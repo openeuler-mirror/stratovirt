@@ -655,6 +655,7 @@ pub trait AudioInterface: Send {
     fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {}
     fn receive(&mut self, recv_data: &StreamData) -> i32;
     fn destroy(&mut self);
+    fn get_status(&self) -> AudioStatus;
 }
 
 pub trait AudioExtension: Send + Sync {

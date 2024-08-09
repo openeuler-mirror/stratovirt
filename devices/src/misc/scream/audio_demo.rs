@@ -19,7 +19,7 @@ use std::{
 use core::time;
 use log::error;
 
-use super::{AudioInterface, ScreamDirection, StreamData};
+use super::{AudioInterface, AudioStatus, ScreamDirection, StreamData};
 
 pub struct AudioDemo {
     file: File,
@@ -86,4 +86,8 @@ impl AudioInterface for AudioDemo {
     }
 
     fn destroy(&mut self) {}
+
+    fn get_status(&self) -> AudioStatus {
+        AudioStatus::Started
+    }
 }

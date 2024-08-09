@@ -24,8 +24,8 @@ use anyhow::Result;
 use log::{debug, error, warn};
 
 use super::{
-    AudioInterface, ScreamDirection, ShmemStreamFmt, StreamData, AUDIO_SAMPLE_RATE_44KHZ,
-    TARGET_LATENCY_MS,
+    AudioInterface, AudioStatus, ScreamDirection, ShmemStreamFmt, StreamData,
+    AUDIO_SAMPLE_RATE_44KHZ, TARGET_LATENCY_MS,
 };
 
 const MAX_CHANNELS: u8 = 8;
@@ -282,5 +282,13 @@ impl AudioInterface for AlsaStreamData {
         }
 
         self.init = false;
+    }
+
+    fn get_status(&self) -> AudioStatus {
+        if self.init {
+            AudioStatus::Started
+        } else {
+            AudioStatus::Ready
+        }
     }
 }
