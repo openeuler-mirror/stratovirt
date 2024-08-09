@@ -114,7 +114,7 @@ impl XhciPciDevice {
         Self {
             base: PciDevBase {
                 base: DeviceBase::new(config.id.clone().unwrap(), true, Some(parent_bus)),
-                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 1),
+                config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
             },
             xhci: XhciDevice::new(mem_space, config),

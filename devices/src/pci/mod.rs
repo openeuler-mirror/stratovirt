@@ -411,7 +411,7 @@ mod tests {
             Self {
                 base: PciDevBase {
                     base: DeviceBase::new(name.to_string(), false, Some(parent_bus)),
-                    config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                    config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, 0),
                     devfn,
                 },
             }
