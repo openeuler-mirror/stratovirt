@@ -22,7 +22,7 @@ use pulse::{
     time::MicroSeconds,
 };
 
-use super::{AudioInterface, AUDIO_SAMPLE_RATE_44KHZ};
+use super::{AudioInterface, AudioStatus, AUDIO_SAMPLE_RATE_44KHZ};
 use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData, TARGET_LATENCY_MS};
 
 const MAX_LATENCY_MS: u32 = 100;
@@ -215,9 +215,9 @@ impl PulseStreamData {
             .map_or_else(
                 |_| {
                     warn!(
-                "Unable to open PulseAudio with sample rate {}, sample size {} and channels {}",
-                self.ss.rate, recv_data.fmt.size, recv_data.fmt.channels
-            );
+                        "Unable to open PulseAudio with sample rate {}, sample size {} and channels {}",
+                        self.ss.rate, recv_data.fmt.size, recv_data.fmt.channels
+                    );
                     None
                 },
                 Some,
@@ -288,6 +288,14 @@ impl AudioInterface for PulseStreamData {
             error!("Failed to flush Capture stream: {:?}", e);
         }
         self.simple = None;
+    }
+
+    fn get_status(&self) -> AudioStatus {
+        if self.simple.is_some() {
+            AudioStatus::Started
+        } else {
+            AudioStatus::Ready
+        }
     }
 }
 

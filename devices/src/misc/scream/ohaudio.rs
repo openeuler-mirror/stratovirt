@@ -43,6 +43,7 @@ trait OhAudioProcess {
     fn destroy(&mut self);
     fn preprocess(&mut self, _start_addr: u64, _sh_header: &ShmemStreamHeader) {}
     fn process(&mut self, recv_data: &StreamData) -> i32;
+    fn get_status(&self) -> AudioStatus;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -295,6 +296,10 @@ impl OhAudioProcess for OhAudioRender {
         }
         0
     }
+
+    fn get_status(&self) -> AudioStatus {
+        self.status
+    }
 }
 
 #[derive(Default)]
@@ -389,6 +394,10 @@ impl OhAudioProcess for OhAudioCapture {
         }
 
         self.new_chunks.load(Ordering::Acquire)
+    }
+
+    fn get_status(&self) -> AudioStatus {
+        self.status
     }
 }
 
@@ -539,6 +548,10 @@ impl AudioInterface for OhAudio {
 
     fn destroy(&mut self) {
         self.processor.destroy();
+    }
+
+    fn get_status(&self) -> AudioStatus {
+        self.processor.get_status()
     }
 }
 
