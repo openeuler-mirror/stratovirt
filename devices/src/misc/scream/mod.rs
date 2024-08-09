@@ -26,12 +26,13 @@ use std::{mem, thread};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use core::time;
-use log::{error, warn};
+use log::{error, info, warn};
 
 #[cfg(feature = "scream_alsa")]
 use self::alsa::AlsaStreamData;
 use self::audio_demo::AudioDemo;
 use super::ivshmem::Ivshmem;
+use crate::pci::{le_read_u32, le_write_u32};
 use crate::{Bus, Device};
 use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
@@ -50,7 +51,10 @@ pub const WINDOWS_SAMPLE_BASE_RATE: u8 = 128;
 
 pub const TARGET_LATENCY_MS: u32 = 50;
 
+#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+const IVSHMEM_VOLUME_SYNC_VECTOR: u16 = 0;
 const IVSHMEM_VECTORS_NR: u32 = 1;
+const IVSHMEM_BAR0_VOLUME: u64 = 240;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
 // to be trained in polling within 50ms. Theoretically, the shorter the polling time,
@@ -596,13 +600,51 @@ impl Scream {
             mem_region,
             IVSHMEM_VECTORS_NR,
         );
-        let _ivshmem = ivshmem.realize()?;
+        let ivshmem = ivshmem.realize()?;
 
-        #[cfg(target_env = "ohos")]
-        OhAudioVolume::init_volume_sync(_ivshmem);
+        self.set_ivshmem_ops(ivshmem);
 
         self.start_play_thread_fn()?;
         self.start_record_thread_fn()
+    }
+
+    fn set_ivshmem_ops(&mut self, ivshmem: Arc<Mutex<Ivshmem>>) {
+        let interface = self.create_audio_extension(ivshmem.clone());
+        let interface2 = interface.clone();
+        let bar0_write = Arc::new(move |data: &[u8], offset: u64| {
+            match offset {
+                IVSHMEM_BAR0_VOLUME => {
+                    interface.set_host_volume(le_read_u32(data, 0).unwrap());
+                }
+                _ => {
+                    info!("ivshmem-scream: unsupported write: {offset}");
+                }
+            }
+            true
+        });
+        let bar0_read = Arc::new(move |data: &mut [u8], offset: u64| {
+            match offset {
+                IVSHMEM_BAR0_VOLUME => {
+                    let _ = le_write_u32(data, 0, interface2.get_host_volume());
+                }
+                _ => {
+                    info!("ivshmem-scream: unsupported read: {offset}");
+                }
+            }
+            true
+        });
+        ivshmem
+            .lock()
+            .unwrap()
+            .set_bar0_ops((bar0_write, bar0_read));
+    }
+
+    fn create_audio_extension(&self, _ivshmem: Arc<Mutex<Ivshmem>>) -> Arc<dyn AudioExtension> {
+        match self.config.interface {
+            #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+            ScreamInterface::OhAudio => OhAudioVolume::new(_ivshmem),
+            _ => Arc::new(AudioExtensionDummy {}),
+        }
     }
 }
 
@@ -614,3 +656,17 @@ pub trait AudioInterface: Send {
     fn receive(&mut self, recv_data: &StreamData) -> i32;
     fn destroy(&mut self);
 }
+
+pub trait AudioExtension: Send + Sync {
+    fn set_host_volume(&self, _vol: u32) {}
+    fn get_host_volume(&self) -> u32 {
+        0
+    }
+}
+
+struct AudioExtensionDummy;
+impl AudioExtension for AudioExtensionDummy {}
+// SAFETY: it is a dummy
+unsafe impl Send for AudioExtensionDummy {}
+// SAFETY: it is a dummy
+unsafe impl Sync for AudioExtensionDummy {}
