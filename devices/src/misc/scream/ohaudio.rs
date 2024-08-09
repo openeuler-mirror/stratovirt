@@ -29,8 +29,6 @@ use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{
     AudioInterface, AudioStatus, ScreamDirection, ShmemStreamHeader, StreamData,
 };
-use crate::pci::{le_read_u32, le_write_u32};
-use machine_manager::notifier::register_vm_pause_notifier;
 use util::ohos_binding::audio::*;
 
 const STREAM_DATA_VEC_CAPACITY: usize = 15;
