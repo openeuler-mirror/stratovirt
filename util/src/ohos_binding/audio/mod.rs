@@ -249,7 +249,6 @@ impl AudioContext {
         ))
     }
 
-    #[allow(unused)]
     fn set_latency_mode(&self) -> Result<(), OAErr> {
         call_capi!(OH_AudioStreamBuilder_SetLatencyMode(
             self.builder,
@@ -332,6 +331,7 @@ impl AudioContext {
         self.set_fmt(size, rate, channels)?;
         self.set_sample_rate()?;
         self.set_sample_format()?;
+        self.set_latency_mode()?;
         self.create_processor(cb)
     }
 
