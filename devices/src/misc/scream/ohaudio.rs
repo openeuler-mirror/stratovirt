@@ -16,14 +16,9 @@ use std::sync::{
     atomic::{fence, AtomicBool, AtomicI32, Ordering},
     Arc, Mutex, RwLock,
 };
-use std::{
-    cmp,
-    io::Read,
-    ptr, thread,
-    time::{Duration, Instant},
-};
+use std::{cmp, io::Read, ptr, thread, time::Duration};
 
-use log::{error, warn};
+use log::error;
 
 use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{
@@ -168,7 +163,6 @@ struct OhAudioRender {
     stream_data: Arc<Mutex<StreamQueue>>,
     flushing: AtomicBool,
     status: AudioStatus,
-    last_called_time: Option<Instant>,
 }
 
 impl Default for OhAudioRender {
@@ -178,7 +172,6 @@ impl Default for OhAudioRender {
             stream_data: Arc::new(Mutex::new(StreamQueue::new(STREAM_DATA_VEC_CAPACITY))),
             flushing: AtomicBool::new(false),
             status: AudioStatus::default(),
-            last_called_time: None,
         }
     }
 }
@@ -250,7 +243,6 @@ impl OhAudioProcess for OhAudioRender {
                 error!("failed to start oh audio renderer: {}", e);
             }
         }
-        self.last_called_time = None;
         self.status == AudioStatus::Started
     }
 
@@ -309,7 +301,6 @@ struct OhAudioCapture {
     shm_len: u64,
     cur_pos: u64,
     status: AudioStatus,
-    last_called_time: Option<Instant>,
 }
 
 impl OhAudioCapture {
@@ -344,7 +335,6 @@ impl OhAudioProcess for OhAudioCapture {
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
-                self.last_called_time = None;
                 self.status = AudioStatus::Started;
                 trace::oh_scream_capture_init(&self.ctx);
                 true
@@ -412,19 +402,6 @@ extern "C" fn on_write_data_cb(
             .unwrap_unchecked()
     };
 
-    match &render.last_called_time {
-        None => render.last_called_time = Some(Instant::now()),
-        Some(last) => {
-            let elapsed = last.elapsed().as_millis();
-            if elapsed >= 1000 {
-                warn!("{elapsed}ms elapsed after last on_write called. Will restart render.");
-                render.status = AudioStatus::Error;
-                return 0;
-            }
-            render.last_called_time = Some(Instant::now());
-        }
-    }
-
     let len = length as usize;
     // SAFETY: the buffer is guaranteed by OH audio framework.
     let wbuf = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, len) };
@@ -454,19 +431,6 @@ extern "C" fn on_read_data_cb(
             .as_mut()
             .unwrap_unchecked()
     };
-
-    match &capture.last_called_time {
-        None => capture.last_called_time = Some(Instant::now()),
-        Some(last) => {
-            let elapsed = last.elapsed().as_millis();
-            if elapsed >= 1000 {
-                warn!("{elapsed}ms elapsed after last on_read called. Will restart capture.");
-                capture.status = AudioStatus::Error;
-                return 0;
-            }
-            capture.last_called_time = Some(Instant::now());
-        }
-    }
 
     trace::trace_scope_start!(ohaudio_read_cb, args = (length));
 
