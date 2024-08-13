@@ -56,6 +56,10 @@ pub const TARGET_LATENCY_MS: u32 = 50;
 const IVSHMEM_VOLUME_SYNC_VECTOR: u16 = 0;
 const IVSHMEM_VECTORS_NR: u32 = 1;
 const IVSHMEM_BAR0_VOLUME: u64 = 240;
+const IVSHMEM_BAR0_STATUS: u64 = 244;
+
+const STATUS_PLAY_BIT: u32 = 0x1;
+const STATUS_START_BIT: u32 = 0x2;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
 // to be trained in polling within 50ms. Theoretically, the shorter the polling time,
@@ -199,6 +203,51 @@ impl ShmemStreamFmt {
     }
 }
 
+struct ScreamCond {
+    cond: Condvar,
+    paused: Mutex<u8>,
+}
+
+impl ScreamCond {
+    const STREAM_PAUSE_BIT: u8 = 0x1;
+    const VM_PAUSE_BIT: u8 = 0x2;
+
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            cond: Condvar::default(),
+            paused: Mutex::new(Self::STREAM_PAUSE_BIT),
+        })
+    }
+
+    fn wait_if_paused(&self, interface: Arc<Mutex<dyn AudioInterface>>) {
+        let mut locked_pause = self.paused.lock().unwrap();
+        while *locked_pause != 0 {
+            interface.lock().unwrap().destroy();
+            locked_pause = self.cond.wait(locked_pause).unwrap();
+        }
+    }
+
+    fn set_value(&self, bv: u8, set: bool) {
+        let mut locked_pause = self.paused.lock().unwrap();
+        let old_val = *locked_pause;
+        match set {
+            true => *locked_pause = old_val | bv,
+            false => *locked_pause = old_val & !bv,
+        }
+        if *locked_pause == 0 {
+            self.cond.notify_all();
+        }
+    }
+
+    fn set_vm_pause(&self, paused: bool) {
+        self.set_value(Self::VM_PAUSE_BIT, paused);
+    }
+
+    fn set_stream_pause(&self, paused: bool) {
+        self.set_value(Self::STREAM_PAUSE_BIT, paused);
+    }
+}
+
 /// Audio stream data structure.
 #[derive(Debug, Default)]
 pub struct StreamData {
@@ -208,9 +257,7 @@ pub struct StreamData {
     pub audio_size: u32,
     /// Location of the played or recorded audio data in the shared memory.
     pub audio_base: u64,
-    /// used for VM pause
-    cond: Arc<Condvar>,
-    paused: Arc<Mutex<bool>>,
+    /// VM pause notifier id.
     pause_notifier_id: u64,
 }
 
@@ -221,23 +268,9 @@ impl StreamData {
         self.chunk_idx = header.chunk_idx;
     }
 
-    #[inline(always)]
-    fn wait_if_paused(&mut self, interface: Arc<Mutex<dyn AudioInterface>>) {
-        let mut locked_pause = self.paused.lock().unwrap();
-        while *locked_pause {
-            interface.lock().unwrap().destroy();
-            locked_pause = self.cond.wait(locked_pause).unwrap();
-        }
-    }
-
-    fn register_pause_notifier(&mut self) {
-        let cond = self.cond.clone();
-        let cond_pause = self.paused.clone();
+    fn register_pause_notifier(&mut self, cond: Arc<ScreamCond>) {
         let pause_notify = Arc::new(move |paused: bool| {
-            *cond_pause.lock().unwrap() = paused;
-            if !paused {
-                cond.notify_all();
-            }
+            cond.set_vm_pause(paused);
         });
         self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
     }
@@ -246,8 +279,8 @@ impl StreamData {
         &mut self,
         interface: Arc<Mutex<dyn AudioInterface>>,
         dir: ScreamDirection,
-        poll_delay_us: u64,
         hva: u64,
+        cond: Arc<ScreamCond>,
     ) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the scream realize.
@@ -257,26 +290,23 @@ impl StreamData {
             ScreamDirection::Playback => &header.play,
             ScreamDirection::Record => &header.capt,
         };
-        trace::scream_init(&dir, &stream_header);
 
         loop {
-            if header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
+            let mut locked_paused = cond.paused.lock().unwrap();
+            while *locked_paused != 0 {
                 interface.lock().unwrap().destroy();
-                while header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
-                    self.wait_if_paused(interface.clone());
-                    thread::sleep(time::Duration::from_millis(10));
-                    header =
-                        // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
-                        &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
-                }
-                self.init(stream_header);
+                locked_paused = cond.cond.wait(locked_paused).unwrap();
             }
 
-            // Audio playback requires waiting for the guest to play audio data.
-            if dir == ScreamDirection::Playback && self.chunk_idx == stream_header.chunk_idx {
-                thread::sleep(time::Duration::from_micros(poll_delay_us));
+            if header.magic != SCREAM_MAGIC || stream_header.is_started == 0 {
+                *locked_paused |= ScreamCond::STREAM_PAUSE_BIT;
                 continue;
             }
+
+            header =
+                // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
+                &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
+            self.init(stream_header);
 
             let mut last_end = 0;
             // The recording buffer is behind the playback buffer. Thereforce, the end position of
@@ -287,14 +317,11 @@ impl StreamData {
             }
 
             if !stream_header.check(last_end) {
+                *locked_paused |= ScreamCond::STREAM_PAUSE_BIT;
                 continue;
             }
 
-            // Guest reformats the audio, and the scream device also needs to be init.
-            if self.fmt != stream_header.fmt {
-                self.init(stream_header);
-                continue;
-            }
+            trace::scream_init(&dir, &stream_header);
 
             return;
         }
@@ -329,6 +356,7 @@ impl StreamData {
         hva: u64,
         shmem_size: u64,
         interface: Arc<Mutex<dyn AudioInterface>>,
+        cond: Arc<ScreamCond>,
     ) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the header check.
@@ -336,7 +364,7 @@ impl StreamData {
         let play = &header.play;
 
         loop {
-            self.wait_if_paused(interface.clone());
+            cond.wait_if_paused(interface.clone());
 
             if play.fmt.fmt_generation != self.fmt.fmt_generation {
                 break;
@@ -373,6 +401,7 @@ impl StreamData {
         hva: u64,
         shmem_size: u64,
         interface: Arc<Mutex<dyn AudioInterface>>,
+        cond: Arc<ScreamCond>,
     ) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the header check.
@@ -382,7 +411,7 @@ impl StreamData {
 
         interface.lock().unwrap().pre_receive(addr, capt);
         while capt.is_started != 0 {
-            self.wait_if_paused(interface.clone());
+            cond.wait_if_paused(interface.clone());
 
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
                 return;
@@ -520,7 +549,7 @@ impl Scream {
         }
     }
 
-    fn start_play_thread_fn(&mut self) -> Result<()> {
+    fn start_play_thread_fn(&mut self, cond: Arc<ScreamCond>) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
@@ -532,24 +561,29 @@ impl Scream {
             .spawn(move || {
                 let clone_interface = interface.clone();
                 let mut play_data = StreamData::default();
-                play_data.register_pause_notifier();
+                play_data.register_pause_notifier(cond.clone());
 
                 loop {
                     play_data.wait_for_ready(
                         clone_interface.clone(),
                         ScreamDirection::Playback,
-                        POLL_DELAY_US,
                         hva,
+                        cond.clone(),
                     );
 
-                    play_data.playback_trans(hva, shmem_size, clone_interface.clone());
+                    play_data.playback_trans(
+                        hva,
+                        shmem_size,
+                        clone_interface.clone(),
+                        cond.clone(),
+                    );
                 }
             })
             .with_context(|| "Failed to create thread scream")?;
         Ok(())
     }
 
-    fn start_record_thread_fn(&mut self) -> Result<()> {
+    fn start_record_thread_fn(&mut self, cond: Arc<ScreamCond>) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
@@ -562,14 +596,14 @@ impl Scream {
             .spawn(move || {
                 let clone_interface = interface.clone();
                 let mut capt_data = StreamData::default();
-                capt_data.register_pause_notifier();
+                capt_data.register_pause_notifier(cond.clone());
 
                 loop {
                     capt_data.wait_for_ready(
                         clone_interface.clone(),
                         ScreamDirection::Record,
-                        POLL_DELAY_US,
                         hva,
+                        cond.clone(),
                     );
 
                     #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
@@ -577,7 +611,7 @@ impl Scream {
                         bound_tokenid(*token_id.read().unwrap())
                             .unwrap_or_else(|e| error!("bound token ID failed: {}", e));
                     }
-                    capt_data.capture_trans(hva, shmem_size, clone_interface.clone());
+                    capt_data.capture_trans(hva, shmem_size, clone_interface.clone(), cond.clone());
                 }
             })
             .with_context(|| "Failed to create thread scream")?;
@@ -617,19 +651,34 @@ impl Scream {
         );
         let ivshmem = ivshmem.realize()?;
 
-        self.set_ivshmem_ops(ivshmem);
+        let play_cond = ScreamCond::new();
+        let capt_cond = ScreamCond::new();
+        self.set_ivshmem_ops(ivshmem, play_cond.clone(), capt_cond.clone());
 
-        self.start_play_thread_fn()?;
-        self.start_record_thread_fn()
+        self.start_play_thread_fn(play_cond)?;
+        self.start_record_thread_fn(capt_cond)
     }
 
-    fn set_ivshmem_ops(&mut self, ivshmem: Arc<Mutex<Ivshmem>>) {
+    fn set_ivshmem_ops(
+        &mut self,
+        ivshmem: Arc<Mutex<Ivshmem>>,
+        play_cond: Arc<ScreamCond>,
+        capt_cond: Arc<ScreamCond>,
+    ) {
         let interface = self.create_audio_extension(ivshmem.clone());
         let interface2 = interface.clone();
         let bar0_write = Arc::new(move |data: &[u8], offset: u64| {
             match offset {
                 IVSHMEM_BAR0_VOLUME => {
                     interface.set_host_volume(le_read_u32(data, 0).unwrap());
+                }
+                IVSHMEM_BAR0_STATUS => {
+                    let val = le_read_u32(data, 0).unwrap();
+                    if val & STATUS_PLAY_BIT == STATUS_PLAY_BIT {
+                        play_cond.set_stream_pause(val & STATUS_START_BIT != STATUS_START_BIT);
+                    } else {
+                        capt_cond.set_stream_pause(val & STATUS_START_BIT != STATUS_START_BIT);
+                    }
                 }
                 _ => {
                     info!("ivshmem-scream: unsupported write: {offset}");
