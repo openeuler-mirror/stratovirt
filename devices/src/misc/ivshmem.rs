@@ -120,9 +120,12 @@ impl Ivshmem {
         };
 
         // bar0: mmio register
+        let mut bar0_region =
+            Region::init_io_region(IVSHMEM_REG_BAR_SIZE, reg_region_ops, "IvshmemIo");
+        bar0_region.set_access_size(4);
         self.base.config.register_bar(
             0,
-            Region::init_io_region(IVSHMEM_REG_BAR_SIZE, reg_region_ops, "IvshmemIo"),
+            bar0_region,
             RegionType::Mem32Bit,
             false,
             IVSHMEM_REG_BAR_SIZE,
