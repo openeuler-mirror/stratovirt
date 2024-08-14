@@ -188,7 +188,7 @@ pub struct XhciInterrupter {
     pub erdp: u64,
     /// Event Ring Producer Cycle State
     pub er_pcs: bool,
-    pub er_start: u64,
+    pub er_start: GuestAddress,
     pub er_size: u32,
     pub er_ep_idx: u32,
 }
@@ -212,7 +212,7 @@ impl XhciInterrupter {
             erstba: 0,
             erdp: 0,
             er_pcs: true,
-            er_start: 0,
+            er_start: GuestAddress(0),
             er_size: 0,
             er_ep_idx: 0,
         }
@@ -238,7 +238,7 @@ impl XhciInterrupter {
         self.erstba = 0;
         self.erdp = 0;
         self.er_pcs = true;
-        self.er_start = 0;
+        self.er_start = GuestAddress(0);
         self.er_size = 0;
         self.er_ep_idx = 0;
     }
@@ -248,19 +248,21 @@ impl XhciInterrupter {
         let er_end = self
             .er_start
             .checked_add((TRB_SIZE * self.er_size) as u64)
-            .ok_or(UsbError::MemoryAccessOverflow(
-                self.er_start,
-                (TRB_SIZE * self.er_size) as u64,
-            ))?;
-        if self.erdp < self.er_start || self.erdp >= er_end {
+            .ok_or_else(|| {
+                UsbError::MemoryAccessOverflow(
+                    self.er_start.raw_value(),
+                    (TRB_SIZE * self.er_size) as u64,
+                )
+            })?;
+        if self.erdp < self.er_start.raw_value() || self.erdp >= er_end.raw_value() {
             bail!(
                 "DMA out of range, erdp {} er_start {:x} er_size {}",
                 self.erdp,
-                self.er_start,
+                self.er_start.raw_value(),
                 self.er_size
             );
         }
-        let dp_idx = (self.erdp - self.er_start) / TRB_SIZE as u64;
+        let dp_idx = (self.erdp - self.er_start.raw_value()) / TRB_SIZE as u64;
         if ((self.er_ep_idx + 2) % self.er_size) as u64 == dp_idx {
             debug!("Event ring full error, idx {}", dp_idx);
             let event = XhciEvent::new(TRBType::ErHostController, TRBCCode::EventRingFullError);
@@ -335,10 +337,12 @@ impl XhciInterrupter {
         let addr = self
             .er_start
             .checked_add((TRB_SIZE * self.er_ep_idx) as u64)
-            .ok_or(UsbError::MemoryAccessOverflow(
-                self.er_start,
-                (TRB_SIZE * self.er_ep_idx) as u64,
-            ))?;
+            .ok_or_else(|| {
+                UsbError::MemoryAccessOverflow(
+                    self.er_start.raw_value(),
+                    (TRB_SIZE * self.er_ep_idx) as u64,
+                )
+            })?;
         let cycle = trb.control as u8;
         // Toggle the cycle bit to avoid driver read it.
         let control = if trb.control & TRB_C == TRB_C {
@@ -350,10 +354,10 @@ impl XhciInterrupter {
         LittleEndian::write_u64(&mut buf, trb.parameter);
         LittleEndian::write_u32(&mut buf[8..], trb.status);
         LittleEndian::write_u32(&mut buf[12..], control);
-        dma_write_bytes(&self.mem, GuestAddress(addr), &buf)?;
+        dma_write_bytes(&self.mem, addr, &buf)?;
         // Write the cycle bit at last.
         fence(Ordering::SeqCst);
-        dma_write_bytes(&self.mem, GuestAddress(addr + 12), &[cycle])?;
+        dma_write_bytes(&self.mem, addr.unchecked_add(12), &[cycle])?;
         Ok(())
     }
 }
@@ -650,14 +654,14 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     } else {
                         error!(
                             "Memory access overflow, addr {:x} offset {:x}",
-                            locked_intr.er_start,
+                            locked_intr.er_start.raw_value(),
                             (TRB_SIZE * locked_intr.er_size) as u64
                         );
                         return false;
                     };
-                    if erdp >= locked_intr.er_start
-                        && erdp < er_end
-                        && (erdp - locked_intr.er_start) / TRB_SIZE as u64
+                    if erdp >= locked_intr.er_start.raw_value()
+                        && erdp < er_end.raw_value()
+                        && (erdp - locked_intr.er_start.raw_value()) / TRB_SIZE as u64
                             != locked_intr.er_ep_idx as u64
                     {
                         drop(locked_intr);

@@ -25,7 +25,7 @@ use super::xhci_pci::XhciConfig;
 use super::xhci_regs::{XhciInterrupter, XhciOperReg};
 use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
 use super::xhci_trb::{
-    TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_TR_DIR, TRB_TR_FRAMEID_MASK,
+    TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_SIZE, TRB_TR_DIR, TRB_TR_FRAMEID_MASK,
     TRB_TR_FRAMEID_SHIFT, TRB_TR_IDT, TRB_TR_IOC, TRB_TR_ISP, TRB_TR_LEN_MASK, TRB_TR_SIA,
     TRB_TYPE_SHIFT,
 };
@@ -2359,7 +2359,7 @@ impl XhciDevice {
     pub(crate) fn reset_event_ring(&mut self, idx: u32) -> Result<()> {
         let mut locked_intr = self.intrs[idx as usize].lock().unwrap();
         if locked_intr.erstsz == 0 || locked_intr.erstba == 0 {
-            locked_intr.er_start = 0;
+            locked_intr.er_start = GuestAddress(0);
             locked_intr.er_size = 0;
             return Ok(());
         }
@@ -2368,7 +2368,16 @@ impl XhciDevice {
         if seg.size < 16 || seg.size > 4096 {
             bail!("Invalid segment size {}", seg.size);
         }
-        locked_intr.er_start = addr64_from_u32(seg.addr_lo, seg.addr_hi);
+
+        // GPAChecked: the event ring must locate in guest ram.
+        let base_addr = GuestAddress(addr64_from_u32(seg.addr_lo, seg.addr_hi));
+        // SAFETY: seg size is a 16 bit register, will not overflow.
+        let er_len = seg.size * TRB_SIZE;
+        if !self.mem_space.address_in_memory(base_addr, er_len as u64) {
+            bail!("The event ring does not locate in guest ram");
+        }
+
+        locked_intr.er_start = base_addr;
         locked_intr.er_size = seg.size;
         locked_intr.er_ep_idx = 0;
         locked_intr.er_pcs = true;
