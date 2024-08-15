@@ -38,6 +38,7 @@ rusb = { version = "0.9", optional = true }
 libusb1-sys = { version = "0.6.4", optional = true }
 trace = { path = "../trace" }
 clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
+hisysevent = { path = "../hisysevent" }
 
 [features]
 default = []
