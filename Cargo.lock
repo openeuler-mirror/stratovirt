@@ -387,6 +387,7 @@ dependencies = [
  "clap",
  "cpu",
  "drm-fourcc",
+ "hisysevent",
  "libc",
  "libpulse-binding",
  "libpulse-simple-binding",

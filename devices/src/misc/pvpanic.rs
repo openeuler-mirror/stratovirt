@@ -87,12 +87,14 @@ impl PvPanicState {
         if (event & PVPANIC_PANICKED) == PVPANIC_PANICKED
             && (self.supported_features & PVPANIC_PANICKED) == PVPANIC_PANICKED
         {
+            hisysevent::STRATOVIRT_PVPANIC("PANICKED".to_string());
             info!("pvpanic: panicked event");
         }
 
         if (event & PVPANIC_CRASHLOADED) == PVPANIC_CRASHLOADED
             && (self.supported_features & PVPANIC_CRASHLOADED) == PVPANIC_CRASHLOADED
         {
+            hisysevent::STRATOVIRT_PVPANIC("CRASHLOADED".to_string());
             info!("pvpanic: crashloaded event");
         }
 
