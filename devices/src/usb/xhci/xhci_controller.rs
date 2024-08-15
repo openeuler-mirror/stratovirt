@@ -1883,7 +1883,7 @@ impl XhciDevice {
                         let mut evt = XhciEvent::new(TRBType::ErTransfer, ccode);
                         evt.slot_id = slot_id as u8;
                         evt.ep_id = ep_id as u8;
-                        evt.ptr = ring.get_dequeue_ptr();
+                        evt.ptr = ring.get_dequeue_ptr().raw_value();
                         if let Err(e) = self.intrs[0].lock().unwrap().send_event(&evt) {
                             error!("Failed to send event: {:?}", e);
                         }
