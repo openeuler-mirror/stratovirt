@@ -2361,7 +2361,7 @@ impl XhciDevice {
 
     pub(crate) fn reset_event_ring(&mut self, idx: u32) -> Result<()> {
         let mut locked_intr = self.intrs[idx as usize].lock().unwrap();
-        if locked_intr.erstsz == 0 || locked_intr.erstba == 0 {
+        if locked_intr.erstsz == 0 || locked_intr.erstba.raw_value() == 0 {
             locked_intr.er_start = GuestAddress(0);
             locked_intr.er_size = 0;
             return Ok(());

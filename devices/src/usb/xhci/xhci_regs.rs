@@ -183,9 +183,9 @@ pub struct XhciInterrupter {
     /// Event Ring Segment Table Size
     pub erstsz: u32,
     /// Event Ring Segment Table Base Address
-    pub erstba: u64,
+    pub erstba: GuestAddress,
     /// Event Ring Dequeue Pointer
-    pub erdp: u64,
+    pub erdp: GuestAddress,
     /// Event Ring Producer Cycle State
     pub er_pcs: bool,
     pub er_start: GuestAddress,
@@ -209,8 +209,8 @@ impl XhciInterrupter {
             iman: 0,
             imod: 0,
             erstsz: 0,
-            erstba: 0,
-            erdp: 0,
+            erstba: GuestAddress(0),
+            erdp: GuestAddress(0),
             er_pcs: true,
             er_start: GuestAddress(0),
             er_size: 0,
@@ -235,8 +235,8 @@ impl XhciInterrupter {
         self.iman = 0;
         self.imod = 0;
         self.erstsz = 0;
-        self.erstba = 0;
-        self.erdp = 0;
+        self.erstba = GuestAddress(0);
+        self.erdp = GuestAddress(0);
         self.er_pcs = true;
         self.er_start = GuestAddress(0);
         self.er_size = 0;
@@ -254,15 +254,15 @@ impl XhciInterrupter {
                     u64::from(TRB_SIZE * self.er_size),
                 )
             })?;
-        if self.erdp < self.er_start.raw_value() || self.erdp >= er_end.raw_value() {
+        if self.erdp < self.er_start || self.erdp >= er_end {
             bail!(
-                "DMA out of range, erdp {} er_start {:x} er_size {}",
-                self.erdp,
+                "DMA out of range, erdp {:x} er_start {:x} er_size {}",
+                self.erdp.raw_value(),
                 self.er_start.raw_value(),
                 self.er_size
             );
         }
-        let dp_idx = (self.erdp - self.er_start.raw_value()) / u64::from(TRB_SIZE);
+        let dp_idx = (self.erdp.raw_value() - self.er_start.raw_value()) / u64::from(TRB_SIZE);
         if u64::from((self.er_ep_idx + 2) % self.er_size) == dp_idx {
             debug!("Event ring full error, idx {}", dp_idx);
             let event = XhciEvent::new(TRBType::ErHostController, TRBCCode::EventRingFullError);
@@ -277,10 +277,11 @@ impl XhciInterrupter {
     }
 
     fn send_intr(&mut self) {
-        let pending = read_u32(self.erdp, 0) & ERDP_EHB == ERDP_EHB;
-        let mut erdp_low = read_u32(self.erdp, 0);
+        let erdp = self.erdp.raw_value();
+        let pending = read_u32(erdp, 0) & ERDP_EHB == ERDP_EHB;
+        let mut erdp_low = read_u32(erdp, 0);
         erdp_low |= ERDP_EHB;
-        self.erdp = write_u64_low(self.erdp, erdp_low);
+        self.erdp = GuestAddress(write_u64_low(erdp, erdp_low));
         self.iman |= IMAN_IP;
         self.enable_intr();
         if pending {
@@ -581,10 +582,10 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 XHCI_INTR_REG_IMAN => locked_intr.iman,
                 XHCI_INTR_REG_IMOD => locked_intr.imod,
                 XHCI_INTR_REG_ERSTSZ => locked_intr.erstsz,
-                XHCI_INTR_REG_ERSTBA_LO => read_u32(locked_intr.erstba, 0),
-                XHCI_INTR_REG_ERSTBA_HI => read_u32(locked_intr.erstba, 1),
-                XHCI_INTR_REG_ERDP_LO => read_u32(locked_intr.erdp, 0),
-                XHCI_INTR_REG_ERDP_HI => read_u32(locked_intr.erdp, 1),
+                XHCI_INTR_REG_ERSTBA_LO => read_u32(locked_intr.erstba.raw_value(), 0),
+                XHCI_INTR_REG_ERSTBA_HI => read_u32(locked_intr.erstba.raw_value(), 1),
+                XHCI_INTR_REG_ERDP_LO => read_u32(locked_intr.erdp.raw_value(), 0),
+                XHCI_INTR_REG_ERDP_HI => read_u32(locked_intr.erdp.raw_value(), 1),
                 _ => {
                     error!(
                         "Invalid offset {:x} for reading interrupter registers.",
@@ -627,10 +628,12 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             XHCI_INTR_REG_IMOD => locked_intr.imod = value,
             XHCI_INTR_REG_ERSTSZ => locked_intr.erstsz = value & 0xffff,
             XHCI_INTR_REG_ERSTBA_LO => {
-                locked_intr.erstba = write_u64_low(locked_intr.erstba, value & 0xffffffc0);
+                let erstba = write_u64_low(locked_intr.erstba.raw_value(), value & 0xffffffc0);
+                locked_intr.erstba = GuestAddress(erstba);
             }
             XHCI_INTR_REG_ERSTBA_HI => {
-                locked_intr.erstba = write_u64_high(locked_intr.erstba, value);
+                let erstba = GuestAddress(write_u64_high(locked_intr.erstba.raw_value(), value));
+                locked_intr.erstba = erstba;
                 drop(locked_intr);
                 if let Err(e) = xhci.reset_event_ring(idx) {
                     error!("Failed to reset event ring: {:?}", e);
@@ -640,10 +643,11 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 // ERDP_EHB is write 1 clear.
                 let mut erdp_lo = value & !ERDP_EHB;
                 if value & ERDP_EHB != ERDP_EHB {
-                    let erdp_old = read_u32(locked_intr.erdp, 0);
+                    let erdp_old = read_u32(locked_intr.erdp.raw_value(), 0);
                     erdp_lo |= erdp_old & ERDP_EHB;
                 }
-                locked_intr.erdp = write_u64_low(locked_intr.erdp, erdp_lo);
+                let erdp = write_u64_low(locked_intr.erdp.raw_value(), erdp_lo);
+                locked_intr.erdp = GuestAddress(erdp);
                 if value & ERDP_EHB == ERDP_EHB {
                     let erdp = locked_intr.erdp;
                     let er_end = if let Some(addr) = locked_intr
@@ -659,9 +663,10 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                         );
                         return false;
                     };
-                    if erdp >= locked_intr.er_start.raw_value()
-                        && erdp < er_end.raw_value()
-                        && (erdp - locked_intr.er_start.raw_value()) / u64::from(TRB_SIZE)
+                    if erdp >= locked_intr.er_start
+                        && erdp < er_end
+                        && (erdp.raw_value() - locked_intr.er_start.raw_value())
+                            / u64::from(TRB_SIZE)
                             != u64::from(locked_intr.er_ep_idx)
                     {
                         drop(locked_intr);
@@ -670,7 +675,8 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 }
             }
             XHCI_INTR_REG_ERDP_HI => {
-                locked_intr.erdp = write_u64_high(locked_intr.erdp, value);
+                let erdp = write_u64_high(locked_intr.erdp.raw_value(), value);
+                locked_intr.erdp = GuestAddress(erdp);
             }
             _ => {
                 error!(

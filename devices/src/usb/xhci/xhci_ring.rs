@@ -268,9 +268,9 @@ impl XhciEventRingSeg {
     }
 
     /// Fetch the event ring segment.
-    pub fn fetch_event_ring_seg(&mut self, addr: u64) -> Result<()> {
+    pub fn fetch_event_ring_seg(&mut self, addr: GuestAddress) -> Result<()> {
         let mut buf = [0_u8; TRB_SIZE as usize];
-        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf)?;
+        dma_read_bytes(&self.mem, addr, &mut buf)?;
         self.addr_lo = LittleEndian::read_u32(&buf);
         self.addr_hi = LittleEndian::read_u32(&buf[4..]);
         self.size = LittleEndian::read_u32(&buf[8..]);
