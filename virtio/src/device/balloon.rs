@@ -160,6 +160,7 @@ fn iov_to_buf<T: ByteCode>(
         return None;
     }
 
+    // GPAChecked: the iov has been checked in pop_avail().
     match address_space.read_object::<T>(GuestAddress(iov.iov_base.raw_value() + offset)) {
         Ok(dat) => Some(dat),
         Err(ref e) => {

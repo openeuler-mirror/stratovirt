@@ -298,6 +298,7 @@ impl SplitVringDesc {
                     return false;
                 }
             };
+            // GPAChecked: the vring desc [addr, addr+len] must locate in guest ram.
             if base > reg_cache.start && end < reg_cache.end {
                 miss_cached = false;
             }
@@ -311,6 +312,7 @@ impl SplitVringDesc {
         }
 
         if miss_cached {
+            // GPAChecked: the vring desc addr must locate in guest ram.
             if let Err(ref e) = checked_offset_mem(sys_mem, self.addr, u64::from(self.len)) {
                 error!("The memory of descriptor is invalid, {:?} ", e);
                 return false;
@@ -642,6 +644,7 @@ impl SplitVring {
     }
 
     fn is_invalid_memory(&self, sys_mem: &Arc<AddressSpace>, actual_size: u64) -> bool {
+        // GPAChecked: the desc ring table must locate in guest ram.
         let desc_table_end =
             match checked_offset_mem(sys_mem, self.desc_table, DESCRIPTOR_LEN * actual_size) {
                 Ok(addr) => addr,
@@ -656,6 +659,7 @@ impl SplitVring {
                 }
             };
 
+        // GPAChecked: the avail ring table must locate in guest ram.
         let desc_avail_end = match checked_offset_mem(
             sys_mem,
             self.avail_ring,
@@ -673,6 +677,7 @@ impl SplitVring {
             }
         };
 
+        // GPAChecked: the used ring table must locate in guest ram.
         let desc_used_end = match checked_offset_mem(
             sys_mem,
             self.used_ring,
