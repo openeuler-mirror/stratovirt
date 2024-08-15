@@ -25,7 +25,7 @@ $ ncat -U path/to/socket
 {"return":{}}
 ```
 
-When VM is in paused state, is's safe to take a snapshot of the VM into the specified directory with QMP.
+When VM is in paused state, it's safe to take a snapshot of the VM into the specified directory with QMP.
 ```shell
 $ ncat -U path/to/socket
 {"QMP":{"version":{"StratoVirt":{"micro":1,"minor":0,"major":0},"package":""},"capabilities":[]}}
