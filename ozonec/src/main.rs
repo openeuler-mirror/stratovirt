@@ -10,10 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod utils;
+
 use std::{path::PathBuf, process::exit};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{crate_description, Args, Parser, Subcommand};
+
+use crate::utils::logger;
 
 // Global options which are not binded to any specific command.
 #[derive(Args, Debug)]
@@ -60,6 +64,9 @@ struct Cli {
 
 fn real_main() -> Result<()> {
     let cli = Cli::parse();
+
+    logger::init(&cli.global.log, cli.global.debug).with_context(|| "Failed to init logger")?;
+
     Ok(())
 }
 
