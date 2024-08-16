@@ -122,6 +122,256 @@ pub struct Device {
     pub gid: Option<u32>,
 }
 
+fn default_device_type() -> String {
+    "a".to_string()
+}
+
+/// Allowed device in Device Cgroup.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CgroupDevice {
+    /// Whether the entry is allowed or denied.
+    pub allow: bool,
+    /// Type of device.
+    #[serde(default = "default_device_type", rename = "type")]
+    pub dev_type: String,
+    /// Major number for the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub major: Option<i64>,
+    /// Minor number for the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minor: Option<i64>,
+    /// Cgroup permissions for device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<String>,
+}
+
+/// Cgroup subsystem to set limits on the container's memory usage.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MemoryCgroup {
+    /// Limit of memory usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    /// Soft limit of memory usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reservation: Option<i64>,
+    /// Limits of memory +Swap usage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swap: Option<i64>,
+    /// Hard limit for kernel memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernel: Option<i64>,
+    /// Hard limit for kernel TCP buffer memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kernelTCP: Option<i64>,
+    /// Swappiness parameter of vmscan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swappiness: Option<u64>,
+    /// Enable or disable the OOM killer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disableOOMKiller: Option<bool>,
+    /// Enable or disable hierarchical memory accounting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub useHierarchy: Option<bool>,
+    /// Enable container memory usage check before setting a new limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkBeforeUpdate: Option<bool>,
+}
+
+/// Cgroup subsystems cpu and cpusets.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CpuCgroup {
+    /// Relative share of CPU time available to the tasks in a cgroup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shares: Option<u64>,
+    /// Total amount of time in microseconds for which all tasks in a
+    /// cgroup can run during one period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota: Option<i64>,
+    /// Maximum amount of accumulated time in microseconds for which
+    /// all tasks in a cgroup can run additionally for burst during
+    /// one period.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub burst: Option<u64>,
+    /// Period of time in microseconds for how regularly a cgroup's access
+    /// to CPU resources should be reallocated (CFS scheduler only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<u64>,
+    /// Period of time in microseconds for the longest continuous period
+    /// in which the tasks in a cgrouop have access to CPU resources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realtimeRuntime: Option<i64>,
+    /// Same as period but applies to realtime scheduler only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realtimePeriod: Option<i64>,
+    /// List of CPUs the container will run on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpus: Option<String>,
+    /// List of memory nodes the container will run on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mems: Option<String>,
+    /// Cgroups are configured with minimum weight.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle: Option<i64>,
+}
+
+/// Per-device bandwidth weights.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WeightDevice {
+    /// Major number for device.
+    pub major: i64,
+    /// Minor number for device.
+    pub minor: i64,
+    /// Bandwidth weight for the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u16>,
+    /// Bandwidth weight for the device while competing with the cgroup's
+    /// child cgroups (CFS scheduler only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leafWeight: Option<u16>,
+}
+
+/// Per-device bandwidth rate limits.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ThrottleDevice {
+    /// Major number for device.
+    pub major: i64,
+    /// Minor number for device.
+    pub minor: i64,
+    /// Bandwidth rate limit in bytes per second or IO rate limit for
+    /// the device.
+    pub rate: u64,
+}
+
+/// Cgroup subsystem blkio which implements the block IO controller.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BlockIoCgroup {
+    /// Per-cgroup weight.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u16>,
+    /// Equivalents of weight for the purpose of deciding how much
+    /// weight tasks in the given cgroup has while competing with
+    /// the cgroup's child cgroups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leafWeight: Option<u16>,
+    /// Array of per-device bandwidth weights.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weightDevice: Option<Vec<WeightDevice>>,
+    /// Array of per-device read bandwidth rate limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throttleReadBpsDevice: Option<Vec<ThrottleDevice>>,
+    /// Array of per-device write bandwidth rate limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throttleWriteBpsDevice: Option<Vec<ThrottleDevice>>,
+    /// Array of per-device read IO rate limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throttleReadIOPSDevice: Option<Vec<ThrottleDevice>>,
+    /// Array of per-device write IO rate limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub throttleWriteIOPSDevice: Option<Vec<ThrottleDevice>>,
+}
+
+/// hugetlb controller which allows to limit the HugeTLB reservations
+/// (if supported) or usage (page fault).
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HugetlbCgroup {
+    /// Hugepage size
+    pub pageSize: String,
+    /// Limit in bytes of hugepagesize HugeTLB reservations
+    /// (if supported) or usage.
+    pub limit: u64,
+}
+
+/// Priority assigned to traffic originating from processes in the
+/// group and egressing the system on various interfaces.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NetPriority {
+    /// Interface name.
+    pub name: String,
+    /// Priority applied to the interface.
+    pub priority: u32,
+}
+
+/// Cgroup subsystems net_cls and net_prio.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NetworkCgroup {
+    /// Network class identifier the cgroup's network packets will
+    /// be tagged with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classID: Option<u32>,
+    /// List of objects of the priorities assigned to traffic
+    /// originating from processes in the group and egressing the
+    /// system on various interfaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priorities: Option<Vec<NetPriority>>,
+}
+
+/// Cgroup subsystem pids.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PidsCgroup {
+    /// Maximum number of tasks in the cgroup.
+    pub limit: i64,
+}
+
+/// Per-device rdma limit.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RdmaLimit {
+    /// Maximum number of hca_handles in the cgroup.
+    pub hcaHandles: Option<u32>,
+    /// Maximum number of hca_objects in the cgroup.
+    pub hcaObjects: Option<u32>,
+}
+
+/// Cgroup subsystem rdma.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RdmaCgroup {
+    /// Rdma limit for mlx5_1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mlx5_1: Option<RdmaLimit>,
+    /// Rdma limit for mlx4_0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mlx4_0: Option<RdmaLimit>,
+    /// Rdma limit for rxe3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rxe3: Option<RdmaLimit>,
+}
+
+/// Cgroups to restrict resource usage for a container and
+/// handle device access.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Cgroups {
+    /// Device cgroup settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devices: Option<Vec<CgroupDevice>>,
+    /// Memory cgroup settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemoryCgroup>,
+    /// Cpu and Cpuset cgroup settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<CpuCgroup>,
+    /// Blkio cgroup settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blockIO: Option<BlockIoCgroup>,
+    /// Hugetlb cgroup settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hugepageLimits: Option<Vec<HugetlbCgroup>>,
+    /// Network cgroup settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkCgroup>,
+    /// Pids cgroup settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pids: Option<PidsCgroup>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json;
