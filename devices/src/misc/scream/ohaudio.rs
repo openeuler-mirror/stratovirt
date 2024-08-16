@@ -31,7 +31,7 @@ const STREAM_DATA_VEC_CAPACITY: usize = 15;
 const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
 const SCREAM_MAX_VOLUME: u32 = 110;
-const CAPTURE_WAIT_TIMEOUT: u64 = 200;
+const CAPTURE_WAIT_TIMEOUT: u64 = 500;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
