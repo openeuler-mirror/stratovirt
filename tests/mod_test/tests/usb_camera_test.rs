@@ -563,7 +563,7 @@ fn test_xhci_camera_hotplug_invalid() {
     #[cfg(not(target_env = "ohos"))]
     assert_eq!(desc, "Failed to open v4l2 backend /tmp/not-existed.");
     #[cfg(target_env = "ohos")]
-    assert_eq!(desc, "Invalid PATH format");
+    assert_eq!(desc, "OH Camera: failed to init cameras");
     // Invalid device id.
     let value = qmp_unplug_camera(&test_state.clone(), "usbcam0");
     let desc = value["error"]["desc"].as_str().unwrap().to_string();
