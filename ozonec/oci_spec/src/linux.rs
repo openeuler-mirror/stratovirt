@@ -235,7 +235,7 @@ pub struct WeightDevice {
 
 /// Per-device bandwidth rate limits.
 #[allow(non_snake_case)]
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ThrottleDevice {
     /// Major number for device.
     pub major: i64,
@@ -516,5 +516,218 @@ mod tests {
         assert_eq!(section.devices[1].fileMode, None);
         assert_eq!(section.devices[1].uid, None);
         assert_eq!(section.devices[1].gid, None);
+    }
+
+    #[test]
+    fn test_cgroup_devices() {
+        let json = r#"{
+            "devices": [
+                {
+                    "allow": false
+                },
+                {
+                    "allow": true,
+                    "type": "c",
+                    "major": 10,
+                    "minor": 229,
+                    "access": "rw"
+                }
+            ]
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            devices: Vec<CgroupDevice>,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.devices.len(), 2);
+        assert_eq!(section.devices[0].allow, false);
+        assert_eq!(section.devices[0].dev_type, "a");
+        assert_eq!(section.devices[0].major, None);
+        assert_eq!(section.devices[0].minor, None);
+        assert_eq!(section.devices[0].access, None);
+        assert_eq!(section.devices[1].allow, true);
+        assert_eq!(section.devices[1].dev_type, "c");
+        assert_eq!(section.devices[1].major, Some(10));
+        assert_eq!(section.devices[1].minor, Some(229));
+        assert_eq!(section.devices[1].access, Some("rw".to_string()));
+    }
+
+    #[test]
+    fn test_cgroup_memory_01() {
+        let json = r#"{
+            "memory": {
+                "limit": 536870912,
+                "reservation": 536870912,
+                "swap": 536870912,
+                "kernel": -1,
+                "kernelTCP": -1,
+                "swappiness": 0,
+                "disableOOMKiller": false
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            memory: MemoryCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.memory.limit, Some(536870912));
+        assert_eq!(section.memory.reservation, Some(536870912));
+        assert_eq!(section.memory.swap, Some(536870912));
+        assert_eq!(section.memory.kernel, Some(-1));
+        assert_eq!(section.memory.kernelTCP, Some(-1));
+        assert_eq!(section.memory.swappiness, Some(0));
+        assert_eq!(section.memory.disableOOMKiller, Some(false));
+        assert_eq!(section.memory.useHierarchy, None);
+        assert_eq!(section.memory.checkBeforeUpdate, None);
+    }
+
+    #[test]
+    fn test_cgroup_memory_02() {
+        let json = r#"{
+            "memory": {
+                "useHierarchy": true,
+                "checkBeforeUpdate": true
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            memory: MemoryCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.memory.limit, None);
+        assert_eq!(section.memory.reservation, None);
+        assert_eq!(section.memory.swap, None);
+        assert_eq!(section.memory.kernel, None);
+        assert_eq!(section.memory.kernelTCP, None);
+        assert_eq!(section.memory.swappiness, None);
+        assert_eq!(section.memory.disableOOMKiller, None);
+        assert_eq!(section.memory.useHierarchy, Some(true));
+        assert_eq!(section.memory.checkBeforeUpdate, Some(true));
+    }
+
+    #[test]
+    fn test_cgroup_cpu_01() {
+        let json = r#"{
+            "cpu": {
+                "shares": 1024,
+                "quota": 1000000,
+                "burst": 1000000,
+                "period": 500000,
+                "realtimeRuntime": 950000,
+                "realtimePeriod": 1000000,
+                "cpus": "2-3",
+                "mems": "0-7",
+                "idle": 0
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            cpu: CpuCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.cpu.shares, Some(1024));
+        assert_eq!(section.cpu.quota, Some(1000000));
+        assert_eq!(section.cpu.burst, Some(1000000));
+        assert_eq!(section.cpu.period, Some(500000));
+        assert_eq!(section.cpu.realtimeRuntime, Some(950000));
+        assert_eq!(section.cpu.realtimePeriod, Some(1000000));
+        assert_eq!(section.cpu.cpus, Some("2-3".to_string()));
+        assert_eq!(section.cpu.mems, Some("0-7".to_string()));
+        assert_eq!(section.cpu.idle, Some(0));
+    }
+
+    #[test]
+    fn test_cgroup_cpu_02() {
+        let json = r#"{
+            "cpu": {}
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            cpu: CpuCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.cpu.shares, None);
+        assert_eq!(section.cpu.quota, None);
+        assert_eq!(section.cpu.burst, None);
+        assert_eq!(section.cpu.period, None);
+        assert_eq!(section.cpu.realtimeRuntime, None);
+        assert_eq!(section.cpu.realtimePeriod, None);
+        assert_eq!(section.cpu.cpus, None);
+        assert_eq!(section.cpu.mems, None);
+        assert_eq!(section.cpu.idle, None);
+    }
+
+    #[test]
+    fn test_cgroup_blkio() {
+        let json = r#"{
+            "blockIO": {
+                "weight": 10,
+                "leafWeight": 10,
+                "weightDevice": [
+                    {
+                        "major": 8,
+                        "minor": 0,
+                        "weight": 500,
+                        "leafWeight": 300
+                    },
+                    {
+                        "major": 8,
+                        "minor": 16
+                    }
+                ],
+                "throttleReadBpsDevice": [
+                    {
+                        "major": 8,
+                        "minor": 0,
+                        "rate": 600
+                    },
+                    {
+                        "major": 8,
+                        "minor": 16,
+                        "rate": 300
+                    }
+                ]
+            }
+        }"#;
+
+        #[allow(non_snake_case)]
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            blockIO: BlockIoCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.blockIO.weight, Some(10));
+        assert_eq!(section.blockIO.leafWeight, Some(10));
+        assert_eq!(section.blockIO.throttleReadIOPSDevice, None);
+        assert_eq!(section.blockIO.throttleWriteBpsDevice, None);
+        assert_eq!(section.blockIO.throttleWriteIOPSDevice, None);
+
+        let weight_device = section.blockIO.weightDevice.as_ref().unwrap();
+        assert_eq!(weight_device.len(), 2);
+        assert_eq!(weight_device[0].major, 8);
+        assert_eq!(weight_device[0].minor, 0);
+        assert_eq!(weight_device[0].weight, Some(500));
+        assert_eq!(weight_device[0].leafWeight, Some(300));
+        assert_eq!(weight_device[1].major, 8);
+        assert_eq!(weight_device[1].minor, 16);
+        assert_eq!(weight_device[1].weight, None);
+        assert_eq!(weight_device[1].leafWeight, None);
+
+        let throttle = section.blockIO.throttleReadBpsDevice.as_ref().unwrap();
+        assert_eq!(throttle.len(), 2);
+        assert_eq!(throttle[1].major, 8);
+        assert_eq!(throttle[1].minor, 16);
+        assert_eq!(throttle[1].rate, 300);
     }
 }
