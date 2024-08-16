@@ -289,7 +289,7 @@ pub struct HugetlbCgroup {
 
 /// Priority assigned to traffic originating from processes in the
 /// group and egressing the system on various interfaces.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct NetPriority {
     /// Interface name.
     pub name: String,
@@ -729,5 +729,120 @@ mod tests {
         assert_eq!(throttle[1].major, 8);
         assert_eq!(throttle[1].minor, 16);
         assert_eq!(throttle[1].rate, 300);
+    }
+
+    #[test]
+    fn test_cgroup_hugetlb() {
+        let json = r#"{
+            "hugepageLimits": [
+                {
+                    "pageSize": "2MB",
+                    "limit": 209715200
+                }
+            ]
+        }"#;
+
+        #[allow(non_snake_case)]
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            hugepageLimits: Vec<HugetlbCgroup>,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.hugepageLimits[0].pageSize, "2MB");
+        assert_eq!(section.hugepageLimits[0].limit, 209715200);
+    }
+
+    #[test]
+    fn test_cgroup_network_01() {
+        let json = r#"{
+            "network": {
+                "classID": 1048577,
+                "priorities": [
+                    {
+                        "name": "eth0",
+                        "priority": 500
+                    }
+                ]
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            network: NetworkCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.network.classID, Some(1048577));
+        let priorities = section.network.priorities.as_ref().unwrap();
+        assert_eq!(priorities[0].name, "eth0");
+        assert_eq!(priorities[0].priority, 500);
+    }
+
+    #[test]
+    fn test_cgroup_network_02() {
+        let json = r#"{
+            "network": {}
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            network: NetworkCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.network.classID, None);
+        assert_eq!(section.network.priorities, None);
+    }
+
+    #[test]
+    fn test_cgroup_pid() {
+        let json = r#"{
+            "pids": {
+                "limit": 32771
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            pids: PidsCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.pids.limit, 32771);
+    }
+
+    #[test]
+    fn test_cgroup_rdma() {
+        let json = r#"{
+            "rdma": {
+                "mlx5_1": {
+                    "hcaHandles": 3,
+                    "hcaObjects": 10000
+                },
+                "mlx4_0": {
+                    "hcaObjects": 1000
+                },
+                "rxe3": {
+                    "hcaHandles": 10000
+                }
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            rdma: RdmaCgroup,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        let rdma_limit = section.rdma.mlx5_1.as_ref().unwrap();
+        assert_eq!(rdma_limit.hcaHandles, Some(3));
+        assert_eq!(rdma_limit.hcaObjects, Some(10000));
+        let rdma_limit = section.rdma.mlx4_0.as_ref().unwrap();
+        assert_eq!(rdma_limit.hcaHandles, None);
+        assert_eq!(rdma_limit.hcaObjects, Some(1000));
+        let rdma_limit = section.rdma.rxe3.as_ref().unwrap();
+        assert_eq!(rdma_limit.hcaHandles, Some(10000));
+        assert_eq!(rdma_limit.hcaObjects, None);
     }
 }
