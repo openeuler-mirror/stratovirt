@@ -574,11 +574,11 @@ impl VirtioPciDevice {
                     0
                 }
             }
-            COMMON_MSIX_REG => locked_device.config_vector() as u32,
+            COMMON_MSIX_REG => u32::from(locked_device.config_vector()),
             COMMON_NUMQ_REG => locked_device.virtio_base().queues_config.len() as u32,
             COMMON_STATUS_REG => locked_device.device_status(),
-            COMMON_CFGGENERATION_REG => locked_device.config_generation() as u32,
-            COMMON_Q_SELECT_REG => locked_device.queue_select() as u32,
+            COMMON_CFGGENERATION_REG => u32::from(locked_device.config_generation()),
+            COMMON_Q_SELECT_REG => u32::from(locked_device.queue_select()),
             COMMON_Q_SIZE_REG => locked_device
                 .queue_config()
                 .map(|config| u32::from(config.size))?,
@@ -588,7 +588,7 @@ impl VirtioPciDevice {
             COMMON_Q_ENABLE_REG => locked_device
                 .queue_config()
                 .map(|config| u32::from(config.ready))?,
-            COMMON_Q_NOFF_REG => locked_device.queue_select() as u32,
+            COMMON_Q_NOFF_REG => u32::from(locked_device.queue_select()),
             COMMON_Q_DESCLO_REG => locked_device
                 .queue_config()
                 .map(|config| config.desc_table.0 as u32)?,
@@ -645,7 +645,7 @@ impl VirtioPciDevice {
                 locked_device.set_driver_features(gfeatures_sel, value);
 
                 if gfeatures_sel == 1 {
-                    let features = (locked_device.driver_features(1) as u64) << 32;
+                    let features = u64::from(locked_device.driver_features(1)) << 32;
                     if virtio_has_feature(features, VIRTIO_F_RING_PACKED) {
                         locked_device.set_queue_type(QUEUE_TYPE_PACKED_VRING);
                     } else {
@@ -663,7 +663,7 @@ impl VirtioPciDevice {
             }
             COMMON_STATUS_REG => {
                 if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
-                    let features = (locked_device.driver_features(1) as u64) << 32;
+                    let features = u64::from(locked_device.driver_features(1)) << 32;
                     if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
                         error!(
                             "Device {} is modern only, but the driver not support VIRTIO_F_VERSION_1", self.base.base.id
@@ -924,8 +924,8 @@ impl VirtioPciDevice {
             warn!("The offset {} of VirtioPciCfgAccessCap is not aligned", off);
             return;
         }
-        if (off as u64)
-            .checked_add(len as u64)
+        if u64::from(off)
+            .checked_add(u64::from(len))
             .filter(|&end| end <= self.base.config.bars[bar as usize].size)
             .is_none()
         {
@@ -935,12 +935,18 @@ impl VirtioPciDevice {
 
         let result = if is_write {
             let mut data = self.base.config.config[pci_cfg_data_offset..].as_ref();
-            self.sys_mem
-                .write(&mut data, GuestAddress(bar_base + off as u64), len as u64)
+            self.sys_mem.write(
+                &mut data,
+                GuestAddress(bar_base + u64::from(off)),
+                u64::from(len),
+            )
         } else {
             let mut data = self.base.config.config[pci_cfg_data_offset..].as_mut();
-            self.sys_mem
-                .read(&mut data, GuestAddress(bar_base + off as u64), len as u64)
+            self.sys_mem.read(
+                &mut data,
+                GuestAddress(bar_base + u64::from(off)),
+                u64::from(len),
+            )
         };
         if let Err(e) = result {
             error!(
@@ -955,7 +961,7 @@ impl VirtioPciDevice {
         // its own request completion. i.e, If the vq is not enough, vcpu A will
         // receive completion of request that submitted by vcpu B, then A needs
         // to IPI B.
-        min(queues_max as u16 - queues_fixed, nr_cpus as u16)
+        min(queues_max as u16 - queues_fixed, u16::from(nr_cpus))
     }
 
     fn queues_register_irqfd(&self, call_fds: &[Arc<EventFd>]) -> bool {
@@ -1148,11 +1154,11 @@ impl Device for VirtioPciDevice {
             .with_context(|| "Failed to realize virtio device")?;
 
         let name = self.name();
-        let devfn = self.base.devfn as u64;
+        let devfn = u64::from(self.base.devfn);
         let dev = Arc::new(Mutex::new(self));
-        let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
-            as u64)
-            .next_power_of_two();
+        let mut mem_region_size =
+            u64::from(VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
+                .next_power_of_two();
         mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         let modern_mem_region =
             Region::init_container_region(mem_region_size, "VirtioPciModernMem");
@@ -1655,7 +1661,7 @@ mod tests {
             .iter_mut()
         {
             queue_cfg.desc_table = GuestAddress(0);
-            queue_cfg.avail_ring = GuestAddress((VIRTIO_DEVICE_QUEUE_SIZE as u64) * 16);
+            queue_cfg.avail_ring = GuestAddress(u64::from(VIRTIO_DEVICE_QUEUE_SIZE) * 16);
             queue_cfg.used_ring = GuestAddress(2 * 4096);
             queue_cfg.ready = true;
             queue_cfg.size = VIRTIO_DEVICE_QUEUE_SIZE;
@@ -1704,6 +1710,6 @@ mod tests {
         .is_ok());
         let header_type =
             le_read_u16(&virtio_pci.base.config.config, HEADER_TYPE as usize).unwrap();
-        assert_eq!(header_type, HEADER_TYPE_MULTIFUNC as u16);
+        assert_eq!(header_type, u16::from(HEADER_TYPE_MULTIFUNC));
     }
 }

@@ -56,7 +56,7 @@ impl GICv3Access for KvmGICv3 {
             KvmDevice::kvm_device_check(
                 &self.fd,
                 kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
-                kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION as u64,
+                u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION),
             )
             .with_context(|| {
                 "Multiple redistributors are acquired while KVM does not provide support."
@@ -196,7 +196,7 @@ impl GICv3Access for KvmGICv3 {
         KvmDevice::kvm_device_access(
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
-            kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES as u64,
+            u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES),
             0,
             true,
         )
@@ -259,7 +259,7 @@ impl GICv3ItsAccess for KvmGICv3Its {
         KvmDevice::kvm_device_access(
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ITS_REGS,
-            attr as u64,
+            u64::from(attr),
             its_value as *const u64 as u64,
             write,
         )
@@ -267,9 +267,9 @@ impl GICv3ItsAccess for KvmGICv3Its {
 
     fn access_gic_its_tables(&self, save: bool) -> Result<()> {
         let attr = if save {
-            kvm_bindings::KVM_DEV_ARM_ITS_SAVE_TABLES as u64
+            u64::from(kvm_bindings::KVM_DEV_ARM_ITS_SAVE_TABLES)
         } else {
-            kvm_bindings::KVM_DEV_ARM_ITS_RESTORE_TABLES as u64
+            u64::from(kvm_bindings::KVM_DEV_ARM_ITS_RESTORE_TABLES)
         };
         KvmDevice::kvm_device_access(
             &self.fd,

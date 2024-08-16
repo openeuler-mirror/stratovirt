@@ -230,13 +230,13 @@ impl VfioPciDevice {
         self.vfio_device.lock().unwrap().write_region(
             data.as_slice(),
             self.config_offset,
-            COMMAND as u64,
+            u64::from(COMMAND),
         )?;
 
         for i in 0..PCI_ROM_SLOT {
             let offset = BAR_0 as usize + REG_SIZE * i as usize;
             let v = le_read_u32(&self.base.config.config, offset)?;
-            if v & BAR_IO_SPACE as u32 != 0 {
+            if v & u32::from(BAR_IO_SPACE) != 0 {
                 le_write_u32(&mut self.base.config.config, offset, v & !IO_BASE_ADDR_MASK)?;
             } else {
                 le_write_u32(
@@ -274,8 +274,8 @@ impl VfioPciDevice {
         Ok(VfioMsixInfo {
             table: MsixTable {
                 table_bar: (table as u16 & MSIX_TABLE_BIR) as u8,
-                table_offset: (table & MSIX_TABLE_OFFSET) as u64,
-                table_size: (entries * MSIX_TABLE_ENTRY_SIZE) as u64,
+                table_offset: u64::from(table & MSIX_TABLE_OFFSET),
+                table_size: u64::from(entries * MSIX_TABLE_ENTRY_SIZE),
             },
             entries,
         })
@@ -295,13 +295,13 @@ impl VfioPciDevice {
             locked_dev.read_region(
                 data.as_mut_slice(),
                 self.config_offset,
-                (BAR_0 + (REG_SIZE as u8) * i) as u64,
+                u64::from(BAR_0 + (REG_SIZE as u8) * i),
             )?;
             let mut region_type = RegionType::Mem32Bit;
             let pci_bar = LittleEndian::read_u32(&data);
-            if pci_bar & BAR_IO_SPACE as u32 != 0 {
+            if pci_bar & u32::from(BAR_IO_SPACE) != 0 {
                 region_type = RegionType::Io;
-            } else if pci_bar & BAR_MEM_64BIT as u32 != 0 {
+            } else if pci_bar & u32::from(BAR_MEM_64BIT) != 0 {
                 region_type = RegionType::Mem64Bit;
             }
             let vfio_region = infos.remove(0);
@@ -515,7 +515,7 @@ impl VfioPciDevice {
             let mut locked_msix = msix.lock().unwrap();
             locked_msix.table[offset as usize..(offset as usize + data.len())]
                 .copy_from_slice(data);
-            let vector = offset / MSIX_TABLE_ENTRY_SIZE as u64;
+            let vector = offset / u64::from(MSIX_TABLE_ENTRY_SIZE);
             if locked_msix.is_vector_masked(vector as u16) {
                 return true;
             }
@@ -530,7 +530,7 @@ impl VfioPciDevice {
                 msg_data: entry.data,
                 masked: false,
                 #[cfg(target_arch = "aarch64")]
-                dev_id: dev_id.load(Ordering::Acquire) as u32,
+                dev_id: u32::from(dev_id.load(Ordering::Acquire)),
             };
 
             let mut locked_gsi_routes = cloned_gsi_routes.lock().unwrap();
@@ -737,7 +737,7 @@ impl VfioPciDevice {
                 let gsi_route = GsiMsiRoute {
                     irq_fd: None,
                     gsi: -1,
-                    nr: i as u32,
+                    nr: u32::from(i),
                 };
                 gsi_routes.push(gsi_route);
             }
@@ -864,7 +864,7 @@ impl Device for VfioPciDevice {
         )?));
         Result::with_context(self.register_bars(), || "Failed to register bars")?;
 
-        let devfn = self.base.devfn as u64;
+        let devfn = u64::from(self.base.devfn);
         let dev = Arc::new(Mutex::new(self));
         let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
         let mut locked_bus = parent_bus.lock().unwrap();
@@ -971,7 +971,8 @@ impl PciDevOps for VfioPciDevice {
         );
 
         if ranges_overlap(offset, size, COMMAND as usize, REG_SIZE).unwrap() {
-            if le_read_u32(&self.base.config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
+            if le_read_u32(&self.base.config.config, offset).unwrap()
+                & u32::from(COMMAND_MEMORY_SPACE)
                 != 0
             {
                 if let Err(e) = self.setup_bars_mmap() {

@@ -242,7 +242,7 @@ impl StdMachine {
             if self.base.cpu_topo.threads > 1 {
                 let core_offset = pptt.table_len();
                 let core_hierarchy_node =
-                    ProcessorHierarchyNode::new(0x0, cluster_offset, core as u32, 3);
+                    ProcessorHierarchyNode::new(0x0, cluster_offset, u32::from(core), 3);
                 pptt.append_child(&core_hierarchy_node.aml_bytes());
                 processor_append_priv_res(pptt, priv_resources);
                 for _thread in 0..self.base.cpu_topo.threads {
@@ -264,7 +264,7 @@ impl StdMachine {
         for cluster in 0..self.base.cpu_topo.clusters {
             let cluster_offset = pptt.table_len();
             let cluster_hierarchy_node =
-                ProcessorHierarchyNode::new(0x0, socket_offset, cluster as u32, 0);
+                ProcessorHierarchyNode::new(0x0, socket_offset, u32::from(cluster), 0);
             pptt.append_child(&cluster_hierarchy_node.aml_bytes());
             self.build_pptt_cores(pptt, cluster_offset as u32, uid);
         }
@@ -277,7 +277,7 @@ impl StdMachine {
             pptt.append_child(&cache_hierarchy_node.aml_bytes());
 
             let socket_offset = pptt.table_len();
-            let socket_hierarchy_node = ProcessorHierarchyNode::new(0x1, 0, socket as u32, 1);
+            let socket_hierarchy_node = ProcessorHierarchyNode::new(0x1, 0, u32::from(socket), 1);
             pptt.append_child(&socket_hierarchy_node.aml_bytes());
             processor_append_priv_res(pptt, priv_resources);
 
@@ -923,7 +923,7 @@ impl AcpiBuilder for StdMachine {
         // Mapping counts of Root Complex Node
         iort.set_field(80, 1_u32);
         // Mapping offset of Root Complex Node
-        iort.set_field(84, ROOT_COMPLEX_ENTRY_SIZE as u32);
+        iort.set_field(84, u32::from(ROOT_COMPLEX_ENTRY_SIZE));
         // Cache of coherent device
         iort.set_field(88, 1_u32);
         // Memory flags of coherent device
@@ -1087,7 +1087,7 @@ impl AcpiBuilder for StdMachine {
                     type_id: 3_u8,
                     length: size_of::<AcpiSratGiccAffinity>() as u8,
                     proximity_domain,
-                    process_uid: *cpu as u32,
+                    process_uid: u32::from(*cpu),
                     flags: 1,
                     clock_domain: 0_u32,
                 }

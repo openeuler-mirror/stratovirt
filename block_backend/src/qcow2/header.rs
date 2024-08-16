@@ -138,7 +138,7 @@ impl QcowHeader {
         if !(MIN_CLUSTER_BIT..=MAX_CLUSTER_BIT).contains(&self.cluster_bits) {
             bail!("Invalid cluster bits {}", self.cluster_bits);
         }
-        if self.header_length as u64 > self.cluster_size() {
+        if u64::from(self.header_length) > self.cluster_size() {
             bail!(
                 "Header length {} over cluster size {}",
                 self.header_length,
@@ -168,7 +168,7 @@ impl QcowHeader {
         if self.refcount_table_clusters == 0 {
             bail!("Refcount table clusters is zero");
         }
-        if self.refcount_table_clusters as u64 > MAX_REFTABLE_SIZE / self.cluster_size() {
+        if u64::from(self.refcount_table_clusters) > MAX_REFTABLE_SIZE / self.cluster_size() {
             bail!(
                 "Refcount table size over limit {}",
                 self.refcount_table_clusters
@@ -181,7 +181,7 @@ impl QcowHeader {
             );
         }
         self.refcount_table_offset
-            .checked_add(self.refcount_table_clusters as u64 * self.cluster_size())
+            .checked_add(u64::from(self.refcount_table_clusters) * self.cluster_size())
             .with_context(|| {
                 format!(
                     "Invalid offset {} or refcount table clusters {}",
@@ -192,7 +192,7 @@ impl QcowHeader {
     }
 
     fn check_l1_table(&self) -> Result<()> {
-        if self.l1_size as u64 > MAX_L1TABLE_SIZE / ENTRY_SIZE {
+        if u64::from(self.l1_size) > MAX_L1TABLE_SIZE / ENTRY_SIZE {
             bail!("L1 table size over limit {}", self.l1_size);
         }
         if !self.cluster_aligned(self.l1_table_offset) {
@@ -201,7 +201,7 @@ impl QcowHeader {
         let size_per_l1_entry = self.cluster_size() * self.cluster_size() / ENTRY_SIZE;
         let l1_need_sz =
             div_round_up(self.size, size_per_l1_entry).with_context(|| "Failed to get l1 size")?;
-        if (self.l1_size as u64) < l1_need_sz {
+        if u64::from(self.l1_size) < l1_need_sz {
             bail!(
                 "L1 table is too small, l1 size {} expect {}",
                 self.l1_size,
@@ -209,7 +209,7 @@ impl QcowHeader {
             );
         }
         self.l1_table_offset
-            .checked_add(self.l1_size as u64 * ENTRY_SIZE)
+            .checked_add(u64::from(self.l1_size) * ENTRY_SIZE)
             .with_context(|| {
                 format!(
                     "Invalid offset {} or entry size {}",

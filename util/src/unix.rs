@@ -278,7 +278,9 @@ impl UnixSock {
         let nex_cmsg_pos = (next_cmsg as *mut u8).wrapping_sub(msghdr.msg_control as usize) as u64;
 
         // SAFETY: Parameter is constant.
-        if nex_cmsg_pos.wrapping_add(unsafe { CMSG_LEN(0) } as u64) > msghdr.msg_controllen as u64 {
+        if nex_cmsg_pos.wrapping_add(u64::from(unsafe { CMSG_LEN(0) }))
+            > msghdr.msg_controllen as u64
+        {
             null_mut()
         } else {
             next_cmsg
@@ -420,7 +422,7 @@ impl UnixSock {
 
             if cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS {
                 // SAFETY: Input parameter is constant.
-                let fd_count = (cmsg.cmsg_len as u64 - unsafe { CMSG_LEN(0) } as u64) as usize
+                let fd_count = (cmsg.cmsg_len as u64 - u64::from(unsafe { CMSG_LEN(0) })) as usize
                     / size_of::<RawFd>();
                 // SAFETY:
                 // 1. the pointer of cmsg_ptr was created in this function and can be guaranteed not be null.

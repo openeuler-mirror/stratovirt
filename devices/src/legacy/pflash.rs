@@ -306,7 +306,7 @@ impl PFlash {
             }
             // Repeat data for PFlash device which supports x16-mode but works in x8-mode.
             for i in 1..self.max_device_width {
-                resp = deposit_u32(resp, 8 * i, 8, self.cfi_table[index as usize] as u32)
+                resp = deposit_u32(resp, 8 * i, 8, u32::from(self.cfi_table[index as usize]))
                     .with_context(|| "Failed to deposit bits to u32")?;
             }
         }
@@ -329,11 +329,11 @@ impl PFlash {
         }
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + size as u64 > mr.size() {
+        if offset + u64::from(size) > mr.size() {
             return Err(anyhow!(LegacyError::PFlashWriteOverflow(
                 mr.size(),
                 offset,
-                size as u64
+                u64::from(size)
             )));
         }
 
@@ -422,7 +422,7 @@ impl PFlash {
                 trace::pflash_write("single byte program (0)".to_string(), cmd);
             }
             0x20 => {
-                let offset_mask = offset & !(self.block_len as u64 - 1);
+                let offset_mask = offset & !(u64::from(self.block_len) - 1);
                 trace::pflash_write_block_erase(offset, self.block_len);
                 if !self.read_only {
                     let all_one = vec![0xff_u8; self.block_len as usize];
@@ -618,7 +618,7 @@ impl PFlash {
                 }
                 self.status |= 0x80;
                 if self.counter == 0 {
-                    let mask: u64 = !(self.write_blk_size as u64 - 1);
+                    let mask: u64 = !(u64::from(self.write_blk_size) - 1);
                     trace::pflash_write("block write finished".to_string(), self.cmd);
                     self.write_cycle = self.write_cycle.wrapping_add(1);
                     if !self.read_only {
@@ -740,15 +740,15 @@ impl SysBusDevOps for PFlash {
                 // 0x70: Status Register.
                 // 0xe8: Write block.
                 // Just read status register, return every device status in bank.
-                ret = self.status as u32;
+                ret = u32::from(self.status);
                 if self.device_width != 0 && data_len > self.device_width {
                     let mut shift: u32 = self.device_width * 8;
                     while shift + self.device_width * 8 <= data_len * 8 {
-                        ret |= (self.status as u32) << shift;
+                        ret |= u32::from(self.status) << shift;
                         shift += self.device_width * 8;
                     }
                 } else if self.device_width == 0 && data_len > 2 {
-                    ret |= (self.status as u32) << 16;
+                    ret |= u32::from(self.status) << 16;
                 }
                 trace::pflash_read_status(ret);
             }
@@ -782,7 +782,7 @@ impl SysBusDevOps for PFlash {
                     // combine serval queries into one response.
                     let mut i: u32 = 0;
                     while i < data_len {
-                        match self.query_devid(offset + (i * self.bank_width) as u64) {
+                        match self.query_devid(offset + u64::from(i * self.bank_width)) {
                             Err(e) => {
                                 error!("Failed to query devid {:?}", e);
                                 break;
@@ -822,7 +822,7 @@ impl SysBusDevOps for PFlash {
                 } else {
                     let mut i: u32 = 0;
                     while i < data_len {
-                        match self.query_cfi(offset + (i * self.bank_width) as u64) {
+                        match self.query_cfi(offset + u64::from(i * self.bank_width)) {
                             Err(e) => {
                                 error!("Failed to query devid, {:?}", e);
                                 break;

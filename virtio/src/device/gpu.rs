@@ -670,8 +670,8 @@ pub fn cal_image_hostmem(format: u32, width: u32, height: u32) -> (Option<usize>
             }
         };
         let bpp = pixman_format_bpp(pixman_format as u32);
-        let stride = ((width as u64 * bpp as u64 + 0x1f) >> 5) * (size_of::<u32>() as u64);
-        match stride.checked_mul(height as u64) {
+        let stride = ((u64::from(width) * u64::from(bpp) + 0x1f) >> 5) * (size_of::<u32>() as u64);
+        match stride.checked_mul(u64::from(height)) {
             None => {
                 error!(
                     "stride * height is overflow: width {} height {} stride {} bpp {}",
@@ -1172,7 +1172,7 @@ impl GpuIoHandler {
         }
 
         let pixman_format = get_image_format(res.pixman_image);
-        let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+        let bpp = (u32::from(pixman_format_bpp(pixman_format as u32)) + 8 - 1) / 8;
         let pixman_stride = get_image_stride(res.pixman_image);
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
@@ -1301,10 +1301,10 @@ impl GpuIoHandler {
                 let extents = pixman_region_extents(final_reg_ptr);
                 display_graphic_update(
                     &scanout.con,
-                    (*extents).x1 as i32,
-                    (*extents).y1 as i32,
-                    ((*extents).x2 - (*extents).x1) as i32,
-                    ((*extents).y2 - (*extents).y1) as i32,
+                    i32::from((*extents).x1),
+                    i32::from((*extents).y1),
+                    i32::from((*extents).x2 - (*extents).x1),
+                    i32::from((*extents).y2 - (*extents).y1),
                 )?;
                 pixman_region_fini(rect_reg_ptr);
                 pixman_region_fini(final_reg_ptr);
@@ -1359,7 +1359,7 @@ impl GpuIoHandler {
         let res = &mut self.resources_list[res_idx];
         let pixman_format = get_image_format(res.pixman_image);
         let width = get_image_width(res.pixman_image) as u32;
-        let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+        let bpp = (u32::from(pixman_format_bpp(pixman_format as u32)) + 8 - 1) / 8;
         let stride = get_image_stride(res.pixman_image) as u32;
         let data = get_image_data(res.pixman_image).cast() as *mut u8;
 
@@ -1452,9 +1452,9 @@ impl GpuIoHandler {
         }
 
         let entries = info_attach_backing.nr_entries;
-        let ents_size = size_of::<VirtioGpuMemEntry>() as u64 * entries as u64;
+        let ents_size = size_of::<VirtioGpuMemEntry>() as u64 * u64::from(entries);
         let head_size = size_of::<VirtioGpuResourceAttachBacking>() as u64;
-        if (req.out_len as u64) < (ents_size + head_size) {
+        if u64::from(req.out_len) < (ents_size + head_size) {
             error!(
                 "GuestError: The nr_entries {} in resource attach backing request is larger than total len {}.",
                 info_attach_backing.nr_entries, req.out_len,

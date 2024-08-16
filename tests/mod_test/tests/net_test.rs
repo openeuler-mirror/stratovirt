@@ -552,8 +552,8 @@ fn poll_used_ring(
     let mut idx = test_state
         .borrow()
         .readw(vq.borrow().used + offset_of!(VringUsed, idx) as u64);
-    while start < idx as u64 {
-        for i in start..idx as u64 {
+    while start < u64::from(idx) {
+        for i in start..u64::from(idx) {
             let len = test_state.borrow().readw(
                 vq.borrow().used
                     + offset_of!(VringUsed, ring) as u64
@@ -567,8 +567,8 @@ fn poll_used_ring(
 
                 let addr = test_state
                     .borrow()
-                    .readq(vq.borrow().desc + id as u64 * VRING_DESC_SIZE);
-                let packets = test_state.borrow().memread(addr, len as u64);
+                    .readq(vq.borrow().desc + u64::from(id) * VRING_DESC_SIZE);
+                let packets = test_state.borrow().memread(addr, u64::from(len));
                 let src_mac_pos = VIRTIO_NET_HDR_SIZE + ETHERNET_HDR_SIZE + ARP_HDR_SIZE;
                 let dst_mac_pos = src_mac_pos + 10;
                 if arp_request[src_mac_pos..src_mac_pos + MAC_ADDR_LEN]
@@ -582,7 +582,7 @@ fn poll_used_ring(
                 }
             }
         }
-        start = idx as u64;
+        start = u64::from(idx);
         vq.borrow().set_used_event(test_state.clone(), start as u16);
         idx = test_state
             .borrow()
@@ -958,7 +958,7 @@ fn net_config_mac_rw(
 
 /// Virtio net configure is not allowed to change except mac.
 fn write_net_config_check(net: Rc<RefCell<TestVirtioPciDev>>, offset: u64, value: u64, size: u8) {
-    let origin_value = net.borrow().config_readw(offset) as u64;
+    let origin_value = u64::from(net.borrow().config_readw(offset));
     assert_ne!(origin_value, value);
     match size {
         1 => net.borrow().config_writeb(offset, value as u8),
@@ -966,7 +966,7 @@ fn write_net_config_check(net: Rc<RefCell<TestVirtioPciDev>>, offset: u64, value
         4 => net.borrow().config_writel(offset, value as u32),
         _ => (),
     };
-    let value = net.borrow().config_readw(offset) as u64;
+    let value = u64::from(net.borrow().config_readw(offset));
     assert_eq!(origin_value, value);
 }
 
@@ -1015,38 +1015,38 @@ fn virtio_net_write_and_check_config() {
         write_net_config_check(
             net.clone(),
             offset_of!(VirtioNetConfig, status) as u64,
-            u16::MAX as u64,
+            u64::from(u16::MAX),
             2,
         );
         write_net_config_check(
             net.clone(),
             offset_of!(VirtioNetConfig, max_virtqueue_pairs) as u64,
-            u16::MAX as u64,
+            u64::from(u16::MAX),
             2,
         );
         write_net_config_check(
             net.clone(),
             offset_of!(VirtioNetConfig, mtu) as u64,
-            u16::MAX as u64,
+            u64::from(u16::MAX),
             2,
         );
         write_net_config_check(
             net.clone(),
             offset_of!(VirtioNetConfig, speed) as u64,
-            u32::MAX as u64,
+            u64::from(u32::MAX),
             4,
         );
         write_net_config_check(
             net.clone(),
             offset_of!(VirtioNetConfig, duplex) as u64,
-            u8::MAX as u64,
+            u64::from(u8::MAX),
             1,
         );
 
         write_net_config_check(
             net.clone(),
             size_of::<VirtioNetConfig> as u64 + 1,
-            u8::MAX as u64,
+            u64::from(u8::MAX),
             1,
         );
 
@@ -1571,7 +1571,7 @@ fn virtio_net_ctrl_rx_test() {
                     alloc.clone(),
                     vqs.clone(),
                     0,
-                    value as u32,
+                    u32::from(value),
                     VIRTIO_NET_OK,
                 );
                 arp_request.arp_packet.src_mac[0] += 1;
@@ -2071,12 +2071,12 @@ fn virtio_net_abnormal_rx_tx_test_3() {
 
         let notify_off = net.borrow().pci_dev.io_readw(
             net.borrow().bar,
-            net.borrow().common_base as u64
+            u64::from(net.borrow().common_base)
                 + offset_of!(VirtioPciCommonCfg, queue_notify_off) as u64,
         );
 
-        vq.borrow_mut().queue_notify_off = net.borrow().notify_base as u64
-            + notify_off as u64 * net.borrow().notify_off_multiplier as u64;
+        vq.borrow_mut().queue_notify_off = u64::from(net.borrow().notify_base)
+            + u64::from(notify_off) * u64::from(net.borrow().notify_off_multiplier);
 
         net.borrow()
             .setup_virtqueue_intr((i + 1) as u16, alloc.clone(), vq.clone());

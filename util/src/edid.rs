@@ -495,7 +495,7 @@ impl EdidInfo {
     fn fullfill_checksum(&mut self, edid_array: &mut [u8]) {
         let mut sum: u32 = 0;
         for elem in edid_array.iter() {
-            sum += *elem as u32;
+            sum += u32::from(*elem);
         }
         sum &= 0xff;
         if sum != 0 {

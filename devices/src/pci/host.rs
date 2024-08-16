@@ -115,7 +115,7 @@ impl PciHost {
         let root_bus = self.child_bus().unwrap();
         let locked_root_bus = root_bus.lock().unwrap();
         if bus_num == 0 {
-            let dev = locked_root_bus.child_dev(devfn as u64)?;
+            let dev = locked_root_bus.child_dev(u64::from(devfn))?;
             return Some(dev.clone());
         }
 
@@ -123,7 +123,7 @@ impl PciHost {
             let child_bus = dev.lock().unwrap().child_bus();
             if let Some(bus) = child_bus {
                 if let Some(b) = PciBus::find_bus_by_num(&bus, bus_num) {
-                    let dev = b.lock().unwrap().child_dev(devfn as u64)?.clone();
+                    let dev = b.lock().unwrap().child_dev(u64::from(devfn))?.clone();
                     return Some(dev);
                 }
             }
@@ -396,8 +396,8 @@ fn build_prt_for_aml(pci_bus: &mut AmlDevice, irq: i32) {
         (0..PCI_PIN_NUM).for_each(|pin| {
             let gsi = (pin + slot) % PCI_PIN_NUM;
             let mut pkg = AmlPackage::new(4);
-            pkg.append_child(AmlDWord((slot as u32) << 16 | 0xFFFF));
-            pkg.append_child(AmlDWord(pin as u32));
+            pkg.append_child(AmlDWord(u32::from(slot) << 16 | 0xFFFF));
+            pkg.append_child(AmlDWord(u32::from(pin)));
             pkg.append_child(AmlName(format!("GSI{}", gsi)));
             pkg.append_child(AmlZero);
             prt_pkg.append_child(pkg);
@@ -419,7 +419,7 @@ fn build_prt_for_aml(pci_bus: &mut AmlDevice, irq: i32) {
             AmlEdgeLevel::Level,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
-            vec![irqs as u32],
+            vec![u32::from(irqs)],
         ));
         gsi.append_child(AmlNameDecl::new("_PRS", crs));
         let mut crs = AmlResTemplate::new();
@@ -428,7 +428,7 @@ fn build_prt_for_aml(pci_bus: &mut AmlDevice, irq: i32) {
             AmlEdgeLevel::Level,
             AmlActiveLevel::High,
             AmlIntShare::Exclusive,
-            vec![irqs as u32],
+            vec![u32::from(irqs)],
         ));
         gsi.append_child(AmlNameDecl::new("_CRS", crs));
         let method = AmlMethod::new("_SRS", 1, false);
@@ -696,13 +696,13 @@ pub mod tests {
         let pci_dev = TestPciDevice::new("PCI device", 8, Arc::downgrade(&bus));
         pci_dev.realize().unwrap();
 
-        let addr: u64 = 8_u64 << ECAM_DEVFN_SHIFT | SECONDARY_BUS_NUM as u64;
+        let addr: u64 = 8_u64 << ECAM_DEVFN_SHIFT | u64::from(SECONDARY_BUS_NUM);
         let data = [1_u8];
         (mmconfig_region_ops.write)(&data, GuestAddress(0), addr);
         let mut buf = [0_u8];
         (mmconfig_region_ops.read)(&mut buf, GuestAddress(0), addr);
         assert_eq!(buf, data);
-        let addr: u64 = 16_u64 << ECAM_DEVFN_SHIFT | SECONDARY_BUS_NUM as u64;
+        let addr: u64 = 16_u64 << ECAM_DEVFN_SHIFT | u64::from(SECONDARY_BUS_NUM);
         let data = [2_u8];
         (mmconfig_region_ops.write)(&data, GuestAddress(0), addr);
         let mut buf = [0_u8];

@@ -299,7 +299,7 @@ impl Request {
             );
         }
         // Note: addr plus len has been checked not overflow in virtqueue.
-        let in_header = GuestAddress(in_iov_elem.addr.0 + in_iov_elem.len as u64 - 1);
+        let in_header = GuestAddress(in_iov_elem.addr.0 + u64::from(in_iov_elem.len) - 1);
 
         let mut request = Request {
             desc_index: elem.index,
@@ -464,7 +464,7 @@ impl Request {
         let sector = LittleEndian::read_u64(segment.sector.as_bytes());
         let num_sectors = LittleEndian::read_u32(segment.num_sectors.as_bytes());
         if sector
-            .checked_add(num_sectors as u64)
+            .checked_add(u64::from(num_sectors))
             .filter(|&off| off <= iohandler.disk_sectors)
             .is_none()
             || num_sectors > MAX_REQUEST_SECTORS
@@ -485,7 +485,7 @@ impl Request {
         let block_backend = iohandler.block_backend.as_ref().unwrap();
         let mut locked_backend = block_backend.lock().unwrap();
         let offset = (sector as usize) << SECTOR_SHIFT;
-        let nbytes = (num_sectors as u64) << SECTOR_SHIFT;
+        let nbytes = u64::from(num_sectors) << SECTOR_SHIFT;
         trace::virtio_blk_handle_discard_write_zeroes_req(&opcode, flags, offset, nbytes);
         if opcode == OpCode::Discard {
             if flags == VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP {
@@ -1068,7 +1068,7 @@ impl Block {
         // capacity: 64bits
         self.config_space.capacity = self.disk_sectors;
         // seg_max = queue_size - 2: 32bits
-        self.config_space.seg_max = self.queue_size_max() as u32 - 2;
+        self.config_space.seg_max = u32::from(self.queue_size_max()) - 2;
 
         if self.blk_cfg.num_queues.unwrap_or(1) > 1 {
             self.config_space.num_queues = self.blk_cfg.num_queues.unwrap_or(1);
@@ -1547,14 +1547,14 @@ mod tests {
         let page = 0_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.base.driver_features, 0_u64);
-        assert_eq!(block.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(block.driver_features(page)), 0_u64);
         assert_eq!(block.device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         block.set_driver_features(page, driver_feature);
         assert_eq!(block.base.driver_features, 0_u64);
-        assert_eq!(block.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(block.driver_features(page)), 0_u64);
         assert_eq!(block.device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
@@ -1569,7 +1569,7 @@ mod tests {
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
         );
         assert_eq!(
-            block.driver_features(page) as u64,
+            u64::from(block.driver_features(page)),
             (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
         );
         assert_eq!(
@@ -1663,10 +1663,10 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
+        queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
+        queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;

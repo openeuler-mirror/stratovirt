@@ -587,7 +587,7 @@ fn get_host_nodes(nodes: &str) -> Result<Vec<u32>> {
             "host_nodes".to_string(),
             0,
             true,
-            MAX_NODES as u64,
+            u64::from(MAX_NODES),
             false,
         )));
     }

@@ -596,7 +596,7 @@ impl FwCfgCommon {
                         &mem_space,
                         GuestAddress(dma.address),
                         data.as_slice(),
-                        len as u64,
+                        u64::from(len),
                     )
                     .is_err()
                     {
@@ -619,7 +619,7 @@ impl FwCfgCommon {
                         &mem_space,
                         GuestAddress(dma.address),
                         &entry.data[offset as usize..],
-                        len as u64,
+                        u64::from(len),
                     )
                     .is_err()
                 {
@@ -629,7 +629,7 @@ impl FwCfgCommon {
                 if is_write {
                     let mut dma_read_error = false;
                     let data = &mut entry.data[offset as usize..];
-                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data, len as u64)
+                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data, u64::from(len))
                         .is_err()
                     {
                         dma_read_error = true;
@@ -641,7 +641,7 @@ impl FwCfgCommon {
                         if let Some(cb) = &entry.write_cb {
                             cb.lock().unwrap().write_callback(
                                 data.to_vec(),
-                                offset as u64,
+                                u64::from(offset),
                                 len as usize,
                             );
                         }
@@ -650,7 +650,7 @@ impl FwCfgCommon {
                 offset += len;
             }
             dma.length -= len;
-            dma.address += len as u64
+            dma.address += u64::from(len)
         }
 
         self.cur_offset = offset;
@@ -705,7 +705,7 @@ impl FwCfgCommon {
     fn dma_mem_read(&self, addr: u64, size: u32) -> Result<u64> {
         extract_u64(
             FW_CFG_DMA_SIGNATURE as u64,
-            ((8 - addr - size as u64) * 8) as u32,
+            ((8 - addr - u64::from(size)) * 8) as u32,
             size * 8,
         )
         .with_context(|| "Failed to extract bits from u64")
@@ -739,7 +739,7 @@ impl FwCfgCommon {
             && cur_offset < entry.data.len() as u32
         {
             loop {
-                value = (value << 8) | entry.data[cur_offset as usize] as u64;
+                value = (value << 8) | u64::from(entry.data[cur_offset as usize]);
                 cur_offset += 1;
                 size -= 1;
 
@@ -747,7 +747,7 @@ impl FwCfgCommon {
                     break;
                 }
             }
-            value <<= 8 * size as u64;
+            value <<= 8 * u64::from(size);
         }
         self.cur_offset = cur_offset;
 
@@ -955,9 +955,9 @@ impl SysBusDevOps for FwCfgMem {
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
         let size = data.len() as u32;
         let value = match size {
-            1 => data[0] as u64,
-            2 => BigEndian::read_u16(data) as u64,
-            4 => BigEndian::read_u32(data) as u64,
+            1 => u64::from(data[0]),
+            2 => u64::from(BigEndian::read_u16(data)),
+            4 => u64::from(BigEndian::read_u32(data)),
             8 => BigEndian::read_u64(data),
             _ => 0,
         };
@@ -1127,9 +1127,9 @@ impl SysBusDevOps for FwCfgIO {
             }
             4..=11 => {
                 let value = match size {
-                    1 => data[0] as u64,
-                    2 => BigEndian::read_u16(data) as u64,
-                    4 => BigEndian::read_u32(data) as u64,
+                    1 => u64::from(data[0]),
+                    2 => u64::from(BigEndian::read_u16(data)),
+                    4 => u64::from(BigEndian::read_u32(data)),
                     8 => BigEndian::read_u64(data),
                     _ => 0,
                 };

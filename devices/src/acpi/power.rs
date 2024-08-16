@@ -356,7 +356,7 @@ impl AmlBuilder for PowerDev {
         acpi_bat_dev.append_child(method);
 
         let mut bst_pkg = AmlPackage::new(4);
-        bst_pkg.append_child(AmlInteger(ACPI_BATTERY_STATE_CHARGING as u64));
+        bst_pkg.append_child(AmlInteger(u64::from(ACPI_BATTERY_STATE_CHARGING)));
         bst_pkg.append_child(AmlInteger(0xFFFFFFFF));
         bst_pkg.append_child(AmlInteger(0xFFFFFFFF));
         bst_pkg.append_child(AmlInteger(0xFFFFFFFF));

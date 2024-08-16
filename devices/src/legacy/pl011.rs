@@ -97,7 +97,7 @@ impl PL011State {
     fn new() -> Self {
         PL011State {
             rfifo: [0; PL011_FIFO_SIZE],
-            flags: (PL011_FLAG_TXFE | PL011_FLAG_RXFE) as u32,
+            flags: u32::from(PL011_FLAG_TXFE | PL011_FLAG_RXFE),
             lcr: 0,
             rsr: 0,
             cr: 0x300,
@@ -174,20 +174,20 @@ impl PL011 {
 
 impl InputReceiver for PL011 {
     fn receive(&mut self, data: &[u8]) {
-        self.state.flags &= !PL011_FLAG_RXFE as u32;
+        self.state.flags &= u32::from(!PL011_FLAG_RXFE);
         for val in data {
             let mut slot = (self.state.read_pos + self.state.read_count) as usize;
             if slot >= PL011_FIFO_SIZE {
                 slot -= PL011_FIFO_SIZE;
             }
-            self.state.rfifo[slot] = *val as u32;
+            self.state.rfifo[slot] = u32::from(*val);
             self.state.read_count += 1;
             trace::pl011_receive(self.state.rfifo[slot], self.state.read_count);
         }
 
         // If in character-mode, or in FIFO-mode and FIFO is full, trigger the interrupt.
         if ((self.state.lcr & 0x10) == 0) || (self.state.read_count as usize == PL011_FIFO_SIZE) {
-            self.state.flags |= PL011_FLAG_RXFF as u32;
+            self.state.flags |= u32::from(PL011_FLAG_RXFF);
             trace::pl011_receive_full();
         }
         if self.state.read_count >= self.state.read_trigger {
@@ -254,7 +254,7 @@ impl SysBusDevOps for PL011 {
                 // Data register.
                 self.unpause_rx();
 
-                self.state.flags &= !(PL011_FLAG_RXFF as u32);
+                self.state.flags &= !u32::from(PL011_FLAG_RXFF);
                 let c = self.state.rfifo[self.state.read_pos as usize];
 
                 if self.state.read_count > 0 {
@@ -265,7 +265,7 @@ impl SysBusDevOps for PL011 {
                     }
                 }
                 if self.state.read_count == 0 {
-                    self.state.flags |= PL011_FLAG_RXFE as u32;
+                    self.state.flags |= u32::from(PL011_FLAG_RXFE);
                 }
                 if self.state.read_count == self.state.read_trigger - 1 {
                     self.state.int_level &= !INT_RX;
@@ -317,7 +317,7 @@ impl SysBusDevOps for PL011 {
             0x3f8..=0x400 => {
                 // Register 0xFE0~0xFFC is UART Peripheral Identification Registers
                 // and PrimeCell Identification Registers.
-                ret = *self.state.id.get(((offset - 0xfe0) >> 2) as usize).unwrap() as u32;
+                ret = u32::from(*self.state.id.get(((offset - 0xfe0) >> 2) as usize).unwrap());
             }
             _ => {
                 error!("Failed to read pl011: Invalid offset 0x{:x}", offset);
@@ -493,7 +493,7 @@ mod test {
         pl011_dev.receive(&data);
         assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
-            assert_eq!(pl011_dev.state.rfifo[i], data[i] as u32);
+            assert_eq!(pl011_dev.state.rfifo[i], u32::from(data[i]));
         }
         assert_eq!(pl011_dev.state.flags, 0xC0);
         assert_eq!(pl011_dev.state.int_level, INT_RX);

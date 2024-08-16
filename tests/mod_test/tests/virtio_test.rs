@@ -180,7 +180,7 @@ fn check_req_result(
 
 fn check_queue(blk: Rc<RefCell<TestVirtioPciDev>>, desc: u64, avail: u64, used: u64) {
     let bar = blk.borrow().bar;
-    let common_base = blk.borrow().common_base as u64;
+    let common_base = u64::from(blk.borrow().common_base);
     let reqs = [
         (offset_of!(VirtioPciCommonCfg, queue_desc_lo), desc),
         (offset_of!(VirtioPciCommonCfg, queue_desc_hi), desc >> 32),
@@ -452,7 +452,7 @@ fn virtio_feature_indirect() {
         free_head = vqs[0]
             .borrow_mut()
             .add(test_state.clone(), req_addr, 8, false);
-        let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+        let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
         test_state
             .borrow()
             .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
@@ -485,7 +485,7 @@ fn virtio_feature_indirect() {
     free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, 8, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
         .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
@@ -498,7 +498,7 @@ fn virtio_feature_indirect() {
     indirect_req.add_desc(test_state.clone(), req_addr + 8, 8, false);
     indirect_req.add_desc(
         test_state.clone(),
-        req_addr + REQ_ADDR_LEN as u64,
+        req_addr + u64::from(REQ_ADDR_LEN),
         513,
         true,
     );
@@ -523,7 +523,7 @@ fn virtio_feature_indirect() {
         String::from_utf8(
             test_state
                 .borrow()
-                .memread(req_addr + REQ_ADDR_LEN as u64, 4)
+                .memread(req_addr + u64::from(REQ_ADDR_LEN), 4)
         )
         .unwrap(),
         "TEST"
@@ -595,7 +595,7 @@ fn virtio_feature_indirect_and_event_idx() {
     let free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, REQ_ADDR_LEN, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
         .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
@@ -608,7 +608,7 @@ fn virtio_feature_indirect_and_event_idx() {
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
     indirect_req.add_desc(
         test_state.clone(),
-        req_addr + REQ_ADDR_LEN as u64,
+        req_addr + u64::from(REQ_ADDR_LEN),
         REQ_DATA_LEN,
         false,
     );
@@ -874,12 +874,12 @@ fn virtio_init_device_abnormal_features() {
 fn virtio_init_device_abnormal_vring_info() {
     // (err_type, value, ack, device_status)
     let reqs = [
-        (0, u16::MAX as u64, 0, 0),
+        (0, u64::from(u16::MAX), 0, 0),
         (0, 2, 0, 0),
         (1, 0_u64, 0xff, 0),
         (1, 255, 0xff, 0),
         (1, 1 << 15, 0xff, 0),
-        (1, u16::MAX as u64, 0xff, 0),
+        (1, u64::from(u16::MAX), 0xff, 0),
         (2, 0, 0xff, 0),
         (3, 0, 0xff, 0),
         (4, 0, 0xff, 0),
@@ -921,7 +921,7 @@ fn virtio_init_device_abnormal_vring_info() {
             blk.borrow().queue_select(value as u16);
         }
 
-        let queue_size = blk.borrow().get_queue_size() as u32;
+        let queue_size = u32::from(blk.borrow().get_queue_size());
 
         // Set invalid queue size.
         if err_type == 1 {
@@ -937,18 +937,19 @@ fn virtio_init_device_abnormal_vring_info() {
         vq.borrow_mut().indirect = (features & (1 << VIRTIO_RING_F_INDIRECT_DESC)) != 0;
         vq.borrow_mut().event = (features & (1 << VIRTIO_RING_F_EVENT_IDX)) != 0;
 
-        let addr = alloc
-            .borrow_mut()
-            .alloc(get_vring_size(queue_size, VIRTIO_PCI_VRING_ALIGN) as u64);
+        let addr = alloc.borrow_mut().alloc(u64::from(get_vring_size(
+            queue_size,
+            VIRTIO_PCI_VRING_ALIGN,
+        )));
 
         vq.borrow_mut().desc = addr;
-        let avail = addr + (queue_size * size_of::<VringDesc>() as u32) as u64 + 16;
+        let avail = addr + u64::from(queue_size * size_of::<VringDesc>() as u32) + 16;
         vq.borrow_mut().avail = avail;
         let used = (avail
-            + (size_of::<u16>() as u32 * (3 + queue_size)) as u64
-            + VIRTIO_PCI_VRING_ALIGN as u64
+            + u64::from(size_of::<u16>() as u32 * (3 + queue_size))
+            + u64::from(VIRTIO_PCI_VRING_ALIGN)
             - 1)
-            & !(VIRTIO_PCI_VRING_ALIGN as u64 - 1) + 16;
+            & !(u64::from(VIRTIO_PCI_VRING_ALIGN) - 1) + 16;
         vq.borrow_mut().used = used + 16;
 
         match err_type {
@@ -1015,32 +1016,32 @@ fn virtio_init_device_abnormal_vring_info() {
 
         let notify_off = blk.borrow().pci_dev.io_readw(
             blk.borrow().bar,
-            blk.borrow().common_base as u64
+            u64::from(blk.borrow().common_base)
                 + offset_of!(VirtioPciCommonCfg, queue_notify_off) as u64,
         );
-        vq.borrow_mut().queue_notify_off = blk.borrow().notify_base as u64
-            + notify_off as u64 * blk.borrow().notify_off_multiplier as u64;
+        vq.borrow_mut().queue_notify_off = u64::from(blk.borrow().notify_base)
+            + u64::from(notify_off) * u64::from(blk.borrow().notify_off_multiplier);
 
         let offset = offset_of!(VirtioPciCommonCfg, queue_enable) as u64;
         // TEST enable vq with 0
         if err_type == 9 {
             blk.borrow().pci_dev.io_writew(
                 blk.borrow().bar,
-                blk.borrow().common_base as u64 + offset,
+                u64::from(blk.borrow().common_base) + offset,
                 0,
             );
         } else {
             blk.borrow().pci_dev.io_writew(
                 blk.borrow().bar,
-                blk.borrow().common_base as u64
+                u64::from(blk.borrow().common_base)
                     + offset_of!(VirtioPciCommonCfg, queue_enable) as u64,
                 1,
             );
             if err_type == 10 {
-                let status = blk
-                    .borrow()
-                    .pci_dev
-                    .io_readw(blk.borrow().bar, blk.borrow().common_base as u64 + offset);
+                let status = blk.borrow().pci_dev.io_readw(
+                    blk.borrow().bar,
+                    u64::from(blk.borrow().common_base) + offset,
+                );
                 assert_eq!(status, 1);
             }
         }
@@ -1481,11 +1482,11 @@ fn virtio_io_abnormal_desc_len() {
             if length == 16 {
                 test_state.borrow().writel(
                     indirect_desc + offset_of!(VringDesc, len) as u64,
-                    u16::MAX as u32 * (VRING_DESC_SIZE as u32 + 1),
+                    u32::from(u16::MAX) * (VRING_DESC_SIZE as u32 + 1),
                 );
                 test_state.borrow().writel(
                     indirect_desc + offset_of!(VringDesc, flags) as u64,
-                    (VRING_DESC_F_INDIRECT | VRING_DESC_F_NEXT) as u32,
+                    u32::from(VRING_DESC_F_INDIRECT | VRING_DESC_F_NEXT),
                 );
             }
         }
@@ -1595,7 +1596,7 @@ fn virtio_io_abnormal_desc_flags_2() {
     let free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, REQ_ADDR_LEN, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
         .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
@@ -1607,7 +1608,7 @@ fn virtio_io_abnormal_desc_flags_2() {
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
     indirect_req.add_desc(
         test_state.clone(),
-        req_addr + REQ_ADDR_LEN as u64,
+        req_addr + u64::from(REQ_ADDR_LEN),
         REQ_DATA_LEN,
         false,
     );
@@ -1670,7 +1671,7 @@ fn virtio_io_abnormal_desc_flags_3() {
             .borrow_mut()
             .add(test_state.clone(), req_addr, 8, false);
 
-        let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+        let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
         test_state
             .borrow()
             .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
@@ -1687,7 +1688,7 @@ fn virtio_io_abnormal_desc_flags_3() {
             .add_indirect(test_state.clone(), indirect_req, true);
 
         // Add VRING_DESC_F_WRITE or VRING_DESC_F_NEXT to desc[0]->flags;
-        let addr = vqs[0].borrow().desc + 16_u64 * (free_head + 1) as u64 + 12;
+        let addr = vqs[0].borrow().desc + 16_u64 * u64::from(free_head + 1) + 12;
         let flags = test_state.borrow().readw(addr) | flag;
         test_state.borrow().writew(addr, flags);
         blk.borrow().virtqueue_notify(vqs[0].clone());
@@ -1871,7 +1872,7 @@ fn virtio_io_abnormal_indirect_desc_elem_num() {
     let free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, REQ_ADDR_LEN, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
         .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);

@@ -141,7 +141,7 @@ impl XhciOperReg {
 
     /// Run the command ring.
     pub fn start_cmd_ring(&mut self) {
-        self.cmd_ring_ctrl |= CMD_RING_CTRL_CRR as u64;
+        self.cmd_ring_ctrl |= u64::from(CMD_RING_CTRL_CRR);
     }
 
     pub fn set_usb_cmd(&mut self, value: u32) {
@@ -247,11 +247,11 @@ impl XhciInterrupter {
     pub fn send_event(&mut self, evt: &XhciEvent) -> Result<()> {
         let er_end = self
             .er_start
-            .checked_add((TRB_SIZE * self.er_size) as u64)
+            .checked_add(u64::from(TRB_SIZE * self.er_size))
             .ok_or_else(|| {
                 UsbError::MemoryAccessOverflow(
                     self.er_start.raw_value(),
-                    (TRB_SIZE * self.er_size) as u64,
+                    u64::from(TRB_SIZE * self.er_size),
                 )
             })?;
         if self.erdp < self.er_start.raw_value() || self.erdp >= er_end.raw_value() {
@@ -262,12 +262,12 @@ impl XhciInterrupter {
                 self.er_size
             );
         }
-        let dp_idx = (self.erdp - self.er_start.raw_value()) / TRB_SIZE as u64;
-        if ((self.er_ep_idx + 2) % self.er_size) as u64 == dp_idx {
+        let dp_idx = (self.erdp - self.er_start.raw_value()) / u64::from(TRB_SIZE);
+        if u64::from((self.er_ep_idx + 2) % self.er_size) == dp_idx {
             debug!("Event ring full error, idx {}", dp_idx);
             let event = XhciEvent::new(TRBType::ErHostController, TRBCCode::EventRingFullError);
             self.write_event(&event)?;
-        } else if ((self.er_ep_idx + 1) % self.er_size) as u64 == dp_idx {
+        } else if u64::from((self.er_ep_idx + 1) % self.er_size) == dp_idx {
             debug!("Event Ring full, drop Event.");
         } else {
             self.write_event(evt)?;
@@ -336,11 +336,11 @@ impl XhciInterrupter {
     fn write_trb(&mut self, trb: &XhciTRB) -> Result<()> {
         let addr = self
             .er_start
-            .checked_add((TRB_SIZE * self.er_ep_idx) as u64)
+            .checked_add(u64::from(TRB_SIZE * self.er_ep_idx))
             .ok_or_else(|| {
                 UsbError::MemoryAccessOverflow(
                     self.er_start.raw_value(),
-                    (TRB_SIZE * self.er_ep_idx) as u64,
+                    u64::from(TRB_SIZE * self.er_ep_idx),
                 )
             })?;
         let cycle = trb.control as u8;
@@ -375,7 +375,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 XHCI_VERSION << hci_version_offset | XHCI_CAP_LENGTH
             }
             XHCI_CAP_REG_HCSPARAMS1 => {
-                (max_ports as u32) << CAP_HCSP_NP_SHIFT
+                u32::from(max_ports) << CAP_HCSP_NP_SHIFT
                     | max_intrs << CAP_HCSP_NI_SHIFT
                     | (locked_dev.slots.len() as u32) << CAP_HCSP_NDS_SHIFT
             }
@@ -396,18 +396,18 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             0x20 => {
                 CAP_EXT_USB_REVISION_2_0 << CAP_EXT_REVISION_SHIFT
                     | 0x4 << CAP_EXT_NEXT_CAP_POINTER_SHIFT
-                    | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
+                    | u32::from(CAP_EXT_CAP_ID_SUPPORT_PROTOCOL)
             }
             0x24 => CAP_EXT_USB_NAME_STRING,
-            0x28 => ((locked_dev.numports_2 as u32) << 8) | 1,
+            0x28 => (u32::from(locked_dev.numports_2) << 8) | 1,
             0x2c => 0x0,
             // Extended capabilities (USB 3.0)
             0x30 => {
                 CAP_EXT_USB_REVISION_3_0 << CAP_EXT_REVISION_SHIFT
-                    | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
+                    | u32::from(CAP_EXT_CAP_ID_SUPPORT_PROTOCOL)
             }
             0x34 => CAP_EXT_USB_NAME_STRING,
-            0x38 => ((locked_dev.numports_3 as u32) << 8) | (locked_dev.numports_2 + 1) as u32,
+            0x38 => (u32::from(locked_dev.numports_3) << 8) | u32::from(locked_dev.numports_2 + 1),
             0x3c => 0x0,
             _ => {
                 error!("Failed to read xhci cap: not implemented");
@@ -515,7 +515,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
             }
             XHCI_OPER_REG_CMD_RING_CTRL_HI => {
-                let crc_hi = (value as u64) << 32;
+                let crc_hi = u64::from(value) << 32;
                 let mut crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0);
                 if crc_lo & (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS) != 0
                     && (crc_lo & CMD_RING_CTRL_CRR) == CMD_RING_CTRL_CRR
@@ -527,7 +527,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                         error!("Failed to send event: {:?}", e);
                     }
                 } else {
-                    let addr = (crc_hi | crc_lo as u64) & XHCI_CRCR_CRP_MASK;
+                    let addr = (crc_hi | u64::from(crc_lo)) & XHCI_CRCR_CRP_MASK;
                     locked_xhci.cmd_ring.init(addr);
                 }
                 crc_lo &= !(CMD_RING_CTRL_CA | CMD_RING_CTRL_CS);
@@ -648,21 +648,21 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     let erdp = locked_intr.erdp;
                     let er_end = if let Some(addr) = locked_intr
                         .er_start
-                        .checked_add((TRB_SIZE * locked_intr.er_size) as u64)
+                        .checked_add(u64::from(TRB_SIZE * locked_intr.er_size))
                     {
                         addr
                     } else {
                         error!(
                             "Memory access overflow, addr {:x} offset {:x}",
                             locked_intr.er_start.raw_value(),
-                            (TRB_SIZE * locked_intr.er_size) as u64
+                            u64::from(TRB_SIZE * locked_intr.er_size)
                         );
                         return false;
                     };
                     if erdp >= locked_intr.er_start.raw_value()
                         && erdp < er_end.raw_value()
-                        && (erdp - locked_intr.er_start.raw_value()) / TRB_SIZE as u64
-                            != locked_intr.er_ep_idx as u64
+                        && (erdp - locked_intr.er_start.raw_value()) / u64::from(TRB_SIZE)
+                            != u64::from(locked_intr.er_ep_idx)
                     {
                         drop(locked_intr);
                         xhci.intrs[idx as usize].lock().unwrap().send_intr();

@@ -218,7 +218,7 @@ impl Request {
         for elem_iov in iovec {
             request.iovec.push(GuestIovec {
                 iov_base: elem_iov.addr,
-                iov_len: elem_iov.len as u64,
+                iov_len: u64::from(elem_iov.len),
             });
             request.elem_cnt += elem_iov.len;
         }
@@ -280,7 +280,7 @@ impl Request {
 
             while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
                 offset += std::mem::size_of::<u32>() as u64;
-                let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
+                let gpa: GuestAddress = GuestAddress(u64::from(pfn) << VIRTIO_BALLOON_PFN_SHIFT);
                 let (hva, shared) = match mem.lock().unwrap().get_host_address(gpa) {
                     Some((addr, mem_share)) => (addr, mem_share),
                     None => {
@@ -741,7 +741,7 @@ impl BalloonIoHandler {
 
     /// Get the memory size of balloon.
     fn get_balloon_memory_size(&self) -> u64 {
-        (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
+        u64::from(self.balloon_actual.load(Ordering::Acquire)) << VIRTIO_BALLOON_PFN_SHIFT
     }
 }
 
@@ -916,9 +916,9 @@ impl ConfigCheck for BalloonConfig {
         {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "balloon membuf-percent".to_string(),
-                MEM_BUFFER_PERCENT_MIN as u64,
+                u64::from(MEM_BUFFER_PERCENT_MIN),
                 false,
-                MEM_BUFFER_PERCENT_MAX as u64,
+                u64::from(MEM_BUFFER_PERCENT_MAX),
                 false,
             )));
         }
@@ -927,9 +927,9 @@ impl ConfigCheck for BalloonConfig {
         {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "balloon monitor-interval".to_string(),
-                MONITOR_INTERVAL_SECOND_MIN as u64,
+                u64::from(MONITOR_INTERVAL_SECOND_MIN),
                 false,
-                MONITOR_INTERVAL_SECOND_MAX as u64,
+                u64::from(MONITOR_INTERVAL_SECOND_MAX),
                 false,
             )));
         }
@@ -1036,7 +1036,7 @@ impl Balloon {
 
     /// Get the size of memory that reclaimed by balloon.
     fn get_balloon_memory_size(&self) -> u64 {
-        (self.actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
+        u64::from(self.actual.load(Ordering::Acquire)) << VIRTIO_BALLOON_PFN_SHIFT
     }
 
     /// Get the actual memory size of guest.
@@ -1291,13 +1291,13 @@ mod tests {
         bln.base.device_features = 1 | 1 << 32;
         bln.set_driver_features(0, 1);
         assert_eq!(bln.base.driver_features, 1);
-        assert_eq!(bln.base.driver_features, bln.driver_features(0) as u64);
+        assert_eq!(bln.base.driver_features, u64::from(bln.driver_features(0)));
         bln.base.driver_features = 1 << 32;
         bln.set_driver_features(1, 1);
         assert_eq!(bln.base.driver_features, 1 << 32);
         assert_eq!(
             bln.base.driver_features,
-            (bln.driver_features(1) as u64) << 32
+            u64::from(bln.driver_features(1)) << 32
         );
 
         // Test methods of balloon.

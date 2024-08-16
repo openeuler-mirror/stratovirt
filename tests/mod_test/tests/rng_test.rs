@@ -90,7 +90,7 @@ fn virtio_rng_read_batch(
     );
 
     assert!(len.unwrap() >= 1);
-    assert!(len.unwrap() as u64 <= bytes);
+    assert!(u64::from(len.unwrap()) <= bytes);
 
     test_state.borrow().memread(req_addr, RNG_DATA_BYTES)
 }
@@ -131,7 +131,7 @@ fn virtio_rng_read_chained(
     );
 
     assert!(len.unwrap() >= 1);
-    assert!(len.unwrap() as u64 <= bytes * DEFAULT_RNG_REQS);
+    assert!(u64::from(len.unwrap()) <= bytes * DEFAULT_RNG_REQS);
 
     test_state.borrow().memread(req_addr, RNG_DATA_BYTES)
 }

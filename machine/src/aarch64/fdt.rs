@@ -311,7 +311,7 @@ impl CompileFDTHelper for MachineBase {
                 let dist: u32 = if id as u32 == *i {
                     10
                 } else if let Some(distance) = distances.get(i) {
-                    *distance as u32
+                    u32::from(*distance)
                 } else {
                     20
                 };

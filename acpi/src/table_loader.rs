@@ -356,7 +356,7 @@ impl TableLoader {
 
         dst_file_entry.file_blob.lock().unwrap()
             [offset as usize..(offset as usize + size as usize)]
-            .copy_from_slice(&(src_offset as u64).as_bytes()[0..size as usize]);
+            .copy_from_slice(&u64::from(src_offset).as_bytes()[0..size as usize]);
 
         self.cmds.push(TableLoaderEntry::new_add_pointer_entry(
             dst_file, src_file, offset, size,

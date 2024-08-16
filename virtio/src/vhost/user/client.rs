@@ -482,7 +482,7 @@ impl VhostUserClient {
             .with_context(|| "Failed to get protocol features for vhost-user blk")?;
         if virtio_has_feature(
             protocol_feature,
-            VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD as u32,
+            u32::from(VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD),
         ) {
             if self.inflight.is_none() {
                 // Expect 1 fd.
@@ -903,7 +903,7 @@ impl VhostOps for VhostUserClient {
             size_of::<VhostUserVringState>() as u32,
         );
         let payload_opt: Option<&[u8]> = None;
-        let vring_state = VhostUserVringState::new(queue_idx as u32, num as u32);
+        let vring_state = VhostUserVringState::new(queue_idx as u32, u32::from(num));
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
@@ -982,7 +982,7 @@ impl VhostOps for VhostUserClient {
             size_of::<VhostUserVringState>() as u32,
         );
         let payload_opt: Option<&[u8]> = None;
-        let vring_state = VhostUserVringState::new(queue_idx as u32, last_avail_idx as u32);
+        let vring_state = VhostUserVringState::new(queue_idx as u32, u32::from(last_avail_idx));
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
@@ -1058,7 +1058,7 @@ impl VhostOps for VhostUserClient {
             size_of::<VhostUserVringState>() as u32,
         );
         let payload_opt: Option<&[u8]> = None;
-        let vring_state = VhostUserVringState::new(queue_idx as u32, status as u32);
+        let vring_state = VhostUserVringState::new(queue_idx as u32, u32::from(status));
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])

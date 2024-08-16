@@ -143,7 +143,7 @@ impl PvPanicPci {
                 }
             });
 
-            matches!(cloned_pvpanic_write.handle_event(val as u32), Ok(()))
+            matches!(cloned_pvpanic_write.handle_event(u32::from(val)), Ok(()))
         });
 
         let bar0_region_ops = RegionOps {
@@ -220,7 +220,7 @@ impl Device for PvPanicPci {
             .unwrap()
             .dev_id
             .store(device_id, Ordering::Release);
-        locked_bus.attach_child(devfn as u64, dev.clone())?;
+        locked_bus.attach_child(u64::from(devfn), dev.clone())?;
 
         Ok(dev)
     }

@@ -278,14 +278,14 @@ impl<T: Clone> AioCb<T> {
 
     pub fn is_misaligned(&self) -> bool {
         if self.direct && (self.opcode == OpCode::Preadv || self.opcode == OpCode::Pwritev) {
-            if (self.offset as u64) & (self.req_align as u64 - 1) != 0 {
+            if (self.offset as u64) & (u64::from(self.req_align) - 1) != 0 {
                 return true;
             }
             for iov in self.iovec.iter() {
-                if iov.iov_base & (self.buf_align as u64 - 1) != 0 {
+                if iov.iov_base & (u64::from(self.buf_align) - 1) != 0 {
                     return true;
                 }
-                if iov.iov_len & (self.req_align as u64 - 1) != 0 {
+                if iov.iov_len & (u64::from(self.req_align) - 1) != 0 {
                     return true;
                 }
             }
@@ -295,8 +295,8 @@ impl<T: Clone> AioCb<T> {
 
     pub fn handle_misaligned(&mut self) -> Result<i32> {
         let max_len = round_down(
-            self.nbytes + self.req_align as u64 * 2,
-            self.req_align as u64,
+            self.nbytes + u64::from(self.req_align) * 2,
+            u64::from(self.req_align),
         )
         .with_context(|| "Failed to round down request length.")?;
         // Set upper limit of buffer length to avoid OOM.
@@ -327,10 +327,10 @@ impl<T: Clone> AioCb<T> {
         bounce_buffer: *mut c_void,
         buffer_len: u64,
     ) -> Result<()> {
-        let offset_align = round_down(self.offset as u64, self.req_align as u64)
+        let offset_align = round_down(self.offset as u64, u64::from(self.req_align))
             .with_context(|| "Failed to round down request offset.")?;
         let high = self.offset as u64 + self.nbytes;
-        let high_align = round_up(high, self.req_align as u64)
+        let high_align = round_up(high, u64::from(self.req_align))
             .with_context(|| "Failed to round up request high edge.")?;
 
         match self.opcode {
@@ -403,7 +403,7 @@ impl<T: Clone> AioCb<T> {
                     head_loaded = true;
                 }
                 // Is head and tail in the same alignment section?
-                let same_section = (offset_align + self.req_align as u64) >= high;
+                let same_section = (offset_align + u64::from(self.req_align)) >= high;
                 let need_tail = !(same_section && head_loaded) && (high_align > high);
 
                 let mut offset = offset_align;
@@ -419,7 +419,7 @@ impl<T: Clone> AioCb<T> {
                     if real_high == high && need_tail {
                         let len = raw_read(
                             self.file_fd,
-                            bounce_buffer as u64 + nbytes - self.req_align as u64,
+                            bounce_buffer as u64 + nbytes - u64::from(self.req_align),
                             self.req_align as usize,
                             (offset + nbytes) as usize - self.req_align as usize,
                         );
@@ -574,7 +574,7 @@ impl<T: Clone + 'static> Aio<T> {
                     -1
                 }
             };
-            return (self.complete_func)(&cb, ret as i64);
+            return (self.complete_func)(&cb, i64::from(ret));
         }
 
         cb.try_convert_to_write_zero();
@@ -586,7 +586,7 @@ impl<T: Clone + 'static> Aio<T> {
             OpCode::WriteZeroes | OpCode::WriteZeroesUnmap => cb.write_zeroes_sync(),
             OpCode::Noop => return Err(anyhow!("Aio opcode is not specified.")),
         };
-        (self.complete_func)(&cb, ret as i64)
+        (self.complete_func)(&cb, i64::from(ret))
     }
 
     pub fn flush_request(&mut self) -> Result<()> {
@@ -941,7 +941,7 @@ mod tests {
         let fsize: usize = 2 << 20;
 
         // perform sync rw in the same alignment section.
-        let minor_align = align as u64 - 100;
+        let minor_align = u64::from(align) - 100;
         perform_sync_rw(fsize, 0, minor_align, opcode, direct, align);
         perform_sync_rw(fsize, 50, minor_align, opcode, direct, align);
         perform_sync_rw(fsize, 100, minor_align, opcode, direct, align);

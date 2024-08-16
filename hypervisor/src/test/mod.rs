@@ -153,7 +153,7 @@ impl CPUHypervisorOps for TestCpu {
     ) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         {
-            arch_cpu.lock().unwrap().mpidr = self.id as u64;
+            arch_cpu.lock().unwrap().mpidr = u64::from(self.id);
             arch_cpu.lock().unwrap().set_core_reg(boot_config);
         }
         Ok(())
@@ -390,8 +390,8 @@ impl MsiIrqManager for TestInterruptManager {
         _dev_id: u32,
     ) -> Result<()> {
         let data = vector.msg_data;
-        let mut addr: u64 = vector.msg_addr_hi as u64;
-        addr = (addr << 32) + vector.msg_addr_lo as u64;
+        let mut addr: u64 = u64::from(vector.msg_addr_hi);
+        addr = (addr << 32) + u64::from(vector.msg_addr_lo);
         add_msix_msg(addr, data);
         Ok(())
     }

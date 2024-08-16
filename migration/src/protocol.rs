@@ -977,10 +977,10 @@ pub mod tests {
         device_v3.set_state_mut(&current_slice).unwrap();
         assert!(state_3_desc.current_version > state_2_desc.current_version);
 
-        assert_eq!(device_v3.state.ier, device_v2.state.ier as u64);
-        assert_eq!(device_v3.state.iir, device_v2.state.iir as u64);
-        assert_eq!(device_v3.state.lcr, device_v2.state.lcr as u64);
-        assert_eq!(device_v3.state.mcr, device_v2.state.mcr as u64);
+        assert_eq!(device_v3.state.ier, u64::from(device_v2.state.ier));
+        assert_eq!(device_v3.state.iir, u64::from(device_v2.state.iir));
+        assert_eq!(device_v3.state.lcr, u64::from(device_v2.state.lcr));
+        assert_eq!(device_v3.state.mcr, u64::from(device_v2.state.mcr));
     }
 
     #[test]
@@ -1102,7 +1102,7 @@ pub mod tests {
         device_v5.set_state_mut(&current_slice).unwrap();
         assert!(state_5_desc.current_version > state_2_desc.current_version);
 
-        assert_eq!(device_v5.state.rii, device_v2.state.iir as u64);
+        assert_eq!(device_v5.state.rii, u64::from(device_v2.state.iir));
     }
 
     #[test]

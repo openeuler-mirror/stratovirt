@@ -241,7 +241,7 @@ fn scream_playback_basic_test() {
     // write one audio chunk
     for i in 0..AUDIO_CHUNK_SIZE {
         ivshmem.borrow_mut().writeb(
-            PLAY_DADA_OFFSET + (AUDIO_CHUNK_SIZE + i) as u64,
+            PLAY_DADA_OFFSET + u64::from(AUDIO_CHUNK_SIZE + i),
             AUDIO_DEFAULT_DATA[i as usize],
         );
     }
@@ -257,9 +257,10 @@ fn scream_playback_basic_test() {
     // When four consecutive frames of data are written, only the last two frames of data can be
     // read.
     for i in 0..AUDIO_CHUNK_SIZE {
-        ivshmem
-            .borrow_mut()
-            .writeb(PLAY_DADA_OFFSET + i as u64, AUDIO_DEFAULT_DATA[i as usize]);
+        ivshmem.borrow_mut().writeb(
+            PLAY_DADA_OFFSET + u64::from(i),
+            AUDIO_DEFAULT_DATA[i as usize],
+        );
     }
 
     // update play header chunk_idx
@@ -374,7 +375,10 @@ fn scream_record_basic_test() {
     let offset = RECORD_BASE + offset_of!(ShmemStreamHeader, chunk_idx) as u64;
     chunk_idx = ivshmem.borrow_mut().readw(offset);
 
-    assert_eq!(chunk_idx as u32, AUDIO_CHUNK_CNT % (AUDIO_CHUNK_CNT - 1));
+    assert_eq!(
+        u32::from(chunk_idx),
+        AUDIO_CHUNK_CNT % (AUDIO_CHUNK_CNT - 1)
+    );
 
     let audio_data = ivshmem.borrow_mut().readl(RECORD_DATA_OFFSET);
     let mut check_data = 0;
@@ -498,7 +502,7 @@ fn scream_exception_002() {
     // write one audio chunk
     for i in 0..AUDIO_CHUNK_SIZE {
         ivshmem.borrow_mut().writeb(
-            PLAY_DADA_OFFSET + (AUDIO_CHUNK_SIZE + i) as u64,
+            PLAY_DADA_OFFSET + u64::from(AUDIO_CHUNK_SIZE + i),
             AUDIO_DEFAULT_DATA[i as usize],
         );
     }

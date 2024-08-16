@@ -866,11 +866,11 @@ impl SmbiosTable {
         table4.header.core_count = mach_cfg.nr_cores;
         table4.header.core_enabled = mach_cfg.nr_cores;
 
-        table4.header.core_count2 = (mach_cfg.nr_cores as u16).to_le_bytes();
-        table4.header.core_enabled2 = (mach_cfg.nr_cores as u16).to_le_bytes();
+        table4.header.core_count2 = u16::from(mach_cfg.nr_cores).to_le_bytes();
+        table4.header.core_enabled2 = u16::from(mach_cfg.nr_cores).to_le_bytes();
 
         table4.header.thread_count = mach_cfg.nr_threads;
-        table4.header.thread_count2 = (mach_cfg.nr_threads as u16).to_le_bytes();
+        table4.header.thread_count2 = u16::from(mach_cfg.nr_threads).to_le_bytes();
         table4.finish();
 
         self.entries.append(&mut table4.header.as_bytes().to_vec());
@@ -946,7 +946,7 @@ impl SmbiosTable {
         let start_kb = start / 1024;
         let end_kb = (start + size - 1) / 1024;
 
-        if start_kb < u32::MAX as u64 && end_kb < u32::MAX as u64 {
+        if start_kb < u64::from(u32::MAX) && end_kb < u64::from(u32::MAX) {
             table19.header.starting_address = (start_kb as u32).to_le_bytes();
             table19.header.ending_address = (end_kb as u32).to_le_bytes();
         } else {
@@ -994,7 +994,7 @@ impl SmbiosTable {
 
         let smbios_sockets = mach_cfg.nr_cpus / (mach_cfg.nr_cores * mach_cfg.nr_threads);
         for i in 0..smbios_sockets {
-            self.build_type4(smbios.type4.clone(), i as u16, mach_cfg);
+            self.build_type4(smbios.type4.clone(), u16::from(i), mach_cfg);
         }
         let mem_num = ((mach_cfg.mem_config.mem_size + 16 * GB_SIZE - 1) / (16 * GB_SIZE)) as u16;
         self.build_type16(mach_cfg.mem_config.mem_size, mem_num);

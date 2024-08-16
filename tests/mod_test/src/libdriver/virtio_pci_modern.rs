@@ -288,50 +288,50 @@ impl TestVirtioPciDev {
 impl VirtioDeviceOps for TestVirtioPciDev {
     fn config_readb(&self, addr: u64) -> u8 {
         self.pci_dev
-            .io_readb(self.bar, self.device_base as u64 + addr)
+            .io_readb(self.bar, u64::from(self.device_base) + addr)
     }
 
     fn config_readw(&self, addr: u64) -> u16 {
         self.pci_dev
-            .io_readw(self.bar, self.device_base as u64 + addr)
+            .io_readw(self.bar, u64::from(self.device_base) + addr)
     }
 
     fn config_readl(&self, addr: u64) -> u32 {
         self.pci_dev
-            .io_readl(self.bar, self.device_base as u64 + addr)
+            .io_readl(self.bar, u64::from(self.device_base) + addr)
     }
 
     fn config_readq(&self, addr: u64) -> u64 {
         self.pci_dev
-            .io_readq(self.bar, self.device_base as u64 + addr)
+            .io_readq(self.bar, u64::from(self.device_base) + addr)
     }
 
     #[allow(unused)]
     fn config_writeb(&self, addr: u64, value: u8) {
         self.pci_dev
-            .io_writeb(self.bar, self.device_base as u64 + addr, value)
+            .io_writeb(self.bar, u64::from(self.device_base) + addr, value)
     }
 
     #[allow(unused)]
     fn config_writew(&self, addr: u64, value: u16) {
         self.pci_dev
-            .io_writew(self.bar, self.device_base as u64 + addr, value)
+            .io_writew(self.bar, u64::from(self.device_base) + addr, value)
     }
 
     #[allow(unused)]
     fn config_writel(&self, addr: u64, value: u32) {
         self.pci_dev
-            .io_writel(self.bar, self.device_base as u64 + addr, value)
+            .io_writel(self.bar, u64::from(self.device_base) + addr, value)
     }
 
     #[allow(unused)]
     fn config_writeq(&self, addr: u64, value: u64) {
         self.pci_dev
-            .io_writeq(self.bar, self.device_base as u64 + addr, value)
+            .io_writeq(self.bar, u64::from(self.device_base) + addr, value)
     }
 
     fn isr_readb(&self) -> u8 {
-        self.pci_dev.io_readb(self.bar, self.isr_base as u64)
+        self.pci_dev.io_readb(self.bar, u64::from(self.isr_base))
     }
 
     fn enable_interrupt(&mut self) {
@@ -345,46 +345,50 @@ impl VirtioDeviceOps for TestVirtioPciDev {
     fn get_device_features(&self) -> u64 {
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, device_feature_select) as u64,
+            u64::from(self.common_base)
+                + offset_of!(VirtioPciCommonCfg, device_feature_select) as u64,
             0,
         );
-        let lo: u64 = self.pci_dev.io_readl(
+        let lo: u64 = u64::from(self.pci_dev.io_readl(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, device_feature) as u64,
-        ) as u64;
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, device_feature) as u64,
+        ));
 
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, device_feature_select) as u64,
+            u64::from(self.common_base)
+                + offset_of!(VirtioPciCommonCfg, device_feature_select) as u64,
             1,
         );
-        let hi: u64 = self.pci_dev.io_readl(
+        let hi: u64 = u64::from(self.pci_dev.io_readl(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, device_feature) as u64,
-        ) as u64;
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, device_feature) as u64,
+        ));
         (hi << 32) | lo
     }
 
     fn set_guest_features(&self, features: u64) {
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
+            u64::from(self.common_base)
+                + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
             0,
         );
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
             features as u32,
         );
 
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
+            u64::from(self.common_base)
+                + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
             1,
         );
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
             (features >> 32) as u32,
         );
     }
@@ -392,36 +396,38 @@ impl VirtioDeviceOps for TestVirtioPciDev {
     fn get_guest_features(&self) -> u64 {
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
+            u64::from(self.common_base)
+                + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
             0,
         );
-        let lo: u64 = self.pci_dev.io_readl(
+        let lo: u64 = u64::from(self.pci_dev.io_readl(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
-        ) as u64;
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
+        ));
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
+            u64::from(self.common_base)
+                + offset_of!(VirtioPciCommonCfg, guest_feature_select) as u64,
             1,
         );
-        let hi: u64 = self.pci_dev.io_readl(
+        let hi: u64 = u64::from(self.pci_dev.io_readl(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
-        ) as u64;
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, guest_feature) as u64,
+        ));
         (hi << 32) | lo
     }
 
     fn get_status(&self) -> u8 {
         self.pci_dev.io_readb(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, device_status) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, device_status) as u64,
         )
     }
 
     fn set_status(&self, status: u8) {
         self.pci_dev.io_writeb(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, device_status) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, device_status) as u64,
             status,
         )
     }
@@ -429,21 +435,21 @@ impl VirtioDeviceOps for TestVirtioPciDev {
     fn get_generation(&self) -> u8 {
         self.pci_dev.io_readb(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, config_generation) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, config_generation) as u64,
         )
     }
 
     fn get_queue_nums(&self) -> u16 {
         self.pci_dev.io_readw(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, num_queues) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, num_queues) as u64,
         )
     }
 
     fn queue_select(&self, index: u16) {
         self.pci_dev.io_writew(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_select) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_select) as u64,
             index,
         );
     }
@@ -451,14 +457,14 @@ impl VirtioDeviceOps for TestVirtioPciDev {
     fn get_queue_select(&self) -> u16 {
         self.pci_dev.io_readw(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_select) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_select) as u64,
         )
     }
 
     fn set_queue_size(&self, size: u16) {
         self.pci_dev.io_writew(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_size) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_size) as u64,
             size,
         )
     }
@@ -466,39 +472,39 @@ impl VirtioDeviceOps for TestVirtioPciDev {
     fn get_queue_size(&self) -> u16 {
         self.pci_dev.io_readw(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_size) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_size) as u64,
         )
     }
 
     fn activate_queue(&self, desc: u64, avail: u64, used: u64) {
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_desc_lo) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_desc_lo) as u64,
             desc as u32,
         );
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_desc_hi) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_desc_hi) as u64,
             (desc >> 32) as u32,
         );
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_avail_lo) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_avail_lo) as u64,
             avail as u32,
         );
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_avail_hi) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_avail_hi) as u64,
             (avail >> 32) as u32,
         );
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_used_lo) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_used_lo) as u64,
             used as u32,
         );
         self.pci_dev.io_writel(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_used_hi) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_used_hi) as u64,
             (used >> 32) as u32,
         );
     }
@@ -555,15 +561,15 @@ impl VirtioDeviceOps for TestVirtioPciDev {
 
         let notify_off = self.pci_dev.io_readw(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_notify_off) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_notify_off) as u64,
         );
 
-        virtqueue.borrow_mut().queue_notify_off =
-            self.notify_base as u64 + notify_off as u64 * self.notify_off_multiplier as u64;
+        virtqueue.borrow_mut().queue_notify_off = u64::from(self.notify_base)
+            + u64::from(notify_off) * u64::from(self.notify_off_multiplier);
 
         self.pci_dev.io_writew(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_enable) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_enable) as u64,
             1,
         );
 
@@ -681,12 +687,12 @@ impl VirtioPCIMSIXOps for TestVirtioPciDev {
     fn set_config_vector(&self, vector: u16) {
         self.pci_dev.io_writew(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, msix_config) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, msix_config) as u64,
             vector,
         );
         let vector_get: u16 = self.pci_dev.io_readw(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, msix_config) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, msix_config) as u64,
         );
         assert_eq!(
             vector, vector_get,
@@ -699,12 +705,12 @@ impl VirtioPCIMSIXOps for TestVirtioPciDev {
         self.queue_select(vq_idx);
         self.pci_dev.io_writew(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_msix_vector) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_msix_vector) as u64,
             vector,
         );
         let vector_get: u16 = self.pci_dev.io_readw(
             self.bar,
-            self.common_base as u64 + offset_of!(VirtioPciCommonCfg, queue_msix_vector) as u64,
+            u64::from(self.common_base) + offset_of!(VirtioPciCommonCfg, queue_msix_vector) as u64,
         );
         if vector_get != vector {
             println!("WARN: set vector {}, get vector {}", vector, vector_get);
