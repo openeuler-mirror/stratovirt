@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 
 use anyhow::{Context, Result};
 use libloading::os::unix::Symbol as RawSymbol;
@@ -33,17 +33,16 @@ pub struct ProfileRecorder {
     pub fps: i32,
 }
 
-pub type BufferProcessFn = unsafe extern "C" fn(src_buffer: u64, length: i32);
-pub type BrokenProcessFn = unsafe extern "C" fn();
+pub type BufferProcessFn = unsafe extern "C" fn(src_buffer: u64, length: i32, camid: *const c_char);
+pub type BrokenProcessFn = unsafe extern "C" fn(camid: *const c_char);
 
 type OhcamCreateCtxFn = unsafe extern "C" fn() -> *mut OhCameraCtx;
 type OhcamCreateSessionFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamReleaseSessionFn = unsafe extern "C" fn(*mut OhCameraCtx);
-type OhcamInitCamerasFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
+type OhcamInitCameraFn = unsafe extern "C" fn(*mut OhCameraCtx, *const c_char) -> c_int;
 type OhcamInitProfilesFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
-type OhcamGetProfileSizeFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int) -> c_int;
-type OhcamGetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, c_int, *mut c_void) -> c_int;
-type OhcamSetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, c_int) -> c_int;
+type OhcamGetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, *mut c_void) -> c_int;
+type OhcamSetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int) -> c_int;
 type OhcamPreStartFn =
     unsafe extern "C" fn(*mut OhCameraCtx, BufferProcessFn, BrokenProcessFn) -> c_int;
 type OhcamStartFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
@@ -56,9 +55,8 @@ pub struct CamFuncTable {
     pub create_ctx: RawSymbol<OhcamCreateCtxFn>,
     pub create_session: RawSymbol<OhcamCreateSessionFn>,
     pub release_session: RawSymbol<OhcamReleaseSessionFn>,
-    pub init_cameras: RawSymbol<OhcamInitCamerasFn>,
+    pub init_camera: RawSymbol<OhcamInitCameraFn>,
     pub init_profiles: RawSymbol<OhcamInitProfilesFn>,
-    pub get_profile_size: RawSymbol<OhcamGetProfileSizeFn>,
     pub get_profile: RawSymbol<OhcamGetProfileFn>,
     pub set_profile: RawSymbol<OhcamSetProfileFn>,
     pub pre_start: RawSymbol<OhcamPreStartFn>,
@@ -75,9 +73,8 @@ impl CamFuncTable {
             create_ctx: get_libfn!(library, OhcamCreateCtxFn, OhcamCreateCtx),
             create_session: get_libfn!(library, OhcamCreateSessionFn, OhcamCreateSession),
             release_session: get_libfn!(library, OhcamReleaseSessionFn, OhcamReleaseSession),
-            init_cameras: get_libfn!(library, OhcamInitCamerasFn, OhcamInitCameras),
+            init_camera: get_libfn!(library, OhcamInitCameraFn, OhcamInitCamera),
             init_profiles: get_libfn!(library, OhcamInitProfilesFn, OhcamInitProfiles),
-            get_profile_size: get_libfn!(library, OhcamGetProfileSizeFn, OhcamGetProfileSize),
             get_profile: get_libfn!(library, OhcamGetProfileFn, OhcamGetProfile),
             set_profile: get_libfn!(library, OhcamSetProfileFn, OhcamSetProfile),
             pre_start: get_libfn!(library, OhcamPreStartFn, OhcamPreStart),
