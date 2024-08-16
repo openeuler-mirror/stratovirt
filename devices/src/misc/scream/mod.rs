@@ -27,6 +27,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use core::time;
 use log::{error, info, warn};
+use once_cell::sync::Lazy;
 
 #[cfg(feature = "scream_alsa")]
 use self::alsa::AlsaStreamData;
@@ -54,12 +55,14 @@ pub const TARGET_LATENCY_MS: u32 = 50;
 
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 const IVSHMEM_VOLUME_SYNC_VECTOR: u16 = 0;
-const IVSHMEM_VECTORS_NR: u32 = 1;
+const IVSHMEM_STATUS_CHANGE_VECTOR: u16 = 1;
+const IVSHMEM_VECTORS_NR: u32 = 2;
 const IVSHMEM_BAR0_VOLUME: u64 = 240;
 const IVSHMEM_BAR0_STATUS: u64 = 244;
 
 const STATUS_PLAY_BIT: u32 = 0x1;
 const STATUS_START_BIT: u32 = 0x2;
+const STATUS_MIC_AVAIL_BIT: u32 = 0x4;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
 // to be trained in polling within 50ms. Theoretically, the shorter the polling time,
@@ -79,6 +82,26 @@ pub enum AudioStatus {
     // OH audio framework error occurred.
     Error,
 }
+
+type AuthorityNotify = dyn Fn() + Send + Sync;
+
+#[derive(Clone)]
+pub struct AuthorityInformation {
+    state: bool,
+    notify: Option<Arc<AuthorityNotify>>,
+}
+
+impl AuthorityInformation {
+    const fn default() -> AuthorityInformation {
+        AuthorityInformation {
+            state: true,
+            notify: None,
+        }
+    }
+}
+
+type AuthInfo = RwLock<AuthorityInformation>;
+static AUTH_INFO: Lazy<AuthInfo> = Lazy::new(|| RwLock::new(AuthorityInformation::default()));
 
 /// The scream device defines the audio directions.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -106,20 +129,19 @@ pub struct ShmemStreamHeader {
     pub fmt: ShmemStreamFmt,
 }
 
-fn record_authority_rw(auth: bool, write: bool) -> bool {
-    static AUTH: RwLock<bool> = RwLock::new(true);
-    if write {
-        *AUTH.write().unwrap() = auth;
-    }
-    *AUTH.read().unwrap()
-}
-
 pub fn set_record_authority(auth: bool) {
-    record_authority_rw(auth, true);
+    AUTH_INFO.write().unwrap().state = auth;
+    if let Some(auth_notify) = &AUTH_INFO.read().unwrap().notify {
+        auth_notify();
+    }
 }
 
-fn get_record_authority() -> bool {
-    record_authority_rw(false, false)
+pub fn set_authority_notify(notify: Option<Arc<AuthorityNotify>>) {
+    AUTH_INFO.write().unwrap().notify = notify;
+}
+
+pub fn get_record_authority() -> bool {
+    AUTH_INFO.read().unwrap().state
 }
 
 impl ShmemStreamHeader {
@@ -650,10 +672,19 @@ impl Scream {
             IVSHMEM_VECTORS_NR,
         );
         let ivshmem = ivshmem.realize()?;
+        let ivshmem_cloned = ivshmem.clone();
 
         let play_cond = ScreamCond::new();
         let capt_cond = ScreamCond::new();
         self.set_ivshmem_ops(ivshmem, play_cond.clone(), capt_cond.clone());
+
+        let author_notify = Arc::new(move || {
+            ivshmem_cloned
+                .lock()
+                .unwrap()
+                .trigger_msix(IVSHMEM_STATUS_CHANGE_VECTOR);
+        });
+        set_authority_notify(Some(author_notify));
 
         self.start_play_thread_fn(play_cond)?;
         self.start_record_thread_fn(capt_cond)
@@ -691,6 +722,9 @@ impl Scream {
                 IVSHMEM_BAR0_VOLUME => {
                     let _ = le_write_u32(data, 0, interface2.get_host_volume());
                 }
+                IVSHMEM_BAR0_STATUS => {
+                    let _ = le_write_u32(data, 0, interface2.get_status_register());
+                }
                 _ => {
                     info!("ivshmem-scream: unsupported read: {offset}");
                 }
@@ -726,6 +760,12 @@ pub trait AudioExtension: Send + Sync {
     fn set_host_volume(&self, _vol: u32) {}
     fn get_host_volume(&self) -> u32 {
         0
+    }
+    fn get_status_register(&self) -> u32 {
+        match get_record_authority() {
+            true => STATUS_MIC_AVAIL_BIT,
+            false => 0,
+        }
     }
 }
 
