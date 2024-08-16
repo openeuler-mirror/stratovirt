@@ -96,6 +96,32 @@ pub struct TimeOffsets {
     pub nanosecs: Option<u32>,
 }
 
+/// Devices available in the container.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Device {
+    /// Type of device.
+    #[serde(rename = "type")]
+    pub dev_type: String,
+    /// Full path to device inside container.
+    pub path: String,
+    /// Major number for the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub major: Option<i64>,
+    /// Minor number for the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minor: Option<i64>,
+    /// File mode for the device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fileMode: Option<u32>,
+    /// Id of device owner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    /// Id of device group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json;
@@ -202,5 +228,43 @@ mod tests {
         let time_offsets: Section = serde_json::from_str(json).unwrap();
         assert_eq!(time_offsets.timeOffsets.secs, Some(100));
         assert_eq!(time_offsets.timeOffsets.nanosecs, None);
+    }
+
+    #[test]
+    fn test_devices() {
+        let json = r#"{
+            "devices": [
+                {
+                    "path": "/dev/fuse",
+                    "type": "c",
+                    "major": 10,
+                    "minor": 229,
+                    "fileMode": 438,
+                    "uid": 0,
+                    "gid": 0
+                },
+                {
+                    "path": "/dev/sda",
+                    "type": "b",
+                    "major": 8,
+                    "minor": 0
+                }
+            ]
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            devices: Vec<Device>,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.devices.len(), 2);
+        assert_eq!(section.devices[1].path, "/dev/sda");
+        assert_eq!(section.devices[1].dev_type, "b");
+        assert_eq!(section.devices[1].major, Some(8));
+        assert_eq!(section.devices[1].minor, Some(0));
+        assert_eq!(section.devices[1].fileMode, None);
+        assert_eq!(section.devices[1].uid, None);
+        assert_eq!(section.devices[1].gid, None);
     }
 }
