@@ -101,9 +101,12 @@ impl XhciCommandRing {
                     self.ccs = !self.ccs;
                 }
             } else {
-                self.dequeue = self.dequeue.checked_add(u64::from(TRB_SIZE)).ok_or(
-                    UsbError::MemoryAccessOverflow(self.dequeue, u64::from(TRB_SIZE)),
-                )?;
+                self.dequeue = self
+                    .dequeue
+                    .checked_add(u64::from(TRB_SIZE))
+                    .ok_or_else(|| {
+                        UsbError::MemoryAccessOverflow(self.dequeue, u64::from(TRB_SIZE))
+                    })?;
                 return Ok(Some(trb));
             }
         }
@@ -182,7 +185,7 @@ impl XhciTransferRing {
                 td.push(trb);
                 dequeue = dequeue
                     .checked_add(u64::from(TRB_SIZE))
-                    .ok_or(UsbError::MemoryAccessOverflow(dequeue, u64::from(TRB_SIZE)))?;
+                    .ok_or_else(|| UsbError::MemoryAccessOverflow(dequeue, u64::from(TRB_SIZE)))?;
                 if trb_type == TRBType::TrSetup {
                     ctrl_td = true;
                 } else if trb_type == TRBType::TrStatus {
