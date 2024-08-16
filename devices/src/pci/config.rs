@@ -1313,7 +1313,7 @@ mod tests {
         assert_eq!(pci_config.get_bar_address(0), BAR_SPACE_UNMAPPED);
         assert_eq!(
             pci_config.get_bar_address(1),
-            (MEM_BASE_ADDR_MASK as u32) as u64
+            u64::from(MEM_BASE_ADDR_MASK as u32)
         );
         assert_eq!(pci_config.get_bar_address(2), MEM_BASE_ADDR_MASK);
     }
