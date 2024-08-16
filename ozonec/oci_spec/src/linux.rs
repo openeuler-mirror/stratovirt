@@ -372,6 +372,28 @@ pub struct Cgroups {
     pub pids: Option<PidsCgroup>,
 }
 
+#[cfg(target_arch = "x86_64")]
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Intel Resource Director Technology
+pub struct IntelRdt {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Identity for RDT Class of Service (CLOS).
+    pub closID: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Schema for L3 cache id and capacity bitmask (CBM).
+    pub l3CacheSchema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Schema of memory bandwidth per L3 cache id.
+    pub memBwSchema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// If Intel RDT CMT should be enabled.
+    pub enableCMT: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// If Intel RDT MBM should be enabled.
+    pub enableMBM: Option<bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json;
@@ -844,5 +866,41 @@ mod tests {
         let rdma_limit = section.rdma.rxe3.as_ref().unwrap();
         assert_eq!(rdma_limit.hcaHandles, Some(10000));
         assert_eq!(rdma_limit.hcaObjects, None);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_intel_rdt() {
+        let json = r#"{
+            "intelRdt": {
+                "closID": "guaranteed_group",
+                "l3CacheSchema": "L3:0=7f0;1=1f",
+                "memBwSchema": "MB:0=20;1=70",
+                "enableCMT": true,
+                "enableMBM": true
+            }
+        }"#;
+
+        #[allow(non_snake_case)]
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            intelRdt: IntelRdt,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            section.intelRdt.closID,
+            Some("guaranteed_group".to_string())
+        );
+        assert_eq!(
+            section.intelRdt.l3CacheSchema,
+            Some("L3:0=7f0;1=1f".to_string())
+        );
+        assert_eq!(
+            section.intelRdt.memBwSchema,
+            Some("MB:0=20;1=70".to_string())
+        );
+        assert_eq!(section.intelRdt.enableCMT, Some(true));
+        assert_eq!(section.intelRdt.enableMBM, Some(true));
     }
 }
