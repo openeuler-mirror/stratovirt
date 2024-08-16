@@ -129,7 +129,7 @@ fn version_to_u32(version_str: &str) -> u32 {
         panic!("Version str is illegal.");
     }
 
-    (version_vec[2] as u32) + ((version_vec[1] as u32) << 8) + ((version_vec[0] as u32) << 16)
+    u32::from(version_vec[2]) + (u32::from(version_vec[1]) << 8) + (u32::from(version_vec[0]) << 16)
 }
 
 #[cfg(test)]

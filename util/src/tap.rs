@@ -140,7 +140,7 @@ impl Tap {
     pub fn set_offload(&self, flags: u32) -> Result<()> {
         let ret =
             // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
-            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) };
+            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), u64::from(flags)) };
         if ret < 0 {
             return Err(anyhow!("ioctl TUNSETOFFLOAD failed.".to_string()));
         }
@@ -162,7 +162,7 @@ impl Tap {
         let flags = TUN_F_CSUM | TUN_F_UFO;
         (
             // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
-            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) }
+            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), u64::from(flags)) }
         ) >= 0
     }
 

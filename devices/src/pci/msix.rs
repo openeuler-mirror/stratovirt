@@ -188,7 +188,7 @@ impl Msix {
 
     fn is_vector_pending(&self, vector: u16) -> bool {
         let offset: usize = vector as usize / 64;
-        let pending_bit: u64 = 1 << (vector as u64 % 64);
+        let pending_bit: u64 = 1 << (u64::from(vector) % 64);
         let value = le_read_u64(&self.pba, offset).unwrap();
         if value & pending_bit > 0 {
             return true;
@@ -198,14 +198,14 @@ impl Msix {
 
     fn set_pending_vector(&mut self, vector: u16) {
         let offset: usize = vector as usize / 64;
-        let pending_bit: u64 = 1 << (vector as u64 % 64);
+        let pending_bit: u64 = 1 << (u64::from(vector) % 64);
         let old_val = le_read_u64(&self.pba, offset).unwrap();
         le_write_u64(&mut self.pba, offset, old_val | pending_bit).unwrap();
     }
 
     fn clear_pending_vector(&mut self, vector: u16) {
         let offset: usize = vector as usize / 64;
-        let pending_bit: u64 = !(1 << (vector as u64 % 64));
+        let pending_bit: u64 = !(1 << (u64::from(vector) % 64));
         let old_val = le_read_u64(&self.pba, offset).unwrap();
         le_write_u64(&mut self.pba, offset, old_val & pending_bit).unwrap();
     }
@@ -231,7 +231,7 @@ impl Msix {
             msg_data: entry.data,
             masked: false,
             #[cfg(target_arch = "aarch64")]
-            dev_id: self.dev_id.load(Ordering::Acquire) as u32,
+            dev_id: u32::from(self.dev_id.load(Ordering::Acquire)),
         };
 
         let irq_manager = self.msi_irq_manager.as_ref().unwrap();
@@ -261,7 +261,7 @@ impl Msix {
             msg_data: entry.data,
             masked: false,
             #[cfg(target_arch = "aarch64")]
-            dev_id: self.dev_id.load(Ordering::Acquire) as u32,
+            dev_id: u32::from(self.dev_id.load(Ordering::Acquire)),
         };
 
         let irq_manager = self.msi_irq_manager.as_ref().unwrap();
@@ -407,11 +407,11 @@ impl Msix {
             msg_data: msg.data,
             masked: false,
             #[cfg(target_arch = "aarch64")]
-            dev_id: dev_id as u32,
+            dev_id: u32::from(dev_id),
         };
 
         let irq_manager = self.msi_irq_manager.as_ref().unwrap();
-        if let Err(e) = irq_manager.trigger(None, msix_vector, dev_id as u32) {
+        if let Err(e) = irq_manager.trigger(None, msix_vector, u32::from(dev_id)) {
             error!("Send msix error: {:?}", e);
         };
     }
@@ -517,7 +517,7 @@ impl MigrationHook for Msix {
                     msg_data: msg.data,
                     masked: false,
                     #[cfg(target_arch = "aarch64")]
-                    dev_id: self.dev_id.load(Ordering::Acquire) as u32,
+                    dev_id: u32::from(self.dev_id.load(Ordering::Acquire)),
                 };
                 let irq_manager = self.msi_irq_manager.as_ref().unwrap();
                 irq_manager.allocate_irq(msi_vector)?;
@@ -554,7 +554,7 @@ pub fn init_msix(
 ) -> Result<()> {
     let config = &mut pcidev_base.config;
     let parent_bus = pcidev_base.base.parent.as_ref().unwrap();
-    if vector_nr == 0 || vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
+    if vector_nr == 0 || vector_nr > u32::from(MSIX_TABLE_SIZE_MAX) + 1 {
         bail!(
             "invalid msix vectors, which should be in [1, {}]",
             MSIX_TABLE_SIZE_MAX + 1
@@ -570,8 +570,8 @@ pub fn init_msix(
         MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
     )?;
     offset = msix_cap_offset + MSIX_CAP_TABLE as usize;
-    let table_size = vector_nr * MSIX_TABLE_ENTRY_SIZE as u32;
-    let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
+    let table_size = vector_nr * u32::from(MSIX_TABLE_ENTRY_SIZE);
+    let pba_size = ((round_up(u64::from(vector_nr), 64).unwrap() / 64) * 8) as u32;
     let (table_offset, pba_offset) = offset_opt.unwrap_or((0, table_size));
     if ranges_overlap(
         table_offset as usize,
@@ -607,19 +607,19 @@ pub fn init_msix(
             msix.clone(),
             region,
             dev_id,
-            table_offset as u64,
-            pba_offset as u64,
+            u64::from(table_offset),
+            u64::from(pba_offset),
         )?;
     } else {
-        let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
+        let mut bar_size = u64::from(table_size + pba_size).next_power_of_two();
         bar_size = max(bar_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         let region = Region::init_container_region(bar_size, "Msix_region");
         Msix::register_memory_region(
             msix.clone(),
             &region,
             dev_id,
-            table_offset as u64,
-            pba_offset as u64,
+            u64::from(table_offset),
+            u64::from(pba_offset),
         )?;
         config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size)?;
     }
@@ -653,7 +653,7 @@ mod tests {
         assert!(init_msix(
             &mut base,
             0,
-            MSIX_TABLE_SIZE_MAX as u32 + 2,
+            u32::from(MSIX_TABLE_SIZE_MAX) + 2,
             Arc::new(AtomicU16::new(0)),
             None,
             None,
@@ -666,7 +666,7 @@ mod tests {
         init_msix(&mut base, 1, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();
         let pci_config = base.config;
         let msix_cap_start = 64_u8;
-        assert_eq!(pci_config.last_cap_end, 64 + MSIX_CAP_SIZE as u16);
+        assert_eq!(pci_config.last_cap_end, 64 + u16::from(MSIX_CAP_SIZE));
         // Capabilities pointer
         assert_eq!(pci_config.config[0x34], msix_cap_start);
         assert_eq!(
@@ -690,7 +690,7 @@ mod tests {
     fn test_mask_vectors() {
         let nr_vector = 2_u32;
         let mut msix = Msix::new(
-            nr_vector * MSIX_TABLE_ENTRY_SIZE as u32,
+            nr_vector * u32::from(MSIX_TABLE_ENTRY_SIZE),
             64,
             64,
             Arc::new(AtomicU16::new(0)),
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn test_pending_vectors() {
         let mut msix = Msix::new(
-            MSIX_TABLE_ENTRY_SIZE as u32,
+            u32::from(MSIX_TABLE_ENTRY_SIZE),
             64,
             64,
             Arc::new(AtomicU16::new(0)),
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn test_get_message() {
         let mut msix = Msix::new(
-            MSIX_TABLE_ENTRY_SIZE as u32,
+            u32::from(MSIX_TABLE_ENTRY_SIZE),
             64,
             64,
             Arc::new(AtomicU16::new(0)),

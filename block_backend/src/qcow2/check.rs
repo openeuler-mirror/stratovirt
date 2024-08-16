@@ -105,7 +105,7 @@ impl RefcountBlock {
         let start_bytes = idx * self.entry_bytes;
         let end_bytes = start_bytes + self.entry_bytes;
         let value = match self.entry_bytes {
-            ENTRY_SIZE_U16 => BigEndian::read_u16(&self.data[start_bytes..end_bytes]) as u64,
+            ENTRY_SIZE_U16 => u64::from(BigEndian::read_u16(&self.data[start_bytes..end_bytes])),
             ENTRY_SIZE_U64 => BigEndian::read_u64(&self.data[start_bytes..end_bytes]),
             _ => bail!("Entry size is unsupported"),
         };
@@ -221,7 +221,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let snapshot_table_length = size_of::<QcowSnapshotHeader>() as u64;
         let snapshot_table_offset = self.header.snapshots_offset;
         // Validate snapshot table.
-        if (u64::MAX - nb_snapshots as u64 * snapshot_table_length) < snapshot_table_offset
+        if (u64::MAX - u64::from(nb_snapshots) * snapshot_table_length) < snapshot_table_offset
             || !is_aligned(self.header.cluster_size(), snapshot_table_offset)
         {
             res.err_num += 1;
@@ -300,7 +300,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     /// Rebuild a new refcount table according to metadata, including active l1 table, active l2 table,
     /// snapshot table, refcount table and refcount block.
     pub(crate) fn check_refcounts(&mut self, check: &mut Qcow2Check) -> Result<()> {
-        let cluster_bits = self.header.cluster_bits as u64;
+        let cluster_bits = u64::from(self.header.cluster_bits);
         let cluster_size = 1 << cluster_bits;
         let virtual_size = self.header.size;
         check.res.disk_frag.total_clusters = div_round_up(virtual_size, cluster_size).unwrap();
@@ -380,14 +380,14 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             0,
             self.header.cluster_size(),
             file_len,
-            self.header.cluster_bits as u64,
+            u64::from(self.header.cluster_bits),
             check,
         )?;
 
         // Increase the refcount of active l1 table.
         let active_l1_offset = self.header.l1_table_offset;
         let active_l1_size = self.header.l1_size;
-        self.check_refcounts_l1(active_l1_offset, active_l1_size as u64, true, check)?;
+        self.check_refcounts_l1(active_l1_offset, u64::from(active_l1_size), true, check)?;
 
         // Increase the refcount of snapshot table.
         for idx in 0..self.header.nb_snapshots {
@@ -404,7 +404,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 continue;
             }
 
-            if snap_l1_size as u64 > QCOW2_MAX_L1_SIZE / ENTRY_SIZE {
+            if u64::from(snap_l1_size) > QCOW2_MAX_L1_SIZE / ENTRY_SIZE {
                 output_msg!(
                     check.quite,
                     "ERROR snapshot {:?}({:?}) l1_size={:?} l1 table is too large; snapshot table entry courropted",
@@ -414,7 +414,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 continue;
             }
 
-            self.check_refcounts_l1(snap_l1_offset, snap_l1_size as u64, false, check)?;
+            self.check_refcounts_l1(snap_l1_offset, u64::from(snap_l1_size), false, check)?;
         }
 
         let snap_table_offset = self.header.snapshots_offset;
@@ -424,19 +424,19 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 snap_table_offset,
                 snap_table_size,
                 file_len,
-                self.header.cluster_bits as u64,
+                u64::from(self.header.cluster_bits),
                 check,
             )?;
         }
 
         let reftable_offset = self.header.refcount_table_offset;
         let reftable_bytes =
-            self.header.refcount_table_clusters as u64 * self.header.cluster_size();
+            u64::from(self.header.refcount_table_clusters) * self.header.cluster_size();
         self.increase_refcounts(
             reftable_offset,
             reftable_bytes,
             file_len,
-            self.header.cluster_bits as u64,
+            u64::from(self.header.cluster_bits),
             check,
         )?;
 
@@ -463,7 +463,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             l1_offset,
             l1_size_bytes,
             file_len,
-            self.header.cluster_bits as u64,
+            u64::from(self.header.cluster_bits),
             check,
         )?;
         let l1_table = self
@@ -497,7 +497,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 l2_offset,
                 self.header.cluster_size(),
                 file_len,
-                self.header.cluster_bits as u64,
+                u64::from(self.header.cluster_bits),
                 check,
             )?;
 
@@ -529,7 +529,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         file_len: u64,
         check: &mut Qcow2Check,
     ) -> Result<()> {
-        let cluster_bits = self.header.cluster_bits as u64;
+        let cluster_bits = u64::from(self.header.cluster_bits);
         let cluster_size = 1 << cluster_bits;
         let l2_size = cluster_size >> ENTRY_BITS;
 
@@ -661,7 +661,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     }
 
     fn check_refcount_block(&mut self, check: &mut Qcow2Check) -> Result<()> {
-        let cluster_bits = self.header.cluster_bits as u64;
+        let cluster_bits = u64::from(self.header.cluster_bits);
         let cluster_size = 1 << cluster_bits;
         let file_len = self.driver.disk_size()?;
         let nb_clusters = bytes_to_clusters(file_len, cluster_size)?;
@@ -794,7 +794,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 );
 
                 if need_fixed {
-                    let added = rc_value_2 as i32 - rc_value_1 as i32;
+                    let added = i32::from(rc_value_2) - i32::from(rc_value_1);
                     let cluster_offset = cluster_idx << cluster_bits;
                     self.refcount.update_refcount(
                         cluster_offset,
@@ -964,8 +964,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut reftable_offset: u64 = 0;
         let mut new_reftable: Vec<u64> = Vec::new();
         let mut reftable_clusters: u64 = 0;
-        let cluster_bits = self.header.cluster_bits as u64;
-        let refblock_bits: u64 = cluster_bits + 3 - self.header.refcount_order as u64;
+        let cluster_bits = u64::from(self.header.cluster_bits);
+        let refblock_bits: u64 = cluster_bits + 3 - u64::from(self.header.refcount_order);
         let refblock_size: u64 = 1 << refblock_bits;
 
         // self.refblock.nb_clusters means the maximum number of clusters that can be represented by

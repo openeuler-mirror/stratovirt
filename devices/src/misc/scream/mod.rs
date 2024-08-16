@@ -146,7 +146,7 @@ pub fn get_record_authority() -> bool {
 
 impl ShmemStreamHeader {
     pub fn check(&self, last_end: u64) -> bool {
-        if (self.offset as u64) < last_end {
+        if u64::from(self.offset) < last_end {
             warn!(
                 "Guest set bad offset {} exceeds last stream buffer end {}",
                 self.offset, last_end
@@ -221,7 +221,7 @@ impl ShmemStreamFmt {
         } else {
             AUDIO_SAMPLE_RATE_48KHZ
         };
-        sample_rate * (self.rate % WINDOWS_SAMPLE_BASE_RATE) as u32
+        sample_rate * u32::from(self.rate % WINDOWS_SAMPLE_BASE_RATE)
     }
 }
 
@@ -334,8 +334,8 @@ impl StreamData {
             // The recording buffer is behind the playback buffer. Thereforce, the end position of
             // the playback buffer must be calculted to determine whether the two buffers overlap.
             if dir == ScreamDirection::Record && header.play.is_started != 0 {
-                last_end = header.play.offset as u64
-                    + header.play.chunk_size as u64 * header.play.max_chunks as u64;
+                last_end = u64::from(header.play.offset)
+                    + u64::from(header.play.chunk_size) * u64::from(header.play.max_chunks);
             }
 
             if !stream_header.check(last_end) {
@@ -357,10 +357,10 @@ impl StreamData {
     ) -> bool {
         self.audio_size = stream_header.chunk_size;
         self.audio_base = hva
-            + stream_header.offset as u64
-            + (stream_header.chunk_size as u64) * (self.chunk_idx as u64);
+            + u64::from(stream_header.offset)
+            + u64::from(stream_header.chunk_size) * u64::from(self.chunk_idx);
 
-        if (self.audio_base + self.audio_size as u64) > (hva + shmem_size) {
+        if (self.audio_base + u64::from(self.audio_size)) > (hva + shmem_size) {
             error!(
                 "Scream: wrong header: offset {} chunk_idx {} chunk_size {} max_chunks {}",
                 stream_header.offset,
@@ -429,7 +429,7 @@ impl StreamData {
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
-        let addr = hva + capt.offset as u64;
+        let addr = hva + u64::from(capt.offset);
 
         interface.lock().unwrap().pre_receive(addr, capt);
         while capt.is_started != 0 {

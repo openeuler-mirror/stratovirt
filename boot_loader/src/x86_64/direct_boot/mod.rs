@@ -66,7 +66,7 @@ fn load_bzimage(kernel_image: &mut File) -> Result<RealModeKernelHeader> {
         return Err(e);
     }
 
-    let mut setup_size = boot_hdr.setup_sects as u64;
+    let mut setup_size = u64::from(boot_hdr.setup_sects);
     if setup_size == 0 {
         setup_size = 4;
     }
@@ -107,8 +107,8 @@ fn load_kernel_image(
     let (boot_hdr, kernel_start, vmlinux_start) = if let Ok(hdr) = load_bzimage(&mut kernel_image) {
         (
             hdr,
-            hdr.code32_start as u64 + BZIMAGE_BOOT_OFFSET,
-            hdr.code32_start as u64,
+            u64::from(hdr.code32_start) + BZIMAGE_BOOT_OFFSET,
+            u64::from(hdr.code32_start),
         )
     } else {
         (
@@ -209,7 +209,7 @@ fn setup_kernel_cmdline(
     sys_mem.write(
         &mut config.kernel_cmdline.as_bytes(),
         GuestAddress(CMDLINE_START),
-        cmdline_len as u64,
+        u64::from(cmdline_len),
     )?;
 
     Ok(())

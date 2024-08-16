@@ -64,7 +64,8 @@ impl TestPciBus {
     }
 
     fn get_addr(&self, bus_num: u8, devfn: u8, offset: u8) -> u64 {
-        self.ecam_alloc_ptr + ((bus_num as u32) << 20 | (devfn as u32) << 12 | offset as u32) as u64
+        self.ecam_alloc_ptr
+            + u64::from(u32::from(bus_num) << 20 | u32::from(devfn) << 12 | u32::from(offset))
     }
 
     pub fn pci_auto_bus_scan(&self, root_port_num: u8) {
@@ -106,11 +107,13 @@ impl TestPciBus {
 
 impl PciBusOps for TestPciBus {
     fn memread(&self, addr: u32, len: usize) -> Vec<u8> {
-        self.test_state.borrow().memread(addr as u64, len as u64)
+        self.test_state
+            .borrow()
+            .memread(u64::from(addr), len as u64)
     }
 
     fn memwrite(&self, addr: u32, buf: &[u8]) {
-        self.test_state.borrow().memwrite(addr as u64, buf);
+        self.test_state.borrow().memwrite(u64::from(addr), buf);
     }
 
     fn config_readb(&self, bus_num: u8, devfn: u8, offset: u8) -> u8 {

@@ -59,7 +59,7 @@ fn load_kernel_image(
     header: &RealModeKernelHeader,
     fwcfg: &mut dyn FwCfgOps,
 ) -> Result<Vec<u8>> {
-    let mut setup_size = header.setup_sects as u64;
+    let mut setup_size = u64::from(header.setup_sects);
     if setup_size == 0 {
         setup_size = 4;
     }

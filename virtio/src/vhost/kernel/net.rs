@@ -466,7 +466,7 @@ mod tests {
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
-        assert_eq!(vhost_net.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(vhost_net.driver_features(page)), 0_u64);
         let new_page = vhost_net.device_features(page);
         assert_eq!(new_page, page);
 
@@ -474,7 +474,7 @@ mod tests {
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
-        assert_eq!(vhost_net.driver_features(page) as u64, 0xff_u64);
+        assert_eq!(u64::from(vhost_net.driver_features(page)), 0xff_u64);
         let new_page = vhost_net.device_features(page);
         assert_ne!(new_page, page);
 

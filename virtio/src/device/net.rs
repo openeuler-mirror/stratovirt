@@ -244,7 +244,7 @@ impl CtrlInfo {
                 continue;
             }
 
-            let size = entries as u64 * MAC_ADDR_LEN as u64;
+            let size = u64::from(entries) * MAC_ADDR_LEN as u64;
             let res_len = Element::iovec_size(data_iovec);
             if size > res_len {
                 bail!("Invalid request for setting mac table.");
@@ -366,7 +366,7 @@ impl CtrlInfo {
         data_iovec: &mut Vec<ElemIovec>,
     ) -> u8 {
         let mut ack = VIRTIO_NET_OK;
-        if cmd as u16 == VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
+        if u16::from(cmd) == VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET {
             let mut queue_pairs: u16 = 0;
             *data_iovec = get_buf_and_discard(mem_space, data_iovec, queue_pairs.as_mut_bytes())
                 .unwrap_or_else(|e| {
@@ -1609,7 +1609,7 @@ impl VirtioDevice for Net {
 
         // The features about offload is included in bits 0 to 31.
         let features = self.driver_features(0_u32);
-        let flags = get_tap_offload_flags(features as u64);
+        let flags = get_tap_offload_flags(u64::from(features));
 
         let mut senders = Vec::new();
         let queue_pairs = queue_num / 2;
@@ -1699,7 +1699,7 @@ impl VirtioDevice for Net {
             // Set tap offload.
             // The features about offload is included in bits 0 to 31.
             let features = self.driver_features(0_u32);
-            let flags = get_tap_offload_flags(features as u64);
+            let flags = get_tap_offload_flags(u64::from(features));
             if let Some(taps) = &self.taps {
                 for (_, tap) in taps.iter().enumerate() {
                     tap.set_offload(flags)

@@ -95,7 +95,7 @@ impl KvmCpu {
     pub fn arch_init_pmu(&self) -> Result<()> {
         let pmu_attr = kvm_device_attr {
             group: KVM_ARM_VCPU_PMU_V3_CTRL,
-            attr: KVM_ARM_VCPU_PMU_V3_INIT as u64,
+            attr: u64::from(KVM_ARM_VCPU_PMU_V3_INIT),
             addr: 0,
             flags: 0,
         };
@@ -108,7 +108,7 @@ impl KvmCpu {
         let irq = PMU_INTR + PPI_BASE;
         let pmu_irq_attr = kvm_device_attr {
             group: KVM_ARM_VCPU_PMU_V3_CTRL,
-            attr: KVM_ARM_VCPU_PMU_V3_IRQ as u64,
+            attr: u64::from(KVM_ARM_VCPU_PMU_V3_IRQ),
             addr: &irq as *const u32 as u64,
             flags: 0,
         };
@@ -302,8 +302,11 @@ impl KvmCpu {
             }
             RegsIndex::VtimerCount => {
                 if locked_arch_cpu.vtimer_cnt_valid {
-                    self.set_one_reg(KVM_REG_ARM_TIMER_CNT, locked_arch_cpu.vtimer_cnt as u128)
-                        .with_context(|| "Failed to set virtual timer count")?;
+                    self.set_one_reg(
+                        KVM_REG_ARM_TIMER_CNT,
+                        u128::from(locked_arch_cpu.vtimer_cnt),
+                    )
+                    .with_context(|| "Failed to set virtual timer count")?;
                     locked_arch_cpu.vtimer_cnt_valid = false;
                 }
             }
@@ -362,24 +365,36 @@ impl KvmCpu {
     /// * `vcpu_fd` - the VcpuFd in KVM mod.
     /// * `core_regs` - kvm_regs state to be written.
     fn set_core_regs(&self, core_regs: kvm_regs) -> Result<()> {
-        self.set_one_reg(Arm64CoreRegs::UserPTRegSp.into(), core_regs.regs.sp as u128)?;
-        self.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), core_regs.sp_el1 as u128)?;
+        self.set_one_reg(
+            Arm64CoreRegs::UserPTRegSp.into(),
+            u128::from(core_regs.regs.sp),
+        )?;
+        self.set_one_reg(Arm64CoreRegs::KvmSpEl1.into(), u128::from(core_regs.sp_el1))?;
         self.set_one_reg(
             Arm64CoreRegs::UserPTRegPState.into(),
-            core_regs.regs.pstate as u128,
+            u128::from(core_regs.regs.pstate),
         )?;
-        self.set_one_reg(Arm64CoreRegs::UserPTRegPc.into(), core_regs.regs.pc as u128)?;
-        self.set_one_reg(Arm64CoreRegs::KvmElrEl1.into(), core_regs.elr_el1 as u128)?;
+        self.set_one_reg(
+            Arm64CoreRegs::UserPTRegPc.into(),
+            u128::from(core_regs.regs.pc),
+        )?;
+        self.set_one_reg(
+            Arm64CoreRegs::KvmElrEl1.into(),
+            u128::from(core_regs.elr_el1),
+        )?;
 
         for i in 0..KVM_NR_REGS as usize {
             self.set_one_reg(
                 Arm64CoreRegs::UserPTRegRegs(i).into(),
-                core_regs.regs.regs[i] as u128,
+                u128::from(core_regs.regs.regs[i]),
             )?;
         }
 
         for i in 0..KVM_NR_SPSR as usize {
-            self.set_one_reg(Arm64CoreRegs::KvmSpsr(i).into(), core_regs.spsr[i] as u128)?;
+            self.set_one_reg(
+                Arm64CoreRegs::KvmSpsr(i).into(),
+                u128::from(core_regs.spsr[i]),
+            )?;
         }
 
         // State save and restore is not supported for SVE for now, so we just skip it.
@@ -394,11 +409,11 @@ impl KvmCpu {
 
         self.set_one_reg(
             Arm64CoreRegs::UserFPSIMDStateFpsr.into(),
-            core_regs.fp_regs.fpsr as u128,
+            u128::from(core_regs.fp_regs.fpsr),
         )?;
         self.set_one_reg(
             Arm64CoreRegs::UserFPSIMDStateFpcr.into(),
-            core_regs.fp_regs.fpcr as u128,
+            u128::from(core_regs.fp_regs.fpcr),
         )?;
 
         Ok(())

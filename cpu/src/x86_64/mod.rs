@@ -221,9 +221,9 @@ impl X86CPUState {
     ///
     /// * `topology` - X86 CPU Topology
     pub fn set_cpu_topology(&mut self, topology: &X86CPUTopology) -> Result<()> {
-        self.nr_threads = topology.threads as u32;
-        self.nr_cores = topology.cores as u32;
-        self.nr_dies = topology.dies as u32;
+        self.nr_threads = u32::from(topology.threads);
+        self.nr_cores = u32::from(topology.cores);
+        self.nr_dies = u32::from(topology.dies);
         Ok(())
     }
 
@@ -271,17 +271,17 @@ impl X86CPUState {
     pub fn setup_sregs(&mut self, sregs: Sregs, boot_config: &X86CPUBootConfig) -> Result<()> {
         self.sregs = sregs;
 
-        self.sregs.cs.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.cs.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.cs.selector = boot_config.boot_selector;
-        self.sregs.ds.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.ds.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.ds.selector = boot_config.boot_selector;
-        self.sregs.es.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.es.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.es.selector = boot_config.boot_selector;
-        self.sregs.fs.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.fs.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.fs.selector = boot_config.boot_selector;
-        self.sregs.gs.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.gs.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.gs.selector = boot_config.boot_selector;
-        self.sregs.ss.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.ss.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.ss.selector = boot_config.boot_selector;
 
         if boot_config.prot64_mode {

@@ -258,7 +258,7 @@ impl TestVringIndirectDesc {
 
         let mut flags = test_state.borrow().readw(
             self.desc
-                + (size_of::<VringDesc>() as u64 * self.index as u64)
+                + (size_of::<VringDesc>() as u64 * u64::from(self.index))
                 + offset_of!(VringDesc, flags) as u64,
         );
 
@@ -359,7 +359,7 @@ impl TestVirtQueue {
         test_state.borrow().writew(
             self.used
                 + offset_of!(VringUsed, ring) as u64
-                + (size_of::<VringUsedElem>() as u64 * self.size as u64),
+                + (size_of::<VringUsedElem>() as u64 * u64::from(self.size)),
             0,
         );
     }
@@ -376,7 +376,7 @@ impl TestVirtQueue {
         let features = virtio_dev.get_guest_features();
         virtio_dev.queue_select(index);
 
-        let queue_size = virtio_dev.get_queue_size() as u32;
+        let queue_size = u32::from(virtio_dev.get_queue_size());
         assert!(queue_size != 0);
         assert!(queue_size & (queue_size - 1) == 0);
 
@@ -390,12 +390,12 @@ impl TestVirtQueue {
 
         let addr = alloc
             .borrow_mut()
-            .alloc(get_vring_size(self.size, self.align) as u64);
+            .alloc(u64::from(get_vring_size(self.size, self.align)));
         self.desc = addr;
-        self.avail = self.desc + (self.size * size_of::<VringDesc>() as u32) as u64;
+        self.avail = self.desc + u64::from(self.size * size_of::<VringDesc>() as u32);
         self.used = round_up(
-            self.avail + (size_of::<u16>() as u32 * (3 + self.size)) as u64,
-            self.align as u64,
+            self.avail + u64::from(size_of::<u16>() as u32 * (3 + self.size)),
+            u64::from(self.align),
         )
         .unwrap();
     }
@@ -413,7 +413,7 @@ impl TestVirtQueue {
 
             let elem_addr = self.used
                 + offset_of!(VringUsed, ring) as u64
-                + (self.last_used_idx as u32 % self.size) as u64
+                + u64::from(u32::from(self.last_used_idx) % self.size)
                     * size_of::<VringUsedElem>() as u64;
 
             let id_addr = elem_addr + offset_of!(VringUsedElem, id) as u64;
@@ -434,7 +434,7 @@ impl TestVirtQueue {
         test_state.borrow().readw(
             self.used
                 + offset_of!(VringUsed, ring) as u64
-                + (size_of::<VringUsedElem>() as u64 * self.size as u64),
+                + (size_of::<VringUsedElem>() as u64 * u64::from(self.size)),
         )
     }
 
@@ -442,7 +442,7 @@ impl TestVirtQueue {
         test_state.borrow().writew(
             self.avail
                 + offset_of!(VringAvail, ring) as u64
-                + (size_of::<u16>() as u64 * self.size as u64),
+                + (size_of::<u16>() as u64 * u64::from(self.size)),
             index,
         );
     }
@@ -466,7 +466,7 @@ impl TestVirtQueue {
         test_state.borrow().writew(
             self.avail
                 + offset_of!(VringAvail, ring) as u64
-                + (size_of::<u16>() * (idx as u32 % self.size) as usize) as u64,
+                + (size_of::<u16>() * (u32::from(idx) % self.size) as usize) as u64,
             desc_idx,
         );
     }
@@ -551,7 +551,7 @@ impl TestVirtQueue {
         let free_head = self.free_head;
         let desc_elem = VringDesc {
             addr: indirect.desc,
-            len: size_of::<VringDesc>() as u32 * indirect.elem as u32,
+            len: size_of::<VringDesc>() as u32 * u32::from(indirect.elem),
             flags: VRING_DESC_F_INDIRECT,
             next: 0,
         };
@@ -565,7 +565,7 @@ impl TestVirtQueue {
     // Add a vring desc elem to desc table.
     fn add_elem_to_desc(&mut self, test_state: Rc<RefCell<TestState>>, elem: VringDesc) {
         self.num_free -= 1;
-        let desc_elem_addr = self.desc + VRING_DESC_SIZE * self.free_head as u64;
+        let desc_elem_addr = self.desc + VRING_DESC_SIZE * u64::from(self.free_head);
         test_state
             .borrow()
             .memwrite(desc_elem_addr, elem.as_bytes());
@@ -591,7 +591,7 @@ impl TestVirtioDev {
 #[inline]
 pub fn get_vring_size(num: u32, align: u32) -> u32 {
     let desc_avail =
-        (size_of::<VringDesc>() as u32 * num + size_of::<u16>() as u32 * (3 + num)) as u64;
-    let desc_avail_align = round_up(desc_avail, align as u64).unwrap() as u32;
+        u64::from(size_of::<VringDesc>() as u32 * num + size_of::<u16>() as u32 * (3 + num));
+    let desc_avail_align = round_up(desc_avail, u64::from(align)).unwrap() as u32;
     desc_avail_align + size_of::<u16>() as u32 * 3 + size_of::<VringUsedElem>() as u32 * num
 }

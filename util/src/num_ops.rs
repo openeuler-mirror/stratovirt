@@ -243,7 +243,7 @@ pub fn extract_u64(value: u64, start: u32, length: u32) -> Option<u64> {
         return None;
     }
 
-    Some((value >> start as u64) & (!(0_u64) >> (64 - length) as u64))
+    Some((value >> u64::from(start)) & (!(0_u64) >> u64::from(64 - length)))
 }
 
 ///  Deposit @fieldval into the 32 bit @value at the bit field specified
@@ -371,8 +371,8 @@ pub fn write_data_u32(data: &mut [u8], value: u32) -> bool {
 /// ```
 pub fn read_data_u32(data: &[u8], value: &mut u32) -> bool {
     *value = match data.len() {
-        1 => data[0] as u32,
-        2 => LittleEndian::read_u16(data) as u32,
+        1 => u32::from(data[0]),
+        2 => u32::from(LittleEndian::read_u16(data)),
         4 => LittleEndian::read_u32(data),
         _ => {
             error!("Invalid data length: data len {}", data.len());
@@ -401,7 +401,7 @@ pub fn read_data_u32(data: &[u8], value: &mut u32) -> bool {
 /// ```
 pub fn read_data_u16(data: &[u8], value: &mut u16) -> bool {
     *value = match data.len() {
-        1 => data[0] as u16,
+        1 => u16::from(data[0]),
         2 => LittleEndian::read_u16(data),
         _ => {
             error!("Invalid data length: data len {}", data.len());

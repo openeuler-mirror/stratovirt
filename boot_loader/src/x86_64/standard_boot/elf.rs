@@ -181,10 +181,11 @@ pub fn load_elf_kernel(
 
                 let p_align = ph.p_align;
                 let aligned_namesz =
-                    round_up(note_hdr.namesz as u64, p_align).with_context(|| {
+                    round_up(u64::from(note_hdr.namesz), p_align).with_context(|| {
                         format!(
                             "Overflows when align up: num 0x{:x}, alignment 0x{:x}",
-                            note_hdr.namesz as u64, p_align,
+                            u64::from(note_hdr.namesz),
+                            p_align,
                         )
                     })?;
                 if note_hdr.type_ == XEN_ELFNOTE_PHYS32_ENTRY {
@@ -195,11 +196,12 @@ pub fn load_elf_kernel(
                     pvh_start_addr = Some(entry_addr);
                     break;
                 } else {
-                    let aligned_descsz =
-                        round_up(note_hdr.descsz as u64, p_align).with_context(|| {
+                    let aligned_descsz = round_up(u64::from(note_hdr.descsz), p_align)
+                        .with_context(|| {
                             format!(
                                 "Overflows when align up, num 0x{:x}, alignment 0x{:x}",
-                                note_hdr.descsz as u64, p_align,
+                                u64::from(note_hdr.descsz),
+                                p_align,
                             )
                         })?;
                     let tail_size = aligned_namesz + aligned_descsz;

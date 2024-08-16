@@ -554,12 +554,12 @@ fn test_vnc_kbd_mouse() {
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     // Key event.
     for &(name, keysym, keycode) in KEYEVENTLIST.iter() {
-        assert!(vnc_client.test_key_event(0, keysym as u32).is_ok());
+        assert!(vnc_client.test_key_event(0, u32::from(keysym)).is_ok());
         let msg = input.borrow_mut().read_input_event();
         println!("key {:?}: {:?}", name, msg);
         assert_eq!(msg.keycode, keycode);
         assert_eq!(msg.down, 0);
-        assert!(vnc_client.test_key_event(1, keysym as u32).is_ok());
+        assert!(vnc_client.test_key_event(1, u32::from(keysym)).is_ok());
 
         let msg = input.borrow_mut().read_input_event();
         println!("key {:?}: {:?}", name, msg);

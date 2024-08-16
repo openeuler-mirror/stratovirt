@@ -119,7 +119,7 @@ impl RefCount {
         self.refcount_table_offset = header.refcount_table_offset;
         self.refcount_table_clusters = header.refcount_table_clusters;
         self.refcount_table_size =
-            header.refcount_table_clusters as u64 * header.cluster_size() / ENTRY_SIZE;
+            u64::from(header.refcount_table_clusters) * header.cluster_size() / ENTRY_SIZE;
         self.refcount_blk_bits = header.cluster_bits + 3 - header.refcount_order;
         self.refcount_blk_size = 1 << self.refcount_blk_bits;
         self.cluster_bits = header.cluster_bits;
@@ -141,7 +141,7 @@ impl RefCount {
     }
 
     fn cluster_in_rc_block(&self, cluster_index: u64) -> u64 {
-        cluster_index & (self.refcount_blk_size - 1) as u64
+        cluster_index & u64::from(self.refcount_blk_size - 1)
     }
 
     /// Allocate a continuous space that is not referenced by existing refcount table
@@ -182,7 +182,7 @@ impl RefCount {
             let (table, blocks) = refcount_metadata_size(
                 clusters,
                 self.cluster_size,
-                header.refcount_order as u64,
+                u64::from(header.refcount_order),
                 true,
             )?;
             self.extend_refcount_table(header, start_idx, table, blocks)?;
@@ -274,7 +274,7 @@ impl RefCount {
         // Free the old cluster of refcount table.
         self.update_refcount(
             old_table_offset,
-            old_table_clusters as u64,
+            u64::from(old_table_clusters),
             -1,
             true,
             &Qcow2DiscardType::Other,
@@ -443,7 +443,7 @@ impl RefCount {
                     )
                 })?
             };
-            let cluster_idx = rt_idx * self.refcount_blk_size as u64 + rb_idx + i as u64;
+            let cluster_idx = rt_idx * u64::from(self.refcount_blk_size) + rb_idx + i as u64;
             if rc_value == 0 {
                 if self.discard_passthrough.contains(discard_type) {
                     // update refcount discard.
@@ -460,7 +460,7 @@ impl RefCount {
         }
 
         for (idx, rc_value) in rb_vec.iter().enumerate() {
-            borrowed_entry.set_entry_map(rb_idx as usize + idx, *rc_value as u64)?;
+            borrowed_entry.set_entry_map(rb_idx as usize + idx, u64::from(*rc_value))?;
         }
         if !is_dirty {
             self.refcount_blk_cache.add_dirty_table(cache_entry.clone());
@@ -829,7 +829,7 @@ mod test {
         let free_cluster_index =
             3 + ((header.l1_size * ENTRY_SIZE as u32 + cluster_sz as u32 - 1) >> cluster_bits);
         let addr = qcow2.alloc_cluster(1, true).unwrap();
-        assert_eq!(addr, cluster_sz * free_cluster_index as u64);
+        assert_eq!(addr, cluster_sz * u64::from(free_cluster_index));
         qcow2.flush().unwrap();
         // Check if the refcount of the cluster is updated to the disk.
         let mut rc_value = [0_u8; 2];
@@ -837,7 +837,7 @@ mod test {
             .as_ref()
             .read_at(
                 &mut rc_value,
-                cluster_sz * 2 + 2 * free_cluster_index as u64,
+                cluster_sz * 2 + 2 * u64::from(free_cluster_index),
             )
             .unwrap();
         assert_eq!(1, BigEndian::read_u16(&rc_value));

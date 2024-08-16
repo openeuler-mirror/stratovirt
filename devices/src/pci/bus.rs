@@ -126,7 +126,7 @@ impl PciBus {
     /// * `bus_num` - The bus number.
     /// * `devfn` - Slot number << 3 | Function number.
     pub fn get_device(&self, bus_num: u8, devfn: u8) -> Option<Arc<Mutex<dyn Device>>> {
-        if let Some(dev) = self.child_dev(devfn as u64) {
+        if let Some(dev) = self.child_dev(u64::from(devfn)) {
             return Some(dev.clone());
         }
         debug!("Can't find device {}:{}", bus_num, devfn);
@@ -232,7 +232,7 @@ impl PciBus {
             .unrealize()
             .with_context(|| format!("Failed to unrealize device {}", pci_dev.name()))?;
 
-        let devfn = pci_dev.pci_base().devfn as u64;
+        let devfn = u64::from(pci_dev.pci_base().devfn);
         let mut locked_bus = bus.lock().unwrap();
         locked_bus
             .detach_child(devfn)
@@ -260,7 +260,7 @@ impl PciBus {
 
     pub fn generate_dev_id(&self, devfn: u8) -> u16 {
         let bus_num = self.number(SECONDARY_BUS_NUM as usize);
-        ((bus_num as u16) << 8) | (devfn as u16)
+        (u16::from(bus_num) << 8) | u16::from(devfn)
     }
 
     pub fn update_dev_id(&self, devfn: u8, dev_id: &Arc<AtomicU16>) {

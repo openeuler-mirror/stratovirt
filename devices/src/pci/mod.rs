@@ -202,7 +202,7 @@ pub trait PciDevOps: Device + Send {
     /// Device id to send MSI/MSI-X.
     fn set_dev_id(&self, bus_num: u8, devfn: u8) -> u16 {
         let bus_shift: u16 = 8;
-        ((bus_num as u16) << bus_shift) | (devfn as u16)
+        (u16::from(bus_num) << bus_shift) | u16::from(devfn)
     }
 
     /// Get the path of the PCI bus where the device resides.
@@ -334,9 +334,9 @@ pub fn init_multifunction(
     parent_bus: Weak<Mutex<dyn Bus>>,
 ) -> Result<()> {
     let mut header_type =
-        le_read_u16(config, HEADER_TYPE as usize)? & (!HEADER_TYPE_MULTIFUNC as u16);
+        le_read_u16(config, HEADER_TYPE as usize)? & u16::from(!HEADER_TYPE_MULTIFUNC);
     if multifunction {
-        header_type |= HEADER_TYPE_MULTIFUNC as u16;
+        header_type |= u16::from(HEADER_TYPE_MULTIFUNC);
     }
     le_write_u16(config, HEADER_TYPE as usize, header_type)?;
 
@@ -348,7 +348,7 @@ pub fn init_multifunction(
     let bus = parent_bus.upgrade().unwrap();
     PCI_BUS!(bus, locked_bus, pci_bus);
     if pci_func(devfn) != 0 {
-        let dev = pci_bus.child_dev(pci_devfn(slot, 0) as u64);
+        let dev = pci_bus.child_dev(u64::from(pci_devfn(slot, 0)));
         if dev.is_none() {
             return Ok(());
         }
@@ -356,7 +356,7 @@ pub fn init_multifunction(
         let mut data = vec![0_u8; 2];
         PCI_BUS_DEVICE!(dev.unwrap(), locked_dev, pci_dev);
         pci_dev.read_config(HEADER_TYPE as usize, data.as_mut_slice());
-        if LittleEndian::read_u16(&data) & HEADER_TYPE_MULTIFUNC as u16 == 0 {
+        if LittleEndian::read_u16(&data) & u16::from(HEADER_TYPE_MULTIFUNC) == 0 {
             // Function 0 should set multifunction bit.
             bail!(
                 "PCI: single function device can't be populated in bus {} function {}.{}",
@@ -374,7 +374,10 @@ pub fn init_multifunction(
 
     // If function 0 is set to single function, the rest function should be None.
     for func in 1..MAX_FUNC {
-        if pci_bus.child_dev(pci_devfn(slot, func) as u64).is_some() {
+        if pci_bus
+            .child_dev(u64::from(pci_devfn(slot, func)))
+            .is_some()
+        {
             bail!(
                 "PCI: {}.0 indicates single function, but {}.{} is already populated",
                 slot,
@@ -390,7 +393,7 @@ pub fn init_multifunction(
 /// PCI-to-PCI bridge specification 9.1: Interrupt routing.
 pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
     let pci_slot = devfn >> 3 & 0x1f;
-    ((pci_slot + pin) % PCI_PIN_NUM) as u32
+    u32::from((pci_slot + pin) % PCI_PIN_NUM)
 }
 
 #[cfg(test)]
@@ -422,7 +425,7 @@ mod tests {
         gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
         fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-            let devfn = self.base.devfn as u64;
+            let devfn = u64::from(self.base.devfn);
             self.init_write_mask(false)?;
             self.init_write_clear_mask(false)?;
 

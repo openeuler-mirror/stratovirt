@@ -236,7 +236,7 @@ pub fn create_qcow2_img(image_path: String, image_size: u64) {
         .custom_flags(libc::O_CREAT | libc::O_TRUNC)
         .open(image_path.clone())
         .unwrap();
-    file.set_len(cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE)
+    file.set_len(cluster_sz * 3 + u64::from(header.l1_size) * ENTRY_SIZE)
         .unwrap();
     file.write_all(&header.to_vec()).unwrap();
 

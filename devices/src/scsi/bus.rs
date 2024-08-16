@@ -373,7 +373,7 @@ pub enum ScsiXferMode {
 
 // Convert from (target, lun) to unique address in BusBase.
 pub fn get_scsi_key(target: u8, lun: u16) -> u64 {
-    (target as u64) << TARGET_ID_SHIFT | lun as u64
+    u64::from(target) << TARGET_ID_SHIFT | u64::from(lun)
 }
 
 // Convert from unique address in BusBase to (target, lun).
@@ -547,7 +547,7 @@ impl ScsiRequest {
                 .with_context(|| "Too large offset IO!")?;
 
             offset
-                .checked_add(datalen as u64)
+                .checked_add(u64::from(datalen))
                 .filter(|&off| off <= disk_size)
                 .with_context(|| {
                     format!(
@@ -802,8 +802,8 @@ pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<dyn Device>>)
         // 010b        |  Bytes[7-8].      |
         // 100b        |  Bytes[10-13].    |
         // 101b        |  Bytes[6-9].      |
-        0 => cdb[4] as i32,
-        1 | 2 => BigEndian::read_u16(&cdb[7..]) as i32,
+        0 => i32::from(cdb[4]),
+        1 | 2 => i32::from(BigEndian::read_u16(&cdb[7..])),
         4 => BigEndian::read_u32(&cdb[10..]) as i32,
         5 => BigEndian::read_u32(&cdb[6..]) as i32,
         _ => -1,
@@ -841,8 +841,8 @@ fn scsi_cdb_lba(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i64 {
         // 010b        |  Bytes[2-5].                  |
         // 100b        |  Bytes[2-9].                  |
         // 101b        |  Bytes[2-5].                  |
-        0 => (BigEndian::read_u32(&cdb[0..]) & 0x1fffff) as i64,
-        1 | 2 | 5 => BigEndian::read_u32(&cdb[2..]) as i64,
+        0 => i64::from(BigEndian::read_u32(&cdb[0..]) & 0x1fffff),
+        1 | 2 | 5 => i64::from(BigEndian::read_u32(&cdb[2..])),
         4 => BigEndian::read_u64(&cdb[2..]) as i64,
         _ => -1,
     }
@@ -992,7 +992,7 @@ fn scsi_command_emulate_vpd_page(
             outbuf[4] = 1;
             let max_xfer_length: u32 = u32::MAX / 512;
             BigEndian::write_u32(&mut outbuf[8..12], max_xfer_length);
-            BigEndian::write_u64(&mut outbuf[36..44], max_xfer_length as u64);
+            BigEndian::write_u64(&mut outbuf[36..44], u64::from(max_xfer_length));
             buflen = outbuf.len();
         }
         0xb1 => {
@@ -1436,7 +1436,7 @@ fn scsi_command_emulate_service_action_in_16(
         let block_size = scsi_dev.block_size;
         let mut outbuf: Vec<u8> = vec![0; 32];
         let mut nb_sectors = scsi_dev.disk_sectors;
-        nb_sectors /= (block_size / DEFAULT_SECTOR_SIZE) as u64;
+        nb_sectors /= u64::from(block_size / DEFAULT_SECTOR_SIZE);
         nb_sectors -= 1;
         drop(locked_dev);
 
@@ -1577,7 +1577,7 @@ fn scsi_command_emulate_get_configuration(
     // Bytes[4-5]: Reserved.
     // Bytes[6-7]: Current Profile.
     BigEndian::write_u32(&mut outbuf[0..4], 36);
-    let current = if scsi_dev.disk_sectors > CD_MAX_SECTORS as u64 {
+    let current = if scsi_dev.disk_sectors > u64::from(CD_MAX_SECTORS) {
         GC_PROFILE_DVD_ROM
     } else {
         GC_PROFILE_CD_ROM
@@ -1600,9 +1600,9 @@ fn scsi_command_emulate_get_configuration(
     outbuf[10] = 0x03;
     outbuf[11] = 8;
     BigEndian::write_u16(&mut outbuf[12..14], GC_PROFILE_CD_ROM);
-    outbuf[14] |= (current == GC_PROFILE_CD_ROM) as u8;
+    outbuf[14] |= u8::from(current == GC_PROFILE_CD_ROM);
     BigEndian::write_u16(&mut outbuf[16..18], GC_PROFILE_DVD_ROM);
-    outbuf[18] |= (current == GC_PROFILE_DVD_ROM) as u8;
+    outbuf[18] |= u8::from(current == GC_PROFILE_DVD_ROM);
 
     // Bytes[8-n]: Feature Descriptor(s):
     // Bytes[20-31]: Feature 1: Core Feature:

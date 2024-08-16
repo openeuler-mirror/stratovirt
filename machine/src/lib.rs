@@ -259,7 +259,7 @@ impl MachineBase {
         use crate::x86_64::ich9_lpc::SLEEP_CTRL_OFFSET;
 
         let count = data.len() as u64;
-        if addr == SLEEP_CTRL_OFFSET as u64 {
+        if addr == u64::from(SLEEP_CTRL_OFFSET) {
             if let Err(e) = self.cpus[0].pause() {
                 log::error!("Fail to pause bsp, {:?}", e);
             }
@@ -1176,7 +1176,7 @@ pub trait MachineOps: MachineLifecycle {
                 vm_config.machine_config.nr_cpus,
                 MAX_VIRTIO_QUEUE,
             );
-            device_cfg.num_queues = Some(queues_auto as u32);
+            device_cfg.num_queues = Some(u32::from(queues_auto));
         }
         let device = Arc::new(Mutex::new(ScsiCntlr::new(device_cfg.clone())));
 

@@ -75,7 +75,7 @@ impl LeakBucket {
         // update the water level
         let now = get_current_time();
         let nanos = (now - self.prev_time).as_nanos();
-        if nanos > (self.level * NANOSECONDS_PER_SECOND / self.capacity) as u128 {
+        if nanos > u128::from(self.level * NANOSECONDS_PER_SECOND / self.capacity) {
             self.level = 0;
         } else {
             self.level -= nanos as u64 * self.capacity / NANOSECONDS_PER_SECOND;

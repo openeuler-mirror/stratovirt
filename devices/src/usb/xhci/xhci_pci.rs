@@ -120,7 +120,7 @@ impl XhciPciDevice {
             xhci: XhciDevice::new(mem_space, config),
             dev_id: Arc::new(AtomicU16::new(0)),
             mem_region: Region::init_container_region(
-                XHCI_PCI_CONFIG_LENGTH as u64,
+                u64::from(XHCI_PCI_CONFIG_LENGTH),
                 "XhciPciContainer",
             ),
             doorbell_fd: Arc::new(create_new_eventfd().unwrap()),
@@ -131,57 +131,57 @@ impl XhciPciDevice {
 
     fn mem_region_init(&mut self) -> Result<()> {
         let cap_region = Region::init_io_region(
-            XHCI_PCI_CAP_LENGTH as u64,
+            u64::from(XHCI_PCI_CAP_LENGTH),
             build_cap_ops(&self.xhci),
             "XhciPciCapRegion",
         );
         self.mem_region
-            .add_subregion(cap_region, XHCI_PCI_CAP_OFFSET as u64)
+            .add_subregion(cap_region, u64::from(XHCI_PCI_CAP_OFFSET))
             .with_context(|| "Failed to register cap region.")?;
 
         let mut oper_region = Region::init_io_region(
-            XHCI_PCI_OPER_LENGTH as u64,
+            u64::from(XHCI_PCI_OPER_LENGTH),
             build_oper_ops(&self.xhci),
             "XhciPciOperRegion",
         );
         oper_region.set_access_size(4);
         self.mem_region
-            .add_subregion(oper_region, XHCI_PCI_OPER_OFFSET as u64)
+            .add_subregion(oper_region, u64::from(XHCI_PCI_OPER_OFFSET))
             .with_context(|| "Failed to register oper region.")?;
 
         let port_num = self.xhci.lock().unwrap().usb_ports.len();
         for i in 0..port_num {
             let port = &self.xhci.lock().unwrap().usb_ports[i];
             let port_region = Region::init_io_region(
-                XHCI_PCI_PORT_LENGTH as u64,
+                u64::from(XHCI_PCI_PORT_LENGTH),
                 build_port_ops(port),
                 "XhciPciPortRegion",
             );
-            let offset = (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i as u32) as u64;
+            let offset = u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * i as u32);
             self.mem_region
                 .add_subregion(port_region, offset)
                 .with_context(|| "Failed to register port region.")?;
         }
 
         let mut runtime_region = Region::init_io_region(
-            XHCI_PCI_RUNTIME_LENGTH as u64,
+            u64::from(XHCI_PCI_RUNTIME_LENGTH),
             build_runtime_ops(&self.xhci),
             "XhciPciRuntimeRegion",
         );
         runtime_region.set_access_size(4);
         self.mem_region
-            .add_subregion(runtime_region, XHCI_PCI_RUNTIME_OFFSET as u64)
+            .add_subregion(runtime_region, u64::from(XHCI_PCI_RUNTIME_OFFSET))
             .with_context(|| "Failed to register runtime region.")?;
 
         let doorbell_region = Region::init_io_region(
-            XHCI_PCI_DOORBELL_LENGTH as u64,
+            u64::from(XHCI_PCI_DOORBELL_LENGTH),
             build_doorbell_ops(&self.xhci),
             "XhciPciDoorbellRegion",
         );
         doorbell_region.set_ioeventfds(&self.ioeventfds());
 
         self.mem_region
-            .add_subregion(doorbell_region, XHCI_PCI_DOORBELL_OFFSET as u64)
+            .add_subregion(doorbell_region, u64::from(XHCI_PCI_DOORBELL_OFFSET))
             .with_context(|| "Failed to register doorbell region.")?;
         Ok(())
     }
@@ -276,7 +276,8 @@ impl Device for XhciPciDevice {
             PCI_SERIAL_BUS_RELEASE_VERSION_3_0;
         self.base.config.config[PCI_FRAME_LENGTH_ADJUSTMENT as usize] =
             PCI_NO_FRAME_LENGTH_TIMING_CAP;
-        self.dev_id.store(self.base.devfn as u16, Ordering::SeqCst);
+        self.dev_id
+            .store(u16::from(self.base.devfn), Ordering::SeqCst);
         self.mem_region_init()?;
 
         let handler = Arc::new(Mutex::new(DoorbellHandler::new(
@@ -308,7 +309,7 @@ impl Device for XhciPciDevice {
             self.base.devfn,
         )?;
 
-        let mut mem_region_size = (XHCI_PCI_CONFIG_LENGTH as u64).next_power_of_two();
+        let mut mem_region_size = u64::from(XHCI_PCI_CONFIG_LENGTH).next_power_of_two();
         mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         self.base.config.register_bar(
             0_usize,
@@ -318,7 +319,7 @@ impl Device for XhciPciDevice {
             mem_region_size,
         )?;
 
-        let devfn = self.base.devfn as u64;
+        let devfn = u64::from(self.base.devfn);
         // It is safe to unwrap, because it is initialized in init_msix.
         let cloned_msix = self.base.config.msix.as_ref().unwrap().clone();
         let cloned_intx = self.base.config.intx.as_ref().unwrap().clone();

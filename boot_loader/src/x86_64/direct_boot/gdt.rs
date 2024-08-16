@@ -119,9 +119,9 @@ pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
     ];
 
     let mut code_seg: kvm_segment = GdtEntry(gdt_table[GDT_ENTRY_BOOT_CS as usize]).into();
-    code_seg.selector = GDT_ENTRY_BOOT_CS as u16 * 8;
+    code_seg.selector = u16::from(GDT_ENTRY_BOOT_CS) * 8;
     let mut data_seg: kvm_segment = GdtEntry(gdt_table[GDT_ENTRY_BOOT_DS as usize]).into();
-    data_seg.selector = GDT_ENTRY_BOOT_DS as u16 * 8;
+    data_seg.selector = u16::from(GDT_ENTRY_BOOT_DS) * 8;
 
     write_gdt_table(&gdt_table[..], guest_mem)?;
     write_idt_value(0, guest_mem)?;

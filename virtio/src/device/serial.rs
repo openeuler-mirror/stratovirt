@@ -1018,13 +1018,13 @@ mod tests {
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(serial.base.driver_features, 0_u64);
-        assert_eq!(serial.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(serial.driver_features(page)), 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(serial.base.driver_features, 0_u64);
-        assert_eq!(serial.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(serial.driver_features(page)), 0_u64);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time, this driver feature bit is supported.
@@ -1037,7 +1037,7 @@ mod tests {
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         assert_eq!(
-            serial.driver_features(page) as u64,
+            u64::from(serial.driver_features(page)),
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         serial.base.driver_features = 0;
@@ -1075,7 +1075,7 @@ mod tests {
             classtype: "virtio-serial-pci".to_string(),
             id: "serial".to_string(),
             multifunction: Some(false),
-            max_ports: max_ports as u32,
+            max_ports: u32::from(max_ports),
             bus: Some("pcie.0".to_string()),
             addr: Some((0, 0)),
         });

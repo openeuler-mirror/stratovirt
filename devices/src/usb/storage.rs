@@ -382,7 +382,7 @@ impl UsbStorage {
 
         match self.state.mode {
             UsbMsdMode::Cbw => {
-                if packet.get_iovecs_size() < CBW_SIZE as u64 {
+                if packet.get_iovecs_size() < u64::from(CBW_SIZE) {
                     bail!("Bad CBW size {}", packet.get_iovecs_size());
                 }
                 self.state.check_cdb_exist(false)?;
@@ -436,7 +436,7 @@ impl UsbStorage {
                 bail!("Not supported usb packet(Token_in and data_out).");
             }
             UsbMsdMode::Csw => {
-                if packet.get_iovecs_size() < CSW_SIZE as u64 {
+                if packet.get_iovecs_size() < u64::from(CSW_SIZE) {
                     bail!("Bad CSW size {}", packet.get_iovecs_size());
                 }
                 self.state.check_cdb_exist(true)?;

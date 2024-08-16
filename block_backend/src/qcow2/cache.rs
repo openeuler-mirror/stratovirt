@@ -85,7 +85,7 @@ impl CacheTable {
             bail!("Invalid idx {}", idx);
         }
         let v = match self.entry_size {
-            ENTRY_SIZE_U16 => BigEndian::read_u16(&self.table_data[start..end]) as u64,
+            ENTRY_SIZE_U16 => u64::from(BigEndian::read_u16(&self.table_data[start..end])),
             ENTRY_SIZE_U64 => BigEndian::read_u64(&self.table_data[start..end]),
             _ => bail!("Unsupported entry size {}", self.entry_size),
         };

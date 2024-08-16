@@ -60,14 +60,14 @@ pub fn swap_u16(value: u16) -> u16 {
 }
 
 pub fn swap_u32(value: u32) -> u32 {
-    let lower_u16 = swap_u16(value as u16) as u32;
-    let higher_u16 = swap_u16((value >> 16) as u16) as u32;
+    let lower_u16 = u32::from(swap_u16(value as u16));
+    let higher_u16 = u32::from(swap_u16((value >> 16) as u16));
     lower_u16 << 16 | higher_u16
 }
 
 pub fn swap_u64(value: u64) -> u64 {
-    let lower_u32 = swap_u32(value as u32) as u64;
-    let higher_u32 = swap_u32((value >> 32) as u32) as u64;
+    let lower_u32 = u64::from(swap_u32(value as u32));
+    let higher_u32 = u64::from(swap_u32((value >> 32) as u32));
     lower_u32 << 32 | higher_u32
 }
 
