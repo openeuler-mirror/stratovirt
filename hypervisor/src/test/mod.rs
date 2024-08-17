@@ -21,6 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+#[cfg(feature = "vfio_device")]
 use kvm_ioctls::DeviceFd;
 use log::info;
 use vmm_sys_util::eventfd::EventFd;
@@ -115,6 +116,7 @@ impl HypervisorOps for TestHypervisor {
         })
     }
 
+    #[cfg(feature = "vfio_device")]
     fn create_vfio_device(&self) -> Option<DeviceFd> {
         None
     }

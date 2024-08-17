@@ -36,9 +36,11 @@ use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
+#[cfg(feature = "vfio_device")]
+use kvm_ioctls::DeviceFd;
 #[cfg(not(test))]
 use kvm_ioctls::VcpuExit;
-use kvm_ioctls::{Cap, DeviceFd, Kvm, VcpuFd, VmFd};
+use kvm_ioctls::{Cap, Kvm, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info, warn};
 use vmm_sys_util::{
@@ -259,6 +261,7 @@ impl HypervisorOps for KvmHypervisor {
         })
     }
 
+    #[cfg(feature = "vfio_device")]
     fn create_vfio_device(&self) -> Option<DeviceFd> {
         let mut device = kvm_create_device {
             type_: kvm_device_type_KVM_DEV_TYPE_VFIO,

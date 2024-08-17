@@ -22,6 +22,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use anyhow::Result;
+#[cfg(feature = "vfio_device")]
 use kvm_ioctls::DeviceFd;
 
 use address_space::AddressSpace;
@@ -56,5 +57,6 @@ pub trait HypervisorOps: Send + Sync + Any {
 
     fn create_irq_manager(&mut self) -> Result<IrqManager>;
 
+    #[cfg(feature = "vfio_device")]
     fn create_vfio_device(&self) -> Option<DeviceFd>;
 }
