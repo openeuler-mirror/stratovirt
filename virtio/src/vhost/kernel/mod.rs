@@ -10,10 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "vhost_net")]
 mod net;
 #[cfg(feature = "vhost_vsock")]
 mod vsock;
 
+#[cfg(feature = "vhost_net")]
 pub use net::Net;
 #[cfg(feature = "vhost_vsock")]
 pub use vsock::{Vsock, VsockConfig, VsockState};

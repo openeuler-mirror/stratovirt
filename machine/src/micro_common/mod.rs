@@ -72,10 +72,12 @@ use migration::MigrationManager;
 use util::loop_context::{create_new_eventfd, EventLoopManager};
 use util::{num_ops::str_to_num, set_termi_canon_mode};
 use virtio::device::block::VirtioBlkDevConfig;
+#[cfg(feature = "vhost_net")]
+use virtio::VhostKern;
 #[cfg(feature = "vhostuser_net")]
 use virtio::VhostUser;
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VirtioDevice,
+    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VirtioDevice,
     VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 
@@ -419,12 +421,18 @@ impl LightMachine {
             .with_context(|| format!("Netdev: {:?} not found for net device", &net_cfg.netdev))?;
         if netdev_cfg.vhost_type().is_some() {
             if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
-                let net = Arc::new(Mutex::new(VhostKern::Net::new(
-                    &net_cfg,
-                    netdev_cfg,
-                    &self.base.sys_mem,
-                )));
-                self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
+                #[cfg(not(feature = "vhost_net"))]
+                bail!("Unsupported Vhost_Net");
+
+                #[cfg(feature = "vhost_net")]
+                {
+                    let net = Arc::new(Mutex::new(VhostKern::Net::new(
+                        &net_cfg,
+                        netdev_cfg,
+                        &self.base.sys_mem,
+                    )));
+                    self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
+                }
             } else {
                 #[cfg(not(feature = "vhostuser_net"))]
                 bail!("Unsupported Vhostuser_Net");

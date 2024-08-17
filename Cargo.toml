@@ -52,6 +52,7 @@ virtio_scsi = ["machine/virtio_scsi"]
 vhost_vsock = ["machine/vhost_vsock"]
 vhostuser_block = ["machine/vhostuser_block"]
 vhostuser_net = ["machine/vhostuser_net"]
+vhost_net = ["machine/vhost_net"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]
