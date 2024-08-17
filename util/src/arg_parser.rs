@@ -800,7 +800,7 @@ mod tests {
         arg_parser.output_help(&mut buffer.inner);
 
         let help_str = buffer.get_msg_vec();
-        let help_msg = help_str.split("\n").collect::<Vec<&str>>();
+        let help_msg = help_str.split('\n').collect::<Vec<&str>>();
         assert_eq!(help_msg[0], "StratoVirt 1.0.0");
         assert_eq!(help_msg[1], "Huawei Technologies Co., Ltd");
         assert_eq!(help_msg[2], "A light kvm-based hypervisor.");
@@ -832,10 +832,10 @@ mod tests {
             arg.possible_values.as_ref().unwrap(),
             &vec!["vm1", "vm2", "vm3"]
         );
-        assert_eq!(arg.required, false);
-        assert_eq!(arg.presented, true);
-        assert_eq!(arg.hiddable, false);
-        assert_eq!(arg.can_no_value, false);
+        assert!(!arg.required);
+        assert!(arg.presented);
+        assert!(!arg.hiddable);
+        assert!(!arg.can_no_value);
         assert_eq!(arg.value.as_ref().unwrap(), "vm1");
 
         let (help_msg, help_type) = arg.help_message();

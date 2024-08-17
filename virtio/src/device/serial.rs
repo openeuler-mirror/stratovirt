@@ -1084,13 +1084,13 @@ mod tests {
         // The offset of configuration that needs to be read exceeds the maximum.
         let offset = size_of::<VirtioConsoleConfig>() as u64;
         let mut read_data: Vec<u8> = vec![0; 8];
-        assert_eq!(serial.read_config(offset, &mut read_data).is_ok(), false);
+        assert!(serial.read_config(offset, &mut read_data).is_err());
 
         // Check the configuration that needs to be read.
         let offset = 0_u64;
         let mut read_data: Vec<u8> = vec![0; 12];
         let expect_data: Vec<u8> = vec![0, 0, 0, 0, max_ports, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(serial.read_config(offset, &mut read_data).is_ok(), true);
+        assert!(serial.read_config(offset, &mut read_data).is_ok());
         assert_eq!(read_data, expect_data);
     }
 }

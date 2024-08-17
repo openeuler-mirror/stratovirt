@@ -136,7 +136,7 @@ impl V4l2Backend {
             // 2. buf can be guaranteed not be null.
             let ret = unsafe {
                 libc::mmap(
-                    std::ptr::null_mut() as *mut libc::c_void,
+                    std::ptr::null_mut(),
                     buf.length as libc::size_t,
                     libc::PROT_WRITE | libc::PROT_READ,
                     libc::MAP_SHARED,

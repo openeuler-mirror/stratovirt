@@ -1124,8 +1124,8 @@ mod test {
         assert!(refblock.set_refcount(9, 9).is_ok());
 
         // Get inner dat
-        let mut vec_1 = (1 as u16).to_be_bytes().to_vec();
-        let mut vec_2 = (7 as u16).to_be_bytes().to_vec();
+        let mut vec_1 = 1_u16.to_be_bytes().to_vec();
+        let mut vec_2 = 7_u16.to_be_bytes().to_vec();
         vec_1.append(&mut vec_2);
         let buf = refblock.get_data(0, 2);
         assert_eq!(buf, vec_1);

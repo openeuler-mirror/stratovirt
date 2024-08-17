@@ -193,7 +193,6 @@ fn init_logger_with_env(logfile: Box<dyn Write + Send>, logfile_path: String) ->
 fn open_log_file(path: &str) -> Result<File> {
     std::fs::OpenOptions::new()
         .read(false)
-        .write(true)
         .append(true)
         .create(true)
         .mode(0o640)

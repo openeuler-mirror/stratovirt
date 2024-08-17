@@ -111,7 +111,7 @@ impl SerialTest {
 
     fn get_pty_path(&mut self) -> String {
         let ret = self.state.borrow().qmp("{\"execute\": \"query-chardev\"}");
-        if (*ret.get("return").unwrap()).as_array().unwrap().len() != 0
+        if !(*ret.get("return").unwrap()).as_array().unwrap().is_empty()
             && (*ret.get("return").unwrap())[0].get("filename").is_some()
         {
             let filename = (*ret.get("return").unwrap())[0]
@@ -120,9 +120,9 @@ impl SerialTest {
                 .to_string()
                 .replace('"', "");
             let mut file_path: Vec<&str> = filename.split("pty:").collect();
-            return file_path.pop().unwrap().to_string();
+            file_path.pop().unwrap().to_string()
         } else {
-            return String::from("");
+            String::from("")
         }
     }
 
@@ -315,7 +315,7 @@ impl SerialTest {
                 server: _,
                 nowait: _,
             } => {
-                stream = self.connect_socket_host(&path);
+                stream = self.connect_socket_host(path);
             }
         }
 
@@ -355,9 +355,9 @@ impl SerialTest {
         let result = match port.chardev_type {
             ChardevType::Pty => {
                 let output = self.connect_pty_host(true);
-                output.unwrap().write(&test_data.as_bytes())
+                output.unwrap().write(test_data.as_bytes())
             }
-            _ => stream.as_ref().unwrap().write(&test_data.as_bytes()),
+            _ => stream.as_ref().unwrap().write(test_data.as_bytes()),
         };
         match result {
             Ok(_num) => {

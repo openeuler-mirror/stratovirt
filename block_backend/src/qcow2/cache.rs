@@ -262,7 +262,7 @@ mod test {
         for i in 0..buf.len() {
             vec.append(&mut buf[i].to_be_bytes().to_vec());
         }
-        let mut entry = CacheTable::new(0x00 as u64, vec, ENTRY_SIZE_U64).unwrap();
+        let mut entry = CacheTable::new(0x00_u64, vec, ENTRY_SIZE_U64).unwrap();
         assert_eq!(entry.get_entry_map(0).unwrap(), 0x00);
         assert_eq!(entry.get_entry_map(3).unwrap(), 0x03);
         assert_eq!(entry.get_entry_map(4).unwrap(), 0x04);
@@ -279,19 +279,19 @@ mod test {
             vec.append(&mut buf[i].to_be_bytes().to_vec());
         }
         let entry_0 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_0.borrow_mut().lru_count = 0;
         let entry_1 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_1.borrow_mut().lru_count = 1;
         let entry_2 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_2.borrow_mut().lru_count = 2;
         let entry_3 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_3.borrow_mut().lru_count = 3;
 

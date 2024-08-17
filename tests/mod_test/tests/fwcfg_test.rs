@@ -34,7 +34,7 @@ fn test_signature() {
     let mut test_state = test_init(args);
 
     let mut read_data: Vec<u8> = Vec::with_capacity(4);
-    let target_data: [u8; 4] = ['Q' as u8, 'E' as u8, 'M' as u8, 'U' as u8];
+    let target_data: [u8; 4] = [b'Q', b'E', b'M', b'U'];
 
     // Select Signature entry and read it.
     test_state.fw_cfg_read_bytes(FwCfgEntryType::Signature as u16, &mut read_data, 4);
@@ -251,12 +251,12 @@ fn test_smbios_type0() {
         &mut allocator.borrow_mut(),
         anchor_file,
         &mut read_data,
-        24 as u32,
+        24_u32,
     );
 
-    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(anchor_size, 24_u32);
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
-    assert_eq!(read_data[6], 24 as u8);
+    assert_eq!(read_data[6], 24_u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
     assert_eq!(talble_len, 372);
 
@@ -315,12 +315,12 @@ fn test_smbios_type1() {
         &mut allocator.borrow_mut(),
         anchor_file,
         &mut read_data,
-        24 as u32,
+        24_u32,
     );
 
-    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(anchor_size, 24_u32);
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
-    assert_eq!(read_data[6], 24 as u8);
+    assert_eq!(read_data[6], 24_u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
     assert_eq!(talble_len, 414);
 
@@ -342,7 +342,7 @@ fn test_smbios_type1() {
         "version0"
     );
     assert_eq!(read_table_date[48], 1);
-    assert_eq!(read_table_date[49], 27 as u8);
+    assert_eq!(read_table_date[49], 27_u8);
     let handle1 = LittleEndian::read_u16(&read_table_date[50..]);
     assert_eq!(handle1, 0x100);
 
@@ -420,12 +420,12 @@ fn test_smbios_type2() {
         &mut allocator.borrow_mut(),
         anchor_file,
         &mut read_data,
-        24 as u32,
+        24_u32,
     );
 
-    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(anchor_size, 24_u32);
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
-    assert_eq!(read_data[6], 24 as u8);
+    assert_eq!(read_data[6], 24_u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
@@ -495,12 +495,12 @@ fn test_smbios_type3() {
         &mut allocator.borrow_mut(),
         anchor_file,
         &mut read_data,
-        24 as u32,
+        24_u32,
     );
 
-    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(anchor_size, 24_u32);
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
-    assert_eq!(read_data[6], 24 as u8);
+    assert_eq!(read_data[6], 24_u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
@@ -547,7 +547,7 @@ fn test_smbios_type4() {
     let mut args: Vec<&str> = Vec::new();
     bios_args(&mut args);
 
-    let cpu_args = format!("-smp 8,maxcpus=8,sockets=2,cores=2,threads=2");
+    let cpu_args = "-smp 8,maxcpus=8,sockets=2,cores=2,threads=2".to_string();
     let mut extra_args = cpu_args.split(' ').collect();
     args.append(&mut extra_args);
 
@@ -570,12 +570,12 @@ fn test_smbios_type4() {
         &mut allocator.borrow_mut(),
         anchor_file,
         &mut read_data,
-        24 as u32,
+        24_u32,
     );
 
-    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(anchor_size, 24_u32);
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
-    assert_eq!(read_data[6], 24 as u8);
+    assert_eq!(read_data[6], 24_u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
 
     let mut read_table_date: Vec<u8> = Vec::with_capacity(talble_len as usize);
@@ -631,7 +631,7 @@ fn test_smbios_type17() {
     let mut args: Vec<&str> = Vec::new();
     bios_args(&mut args);
 
-    let cpu_args = format!("-smp 8,maxcpus=8,sockets=2,cores=2,threads=2");
+    let cpu_args = "-smp 8,maxcpus=8,sockets=2,cores=2,threads=2".to_string();
     let mut extra_args = cpu_args.split(' ').collect();
     args.append(&mut extra_args);
 
@@ -655,12 +655,12 @@ fn test_smbios_type17() {
         &mut allocator.borrow_mut(),
         anchor_file,
         &mut read_data,
-        24 as u32,
+        24_u32,
     );
 
-    assert_eq!(anchor_size, 24 as u32);
+    assert_eq!(anchor_size, 24_u32);
     assert_eq!(String::from_utf8_lossy(&read_data[..5]), "_SM3_");
-    assert_eq!(read_data[6], 24 as u8);
+    assert_eq!(read_data[6], 24_u8);
     let talble_len = LittleEndian::read_u32(&read_data[12..]);
     assert_eq!(talble_len, 467);
 

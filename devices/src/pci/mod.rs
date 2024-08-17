@@ -208,7 +208,8 @@ pub trait PciDevOps: Device + Send {
     /// Get the path of the PCI bus where the device resides.
     fn get_parent_dev_path(&self, parent_bus: Arc<Mutex<dyn Bus>>) -> String {
         PCI_BUS!(parent_bus, locked_bus, pci_bus);
-        let parent_dev_path = if pci_bus.name().eq("pcie.0") {
+
+        if pci_bus.name().eq("pcie.0") {
             String::from("/pci@ffffffffffffffff")
         } else {
             // This else branch will not be executed currently,
@@ -217,8 +218,7 @@ pub trait PciDevOps: Device + Send {
             let parent_bridge = pci_bus.parent_device().unwrap().upgrade().unwrap();
             ROOT_PORT!(parent_bridge, locked_bridge, rootport);
             rootport.get_dev_path().unwrap()
-        };
-        parent_dev_path
+        }
     }
 
     /// Fill the device path according to parent device path and device function.

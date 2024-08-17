@@ -625,7 +625,7 @@ mod tests {
             check_config_space_rw(&self.config_space, offset, data)?;
             let data_len = data.len();
             self.config_space[(offset as usize)..(offset as usize + data_len)]
-                .copy_from_slice(&data[..]);
+                .copy_from_slice(data);
             Ok(())
         }
 
@@ -662,7 +662,7 @@ mod tests {
     fn test_virtio_mmio_device_new() {
         let (virtio_device, virtio_mmio_device) = virtio_mmio_test_init();
         let locked_device = virtio_device.lock().unwrap();
-        assert_eq!(locked_device.device_activated(), false);
+        assert!(!locked_device.device_activated());
         assert_eq!(
             virtio_mmio_device.host_notify_info.events.len(),
             locked_device.queue_num()
@@ -682,34 +682,22 @@ mod tests {
 
         // read the register of magic value
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, MAGIC_VALUE_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, MAGIC_VALUE_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), MMIO_MAGIC_VALUE);
 
         // read the register of version
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, VERSION_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, VERSION_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), MMIO_VERSION);
 
         // read the register of device id
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, DEVICE_ID_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, DEVICE_ID_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), VIRTIO_TYPE_BLOCK);
 
         // read the register of vendor id
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, VENDOR_ID_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, VENDOR_ID_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), VENDOR_ID);
 
         // read the register of the features
@@ -717,18 +705,12 @@ mod tests {
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_hfeatures_sel(0);
         virtio_device.lock().unwrap().base.device_features = 0x0000_00f8_0000_00fe;
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, DEVICE_FEATURES_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, DEVICE_FEATURES_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0x0000_00fe);
         // get high 32bit of the features for device which supports VirtIO Version 1
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_hfeatures_sel(1);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, DEVICE_FEATURES_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, DEVICE_FEATURES_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0x0000_00f9);
     }
 
@@ -741,18 +723,12 @@ mod tests {
         // for queue_select as 0
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_queue_select(0);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), u32::from(QUEUE_SIZE));
         // for queue_select as 1
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_queue_select(1);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), u32::from(QUEUE_SIZE));
 
         // read the register representing the status of queue
@@ -764,15 +740,9 @@ mod tests {
             .unwrap()
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 1);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG));
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut data[..], addr, QUEUE_READY_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut data[..], addr, QUEUE_READY_REG));
         assert_eq!(LittleEndian::read_u32(&data[..]), 1);
         // for queue_select as 1
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
@@ -781,44 +751,29 @@ mod tests {
             .lock()
             .unwrap()
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, QUEUE_READY_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, QUEUE_READY_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0);
 
         // read the register representing the status of interrupt
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, INTERRUPT_STATUS_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, INTERRUPT_STATUS_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device
             .lock()
             .unwrap()
             .set_interrupt_status(0b10_1111);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, INTERRUPT_STATUS_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, INTERRUPT_STATUS_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0b10_1111);
 
         // read the register representing the status of device
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_device_status(0);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, STATUS_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, STATUS_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_device_status(5);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, STATUS_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, STATUS_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 5);
     }
 
@@ -829,23 +784,17 @@ mod tests {
 
         // read the configuration atomic value
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, CONFIG_GENERATION_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, CONFIG_GENERATION_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 0);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_config_generation(10);
-        assert_eq!(
-            virtio_mmio_device.read(&mut buf[..], addr, CONFIG_GENERATION_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, CONFIG_GENERATION_REG));
         assert_eq!(LittleEndian::read_u32(&buf[..]), 10);
 
         // read the unknown register
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(virtio_mmio_device.read(&mut buf[..], addr, 0xf1), false);
-        assert_eq!(virtio_mmio_device.read(&mut buf[..], addr, 0x1ff + 1), true);
+        assert!(!virtio_mmio_device.read(&mut buf[..], addr, 0xf1));
+        assert!(virtio_mmio_device.read(&mut buf[..], addr, 0x1ff + 1));
         assert_eq!(buf, [0xff, 0xff, 0xff, 0xff]);
 
         // read the configuration space of virtio device
@@ -859,12 +808,12 @@ mod tests {
             .copy_from_slice(&result);
 
         let mut data: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(virtio_mmio_device.read(&mut data[..], addr, 0x100), true);
+        assert!(virtio_mmio_device.read(&mut data[..], addr, 0x100));
         assert_eq!(data, result);
 
         let mut data: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0];
         let result: Vec<u8> = vec![9, 10, 11, 12, 13, 14, 15, 16];
-        assert_eq!(virtio_mmio_device.read(&mut data[..], addr, 0x108), true);
+        assert!(virtio_mmio_device.read(&mut data[..], addr, 0x108));
         assert_eq!(data, result);
     }
 
@@ -876,10 +825,7 @@ mod tests {
         // write the selector for device features
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 2);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, DEVICE_FEATURES_SEL_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, DEVICE_FEATURES_SEL_REG));
         assert_eq!(virtio_device.lock().unwrap().hfeatures_sel(), 2);
 
         // write the device features
@@ -889,25 +835,16 @@ mod tests {
             .lock()
             .unwrap()
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
-            false
-        );
+        assert!(!virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG));
         virtio_device
             .lock()
             .unwrap()
             .set_device_status(CONFIG_STATUS_FAILED);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
-            false
-        );
+        assert!(!virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG));
         virtio_device.lock().unwrap().set_device_status(
             CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_FAILED | CONFIG_STATUS_DRIVER,
         );
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
-            false
-        );
+        assert!(!virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG));
         // it is ok to write the low 32bit of device features
         virtio_device
             .lock()
@@ -917,10 +854,7 @@ mod tests {
         virtio_device.lock().unwrap().set_gfeatures_sel(0);
         LittleEndian::write_u32(&mut buf[..], 0x0000_00fe);
         virtio_device.lock().unwrap().base.device_features = 0x0000_00fe;
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG));
         assert_eq!(
             virtio_device.lock().unwrap().base.driver_features as u32,
             0x0000_00fe
@@ -930,35 +864,26 @@ mod tests {
         virtio_device.lock().unwrap().set_gfeatures_sel(1);
         LittleEndian::write_u32(&mut buf[..], 0x0000_00ff);
         virtio_device.lock().unwrap().base.device_features = 0x0000_00ff_0000_0000;
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_REG));
         assert_eq!(
             virtio_device.lock().unwrap().queue_type(),
             QUEUE_TYPE_PACKED_VRING
         );
         assert_eq!(
-            virtio_device.lock().unwrap().base.driver_features >> 32 as u32,
+            virtio_device.lock().unwrap().base.driver_features >> 32_u32,
             0x0000_00ff
         );
 
         // write the selector of driver features
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0x00ff_0000);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_SEL_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, DRIVER_FEATURES_SEL_REG));
         assert_eq!(virtio_device.lock().unwrap().gfeatures_sel(), 0x00ff_0000);
 
         // write the selector of queue
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0x0000_ff00);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_SEL_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_SEL_REG));
         assert_eq!(virtio_device.lock().unwrap().queue_select(), 0x0000_ff00);
 
         // write the size of queue
@@ -969,10 +894,7 @@ mod tests {
             .unwrap()
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 128);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_NUM_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_NUM_REG));
         if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!(config.size, 128);
         } else {
@@ -993,15 +915,9 @@ mod tests {
             .unwrap()
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 1);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG));
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut data[..], addr, QUEUE_READY_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut data[..], addr, QUEUE_READY_REG));
         assert_eq!(LittleEndian::read_u32(&data[..]), 1);
 
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
@@ -1011,15 +927,9 @@ mod tests {
             .unwrap()
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         LittleEndian::write_u32(&mut buf[..], 2);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_READY_REG));
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut data[..], addr, QUEUE_READY_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut data[..], addr, QUEUE_READY_REG));
         assert_eq!(LittleEndian::read_u32(&data[..]), 0);
 
         // write the interrupt status
@@ -1033,15 +943,9 @@ mod tests {
             .unwrap()
             .set_interrupt_status(0b10_1111);
         LittleEndian::write_u32(&mut buf[..], 0b111);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, INTERRUPT_ACK_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, INTERRUPT_ACK_REG));
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut data[..], addr, INTERRUPT_STATUS_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut data[..], addr, INTERRUPT_STATUS_REG));
         assert_eq!(LittleEndian::read_u32(&data[..]), 0b10_1000);
     }
 
@@ -1058,10 +962,7 @@ mod tests {
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xffff_fefe);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_DESC_LOW_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_DESC_LOW_REG));
         if let Ok(config) = virtio_mmio_device.device.lock().unwrap().queue_config() {
             assert_eq!(config.desc_table.0 as u32, 0xffff_fefe)
         } else {
@@ -1076,10 +977,7 @@ mod tests {
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xfcfc_ffff);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_DESC_HIGH_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_DESC_HIGH_REG));
         if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!((config.desc_table.0 >> 32) as u32, 0xfcfc_ffff)
         } else {
@@ -1094,10 +992,7 @@ mod tests {
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xfcfc_fafa);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_AVAIL_LOW_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_AVAIL_LOW_REG));
         if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!(config.avail_ring.0 as u32, 0xfcfc_fafa)
         } else {
@@ -1112,10 +1007,7 @@ mod tests {
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xecec_fafa);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_AVAIL_HIGH_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_AVAIL_HIGH_REG));
         if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!((config.avail_ring.0 >> 32) as u32, 0xecec_fafa)
         } else {
@@ -1130,10 +1022,7 @@ mod tests {
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xacac_fafa);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_USED_LOW_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_USED_LOW_REG));
         if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!(config.used_ring.0 as u32, 0xacac_fafa)
         } else {
@@ -1148,10 +1037,7 @@ mod tests {
             .set_device_status(CONFIG_STATUS_FEATURES_OK);
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], 0xcccc_fafa);
-        assert_eq!(
-            virtio_mmio_device.write(&buf[..], addr, QUEUE_USED_HIGH_REG),
-            true
-        );
+        assert!(virtio_mmio_device.write(&buf[..], addr, QUEUE_USED_HIGH_REG));
         if let Ok(config) = virtio_device.lock().unwrap().queue_config() {
             assert_eq!((config.used_ring.0 >> 32) as u32, 0xcccc_fafa)
         } else {
@@ -1165,7 +1051,7 @@ mod tests {
         } else {
             0
         };
-        (size + align_adjust) as u64
+        size + align_adjust
     }
 
     #[test]
@@ -1203,13 +1089,10 @@ mod tests {
         // write the device status
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         LittleEndian::write_u32(&mut buf[..], CONFIG_STATUS_ACKNOWLEDGE);
-        assert_eq!(virtio_mmio_device.write(&buf[..], addr, STATUS_REG), true);
-        assert_eq!(virtio_device.lock().unwrap().device_activated(), false);
+        assert!(virtio_mmio_device.write(&buf[..], addr, STATUS_REG));
+        assert!(!virtio_device.lock().unwrap().device_activated());
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut data[..], addr, STATUS_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut data[..], addr, STATUS_REG));
         assert_eq!(LittleEndian::read_u32(&data[..]), CONFIG_STATUS_ACKNOWLEDGE);
 
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
@@ -1220,15 +1103,12 @@ mod tests {
                 | CONFIG_STATUS_DRIVER_OK
                 | CONFIG_STATUS_FEATURES_OK,
         );
-        assert_eq!(virtio_device.lock().unwrap().b_active, false);
-        assert_eq!(virtio_mmio_device.write(&buf[..], addr, STATUS_REG), true);
-        assert_eq!(virtio_device.lock().unwrap().device_activated(), true);
-        assert_eq!(virtio_device.lock().unwrap().b_active, true);
+        assert!(!virtio_device.lock().unwrap().b_active);
+        assert!(virtio_mmio_device.write(&buf[..], addr, STATUS_REG));
+        assert!(virtio_device.lock().unwrap().device_activated());
+        assert!(virtio_device.lock().unwrap().b_active);
         let mut data: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
-        assert_eq!(
-            virtio_mmio_device.read(&mut data[..], addr, STATUS_REG),
-            true
-        );
+        assert!(virtio_mmio_device.read(&mut data[..], addr, STATUS_REG));
         assert_eq!(
             LittleEndian::read_u32(&data[..]),
             CONFIG_STATUS_ACKNOWLEDGE

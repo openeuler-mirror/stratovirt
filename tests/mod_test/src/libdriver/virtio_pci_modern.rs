@@ -263,7 +263,7 @@ impl TestVirtioPciDev {
     }
 
     fn has_msix(&self, msix_addr: u64, msix_data: u32) -> bool {
-        return self.pci_dev.has_msix(msix_addr, msix_data);
+        self.pci_dev.has_msix(msix_addr, msix_data)
     }
 
     pub fn setup_virtqueue_intr(
@@ -597,7 +597,7 @@ impl VirtioDeviceOps for TestVirtioPciDev {
         let vq = virtqueue.borrow();
         let idx: u16 = test_state.borrow().readw(vq.avail + 2);
 
-        if (!vq.event) || (idx >= vq.get_avail_event(test_state.clone()) + 1) {
+        if (!vq.event) || (idx > vq.get_avail_event(test_state.clone())) {
             self.virtqueue_notify(virtqueue.clone());
         }
     }

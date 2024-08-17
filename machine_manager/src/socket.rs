@@ -406,7 +406,7 @@ mod tests {
     // Environment Recovery for UnixSocket
     fn recover_unix_socket_environment(socket_id: &str) {
         let socket_name: String = format!("test_{}.sock", socket_id);
-        std::fs::remove_file(&socket_name).unwrap();
+        std::fs::remove_file(socket_name).unwrap();
     }
 
     fn socket_basic_rw(client_fd: RawFd, server_fd: RawFd) -> bool {

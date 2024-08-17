@@ -138,7 +138,7 @@ impl TestState {
         let resp: Value =
             serde_json::from_slice(self.qmp_sock.read_line(timeout).as_bytes()).unwrap();
         assert!(resp.get("event").is_some());
-        return resp;
+        resp
     }
 
     pub fn qmp(&self, cmd: &str) -> Value {
@@ -205,7 +205,7 @@ impl TestState {
 
     pub fn readq(&self, addr: u64) -> u64 {
         let cmd = format!("readq 0x{:x}", addr);
-        self.send_read_cmd(&cmd) as u64
+        self.send_read_cmd(&cmd)
     }
 
     pub fn memread(&self, addr: u64, size: u64) -> Vec<u8> {

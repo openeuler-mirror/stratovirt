@@ -496,13 +496,13 @@ mod test {
 
     #[test]
     fn round_up_test() {
-        let result = round_up(10001 as u64, 100 as u64);
+        let result = round_up(10001_u64, 100_u64);
         assert_eq!(result, Some(10100));
     }
 
     #[test]
     fn round_down_test() {
-        let result = round_down(10001 as u64, 100 as u64);
+        let result = round_down(10001_u64, 100_u64);
         assert_eq!(result, Some(10000));
     }
 

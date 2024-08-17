@@ -18,6 +18,7 @@ mod uring;
 pub use raw::*;
 
 use std::clone::Clone;
+use std::fmt::Display;
 use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
@@ -80,13 +81,13 @@ impl FromStr for AioEngine {
     }
 }
 
-impl ToString for AioEngine {
-    fn to_string(&self) -> String {
-        match *self {
-            AioEngine::Off => "off".to_string(),
-            AioEngine::Native => "native".to_string(),
-            AioEngine::IoUring => "io_uring".to_string(),
-            AioEngine::Threads => "threads".to_string(),
+impl Display for AioEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AioEngine::Off => write!(f, "off"),
+            AioEngine::Native => write!(f, "native"),
+            AioEngine::IoUring => write!(f, "io_uring"),
+            AioEngine::Threads => write!(f, "threads"),
         }
     }
 }
@@ -862,7 +863,7 @@ mod tests {
         assert!(opcode == OpCode::Preadv || opcode == OpCode::Pwritev);
         // Init a file with special content.
         let mut content = vec![0u8; fsize];
-        for (index, elem) in content.as_mut_slice().into_iter().enumerate() {
+        for (index, elem) in content.as_mut_slice().iter_mut().enumerate() {
             *elem = index as u8;
         }
         let tmp_file = TempFile::new().unwrap();
@@ -955,7 +956,7 @@ mod tests {
 
     fn test_sync_rw_all_align(opcode: OpCode, direct: bool) {
         let basic_align = 512;
-        test_sync_rw(opcode, direct, basic_align << 0);
+        test_sync_rw(opcode, direct, basic_align);
         test_sync_rw(opcode, direct, basic_align << 1);
         test_sync_rw(opcode, direct, basic_align << 2);
         test_sync_rw(opcode, direct, basic_align << 3);

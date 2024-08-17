@@ -154,7 +154,7 @@ impl CreateOptions {
 
 // Transform size into string with storage units.
 fn size_to_string(size: f64) -> Result<String> {
-    let units = vec!["", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+    let units = ["", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 
     // Switch to higher power if the integer part is >= 1000,
     // For example: 1000 * 2^30 bytes

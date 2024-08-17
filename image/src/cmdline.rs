@@ -162,20 +162,16 @@ mod test {
     fn test_arg_parse() {
         let mut arg_parser = ArgsParse::create(vec!["q", "h", "help"], vec!["f"], vec!["o"]);
         let cmd_line = "-f qcow2 -q -h --help -o cluster_size=512 -o refcount_bits=16 img_path +1G";
-        let cmd_args: Vec<String> = cmd_line
-            .split(' ')
-            .into_iter()
-            .map(|str| str.to_string())
-            .collect();
+        let cmd_args: Vec<String> = cmd_line.split(' ').map(|str| str.to_string()).collect();
 
         let ret = arg_parser.parse(cmd_args);
         println!("{:?}", ret);
         assert!(ret.is_ok());
 
-        assert_eq!(arg_parser.opt_present("f"), true);
-        assert_eq!(arg_parser.opt_present("q"), true);
-        assert_eq!(arg_parser.opt_present("h"), true);
-        assert_eq!(arg_parser.opt_present("help"), true);
+        assert!(arg_parser.opt_present("f"));
+        assert!(arg_parser.opt_present("q"));
+        assert!(arg_parser.opt_present("h"));
+        assert!(arg_parser.opt_present("help"));
 
         let values = arg_parser.opt_strs("o");
         assert!(values.contains(&"cluster_size=512".to_string()));

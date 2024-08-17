@@ -844,22 +844,22 @@ mod tests {
     #[test]
     fn test_console_select() {
         let con_opts = Arc::new(HwOpts {});
-        let dev_name0 = format!("test_device0");
+        let dev_name0 = "test_device0".to_string();
         let con_0 = console_init(dev_name0, ConsoleType::Graphic, con_opts.clone());
         let clone_con = con_0.clone();
         assert_eq!(
             clone_con.unwrap().upgrade().unwrap().lock().unwrap().con_id,
             0
         );
-        let dev_name1 = format!("test_device1");
+        let dev_name1 = "test_device1".to_string();
         let con_1 = console_init(dev_name1, ConsoleType::Graphic, con_opts.clone());
         assert_eq!(con_1.unwrap().upgrade().unwrap().lock().unwrap().con_id, 1);
-        let dev_name2 = format!("test_device2");
+        let dev_name2 = "test_device2".to_string();
         let con_2 = console_init(dev_name2, ConsoleType::Graphic, con_opts.clone());
         assert_eq!(con_2.unwrap().upgrade().unwrap().lock().unwrap().con_id, 2);
         assert!(console_close(&con_0).is_ok());
         assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(1));
-        let dev_name3 = format!("test_device3");
+        let dev_name3 = "test_device3".to_string();
         let con_3 = console_init(dev_name3, ConsoleType::Graphic, con_opts.clone());
         assert_eq!(con_3.unwrap().upgrade().unwrap().lock().unwrap().con_id, 3);
         assert!(console_select(Some(0)).is_ok());

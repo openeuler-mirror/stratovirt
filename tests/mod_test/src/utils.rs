@@ -56,7 +56,7 @@ pub fn read_le_u64(input: &mut &[u8]) -> u64 {
 }
 
 pub fn swap_u16(value: u16) -> u16 {
-    return value << 8 | value >> 8;
+    value << 8 | value >> 8
 }
 
 pub fn swap_u32(value: u32) -> u32 {
@@ -143,15 +143,11 @@ pub fn support_numa() -> bool {
                         }
                     }
                 }
-                if has_nodes {
-                    return true;
-                } else {
-                    return false;
-                }
+                has_nodes
             }
-            Err(_) => return false,
+            Err(_) => false,
         }
     } else {
-        return false;
+        false
     }
 }

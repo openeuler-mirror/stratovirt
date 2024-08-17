@@ -1323,7 +1323,7 @@ mod test {
                 .subregions
                 .read()
                 .unwrap()
-                .get(0)
+                .first()
                 .unwrap()
                 .priority(),
             10

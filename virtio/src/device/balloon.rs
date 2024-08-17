@@ -1497,10 +1497,10 @@ mod tests {
             .write_object::<GuestIovec>(&ele, GuestAddress(0x2000))
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4 as u64))
+            .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4_u64))
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_inf.avail_ring.0 + 2 as u64))
+            .write_object::<u16>(&1, GuestAddress(queue_config_inf.avail_ring.0 + 2_u64))
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_INFLATE_EVENT).is_ok());
@@ -1523,10 +1523,10 @@ mod tests {
             .write_object::<GuestIovec>(&ele, GuestAddress(0x3000))
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4 as u64))
+            .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4_u64))
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_def.avail_ring.0 + 2 as u64))
+            .write_object::<u16>(&1, GuestAddress(queue_config_def.avail_ring.0 + 2_u64))
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_DEFLATE_EVENT).is_ok());
@@ -1556,7 +1556,7 @@ mod tests {
         let mut queue_evts: Vec<Arc<EventFd>> = Vec::new();
         for i in 0..QUEUE_NUM_BALLOON as u64 {
             let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
-            queue_config_inf.desc_table = GuestAddress(12288 * i + 0);
+            queue_config_inf.desc_table = GuestAddress(12288 * i);
             queue_config_inf.avail_ring = GuestAddress(12288 * i + 4096);
             queue_config_inf.used_ring = GuestAddress(12288 * i + 8192);
             queue_config_inf.ready = true;

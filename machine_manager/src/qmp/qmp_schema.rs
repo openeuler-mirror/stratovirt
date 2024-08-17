@@ -2010,7 +2010,7 @@ mod tests {
     fn test_qmp_event_msg() {
         let event_json =
             r#"{"event":"STOP","data":{},"timestamp":{"seconds":1575531524,"microseconds":91519}}"#;
-        let qmp_event: QmpEvent = serde_json::from_str(&event_json).unwrap();
+        let qmp_event: QmpEvent = serde_json::from_str(event_json).unwrap();
         match qmp_event {
             QmpEvent::Stop {
                 data: _,

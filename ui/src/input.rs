@@ -598,7 +598,7 @@ mod tests {
 
         assert!(key_event(12, true).is_ok());
         assert_eq!(test_kdb.lock().unwrap().keycode, 12);
-        assert_eq!(test_kdb.lock().unwrap().down, true);
+        assert!(test_kdb.lock().unwrap().down);
 
         // Test point event.
         assert_eq!(test_mouse.lock().unwrap().button, 0);
@@ -642,14 +642,14 @@ mod tests {
         let keysym_lists: Vec<u16> = vec![0x07D0, 0x07E1, 0x0802];
         let keycode_lists: Vec<u16> = keysym_lists
             .iter()
-            .map(|x| *keysym2qkeycode.get(&x).unwrap())
+            .map(|x| *keysym2qkeycode.get(x).unwrap())
             .collect();
         for idx in 0..keysym_lists.len() {
             let keysym = keycode_lists[idx];
             let keycode = keycode_lists[idx];
             assert!(do_key_event(true, keysym as i32, keycode).is_ok());
             assert_eq!(test_kdb.lock().unwrap().keycode, keycode);
-            assert_eq!(test_kdb.lock().unwrap().down, true);
+            assert!(test_kdb.lock().unwrap().down);
         }
 
         let locked_input = INPUTS.lock().unwrap();

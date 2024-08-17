@@ -86,7 +86,7 @@ impl ImageFile {
         detect_fmt: DiskFormat,
     ) -> Result<DiskFormat> {
         let real_fmt = match input_fmt {
-            Some(fmt) if fmt == DiskFormat::Raw => DiskFormat::Raw,
+            Some(DiskFormat::Raw) => DiskFormat::Raw,
             Some(fmt) => {
                 if fmt != detect_fmt {
                     bail!(
@@ -588,11 +588,8 @@ mod test {
                 "-f qcow2 -o cluster_size={} -o refcount_bits={} {} {}",
                 cluster_size, refcount_bits, path, img_size,
             );
-            let create_args: Vec<String> = create_str
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let create_args: Vec<String> =
+                create_str.split(' ').map(|str| str.to_string()).collect();
             assert!(image_create(create_args).is_ok());
 
             // Read header.
@@ -627,8 +624,8 @@ mod test {
                 format: DiskFormat::Qcow2,
                 ..Default::default()
             };
-            let qcow2_driver = create_qcow2_driver_for_check(file, conf).unwrap();
-            qcow2_driver
+
+            create_qcow2_driver_for_check(file, conf).unwrap()
         }
 
         fn read_data(&self, guest_offset: u64, buf: &Vec<u8>) -> Result<()> {
@@ -694,11 +691,8 @@ mod test {
     impl TestRawImage {
         fn create(path: String, img_size: String) -> Self {
             let create_str = format!("-f raw {} {}", path, img_size);
-            let create_args: Vec<String> = create_str
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let create_args: Vec<String> =
+                create_str.split(' ').map(|str| str.to_string()).collect();
             assert!(image_create(create_args).is_ok());
 
             Self { path }
@@ -710,8 +704,8 @@ mod test {
             let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
 
             let file = open_file(&self.path, false, false).unwrap();
-            let raw_driver = RawDriver::new(Arc::new(file), aio, conf);
-            raw_driver
+
+            RawDriver::new(Arc::new(file), aio, conf)
         }
     }
 
@@ -801,11 +795,8 @@ mod test {
         for case in test_case {
             let create_str = case.0.replace("img_path", path);
             println!("Create options: {}", create_str);
-            let create_args: Vec<String> = create_str
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let create_args: Vec<String> =
+                create_str.split(' ').map(|str| str.to_string()).collect();
 
             if case.1 {
                 assert!(image_create(create_args).is_ok());
@@ -836,11 +827,7 @@ mod test {
 
         for case in test_case {
             let cmd_str = case.0.replace("img_path", path);
-            let args: Vec<String> = cmd_str
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let args: Vec<String> = cmd_str.split(' ').map(|str| str.to_string()).collect();
 
             // Query image info with type of qcow2.
             assert!(image_create(vec![
@@ -908,7 +895,7 @@ mod test {
             assert_eq!(test_image.header.size, image_size);
 
             // Check refcount.
-            assert_eq!(test_image.check_image(false, 0), true);
+            assert!(test_image.check_image(false, 0));
         }
     }
 
@@ -928,20 +915,13 @@ mod test {
             ("-f qcow2 path +1G", DiskFormat::Qcow2),
         ];
         let check_str = format!("-f raw {}", path);
-        let check_args: Vec<String> = check_str
-            .split(' ')
-            .into_iter()
-            .map(|str| str.to_string())
-            .collect();
+        let check_args: Vec<String> = check_str.split(' ').map(|str| str.to_string()).collect();
 
         for case in test_case {
             let create_str = case.0.replace("path", path);
             println!("stratovirt-img {}", create_str);
-            let create_args: Vec<String> = create_str
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let create_args: Vec<String> =
+                create_str.split(' ').map(|str| str.to_string()).collect();
             assert!(image_create(create_args).is_ok());
 
             let image_file = ImageFile::create(path, false).unwrap();
@@ -981,18 +961,13 @@ mod test {
             let create_string = create_str.replace("disk_fmt", case.0);
             let create_args: Vec<String> = create_string
                 .split(' ')
-                .into_iter()
                 .map(|str| str.to_string())
                 .collect();
             println!("Create args: {}", create_string);
             assert!(image_create(create_args.clone()).is_ok());
 
             let check_str = case.1.replace("img_path", path);
-            let check_args: Vec<String> = check_str
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let check_args: Vec<String> = check_str.split(' ').map(|str| str.to_string()).collect();
             println!("Check args: {}", check_str);
 
             if case.2 {
@@ -1254,7 +1229,7 @@ mod test {
             let l2_idx = qcow2_driver.table.get_l2_table_index(guest_offset) as usize;
             let cache_entry = qcow2_driver.get_table_cluster(guest_offset).unwrap();
             let mut l2_entry = cache_entry.borrow_mut().get_entry_map(l2_idx).unwrap();
-            l2_entry = l2_entry & !QCOW2_OFFSET_COPIED;
+            l2_entry &= !QCOW2_OFFSET_COPIED;
             assert!(cache_entry
                 .borrow_mut()
                 .set_entry_map(l2_idx, l2_entry)
@@ -1605,18 +1580,14 @@ mod test {
             let create_string = create_str.replace("disk_fmt", case.0);
             let create_args: Vec<String> = create_string
                 .split(' ')
-                .into_iter()
                 .map(|str| str.to_string())
                 .collect();
             println!("Create args: {}", create_string);
             assert!(image_create(create_args).is_ok());
 
             let snapshot_str = case.1.replace("img_path", path);
-            let snapshot_args: Vec<String> = snapshot_str
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let snapshot_args: Vec<String> =
+                snapshot_str.split(' ').map(|str| str.to_string()).collect();
             let ret = image_snapshot(snapshot_args);
             if case.2 {
                 assert!(ret.is_ok());
@@ -1648,10 +1619,10 @@ mod test {
         let quite = false;
         let fix = FIX_ERRORS | FIX_LEAKS;
 
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let buf = vec![1_u8; cluster_size as usize];
         assert!(test_image.write_data(0, &buf).is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         // Create a snapshot named test_snapshot0
         assert!(image_snapshot(vec![
@@ -1661,10 +1632,10 @@ mod test {
         ])
         .is_ok());
 
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let buf = vec![2_u8; cluster_size as usize];
         assert!(test_image.write_data(0, &buf).is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         // Create as snapshot named test_snapshot1.
         assert!(image_snapshot(vec![
@@ -1674,10 +1645,10 @@ mod test {
         ])
         .is_ok());
 
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let buf = vec![3_u8; cluster_size as usize];
         assert!(test_image.write_data(0, &buf).is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         // Apply snapshot named test_snapshot0.
         assert!(image_snapshot(vec![
@@ -1687,7 +1658,7 @@ mod test {
         ])
         .is_ok());
 
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let buf = vec![0_u8; cluster_size as usize];
         assert!(test_image.read_data(0, &buf).is_ok());
         for elem in buf {
@@ -1695,7 +1666,7 @@ mod test {
         }
         let buf = vec![4_u8; cluster_size as usize];
         assert!(test_image.write_data(0, &buf).is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         // Apply snapshot named test_snapshot1
         assert!(image_snapshot(vec![
@@ -1704,7 +1675,7 @@ mod test {
             path.to_string()
         ])
         .is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let buf = vec![0_u8; cluster_size as usize];
         assert!(test_image.read_data(0, &buf).is_ok());
         for elem in buf {
@@ -1754,14 +1725,10 @@ mod test {
 
             // Apply resize operation.
             let cmd = cmd.replace("img_path", path);
-            let args: Vec<String> = cmd
-                .split(' ')
-                .into_iter()
-                .map(|str| str.to_string())
-                .collect();
+            let args: Vec<String> = cmd.split(' ').map(|str| str.to_string()).collect();
             assert_eq!(image_resize(args).is_ok(), res);
 
-            assert!(remove_file(path.to_string()).is_ok());
+            assert!(remove_file(path).is_ok());
         }
     }
 
@@ -1788,7 +1755,7 @@ mod test {
         let buf = vec![1; 10240];
         let mut driver = test_image.create_driver();
         while offset < 10 * M as usize {
-            assert!(image_write(&mut driver, offset as usize, &buf).is_ok());
+            assert!(image_write(&mut driver, offset, &buf).is_ok());
             offset += 10240;
         }
         drop(driver);
@@ -1806,7 +1773,7 @@ mod test {
         let buf = vec![2; 10240];
         let mut driver = test_image.create_driver();
         while offset < (10 + 10) * M as usize {
-            assert!(image_write(&mut driver, offset as usize, &buf).is_ok());
+            assert!(image_write(&mut driver, offset, &buf).is_ok());
             offset += 10240;
         }
 
@@ -1903,7 +1870,7 @@ mod test {
         let mut driver = test_image.create_driver();
         let buf = vec![1; 1024 * 1024];
         assert!(image_write(&mut driver, 0, &buf).is_ok());
-        assert_eq!(driver.header.size, 1 * G);
+        assert_eq!(driver.header.size, G);
         drop(driver);
         let quite = false;
         let fix = FIX_ERRORS | FIX_LEAKS;
@@ -1914,13 +1881,13 @@ mod test {
             path.to_string()
         ])
         .is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let mut driver = test_image.create_driver();
         let buf = vec![2; 1024 * 1024];
         assert!(image_write(&mut driver, 0, &buf).is_ok());
-        assert_eq!(driver.header.size, 1 * G);
+        assert_eq!(driver.header.size, G);
         drop(driver);
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         assert!(image_resize(vec![
             "-f".to_string(),
@@ -1929,7 +1896,7 @@ mod test {
             "+20G".to_string(),
         ])
         .is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let mut driver = test_image.create_driver();
         let buf = vec![3; 1024 * 1024];
         assert!(image_write(&mut driver, 20 * G as usize, &buf).is_ok());
@@ -1938,7 +1905,7 @@ mod test {
         assert!(vec_is_fill_with(&buf, 2));
         assert_eq!(driver.header.size, 21 * G);
         drop(driver);
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         assert!(image_snapshot(vec![
             "-c".to_string(),
@@ -1946,13 +1913,13 @@ mod test {
             path.to_string()
         ])
         .is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let mut driver = test_image.create_driver();
         let buf = vec![4; 1024 * 1024];
         assert!(image_write(&mut driver, 20 * G as usize, &buf).is_ok());
         assert_eq!(driver.header.size, 21 * G);
         drop(driver);
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         assert!(image_resize(vec![
             "-f".to_string(),
@@ -1961,7 +1928,7 @@ mod test {
             "+10G".to_string(),
         ])
         .is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let mut driver = test_image.create_driver();
         let buf = vec![5; 1024 * 1024];
         assert!(image_write(&mut driver, 30 * G as usize, &buf).is_ok());
@@ -1970,7 +1937,7 @@ mod test {
         assert!(vec_is_fill_with(&buf, 4));
         assert_eq!(driver.header.size, 31 * G);
         drop(driver);
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         assert!(image_snapshot(vec![
             "-a".to_string(),
@@ -1978,14 +1945,14 @@ mod test {
             path.to_string()
         ])
         .is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let mut driver = test_image.create_driver();
         let buf = vec![0; 1024 * 1024];
         assert!(image_read(&mut driver, 0, &buf).is_ok());
         assert!(vec_is_fill_with(&buf, 1));
-        assert_eq!(driver.header.size, 1 * G);
+        assert_eq!(driver.header.size, G);
         drop(driver);
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
 
         assert!(image_snapshot(vec![
             "-a".to_string(),
@@ -1993,13 +1960,13 @@ mod test {
             path.to_string()
         ])
         .is_ok());
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
         let mut driver = test_image.create_driver();
         let buf = vec![0; 1024 * 1024];
         assert!(image_read(&mut driver, 20 * G as usize, &buf).is_ok());
         assert!(vec_is_fill_with(&buf, 3));
         assert_eq!(driver.header.size, 21 * G);
         drop(driver);
-        assert_eq!(test_image.check_image(quite, fix), true);
+        assert!(test_image.check_image(quite, fix));
     }
 }
