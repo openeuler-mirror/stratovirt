@@ -109,14 +109,16 @@ use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_scsi")]
 use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
-#[cfg(any(feature = "vhost_vsock"))]
+#[cfg(any(feature = "vhost_vsock", feature = "vhost_net"))]
 use virtio::VhostKern;
+#[cfg(any(feature = "vhostuser_block", feature = "vhostuser_net"))]
+use virtio::VhostUser;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
     virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Serial,
-    SerialPort, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
+    SerialPort, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
     VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
@@ -1278,21 +1280,31 @@ pub trait MachineOps: MachineLifecycle {
         let bdf = PciBdf::new(net_cfg.bus.clone().unwrap(), net_cfg.addr.unwrap());
         let multi_func = net_cfg.multifunction.unwrap_or_default();
 
+        #[cfg(all(not(feature = "vhost_net"), not(feature = "vhostuser_net")))]
+        let need_irqfd = false;
+        #[cfg(any(feature = "vhost_net", feature = "vhostuser_net"))]
         let mut need_irqfd = false;
         let device: Arc<Mutex<dyn VirtioDevice>> = if netdev_cfg.vhost_type().is_some() {
-            need_irqfd = true;
             if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
-                Arc::new(Mutex::new(VhostKern::Net::new(
-                    &net_cfg,
-                    netdev_cfg,
-                    self.get_sys_mem(),
-                )))
+                #[cfg(not(feature = "vhost_net"))]
+                bail!("Unsupported Vhost_net");
+
+                #[cfg(feature = "vhost_net")]
+                {
+                    need_irqfd = true;
+                    Arc::new(Mutex::new(VhostKern::Net::new(
+                        &net_cfg,
+                        netdev_cfg,
+                        self.get_sys_mem(),
+                    )))
+                }
             } else {
                 #[cfg(not(feature = "vhostuser_net"))]
                 bail!("Unsupported Vhostuser_net");
 
                 #[cfg(feature = "vhostuser_net")]
                 {
+                    need_irqfd = true;
                     let chardev = netdev_cfg.chardev.clone().with_context(|| {
                         format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
                     })?;
