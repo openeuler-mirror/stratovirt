@@ -1229,6 +1229,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            #[cfg(feature = "vhostuser_block")]
             "vhost-user-blk-pci" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vhost_user_blk_pci(&mut vm_config_clone, &cfg_args, true) {

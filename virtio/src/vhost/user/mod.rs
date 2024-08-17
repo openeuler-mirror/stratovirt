@@ -12,12 +12,14 @@
 
 pub mod fs;
 
+#[cfg(feature = "vhostuser_block")]
 mod block;
 mod client;
 mod message;
 mod net;
 mod sock;
 
+#[cfg(feature = "vhostuser_block")]
 pub use self::block::{Block, VhostUserBlkDevConfig};
 pub use self::client::*;
 pub use self::fs::*;
