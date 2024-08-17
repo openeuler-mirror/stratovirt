@@ -66,6 +66,7 @@ use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
 use devices::usb::storage::{UsbStorage, UsbStorageConfig};
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
+#[cfg(feature = "usb_uas")]
 use devices::usb::uas::{UsbUas, UsbUasConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
@@ -1823,6 +1824,7 @@ pub trait MachineOps: MachineLifecycle {
                     .realize()
                     .with_context(|| "Failed to realize usb storage device")?
             }
+            #[cfg(feature = "usb_uas")]
             "usb-uas" => {
                 let device_cfg =
                     UsbUasConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
