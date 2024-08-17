@@ -74,9 +74,12 @@ use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
 use devices::usb::UsbDevice;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use devices::ScsiBus::get_scsi_key;
-use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use devices::{convert_bus_ref, Bus, Device, PCI_BUS, SYS_BUS_DEVICE};
+#[cfg(feature = "virtio_scsi")]
+use devices::{
+    ScsiBus::get_scsi_key,
+    ScsiDisk::{ScsiDevConfig, ScsiDevice},
+};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
@@ -102,13 +105,14 @@ use util::loop_context::{
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 #[cfg(feature = "vfio_device")]
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
+#[cfg(feature = "virtio_scsi")]
+use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState,
-    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig},
-    Serial, SerialPort, VhostKern, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
+    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Serial,
+    SerialPort, VhostKern, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
     VirtioMmioState, VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
@@ -1164,6 +1168,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "virtio_scsi")]
     fn add_virtio_pci_scsi(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1195,6 +1200,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "virtio_scsi")]
     fn add_scsi_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = ScsiDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let drive_arg = vm_config
@@ -1893,8 +1899,6 @@ pub trait MachineOps: MachineLifecycle {
                 dev.0.as_str(); self;
                 ("virtio-blk-device", add_virtio_mmio_block, vm_config, cfg_args),
                 ("virtio-blk-pci", add_virtio_pci_blk, vm_config, cfg_args, false),
-                ("virtio-scsi-pci", add_virtio_pci_scsi, vm_config, cfg_args, false),
-                ("scsi-hd" | "scsi-cd", add_scsi_device, vm_config, cfg_args),
                 ("virtio-net-device", add_virtio_mmio_net, vm_config, cfg_args),
                 ("virtio-net-pci", add_virtio_pci_net, vm_config, cfg_args, false),
                 ("pcie-root-port", add_pci_root_port, cfg_args),
@@ -1913,6 +1917,10 @@ pub trait MachineOps: MachineLifecycle {
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]
                 ("virtio-gpu-pci", add_virtio_pci_gpu, cfg_args),
+                #[cfg(feature = "virtio_scsi")]
+                ("virtio-scsi-pci", add_virtio_pci_scsi, vm_config, cfg_args, false),
+                #[cfg(feature = "virtio_scsi")]
+                ("scsi-hd" | "scsi-cd", add_scsi_device, vm_config, cfg_args),
                 #[cfg(feature = "ramfb")]
                 ("ramfb", add_ramfb, cfg_args),
                 #[cfg(feature = "demo_device")]
