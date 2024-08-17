@@ -148,7 +148,7 @@ impl OhUiMsgHandler {
 
         let hdr = &reader.header;
         let event_type = hdr.event_type;
-        let body_size = hdr.size as size;
+        let body_size = hdr.size as usize;
         trace::trace_scope_start!(handle_msg, args = (&event_type));
 
         let body_bytes = reader.body.as_ref().unwrap();
