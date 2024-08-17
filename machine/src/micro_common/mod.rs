@@ -764,7 +764,7 @@ impl DeviceInterface for LightMachine {
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
         // get slot of bus by addr or lun
-        let mut slot = 0;
+        let mut slot = 0_usize;
         if let Some(addr) = args.addr.clone() {
             if let Ok(num) = str_to_num::<usize>(&addr) {
                 slot = num;

@@ -547,7 +547,7 @@ pub(crate) trait AcpiBuilder {
     {
         let mut mcfg = AcpiTable::new(*b"MCFG", 1, *b"STRATO", *b"VIRTMCFG", 1);
         // Bits 20~28 (totally 9 bits) in PCIE ECAM represents bus number.
-        let bus_number_mask = (1 << 9) - 1;
+        let bus_number_mask = (1u64 << 9) - 1;
         let ecam_addr: u64;
         let max_nr_bus: u64;
         #[cfg(target_arch = "x86_64")]
@@ -610,31 +610,31 @@ pub(crate) trait AcpiBuilder {
         fadt.set_table_len(208_usize);
         // PM1A_EVENT bit, offset is 56.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(56, 0x600);
+        fadt.set_field(56, 0x600_u32);
         // PM1A_CONTROL bit, offset is 64.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(64, 0x604);
+        fadt.set_field(64, 0x604_u32);
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(76, 0x608);
+        fadt.set_field(76, 0x608_u32);
         // PM1_EVT_LEN, offset is 88.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(88, 4);
+        fadt.set_field(88, 4_u8);
         // PM1_CNT_LEN, offset is 89.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(89, 2);
+        fadt.set_field(89, 2_u8);
         // PM_TMR_LEN, offset is 91.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(91, 4);
+        fadt.set_field(91, 4_u8);
         #[cfg(target_arch = "aarch64")]
         {
             // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
-            fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+            fadt.set_field(112, 1_u32 << 20 | 1_u32 << 10 | 1_u32 << 8);
             // ARM Boot Architecture Flags
             fadt.set_field(129, 0x3_u16);
         }
         // FADT minor revision
-        fadt.set_field(131, 3);
+        fadt.set_field(131, 3_u8);
         // X_PM_TMR_BLK bit, offset is 208.
         #[cfg(target_arch = "x86_64")]
         fadt.append_child(&AcpiGenericAddress::new_io_address(0x608_u32).aml_bytes());
@@ -644,7 +644,7 @@ pub(crate) trait AcpiBuilder {
         #[cfg(target_arch = "x86_64")]
         {
             // FADT flag: disable HW_REDUCED_ACPI bit on x86 plantform.
-            fadt.set_field(112, 1 << 10 | 1 << 8);
+            fadt.set_field(112, 1_u32 << 10 | 1_u32 << 8);
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);
