@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
+use std::ffi::CStr;
 use std::sync::RwLock;
 
 use anyhow::{bail, Context, Result};
@@ -29,8 +31,8 @@ use trace::trace_scope::Scope;
 use util::aio::Iovec;
 use util::ohos_binding::camera::*;
 
-type OhCamCB = RwLock<OhCamCallBack>;
-static OHCAM_CALLBACK: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(OhCamCallBack::default()));
+type OhCamCB = RwLock<HashMap<String, OhCamCallBack>>;
+static OHCAM_CALLBACKS: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(HashMap::new()));
 
 // In UVC, interval's unit is 100ns.
 // So, fps * interval / 10_000_000 == 1.
@@ -114,8 +116,10 @@ impl OhCameraAsyncScope {
 
 #[derive(Clone)]
 pub struct OhCameraBackend {
+    // ID for this OhCameraBackend.
     id: String,
-    camidx: u8,
+    // ID of OH camera device.
+    camid: String,
     profile_cnt: u8,
     ctx: OhCamera,
     fmt_list: Vec<CameraFormatList>,
@@ -148,17 +152,20 @@ fn cam_fmt_from_oh(t: i32) -> Result<FmtType> {
     Ok(fmt)
 }
 
-impl OhCameraBackend {
-    pub fn new(id: String, camid: String) -> Result<Self> {
-        let idx = camid.parse::<u8>().with_context(|| "Invalid PATH format")?;
-        let ctx = OhCamera::new(idx as i32)?;
+impl Drop for OhCameraBackend {
+    fn drop(&mut self) {
+        OHCAM_CALLBACKS.write().unwrap().remove_entry(&self.camid);
+    }
+}
 
-        let profile_cnt = ctx.get_fmt_nums(idx as i32)? as u8;
+impl OhCameraBackend {
+    pub fn new(id: String, cam_name: String) -> Result<Self> {
+        let (ctx, profile_cnt) = OhCamera::new(cam_name.clone())?;
 
         Ok(OhCameraBackend {
             id,
-            camidx: idx,
-            profile_cnt,
+            camid: cam_name,
+            profile_cnt: profile_cnt as u8,
             ctx,
             fmt_list: vec![],
             selected_profile: 0,
@@ -193,8 +200,7 @@ impl CameraBackend for OhCameraBackend {
                 }
 
                 self.selected_profile = fmt.fmt_index - 1;
-                self.ctx
-                    .set_fmt(self.camidx as i32, self.selected_profile as i32)?;
+                self.ctx.set_fmt(i32::from(self.selected_profile))?;
                 return Ok(());
             }
         }
@@ -213,7 +219,9 @@ impl CameraBackend for OhCameraBackend {
 
     fn video_stream_off(&mut self) -> Result<()> {
         self.ctx.stop_stream();
-        OHCAM_CALLBACK.write().unwrap().clear_buffer();
+        if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&self.camid) {
+            cb.clear_buffer();
+        }
         self.stream_on = false;
         #[cfg(any(
             feature = "trace_to_logger",
@@ -228,7 +236,7 @@ impl CameraBackend for OhCameraBackend {
         let mut fmt_list: Vec<CameraFormatList> = Vec::new();
 
         for idx in 0..self.profile_cnt {
-            match self.ctx.get_profile(self.camidx as i32, idx as i32) {
+            match self.ctx.get_profile(idx as i32) {
                 Ok((fmt, width, height, fps)) => {
                     if !FRAME_FORMAT_WHITELIST.iter().any(|&x| x == fmt)
                         || !RESOLUTION_WHITELIST.iter().any(|&x| x == (width, height))
@@ -257,8 +265,12 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn reset(&mut self) {
-        OHCAM_CALLBACK.write().unwrap().clear_buffer();
-        self.ctx.reset_camera();
+        if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&self.camid) {
+            cb.clear_buffer();
+        }
+        if let Err(e) = self.ctx.reset_camera(self.camid.clone()) {
+            error!("OHCAM: reset failed, err: {e}");
+        }
         #[cfg(any(
             feature = "trace_to_logger",
             feature = "trace_to_ftrace",
@@ -300,7 +312,10 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn get_frame_size(&self) -> usize {
-        OHCAM_CALLBACK.read().unwrap().get_buffer().1 as usize
+        if let Some(cb) = OHCAM_CALLBACKS.read().unwrap().get(&self.camid) {
+            return cb.get_buffer().1 as usize;
+        }
+        0
     }
 
     fn next_frame(&mut self) -> Result<()> {
@@ -311,12 +326,20 @@ impl CameraBackend for OhCameraBackend {
         ))]
         self.async_scope.start();
         self.ctx.next_frame();
-        OHCAM_CALLBACK.write().unwrap().clear_buffer();
+        if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&self.camid) {
+            cb.clear_buffer();
+        }
         Ok(())
     }
 
     fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize> {
-        let (src, src_len) = OHCAM_CALLBACK.read().unwrap().get_buffer();
+        let (src, src_len) = OHCAM_CALLBACKS
+            .read()
+            .unwrap()
+            .get(&self.camid)
+            .with_context(|| "Invalid camid in callback table")?
+            .get_buffer();
+
         if src_len == 0 {
             bail!("Invalid frame src_len {}", src_len);
         }
@@ -344,11 +367,21 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn register_notify_cb(&mut self, cb: CameraNotifyCallback) {
-        OHCAM_CALLBACK.write().unwrap().set_notify_cb(cb);
+        OHCAM_CALLBACKS
+            .write()
+            .unwrap()
+            .entry(self.camid.clone())
+            .or_insert(OhCamCallBack::default())
+            .set_notify_cb(cb);
     }
 
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback) {
-        OHCAM_CALLBACK.write().unwrap().set_broken_cb(cb);
+        OHCAM_CALLBACKS
+            .write()
+            .unwrap()
+            .entry(self.camid.clone())
+            .or_insert(OhCamCallBack::default())
+            .set_broken_cb(cb);
     }
 
     fn pause(&mut self, paused: bool) {
@@ -376,16 +409,39 @@ impl CameraBackend for OhCameraBackend {
     }
 }
 
-// SAFETY: use RW lock to ensure the security of resources.
-unsafe extern "C" fn on_buffer_available(src_buffer: u64, length: i32) {
-    OHCAM_CALLBACK
-        .write()
-        .unwrap()
-        .set_buffer(src_buffer, length);
-    OHCAM_CALLBACK.read().unwrap().notify();
+fn cstr_to_string(src: *const u8) -> Result<String> {
+    if src.is_null() {
+        bail!("cstr_to_string: src is null");
+    }
+    // SAFETY: we promise that 'src' ends with "null" symbol.
+    let src_cstr = unsafe { CStr::from_ptr(src) };
+    let target_string = src_cstr
+        .to_str()
+        .with_context(|| "cstr_to_string: failed to transfer camid")?
+        .to_owned();
+
+    Ok(target_string)
 }
 
 // SAFETY: use RW lock to ensure the security of resources.
-unsafe extern "C" fn on_broken() {
-    OHCAM_CALLBACK.read().unwrap().broken();
+unsafe extern "C" fn on_buffer_available(src_buffer: u64, length: i32, camid: *const u8) {
+    let cam = cstr_to_string(camid).unwrap_or_else(|e| {
+        error!("{e}");
+        "".to_string()
+    });
+    if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&cam) {
+        cb.set_buffer(src_buffer, length);
+        cb.notify();
+    }
+}
+
+// SAFETY: use RW lock to ensure the security of resources.
+unsafe extern "C" fn on_broken(camid: *const u8) {
+    let cam = cstr_to_string(camid).unwrap_or_else(|e| {
+        error!("{e}");
+        "".to_string()
+    });
+    if let Some(cb) = OHCAM_CALLBACKS.read().unwrap().get(&cam) {
+        cb.broken();
+    }
 }
