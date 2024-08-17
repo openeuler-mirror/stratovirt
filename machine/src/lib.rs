@@ -99,6 +99,7 @@ use util::loop_context::{
     gen_delete_notifiers, EventNotifier, NotifierCallback, NotifierOperation,
 };
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
+#[cfg(feature = "vfio_device")]
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
@@ -1384,7 +1385,7 @@ pub trait MachineOps: MachineLifecycle {
             .with_context(|| "Failed to add vhost user block device")?;
         Ok(())
     }
-
+    #[cfg(feature = "vfio_device")]
     fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
         let hypervisor = self.get_hypervisor();
         let locked_hypervisor = hypervisor.lock().unwrap();
@@ -1898,12 +1899,13 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
-                ("vfio-pci", add_vfio_device, cfg_args, false),
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
                 ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                #[cfg(feature = "vfio_device")]
+                ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]
                 ("virtio-gpu-pci", add_virtio_pci_gpu, cfg_args),
                 #[cfg(feature = "ramfb")]
@@ -2461,6 +2463,7 @@ pub fn type_init() -> Result<()> {
 
     // Register all pci devices type.
     machine_register_pcidevops_type()?;
+    #[cfg(feature = "vfio_device")]
     vfio_register_pcidevops_type()?;
     virtio_register_pcidevops_type()?;
     devices_register_pcidevops_type()?;

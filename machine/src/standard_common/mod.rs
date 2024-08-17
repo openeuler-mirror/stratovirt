@@ -1252,6 +1252,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            #[cfg(feature = "vfio_device")]
             "vfio-pci" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vfio_device(&cfg_args, true) {
