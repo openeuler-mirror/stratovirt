@@ -835,7 +835,7 @@ impl AcpiBuilder for StdMachine {
         dbg2.set_field(40, 1_u32);
 
         // Table 2. Debug Device Information structure format
-        let offset = 44;
+        let offset = 44_usize;
         // Revision
         dbg2.set_field(offset, 0_u8);
         // Length
@@ -1147,7 +1147,7 @@ impl AcpiBuilder for StdMachine {
         loader: &mut TableLoader,
     ) -> Result<u64> {
         let mut pptt = AcpiTable::new(*b"PPTT", 2, *b"STRATO", *b"VIRTPPTT", 1);
-        let mut uid = 0;
+        let mut uid = 0_u32;
         self.build_pptt_sockets(&mut pptt, &mut uid);
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
             .with_context(|| "Fail to add PPTT table to loader")?;
