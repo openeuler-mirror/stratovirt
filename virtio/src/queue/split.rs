@@ -1051,14 +1051,14 @@ mod tests {
         }
 
         fn set_avail_ring_idx(&self, sys_mem: &Arc<AddressSpace>, idx: u16) -> Result<()> {
-            let avail_idx_offset = 2 as u64;
+            let avail_idx_offset = 2_u64;
             sys_mem
                 .write_object::<u16>(&idx, GuestAddress(self.avail_ring.0 + avail_idx_offset))?;
             Ok(())
         }
 
         fn set_avail_ring_flags(&self, sys_mem: &Arc<AddressSpace>, flags: u16) -> Result<()> {
-            let avail_idx_offset = 0 as u64;
+            let avail_idx_offset = 0_u64;
             sys_mem
                 .write_object::<u16>(&flags, GuestAddress(self.avail_ring.0 + avail_idx_offset))?;
             Ok(())
@@ -1134,7 +1134,7 @@ mod tests {
     }
 
     const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
-    const QUEUE_SIZE: u16 = 256 as u16;
+    const QUEUE_SIZE: u16 = 256_u16;
 
     fn align(size: u64, alignment: u64) -> u64 {
         let align_adjust = if size % alignment != 0 {
@@ -1142,7 +1142,7 @@ mod tests {
         } else {
             0
         };
-        (size + align_adjust) as u64
+        size + align_adjust
     }
 
     #[test]
@@ -1169,28 +1169,28 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the status is not ready
         queue_config.ready = false;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         queue_config.ready = true;
 
         // it is invalid when the size of virtual ring is more than the max size
         queue_config.size = QUEUE_SIZE + 1;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
 
         // it is invalid when the size of virtual ring is zero
         queue_config.size = 0;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
 
         // it is invalid when the size of virtual ring isn't power of 2
         queue_config.size = 15;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
     }
 
     #[test]
@@ -1209,39 +1209,39 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of descriptor table is out of bound
         queue_config.desc_table =
-            GuestAddress(SYSTEM_SPACE_SIZE - u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN + 1 as u64);
+            GuestAddress(SYSTEM_SPACE_SIZE - u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN + 1_u64);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.desc_table = GuestAddress(0);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of avail ring is out of bound
         queue_config.avail_ring = GuestAddress(
             SYSTEM_SPACE_SIZE
                 - (VRING_AVAIL_LEN_EXCEPT_AVAILELEM + AVAILELEM_LEN * u64::from(QUEUE_SIZE))
-                + 1 as u64,
+                + 1_u64,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of used ring is out of bound
         queue_config.used_ring = GuestAddress(
             SYSTEM_SPACE_SIZE
                 - (VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * u64::from(QUEUE_SIZE))
-                + 1 as u64,
+                + 1_u64,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
@@ -1250,7 +1250,7 @@ mod tests {
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
     }
 
     #[test]
@@ -1269,31 +1269,31 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of descriptor table is equal to the address of avail ring
         queue_config.avail_ring = GuestAddress(0);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of descriptor table is overlapped to the address of avail
         // ring.
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN - 1);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of avail ring is equal to the address of used ring
         queue_config.used_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
@@ -1302,7 +1302,7 @@ mod tests {
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of avail ring is overlapped to the address of used ring
         queue_config.used_ring = GuestAddress(
@@ -1312,7 +1312,7 @@ mod tests {
                 - 1,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
@@ -1321,7 +1321,7 @@ mod tests {
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
     }
 
     #[test]
@@ -1340,25 +1340,25 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of descriptor table is not aligned to 16
-        queue_config.desc_table = GuestAddress(15 as u64);
+        queue_config.desc_table = GuestAddress(15_u64);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.desc_table = GuestAddress(0);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of avail ring is not aligned to 2
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN + 1);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
 
         // it is invalid when the address of used ring is not aligned to 4
         queue_config.used_ring = GuestAddress(
@@ -1368,7 +1368,7 @@ mod tests {
                 + 3,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), false);
+        assert!(!queue.is_valid(&sys_space));
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
@@ -1377,7 +1377,7 @@ mod tests {
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
-        assert_eq!(queue.is_valid(&sys_space), true);
+        assert!(queue.is_valid(&sys_space));
     }
 
     #[test]
@@ -1402,7 +1402,7 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
-        assert_eq!(vring.is_valid(&sys_space), true);
+        assert!(vring.is_valid(&sys_space));
 
         // it is ok when the descriptor chain is normal
         // set the information of index 0 for descriptor
@@ -1452,11 +1452,11 @@ mod tests {
         assert_eq!(elem.index, 0);
         assert_eq!(elem.desc_num, 3);
         assert_eq!(elem.out_iovec.len(), 1);
-        let elem_iov = elem.out_iovec.get(0).unwrap();
+        let elem_iov = elem.out_iovec.first().unwrap();
         assert_eq!(elem_iov.addr, GuestAddress(0x111));
         assert_eq!(elem_iov.len, 16);
         assert_eq!(elem.in_iovec.len(), 2);
-        let elem_iov = elem.in_iovec.get(0).unwrap();
+        let elem_iov = elem.in_iovec.first().unwrap();
         assert_eq!(elem_iov.addr, GuestAddress(0x222));
         assert_eq!(elem_iov.len, 32);
         let elem_iov = elem.in_iovec.get(1).unwrap();
@@ -1492,7 +1492,7 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
-        assert_eq!(vring.is_valid(&sys_space), true);
+        assert!(vring.is_valid(&sys_space));
 
         // it is ok when the descriptor chain is indirect
         // set the information for indirect descriptor
@@ -1558,14 +1558,14 @@ mod tests {
         assert_eq!(elem.index, 0);
         assert_eq!(elem.desc_num, 3);
         assert_eq!(elem.out_iovec.len(), 2);
-        let elem_iov = elem.out_iovec.get(0).unwrap();
+        let elem_iov = elem.out_iovec.first().unwrap();
         assert_eq!(elem_iov.addr, GuestAddress(0x444));
         assert_eq!(elem_iov.len, 100);
         let elem_iov = elem.out_iovec.get(1).unwrap();
         assert_eq!(elem_iov.addr, GuestAddress(0x555));
         assert_eq!(elem_iov.len, 200);
         assert_eq!(elem.in_iovec.len(), 1);
-        let elem_iov = elem.in_iovec.get(0).unwrap();
+        let elem_iov = elem.in_iovec.first().unwrap();
         assert_eq!(elem_iov.addr, GuestAddress(0x666));
         assert_eq!(elem_iov.len, 300);
     }
@@ -1592,7 +1592,7 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
-        assert_eq!(vring.is_valid(&sys_space), true);
+        assert!(vring.is_valid(&sys_space));
 
         // it is error when the idx of avail ring which is equal to next_avail
         // set 0 to the idx of avail ring which is equal to next_avail
@@ -1637,7 +1637,7 @@ mod tests {
                 0,
             )
             .unwrap();
-        if let Ok(_) = vring.pop_avail(&sys_space, features) {
+        if vring.pop_avail(&sys_space, features).is_ok() {
             assert!(false);
         }
 
@@ -1787,7 +1787,7 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
-        assert_eq!(vring.is_valid(&sys_space), true);
+        assert!(vring.is_valid(&sys_space));
 
         // Set the information of index 0 for normal descriptor.
         vring
@@ -1906,7 +1906,7 @@ mod tests {
 
         // Two elem for reading.
         assert_eq!(elem.out_iovec.len(), 2);
-        let elem_iov = elem.out_iovec.get(0).unwrap();
+        let elem_iov = elem.out_iovec.first().unwrap();
         assert_eq!(elem_iov.addr, GuestAddress(0x111));
         assert_eq!(elem_iov.len, 16);
         let elem_iov = elem.out_iovec.get(1).unwrap();
@@ -1915,7 +1915,7 @@ mod tests {
 
         // Two elem for writing.
         assert_eq!(elem.in_iovec.len(), 2);
-        let elem_iov = elem.in_iovec.get(0).unwrap();
+        let elem_iov = elem.in_iovec.first().unwrap();
         assert_eq!(elem_iov.addr, GuestAddress(0x444));
         assert_eq!(elem_iov.len, 100);
         let elem_iov = elem.in_iovec.get(1).unwrap();
@@ -1951,7 +1951,7 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
-        assert_eq!(vring.is_valid(&sys_space), true);
+        assert!(vring.is_valid(&sys_space));
 
         // it is false when the index is more than the size of queue
         if let Err(err) = vring.add_used(&sys_space, QUEUE_SIZE, 100) {
@@ -1995,20 +1995,20 @@ mod tests {
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
-        assert_eq!(vring.is_valid(&sys_space), true);
+        assert!(vring.is_valid(&sys_space));
 
         // it's true when the feature of event idx and no interrupt for the avail ring is closed
-        let features = 0 as u64;
+        let features = 0_u64;
         assert!(vring.set_avail_ring_flags(&sys_space, 0).is_ok());
-        assert_eq!(vring.should_notify(&sys_space, features), true);
+        assert!(vring.should_notify(&sys_space, features));
 
         // it's false when the feature of event idx is closed and the feature of no interrupt for
         // the avail ring is open
-        let features = 0 as u64;
+        let features = 0_u64;
         assert!(vring
             .set_avail_ring_flags(&sys_space, VRING_AVAIL_F_NO_INTERRUPT)
             .is_ok());
-        assert_eq!(vring.should_notify(&sys_space, features), false);
+        assert!(!vring.should_notify(&sys_space, features));
 
         // it's true when the feature of event idx is open and
         // (new - event_idx - Wrapping(1) < new -old)
@@ -2016,20 +2016,20 @@ mod tests {
         vring.last_signal_used = Wrapping(5); // old
         assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
         assert!(vring.set_used_event_idx(&sys_space, 6).is_ok()); // event_idx
-        assert_eq!(vring.should_notify(&sys_space, features), true);
+        assert!(vring.should_notify(&sys_space, features));
 
         // it's false when the feature of event idx is open and
         // (new - event_idx - Wrapping(1) > new - old)
         vring.last_signal_used = Wrapping(5); // old
         assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
         assert!(vring.set_used_event_idx(&sys_space, 1).is_ok()); // event_idx
-        assert_eq!(vring.should_notify(&sys_space, features), false);
+        assert!(!vring.should_notify(&sys_space, features));
 
         // it's false when the feature of event idx is open and
         // (new - event_idx - Wrapping(1) = new -old)
         vring.last_signal_used = Wrapping(5); // old
         assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
         assert!(vring.set_used_event_idx(&sys_space, 4).is_ok()); // event_idx
-        assert_eq!(vring.should_notify(&sys_space, features), false);
+        assert!(!vring.should_notify(&sys_space, features));
     }
 }

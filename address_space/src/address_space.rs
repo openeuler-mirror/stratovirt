@@ -984,7 +984,7 @@ mod test {
         space.unregister_listener(listener2).unwrap();
         assert_eq!(space.listeners.lock().unwrap().len(), 1);
         for listener in space.listeners.lock().unwrap().iter() {
-            assert_eq!(listener.lock().unwrap().enabled(), true);
+            assert!(listener.lock().unwrap().enabled());
         }
     }
 
@@ -1024,7 +1024,7 @@ mod test {
                 .reqs
                 .lock()
                 .unwrap()
-                .get(0)
+                .first()
                 .unwrap()
                 .1,
             AddressRange::new(region_c.offset(), region_c.size())
@@ -1047,7 +1047,7 @@ mod test {
         assert_eq!(locked_listener.reqs.lock().unwrap().len(), 4);
         // delete flat-range 0~6000 first, belonging to region_c
         assert_eq!(
-            locked_listener.reqs.lock().unwrap().get(0).unwrap().1,
+            locked_listener.reqs.lock().unwrap().first().unwrap().1,
             AddressRange::new(region_c.offset(), region_c.size())
         );
         // add range 0~2000, belonging to region_c
@@ -1197,8 +1197,8 @@ mod test {
             ram2.start_address().unchecked_add(ram2.size())
         );
         assert!(space.address_in_memory(GuestAddress(0), 0));
-        assert_eq!(space.address_in_memory(GuestAddress(1000), 0), false);
-        assert_eq!(space.address_in_memory(GuestAddress(1500), 0), false);
+        assert!(!space.address_in_memory(GuestAddress(1000), 0));
+        assert!(!space.address_in_memory(GuestAddress(1500), 0));
         assert!(space.address_in_memory(GuestAddress(2900), 0));
 
         assert_eq!(
@@ -1227,9 +1227,9 @@ mod test {
             ram2.start_address().unchecked_add(ram2.size())
         );
         assert!(space.address_in_memory(GuestAddress(0), 0));
-        assert_eq!(space.address_in_memory(GuestAddress(1000), 0), false);
-        assert_eq!(space.address_in_memory(GuestAddress(1500), 0), false);
-        assert_eq!(space.address_in_memory(GuestAddress(2400), 0), false);
+        assert!(!space.address_in_memory(GuestAddress(1000), 0));
+        assert!(!space.address_in_memory(GuestAddress(1500), 0));
+        assert!(!space.address_in_memory(GuestAddress(2400), 0));
         assert!(space.address_in_memory(GuestAddress(2900), 0));
 
         assert_eq!(

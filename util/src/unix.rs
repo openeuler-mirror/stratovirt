@@ -113,7 +113,7 @@ pub fn do_mmap(
     // SAFETY: The return value is checked.
     let hva = unsafe {
         libc::mmap(
-            std::ptr::null_mut() as *mut libc::c_void,
+            std::ptr::null_mut(),
             len as libc::size_t,
             prot,
             flags,
@@ -418,7 +418,7 @@ impl UnixSock {
         while !cmsg_ptr.is_null() {
             // SAFETY: The pointer of cmsg_ptr was created in this function and
             // can be guaranteed not be null.
-            let cmsg = unsafe { (cmsg_ptr as *mut cmsghdr).read_unaligned() };
+            let cmsg = unsafe { cmsg_ptr.read_unaligned() };
 
             if cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS {
                 // SAFETY: Input parameter is constant.
@@ -488,7 +488,7 @@ mod tests {
         assert_ne!(stream.get_stream_raw_fd(), 0);
 
         assert!(listener.accept().is_ok());
-        assert_eq!(listener.is_accepted(), true);
+        assert!(listener.is_accepted());
 
         if sock_path.exists() {
             fs::remove_file("./test_socket1.sock").unwrap();

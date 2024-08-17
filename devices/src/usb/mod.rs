@@ -237,7 +237,7 @@ impl UsbDeviceBase {
                             .as_ref()
                             .with_context(|| "Device descriptor not found")?;
                         desc.configs
-                            .get(0)
+                            .first()
                             .with_context(|| "Config descriptor not found")?
                             .clone()
                     };

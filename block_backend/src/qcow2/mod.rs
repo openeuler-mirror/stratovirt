@@ -1994,10 +1994,10 @@ mod test {
             file.write_all(&header.to_vec()).unwrap();
 
             // Cluster 1 is the refcount table.
-            assert_eq!(header.refcount_table_offset, cluster_sz * 1);
+            assert_eq!(header.refcount_table_offset, cluster_sz);
             let mut refcount_table = [0_u8; ENTRY_SIZE as usize];
             BigEndian::write_u64(&mut refcount_table, cluster_sz * 2);
-            file.seek(SeekFrom::Start(cluster_sz * 1)).unwrap();
+            file.seek(SeekFrom::Start(cluster_sz)).unwrap();
             file.write_all(&refcount_table).unwrap();
 
             // Clusters which has been allocated.
@@ -2357,7 +2357,7 @@ mod test {
             riovec,
             wiovec,
             data: test_data,
-            offset: 1 * CLUSTER_SIZE as usize,
+            offset: CLUSTER_SIZE as usize,
             sz: CLUSTER_SIZE,
         });
         let test_data = vec![TestData::new(5, CLUSTER_SIZE as usize)];
@@ -2743,9 +2743,8 @@ mod test {
             .borrow_mut()
             .get_entry_map(l2_index as usize)
             .unwrap();
-        let host_offset = l2_entry & L2_TABLE_OFFSET_MASK;
 
-        host_offset
+        l2_entry & L2_TABLE_OFFSET_MASK
     }
 
     // Change snapshot table offset to unaligned address which will lead to error in refcount update

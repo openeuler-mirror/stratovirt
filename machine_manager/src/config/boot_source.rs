@@ -239,8 +239,8 @@ mod tests {
 
         test_kernel_param.push(Param::from_str("maxcpus=8"));
         assert_eq!(test_kernel_param.params.len(), 6);
-        assert_eq!(test_kernel_param.contains("maxcpus"), true);
-        assert_eq!(test_kernel_param.contains("cpus"), false);
+        assert!(test_kernel_param.contains("maxcpus"));
+        assert!(!test_kernel_param.contains("cpus"));
         assert_eq!(
             test_kernel_param.to_string(),
             "reboot=k panic=1 pci=off nomodules 8250.nr_uarts=0 maxcpus=8"
@@ -257,7 +257,7 @@ mod tests {
         initrd_file.set_len(100_u64).unwrap();
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_kernel(&kernel_path).is_ok());
-        vm_config.add_kernel_cmdline(&vec![
+        vm_config.add_kernel_cmdline(&[
             String::from("console=ttyS0"),
             String::from("reboot=k"),
             String::from("panic=1"),

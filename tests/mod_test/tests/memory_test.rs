@@ -270,7 +270,7 @@ fn rom_device_region_readwrite() {
     // Add a dummy rom device by qmp. The function of the device is to multiply the written value by
     // 2 through the write interface and save it, and read the saved value through the read
     // interface.
-    let file = File::create(&ROM_DEV_PATH).unwrap();
+    let file = File::create(ROM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",
@@ -309,7 +309,7 @@ fn rom_device_region_readwrite() {
     // device. The device can set the write mode to writable according to the device status during
     // the write operation, or directly return an error indicating that the write is not allowed.
     // The read operation is the same as that of IO region.
-    let file = File::create(&ROM_DEV_PATH).unwrap();
+    let file = File::create(ROM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",
@@ -352,7 +352,7 @@ fn ram_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
     let addr = 0x1_0000_0000; // 4GB
 
-    let file = File::create(&RAM_DEV_PATH).unwrap();
+    let file = File::create(RAM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",
@@ -719,7 +719,7 @@ fn ram_readwrite_numa1() {
     assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
     test_state.borrow_mut().qmp("{\"execute\": \"query-mem\"}");
 
-    let file = File::create(&RAM_DEV_PATH).unwrap();
+    let file = File::create(RAM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",

@@ -1002,7 +1002,7 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_x86_64_kvm_cpu() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -1110,7 +1110,7 @@ mod test {
     #[test]
     #[allow(unused)]
     fn test_cpu_lifecycle_with_kvm() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }

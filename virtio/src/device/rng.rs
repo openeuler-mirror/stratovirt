@@ -624,11 +624,11 @@ mod tests {
             .unwrap();
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4_u64))
             .unwrap();
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2_u64))
             .unwrap();
 
         let buffer = vec![1_u8; data_len as usize];
@@ -645,7 +645,7 @@ mod tests {
         assert_eq!(read_buffer, buffer);
 
         let idx = mem_space
-            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2_u64))
             .unwrap();
         assert_eq!(idx, 1);
         assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);
@@ -722,11 +722,11 @@ mod tests {
 
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4_u64))
             .unwrap();
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2_u64))
             .unwrap();
 
         let mut buffer1 = vec![1_u8; data_len as usize];
@@ -756,7 +756,7 @@ mod tests {
         assert_eq!(read_buffer, buffer2_check);
 
         let idx = mem_space
-            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2_u64))
             .unwrap();
         assert_eq!(idx, 1);
         assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);

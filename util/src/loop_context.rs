@@ -675,7 +675,7 @@ impl EventLoopContext {
 
             match ppoll(&mut pollfds, time_out_spec, None) {
                 Ok(_) => time_out = Some(Duration::ZERO),
-                Err(e) if e == Errno::EINTR => time_out = Some(Duration::ZERO),
+                Err(Errno::EINTR) => time_out = Some(Duration::ZERO),
                 Err(e) => return Err(anyhow!(UtilError::EpollWait(e.into()))),
             };
         }
@@ -757,12 +757,9 @@ mod test {
     impl EventLoopContext {
         fn check_existence(&self, fd: RawFd) -> Option<bool> {
             let events_map = self.events.read().unwrap();
-            match events_map.get(&fd) {
-                None => {
-                    return None;
-                }
-                Some(notifier) => Some(*notifier.status.lock().unwrap() == EventStatus::Alive),
-            }
+            events_map
+                .get(&fd)
+                .map(|notifier| *notifier.status.lock().unwrap() == EventStatus::Alive)
         }
 
         fn create_event(&mut self) -> i32 {
@@ -803,8 +800,7 @@ mod test {
         let fd1_related = EventFd::new(EFD_NONBLOCK).unwrap();
 
         let handler1 = generate_handler(fd1_related.as_raw_fd());
-        let mut handlers = Vec::new();
-        handlers.push(handler1);
+        let handlers = vec![handler1];
         let event1 = EventNotifier::new(
             NotifierOperation::AddShared,
             fd1.as_raw_fd(),

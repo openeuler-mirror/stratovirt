@@ -1582,7 +1582,7 @@ mod tests {
                 .unwrap()
                 .virtio_base()
                 .queues_config
-                .get(0)
+                .first()
                 .unwrap()
                 .ready
         );
@@ -1673,7 +1673,7 @@ mod tests {
         let status = (CONFIG_STATUS_ACKNOWLEDGE | CONFIG_STATUS_DRIVER | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
+        assert!(!virtio_dev.lock().unwrap().device_activated());
         // Device status is not ok, failed to activate virtio device
         let status = (CONFIG_STATUS_ACKNOWLEDGE
             | CONFIG_STATUS_DRIVER
@@ -1681,7 +1681,7 @@ mod tests {
             | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
+        assert!(!virtio_dev.lock().unwrap().device_activated());
         // Status is ok, virtio device is activated.
         let status = (CONFIG_STATUS_ACKNOWLEDGE
             | CONFIG_STATUS_DRIVER
@@ -1689,11 +1689,11 @@ mod tests {
             | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), true);
+        assert!(virtio_dev.lock().unwrap().device_activated());
 
         // If device status(not zero) is set to zero, reset the device
         (common_cfg_ops.write)(0_u32.as_bytes(), GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
+        assert!(!virtio_dev.lock().unwrap().device_activated());
     }
 
     #[test]

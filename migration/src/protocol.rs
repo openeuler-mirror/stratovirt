@@ -920,12 +920,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v1.get_state_vec().unwrap();
-        assert_eq!(
-            state_2_desc
-                .add_padding(&state_1_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_2_desc
+            .add_padding(&state_1_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v2 = DeviceV2 {
             state: DeviceV2State::default(),
@@ -964,12 +961,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v2.get_state_vec().unwrap();
-        assert_eq!(
-            state_3_desc
-                .add_padding(&state_2_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_3_desc
+            .add_padding(&state_2_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v3 = DeviceV3 {
             state: DeviceV3State::default(),
@@ -1007,12 +1001,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v3.get_state_vec().unwrap();
-        assert_eq!(
-            state_4_desc
-                .add_padding(&state_3_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_4_desc
+            .add_padding(&state_3_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v4 = DeviceV4 {
             state: DeviceV4State::default(),
@@ -1050,12 +1041,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v4.get_state_vec().unwrap();
-        assert_eq!(
-            state_5_desc
-                .add_padding(&state_4_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_5_desc
+            .add_padding(&state_4_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v5 = DeviceV5 {
             state: DeviceV5State::default(),
@@ -1089,12 +1077,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v2.get_state_vec().unwrap();
-        assert_eq!(
-            state_5_desc
-                .add_padding(&state_2_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_5_desc
+            .add_padding(&state_2_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v5 = DeviceV5 {
             state: DeviceV5State::default(),
@@ -1107,11 +1092,11 @@ pub mod tests {
 
     #[test]
     fn test_check_header() {
-        if !Kvm::new().is_ok() {
+        if Kvm::new().is_err() {
             return;
         }
 
         let header = MigrationHeader::default();
-        assert_eq!(header.check_header().is_ok(), true);
+        assert!(header.check_header().is_ok());
     }
 }

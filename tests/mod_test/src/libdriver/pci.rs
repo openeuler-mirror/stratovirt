@@ -334,21 +334,16 @@ impl TestPciDev {
     }
 
     pub fn io_map(&self, barnum: u8) -> u64 {
-        let addr: u32;
-        let size: u64;
-        let location: u64;
-        let bar_addr: PCIBarAddr;
-
         assert!(barnum <= 5);
         let bar_offset: u8 = BAR_MAP[barnum as usize];
 
         self.config_writel(bar_offset, 0xFFFFFFFF);
-        addr = self.config_readl(bar_offset) & !(0x0F_u32);
+        let addr: u32 = self.config_readl(bar_offset) & !(0x0F_u32);
         assert!(addr != 0);
 
         let mut pci_bus = self.pci_bus.borrow_mut();
-        size = 1 << addr.trailing_zeros();
-        location = (pci_bus.mmio_alloc_ptr + size - 1) / size * size;
+        let size: u64 = 1 << addr.trailing_zeros();
+        let location: u64 = (pci_bus.mmio_alloc_ptr + size - 1) / size * size;
         if location < pci_bus.mmio_alloc_ptr || location + size > pci_bus.mmio_limit {
             return INVALID_BAR_ADDR;
         }
@@ -356,7 +351,7 @@ impl TestPciDev {
         pci_bus.mmio_alloc_ptr = location + size;
         drop(pci_bus);
         self.config_writel(bar_offset, location as u32);
-        bar_addr = location;
+        let bar_addr: PCIBarAddr = location;
         bar_addr
     }
 

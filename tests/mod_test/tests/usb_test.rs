@@ -544,7 +544,7 @@ fn test_xhci_keyboard_reorder() {
     let buf = xhci.get_transfer_data_indirect(evt.ptr, HID_KEYBOARD_LEN);
     assert_eq!(buf, [0, 0, 30, 31, 32, 33, 0, 0]);
     // 1 2 3 4 Up
-    let key_list = vec![
+    let key_list = [
         KEYCODE_NUM1,
         KEYCODE_NUM1 + 1,
         KEYCODE_NUM1 + 2,
@@ -736,7 +736,7 @@ fn test_xhci_keyboard_invalid_value() {
     xhci.queue_trb(slot_id, HID_DEVICE_ENDPOINT_ID, &mut trb);
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
     // NOTE: no HCE, only primary interrupter supported now.
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS);
     assert!(status & USB_STS_HCE != USB_STS_HCE);
 
     test_state.borrow_mut().stop();
@@ -845,7 +845,7 @@ fn test_xhci_keyboard_over_transfer_ring() {
     xhci.queue_link_trb(slot_id, HID_DEVICE_ENDPOINT_ID, ptr, false);
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
     // Host Controller Error
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS);
     assert!(status & USB_STS_HCE == USB_STS_HCE);
 
     xhci.reset_controller(true);
@@ -856,7 +856,7 @@ fn test_xhci_keyboard_over_transfer_ring() {
     xhci.queue_td_by_iovec(slot_id, HID_DEVICE_ENDPOINT_ID, &mut iovecs, false);
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
     // Host Controller Error
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS);
     assert!(status & USB_STS_HCE == USB_STS_HCE);
 
     xhci.reset_controller(true);
@@ -959,35 +959,35 @@ fn test_xhci_keyboard_controller_init_invalid_register() {
     // Case 3: write invalid slot.
     xhci.pci_dev.io_writel(
         xhci.bar_addr,
-        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG as u64,
+        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG,
         0xffff,
     );
     let config = xhci.pci_dev.io_readl(
         xhci.bar_addr,
-        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG as u64,
+        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG,
     );
     assert_ne!(config, 0xffff);
 
     // Case 4: invalid oper
     xhci.pci_dev.io_writel(
         xhci.bar_addr,
-        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS as u64,
+        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS,
         0xffff,
     );
     let status = xhci.pci_dev.io_readl(
         xhci.bar_addr,
-        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS as u64,
+        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS,
     );
     assert_ne!(status, 0xffff);
     // Device Notify Control
     xhci.pci_dev.io_writel(
         xhci.bar_addr,
-        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DNCTRL as u64,
+        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DNCTRL,
         0x12345,
     );
     let ndctrl = xhci.pci_dev.io_readl(
         xhci.bar_addr,
-        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DNCTRL as u64,
+        u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DNCTRL,
     );
     assert_eq!(ndctrl, 0x12345 & XHCI_OPER_NE_MASK);
     // invalid port offset.
@@ -1084,7 +1084,7 @@ fn test_xhci_keyboard_controller_init_miss_step() {
     xhci.enable_slot();
     assert!(xhci.fetch_event(PRIMARY_INTERRUPTER_ID).is_none());
     // Host Controller Error
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS);
     assert!(status & USB_STS_HCE == USB_STS_HCE);
 
     xhci.reset_controller(false);
@@ -1108,7 +1108,7 @@ fn test_xhci_keyboard_controller_init_miss_step() {
     xhci.address_device(slot_id, false, port_id);
     assert!(xhci.fetch_event(PRIMARY_INTERRUPTER_ID).is_none());
     // Host Controller Error
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS);
     assert!(status & USB_STS_HCE == USB_STS_HCE);
 
     xhci.reset_controller(false);
@@ -1330,7 +1330,7 @@ fn test_xhci_keyboard_over_command_ring() {
     xhci.queue_link_trb(0, 0, ptr, false);
     xhci.doorbell_write(0, 0);
     // Host Controller Error
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS);
     assert!(status & USB_STS_HCE == USB_STS_HCE);
 
     xhci.reset_controller(true);
@@ -1766,7 +1766,7 @@ fn test_xhci_keyboard_device_init_reset_device() {
     let slot_id = evt.get_slot_id();
     //  Case 1: reset after enable slot.
     xhci.reset_device(slot_id);
-    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+    let status = xhci.oper_regs_read(XHCI_OPER_REG_USBSTS);
     assert!(status & USB_STS_HCE == USB_STS_HCE);
 
     xhci.reset_controller(true);
@@ -2040,9 +2040,9 @@ fn test_xhci_tablet_basic() {
             [
                 i as u8 % 3,
                 (i * 10) as u8,
-                (i * 10 >> 8) as u8,
+                ((i * 10) >> 8) as u8,
                 (i * 20) as u8,
-                (i * 20 >> 8) as u8,
+                ((i * 20) >> 8) as u8,
                 0,
                 0
             ]
@@ -2053,9 +2053,9 @@ fn test_xhci_tablet_basic() {
             [
                 0,
                 (i * 10) as u8,
-                (i * 10 >> 8) as u8,
+                ((i * 10) >> 8) as u8,
                 (i * 20) as u8,
-                (i * 20 >> 8) as u8,
+                ((i * 20) >> 8) as u8,
                 0,
                 0
             ]
@@ -2433,11 +2433,11 @@ fn test_xhci_disable_interrupt() {
     // Case: disable USB_CMD_INTE
     qmp_send_pointer_event(test_state.borrow_mut(), 100, 200, 0, true);
     xhci.queue_direct_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
-    let value = xhci.oper_regs_read(XHCI_OPER_REG_USBCMD as u64);
+    let value = xhci.oper_regs_read(XHCI_OPER_REG_USBCMD);
     xhci.oper_regs_write(XHCI_OPER_REG_USBCMD, value & !USB_CMD_INTE);
     xhci.doorbell_write(slot_id, HID_DEVICE_ENDPOINT_ID);
     assert!(xhci.fetch_event(PRIMARY_INTERRUPTER_ID).is_none());
-    let value = xhci.oper_regs_read(XHCI_OPER_REG_USBCMD as u64);
+    let value = xhci.oper_regs_read(XHCI_OPER_REG_USBCMD);
     xhci.oper_regs_write(XHCI_OPER_REG_USBCMD, value | USB_CMD_INTE);
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
@@ -2447,8 +2447,7 @@ fn test_xhci_disable_interrupt() {
     // Case: disable IMAN_IE
     qmp_send_pointer_event(test_state.borrow_mut(), 100, 200, 0, true);
     xhci.queue_direct_td(slot_id, HID_DEVICE_ENDPOINT_ID, HID_POINTER_LEN);
-    let value =
-        xhci.interrupter_regs_read(PRIMARY_INTERRUPTER_ID as u64, XHCI_INTR_REG_IMAN as u64);
+    let value = xhci.interrupter_regs_read(PRIMARY_INTERRUPTER_ID as u64, XHCI_INTR_REG_IMAN);
     xhci.interrupter_regs_write(
         PRIMARY_INTERRUPTER_ID as u64,
         XHCI_INTR_REG_IMAN,

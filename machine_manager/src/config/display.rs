@@ -123,28 +123,28 @@ mod tests {
         assert!(vm_config.add_display(config_line).is_ok());
         let display_config = vm_config.display.unwrap();
         assert_eq!(display_config.display_type, "gtk");
-        assert_eq!(display_config.full_screen, false);
+        assert!(!display_config.full_screen);
 
         let mut vm_config = VmConfig::default();
         let config_line = "gtk,full-screen=on";
         assert!(vm_config.add_display(config_line).is_ok());
         let display_config = vm_config.display.unwrap();
         assert_eq!(display_config.display_type, "gtk");
-        assert_eq!(display_config.full_screen, true);
+        assert!(display_config.full_screen);
 
         let mut vm_config = VmConfig::default();
         let config_line = "gtk,full-screen=off";
         assert!(vm_config.add_display(config_line).is_ok());
         let display_config = vm_config.display.unwrap();
         assert_eq!(display_config.display_type, "gtk");
-        assert_eq!(display_config.full_screen, false);
+        assert!(!display_config.full_screen);
 
         let mut vm_config = VmConfig::default();
         let config_line = "gtk,app-name=desktopappengine";
         assert!(vm_config.add_display(config_line).is_ok());
         let display_config = vm_config.display.unwrap();
         assert_eq!(display_config.display_type, "gtk");
-        assert_eq!(display_config.full_screen, false);
+        assert!(!display_config.full_screen);
         assert_eq!(
             display_config.app_name,
             Some("desktopappengine".to_string())

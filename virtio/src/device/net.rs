@@ -614,7 +614,7 @@ impl NetCtrlHandler {
             // Write result to the device writable iovec.
             let status = elem
                 .in_iovec
-                .get(0)
+                .first()
                 .with_context(|| "Failed to get device writable iovec")?;
             self.mem_space.write_object::<u8>(&ack, status.addr)?;
 
@@ -1817,12 +1817,12 @@ mod tests {
         assert_eq!(net.base.device_features, 0);
         assert_eq!(net.base.driver_features, 0);
 
-        assert_eq!(net.taps.is_none(), true);
-        assert_eq!(net.senders.is_none(), true);
-        assert_eq!(net.net_cfg.mac.is_none(), true);
-        assert_eq!(net.netdev_cfg.tap_fds.is_none(), true);
+        assert!(net.taps.is_none());
+        assert!(net.senders.is_none());
+        assert!(net.net_cfg.mac.is_none());
+        assert!(net.netdev_cfg.tap_fds.is_none());
         assert!(net.netdev_cfg.vhost_type().is_none());
-        assert_eq!(net.netdev_cfg.vhost_fds.is_none(), true);
+        assert!(net.netdev_cfg.vhost_fds.is_none());
 
         // test net realize method
         net.realize().unwrap();
@@ -1850,25 +1850,25 @@ mod tests {
 
         let mut data: Vec<u8> = vec![0; 10];
         let offset: u64 = len + 1;
-        assert_eq!(net.read_config(offset, &mut data).is_ok(), false);
+        assert!(net.read_config(offset, &mut data).is_err());
 
         let offset: u64 = len;
-        assert_eq!(net.read_config(offset, &mut data).is_ok(), false);
+        assert!(net.read_config(offset, &mut data).is_err());
 
         let offset: u64 = 0;
-        assert_eq!(net.read_config(offset, &mut data).is_ok(), true);
+        assert!(net.read_config(offset, &mut data).is_ok());
 
         let offset: u64 = len;
         let mut data: Vec<u8> = vec![0; 1];
-        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
+        assert!(net.write_config(offset, &mut data).is_err());
 
         let offset: u64 = len - 1;
         let mut data: Vec<u8> = vec![0; 1];
-        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
+        assert!(net.write_config(offset, &mut data).is_err());
 
         let offset: u64 = 0;
         let mut data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(net.write_config(offset, &mut data).is_ok(), false);
+        assert!(net.write_config(offset, &mut data).is_err());
     }
 
     #[test]
@@ -1879,8 +1879,8 @@ mod tests {
         // Test create tap with net_fds and host_dev_name.
         let net_fds = vec![32, 33];
         let tap_name = "tap0";
-        if let Err(err) = create_tap(Some(&net_fds), Some(&tap_name), 1) {
-            let err_msg = format!("Failed to create tap, index is 0");
+        if let Err(err) = create_tap(Some(&net_fds), Some(tap_name), 1) {
+            let err_msg = "Failed to create tap, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
             assert!(false);
@@ -1888,7 +1888,7 @@ mod tests {
 
         // Test create tap with empty net_fds.
         if let Err(err) = create_tap(Some(&vec![]), None, 1) {
-            let err_msg = format!("Failed to get fd from index 0");
+            let err_msg = "Failed to get fd from index 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
             assert!(false);
@@ -1897,7 +1897,7 @@ mod tests {
         // Test create tap with tap_name which is not exist.
         if let Err(err) = create_tap(None, Some("the_tap_is_not_exist"), 1) {
             let err_msg =
-                format!("Failed to create tap with name the_tap_is_not_exist, index is 0");
+                "Failed to create tap with name the_tap_is_not_exist, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
             assert!(false);
@@ -1913,14 +1913,14 @@ mod tests {
             0x00, 0x00,
         ];
         // It has no vla vid, the packet is filtered.
-        assert_eq!(ctrl_info.filter_packets(&buf), true);
+        assert!(ctrl_info.filter_packets(&buf));
 
         // It has valid vlan id, the packet is not filtered.
         let vid: u16 = 1023;
         buf[ETHERNET_HDR_LENGTH] = u16::to_be_bytes(vid)[0];
         buf[ETHERNET_HDR_LENGTH + 1] = u16::to_be_bytes(vid)[1];
         ctrl_info.vlan_map.insert(vid >> 5, 1 << (vid & 0x1f));
-        assert_eq!(ctrl_info.filter_packets(&buf), false);
+        assert!(!ctrl_info.filter_packets(&buf));
     }
 
     #[test]
@@ -1928,12 +1928,12 @@ mod tests {
         let mut net_config = VirtioNetConfig::default();
         // Parsing the normal mac address.
         let mac = "52:54:00:12:34:56";
-        let ret = build_device_config_space(&mut net_config, &mac);
+        let ret = build_device_config_space(&mut net_config, mac);
         assert_eq!(ret, 1 << VIRTIO_NET_F_MAC);
 
         // Parsing the abnormale mac address.
         let mac = "52:54:00:12:34:";
-        let ret = build_device_config_space(&mut net_config, &mac);
+        let ret = build_device_config_space(&mut net_config, mac);
         assert_eq!(ret, 0);
     }
 

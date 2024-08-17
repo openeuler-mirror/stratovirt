@@ -33,7 +33,7 @@ impl VmConfig {
         let saslauth =
             SaslAuthObjConfig::try_parse_from(str_slip_to_clap(saslauth_config, true, false))?;
         let id = saslauth.id.clone();
-        if self.object.sasl_object.get(&id).is_some() {
+        if self.object.sasl_object.contains_key(&id) {
             return Err(anyhow!(ConfigError::IdRepeat("saslauth".to_string(), id)));
         }
         self.object.sasl_object.insert(id, saslauth);
@@ -62,7 +62,7 @@ mod tests {
         assert!(vm_config.add_object("authz-simple,id=authz0").is_ok());
         assert!(vm_config.object.sasl_object.get(&id).is_some());
         if let Some(obj_cfg) = vm_config.object.sasl_object.get(&id) {
-            assert!(obj_cfg.identity == "".to_string());
+            assert!(obj_cfg.identity == *"");
         }
     }
 }

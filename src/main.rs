@@ -180,11 +180,9 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
 
             if is_test_enabled() {
                 let sock_path = cmd_args.value_of("mod-test");
-                let test_sock = Some(TestSock::new(sock_path.unwrap().as_str(), vm.clone()));
+                let test_sock = TestSock::new(sock_path.unwrap().as_str(), vm.clone());
                 EventLoop::update_event(
-                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(
-                        test_sock.unwrap(),
-                    ))),
+                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(test_sock))),
                     None,
                 )
                 .with_context(|| "Failed to add test socket to MainLoop")?;
@@ -211,7 +209,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
     };
 
-    let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
+    let balloon_switch_on = vm_config.dev_name.contains_key("balloon");
     if !cmd_args.is_present("disable-seccomp") {
         vm.lock()
             .unwrap()

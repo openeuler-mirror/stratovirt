@@ -1900,9 +1900,9 @@ mod tests {
         assert_eq!(gpu_cfg.max_outputs, 5);
         assert_eq!(gpu_cfg.xres, 2048);
         assert_eq!(gpu_cfg.yres, 800);
-        assert_eq!(gpu_cfg.edid, false);
+        assert!(!gpu_cfg.edid);
         assert_eq!(gpu_cfg.max_hostmem, 268435457);
-        assert_eq!(gpu_cfg.enable_bar0, true);
+        assert!(gpu_cfg.enable_bar0);
 
         // Test2: Default.
         let gpu_cmd2 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0";
@@ -1911,9 +1911,9 @@ mod tests {
         assert_eq!(gpu_cfg.max_outputs, 1);
         assert_eq!(gpu_cfg.xres, 1024);
         assert_eq!(gpu_cfg.yres, 768);
-        assert_eq!(gpu_cfg.edid, true);
+        assert!(gpu_cfg.edid);
         assert_eq!(gpu_cfg.max_hostmem, VIRTIO_GPU_DEFAULT_MAX_HOSTMEM);
-        assert_eq!(gpu_cfg.enable_bar0, false);
+        assert!(!gpu_cfg.enable_bar0);
 
         // Test3/4: max_outputs is illegal.
         let gpu_cmd3 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=17";

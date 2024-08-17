@@ -617,7 +617,7 @@ impl ScsiCtrlQueueHandler {
 
             let ctrl_desc = elem
                 .out_iovec
-                .get(0)
+                .first()
                 .with_context(|| "Error request in ctrl queue. Empty dataout buf!")?;
             let ctrl_type = self
                 .mem_space

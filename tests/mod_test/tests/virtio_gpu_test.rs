@@ -60,19 +60,19 @@ fn image_display_fun() {
     let (dpy, gpu) = set_up(&gpu_cfg);
     let image_addr = gpu.borrow_mut().allocator.borrow_mut().alloc(image_size);
 
-    let image_byte_0 = vec![0 as u8; 1];
-    let image_byte_1 = vec![1 as u8; 1];
-    let image_0 = vec![0 as u8; image_size as usize];
+    let image_byte_0 = vec![0_u8; 1];
+    let image_byte_1 = vec![1_u8; 1];
+    let image_0 = vec![0_u8; image_size as usize];
 
     // image with half data 1
-    let mut image_half_1 = vec![0 as u8; image_size as usize];
+    let mut image_half_1 = vec![0_u8; image_size as usize];
     let mut i = 0;
     while i < image_size / 2 {
         image_half_1[i as usize] = 1;
         i += 1;
     }
     // image with quarter data1
-    let mut image_quarter_1 = vec![0 as u8; image_size as usize];
+    let mut image_quarter_1 = vec![0_u8; image_size as usize];
     let mut i = 0;
     while i < image_size / 4 {
         image_quarter_1[i as usize] = 1;
@@ -190,9 +190,9 @@ fn image_display_fun() {
 
 #[test]
 fn cursor_display_fun() {
-    let image_0: Vec<u8> = vec![0 as u8; D_CURSOR_IMG_SIZE as usize];
-    let image_1: Vec<u8> = vec![1 as u8; D_CURSOR_IMG_SIZE as usize];
-    let image_byte_1 = vec![1 as u8; 1];
+    let image_0: Vec<u8> = vec![0_u8; D_CURSOR_IMG_SIZE as usize];
+    let image_1: Vec<u8> = vec![1_u8; D_CURSOR_IMG_SIZE as usize];
+    let image_byte_1 = vec![1_u8; 1];
 
     let image_size = cal_image_hostmem(D_FMT, D_CURSOR_WIDTH, D_CURSOR_HEIGHT);
     let image_size = image_size.0.unwrap() as u64;
@@ -676,7 +676,7 @@ fn cursor_update_dfx() {
     gpu.borrow_mut().allocator.borrow_mut().alloc(image_size);
 
     let image_empty: Vec<u8> = vec![];
-    let image_0: Vec<u8> = vec![0 as u8; D_CURSOR_IMG_SIZE as usize];
+    let image_0: Vec<u8> = vec![0_u8; D_CURSOR_IMG_SIZE as usize];
 
     // invalid scanout id
     assert!(current_curosr_check(&dpy, &image_empty));

@@ -671,7 +671,7 @@ pub fn get_display_info(gpu: &Rc<RefCell<TestVirtioGpu>>) -> VirtioGpuDisplayInf
 
     gpu.borrow_mut()
         .request_complete(true, hdr.as_bytes(), None, None, Some(&mut resp));
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_GET_EDID
@@ -689,7 +689,7 @@ pub fn get_edid(gpu: &Rc<RefCell<TestVirtioGpu>>, hdr_ctx: VirtioGpuGetEdid) -> 
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 pub fn current_curosr_check(dpy: &Rc<RefCell<TestDemoDpyDevice>>, local: &Vec<u8>) -> bool {
@@ -740,7 +740,7 @@ pub fn resource_create(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_RESOURCE_UNREF
@@ -761,7 +761,7 @@ pub fn resource_unref(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_RESOURCE_FLUSH
@@ -782,7 +782,7 @@ pub fn resource_flush(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_UPDATE_CURSOR
@@ -831,7 +831,7 @@ pub fn resource_attach_backing(
         Some(&ctx),
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 pub fn resource_attach_backing_with_invalid_ctx_len(
@@ -851,7 +851,7 @@ pub fn resource_attach_backing_with_invalid_ctx_len(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING
@@ -872,7 +872,7 @@ pub fn resource_detach_backing(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D
@@ -892,7 +892,7 @@ pub fn transfer_to_host(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_SET_SCANOUT
@@ -913,7 +913,7 @@ pub fn set_scanout(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 pub fn invalid_cmd_test(gpu: &Rc<RefCell<TestVirtioGpu>>) -> VirtioGpuCtrlHdr {
@@ -924,5 +924,5 @@ pub fn invalid_cmd_test(gpu: &Rc<RefCell<TestVirtioGpu>>) -> VirtioGpuCtrlHdr {
 
     gpu.borrow_mut()
         .request_complete(true, hdr.as_bytes(), None, None, Some(&mut resp));
-    return resp;
+    resp
 }

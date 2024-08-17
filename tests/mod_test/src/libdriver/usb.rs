@@ -395,6 +395,12 @@ pub struct TestEventRingSegment {
     pub reserved: u32,
 }
 
+impl Default for TestEventRingSegment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestEventRingSegment {
     pub fn new() -> Self {
         Self {
@@ -503,21 +509,21 @@ impl TestXhciPciDevice {
     pub fn run(&mut self) {
         let status = self.pci_dev.io_readl(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS,
         );
         assert!(status & USB_STS_HCH == USB_STS_HCH);
         let cmd = self.pci_dev.io_readl(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBCMD as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBCMD,
         );
         self.pci_dev.io_writel(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBCMD as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBCMD,
             cmd | USB_CMD_RUN,
         );
         let status = self.pci_dev.io_readl(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS,
         );
         assert!(status & USB_STS_HCH != USB_STS_HCH);
     }
@@ -627,7 +633,7 @@ impl TestXhciPciDevice {
     pub fn reset_controller(&mut self, auto_run: bool) {
         // reset xhci
         self.oper_regs_write(0, USB_CMD_HCRST);
-        let status = self.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+        let status = self.oper_regs_read(XHCI_OPER_REG_USBSTS);
         assert!(status & USB_STS_HCE != USB_STS_HCE);
         if auto_run {
             self.init_host_controller(XHCI_PCI_SLOT_NUM, XHCI_PCI_FUN_NUM);
@@ -699,14 +705,14 @@ impl TestXhciPciDevice {
     pub fn port_regs_read(&self, port_id: u32, offset: u64) -> u32 {
         self.pci_dev.io_readl(
             self.bar_addr,
-            u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1) as u32) + offset,
+            u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1)) + offset,
         )
     }
 
     pub fn port_regs_write(&mut self, port_id: u32, offset: u64, value: u32) {
         self.pci_dev.io_writel(
             self.bar_addr,
-            u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1) as u32) + offset,
+            u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1)) + offset,
             value,
         );
     }
@@ -830,13 +836,13 @@ impl TestXhciPciDevice {
         let enabled_slot = USB_CONFIG_MAX_SLOTS_ENABLED & USB_CONFIG_MAX_SLOTS_EN_MASK;
         self.pci_dev.io_writel(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG,
             enabled_slot,
         );
 
         let config = self.pci_dev.io_readl(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG,
         );
         assert_eq!(config, enabled_slot);
     }
@@ -846,13 +852,13 @@ impl TestXhciPciDevice {
         let dcbaap = self.allocator.borrow_mut().alloc(u64::from(dcba));
         self.pci_dev.io_writeq(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DCBAAP as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DCBAAP,
             dcbaap,
         );
 
         let value = self.pci_dev.io_readq(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DCBAAP as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DCBAAP,
         );
         assert_eq!(value, dcbaap);
         self.xhci.dcbaap = value;
@@ -870,13 +876,13 @@ impl TestXhciPciDevice {
         self.xhci.cmd_ring.init(cmd_ring, cmd_ring_sz);
         self.pci_dev.io_writeq(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CMD_RING_CTRL as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CMD_RING_CTRL,
             cmd_ring,
         );
         // Read dequeue pointer return 0.
         let cmd_ring = self.pci_dev.io_readq(
             self.bar_addr,
-            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CMD_RING_CTRL as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CMD_RING_CTRL,
         );
         assert_eq!(cmd_ring, 0);
     }
@@ -906,13 +912,9 @@ impl TestXhciPciDevice {
 
     pub fn reset_port(&mut self, port_id: u32) {
         assert!(port_id > 0);
-        let port_offset =
-            u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1) as u32);
-        self.pci_dev.io_writel(
-            self.bar_addr,
-            port_offset + XHCI_PORTSC_OFFSET,
-            PORTSC_PR as u32,
-        );
+        let port_offset = u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1));
+        self.pci_dev
+            .io_writel(self.bar_addr, port_offset + XHCI_PORTSC_OFFSET, PORTSC_PR);
         self.oper_regs_write(XHCI_OPER_REG_USBSTS, USB_STS_PCD);
         let status = self.oper_regs_read(XHCI_OPER_REG_USBSTS);
         assert!(status & USB_STS_PCD != USB_STS_PCD);
@@ -1156,7 +1158,7 @@ impl TestXhciPciDevice {
 
     pub fn queue_device_request(&mut self, slot_id: u32, device_req: &UsbDeviceRequest) -> u64 {
         // Setup Stage.
-        let mut setup_trb = TestNormalTRB::generate_setup_td(&device_req);
+        let mut setup_trb = TestNormalTRB::generate_setup_td(device_req);
         self.queue_trb(slot_id, CONTROL_ENDPOINT_ID, &mut setup_trb);
         // Data Stage.
         let ptr = self
@@ -1258,16 +1260,15 @@ impl TestXhciPciDevice {
 
     // Read data from parameter directly.
     pub fn get_transfer_data_direct(&self, addr: u64, len: u64) -> Vec<u8> {
-        let buf = self.mem_read(addr, len as usize);
-        buf
+        self.mem_read(addr, len as usize)
     }
 
     // Read data from parameter as address.
     pub fn get_transfer_data_indirect(&self, addr: u64, len: u64) -> Vec<u8> {
         let buf = self.mem_read(addr, 8);
         let mem = LittleEndian::read_u64(&buf);
-        let buf = self.mem_read(mem, len as usize);
-        buf
+
+        self.mem_read(mem, len as usize)
     }
 
     pub fn get_transfer_data_indirect_with_offset(
@@ -1278,8 +1279,8 @@ impl TestXhciPciDevice {
     ) -> Vec<u8> {
         let buf = self.mem_read(addr, 8);
         let mem = LittleEndian::read_u64(&buf);
-        let buf = self.mem_read(mem + offset, len);
-        buf
+
+        self.mem_read(mem + offset, len)
     }
 
     pub fn get_command_pointer(&self) -> u64 {
@@ -1345,7 +1346,7 @@ impl TestXhciPciDevice {
             trb.set_cycle_bit(self.get_cycle_bit(slot_id, ep_id));
         }
         let en_ptr = self.get_transfer_pointer(slot_id, ep_id);
-        self.write_trb(en_ptr, &trb);
+        self.write_trb(en_ptr, trb);
         self.increase_transfer_ring(slot_id, ep_id, 1);
     }
 
@@ -1426,7 +1427,7 @@ impl TestXhciPciDevice {
         assert_eq!(data, self.get_event_pointer(intr_idx));
 
         // enable USB_CMD_INTE
-        let value = self.oper_regs_read(XHCI_OPER_REG_USBCMD as u64);
+        let value = self.oper_regs_read(XHCI_OPER_REG_USBCMD);
         self.oper_regs_write(XHCI_OPER_REG_USBCMD, value | USB_CMD_INTE);
         // enable INTE
         let value = self.interrupter_regs_read(intr_idx as u64, XHCI_INTR_REG_IMAN);
@@ -1528,8 +1529,8 @@ impl TestXhciPciDevice {
     fn get_device_context_address(&self, slot_id: u32) -> u64 {
         let device_ctx_addr = self.xhci.dcbaap + u64::from(slot_id * DEVICE_CONTEXT_ENTRY_SIZE);
         let mut buf = self.mem_read(device_ctx_addr, 8);
-        let addr = LittleEndian::read_u64(&mut buf);
-        addr
+
+        LittleEndian::read_u64(&mut buf)
     }
 
     fn has_msix(&mut self, msix_addr: u64, msix_data: u32) -> bool {
@@ -1595,7 +1596,7 @@ impl TestXhciPciDevice {
 // Descriptor
 impl TestXhciPciDevice {
     fn get_usb_device_type(&mut self) -> UsbDeviceType {
-        let usb_device_type = if *self.device_config.get("tablet").unwrap_or(&false) {
+        if *self.device_config.get("tablet").unwrap_or(&false) {
             UsbDeviceType::Tablet
         } else if *self.device_config.get("keyboard").unwrap_or(&false) {
             UsbDeviceType::Keyboard
@@ -1605,9 +1606,7 @@ impl TestXhciPciDevice {
             UsbDeviceType::Camera
         } else {
             UsbDeviceType::Other
-        };
-
-        usb_device_type
+        }
     }
 
     fn get_iad_desc(&mut self, offset: &mut u64, addr: u64) {
@@ -1618,7 +1617,7 @@ impl TestXhciPciDevice {
 
         // 1. IAD header descriptor
         *offset += u64::from(USB_DT_CONFIG_SIZE);
-        let buf = self.get_transfer_data_indirect_with_offset(addr, 8 as usize, *offset);
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 8_usize, *offset);
 
         // descriptor type
         assert_eq!(buf[1], USB_DT_INTERFACE_ASSOCIATION);
@@ -1642,7 +1641,7 @@ impl TestXhciPciDevice {
 
         // get total vc length from its header descriptor
         *offset += u64::from(USB_DT_INTERFACE_SIZE);
-        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xd as usize, *offset);
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xd_usize, *offset);
 
         let total = u16::from_le_bytes(buf[5..7].try_into().unwrap());
         let remained = total - 0xd;
@@ -1664,7 +1663,7 @@ impl TestXhciPciDevice {
 
         // get total vs length from its header descriptor
         *offset += u64::from(USB_DT_INTERFACE_SIZE);
-        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xf as usize, *offset);
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xf_usize, *offset);
         let total = u16::from_le_bytes(buf[4..6].try_into().unwrap());
         let remained = total - 0xf;
 
@@ -2131,7 +2130,7 @@ impl TestXhciPciDevice {
 // Memory operation
 impl TestXhciPciDevice {
     pub fn mem_read_u32(&self, addr: u64, buf: &mut [u32]) {
-        let vec_len = size_of::<u32>() * buf.len();
+        let vec_len = std::mem::size_of_val(buf);
         let tmp = self.mem_read(addr, vec_len);
         for i in 0..buf.len() {
             buf[i] = LittleEndian::read_u32(&tmp[(size_of::<u32>() * i)..]);
@@ -2139,7 +2138,7 @@ impl TestXhciPciDevice {
     }
 
     pub fn mem_write_u32(&self, addr: u64, buf: &[u32]) {
-        let vec_len = size_of::<u32>() * buf.len();
+        let vec_len = std::mem::size_of_val(buf);
         let mut vec = vec![0_u8; vec_len];
         let tmp = vec.as_mut_slice();
         for i in 0..buf.len() {
@@ -2330,6 +2329,12 @@ pub struct TestUsbBuilder {
     config: HashMap<String, bool>,
 }
 
+impl Default for TestUsbBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestUsbBuilder {
     pub fn new() -> Self {
         let mut args = Vec::new();
@@ -2386,7 +2391,7 @@ impl TestUsbBuilder {
     }
 
     pub fn with_usb_storage(mut self, image_path: &str, media: &str) -> Self {
-        let args = format!("-device usb-storage,drive=drive0,id=storage0");
+        let args = "-device usb-storage,drive=drive0,id=storage0".to_string();
         let args: Vec<&str> = args[..].split(' ').collect();
         let mut args = args.into_iter().map(|s| s.to_string()).collect();
         self.args.append(&mut args);
@@ -2492,8 +2497,7 @@ pub fn qmp_plug_keyboard_event(test_state: RefMut<TestState>, num: u32) -> Value
     str += &num_str;
     str += "\",\"bus\":\"usb.0\",\"port\":\"1\"}}";
 
-    let value = test_state.qmp(&str);
-    value
+    test_state.qmp(&str)
 }
 
 pub fn qmp_plug_tablet_event(test_state: RefMut<TestState>, num: u32) -> Value {
@@ -2504,8 +2508,7 @@ pub fn qmp_plug_tablet_event(test_state: RefMut<TestState>, num: u32) -> Value {
     str += &num_str;
     str += "\",\"bus\":\"usb.0\",\"port\":\"2\"}}";
 
-    let value = test_state.qmp(&str);
-    value
+    test_state.qmp(&str)
 }
 
 pub fn qmp_unplug_usb_event(test_state: RefMut<TestState>, num: u32) -> Value {
@@ -2514,8 +2517,7 @@ pub fn qmp_unplug_usb_event(test_state: RefMut<TestState>, num: u32) -> Value {
     str += &num_str;
     str += "\"}}";
 
-    let value = test_state.qmp(&str);
-    value
+    test_state.qmp(&str)
 }
 
 pub fn qmp_event_read(test_state: RefMut<TestState>) {
@@ -2524,6 +2526,6 @@ pub fn qmp_event_read(test_state: RefMut<TestState>) {
 
 pub fn clear_iovec(test_state: RefMut<TestState>, iovecs: &Vec<TestIovec>) {
     for iov in iovecs.iter() {
-        test_state.memwrite(iov.io_base, &vec![0; iov.io_len as usize]);
+        test_state.memwrite(iov.io_base, &vec![0; iov.io_len]);
     }
 }

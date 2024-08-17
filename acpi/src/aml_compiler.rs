@@ -1819,7 +1819,7 @@ mod test {
         let elem4 = AmlFieldUnit::new(Some("FLD3"), 4);
         let elem5 = AmlFieldUnit::new(Some("FLD4"), 12);
 
-        for e in vec![elem1, elem2, elem3, elem4, elem5] {
+        for e in [elem1, elem2, elem3, elem4, elem5] {
             field.append_child(e);
         }
 
@@ -1991,7 +1991,7 @@ mod test {
         if_scope1.append_child(AmlReturn::new());
         method1.append_child(if_scope1);
 
-        let store1 = AmlStore::new(AmlArg(0), AmlLocal(0).clone());
+        let store1 = AmlStore::new(AmlArg(0), AmlLocal(0));
         method1.append_child(store1);
 
         let mut while_scope = AmlWhile::new(AmlLLess::new(AmlLocal(0), AmlArg(1)));
@@ -2031,7 +2031,7 @@ mod test {
         method2.append_child(store2);
 
         let mut pkg1 = AmlPackage::new(3);
-        vec![0x01, 0x03F8, 0x03FF].iter().for_each(|&x| {
+        [0x01, 0x03F8, 0x03FF].iter().for_each(|&x| {
             pkg1.append_child(AmlInteger(x as u64));
         });
         let named_pkg1 = AmlNameDecl::new("PKG1", pkg1);
