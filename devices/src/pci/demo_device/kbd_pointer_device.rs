@@ -94,7 +94,7 @@ impl KeyboardOpts for TestPciKbd {
         let msg = PointerMessage {
             event_type: InputEvent::KbdEvent,
             keycode,
-            down: down as u8,
+            down: u8::from(down),
             ..Default::default()
         };
         MEM_ADDR.lock().unwrap().send_kbdmouse_message(&msg)

@@ -133,7 +133,7 @@ pub fn set_pollfd_notifiers(
             if (*poll.offset(i)).is_null() {
                 break;
             };
-            if (*(*poll.offset(i))).events as c_int == EPOLLIN {
+            if i32::from((*(*poll.offset(i))).events) == EPOLLIN {
                 notifiers.push(EventNotifier::new(
                     NotifierOperation::AddShared,
                     (*(*poll.offset(i))).fd,
@@ -141,7 +141,7 @@ pub fn set_pollfd_notifiers(
                     EventSet::IN,
                     vec![handler.clone()],
                 ));
-            } else if (*(*poll.offset(i))).events as c_int == EPOLLOUT {
+            } else if i32::from((*(*poll.offset(i))).events) == EPOLLOUT {
                 notifiers.push(EventNotifier::new(
                     NotifierOperation::AddShared,
                     (*(*poll.offset(i))).fd,

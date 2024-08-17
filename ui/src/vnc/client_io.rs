@@ -400,7 +400,7 @@ impl ClientState {
             conn_state: Arc::new(Mutex::new(ConnState::default())),
             dirty_bitmap: Arc::new(Mutex::new(Bitmap::<u64>::new(
                 MAX_WINDOW_HEIGHT as usize
-                    * round_up_div(DIRTY_WIDTH_BITS as u64, u64::BITS as u64) as usize,
+                    * round_up_div(u64::from(DIRTY_WIDTH_BITS), u64::from(u64::BITS)) as usize,
             ))),
         }
     }
@@ -728,9 +728,9 @@ impl ClientIoHandler {
 
         let pf = self.client.client_dpm.lock().unwrap().pf.clone();
         for i in 0..NUM_OF_COLORMAP {
-            let r = ((i >> pf.red.shift) & pf.red.max as u16) << (16 - pf.red.bits);
-            let g = ((i >> pf.green.shift) & pf.green.max as u16) << (16 - pf.green.bits);
-            let b = ((i >> pf.blue.shift) & pf.blue.max as u16) << (16 - pf.blue.bits);
+            let r = ((i >> pf.red.shift) & u16::from(pf.red.max)) << (16 - pf.red.bits);
+            let g = ((i >> pf.green.shift) & u16::from(pf.green.max)) << (16 - pf.green.bits);
+            let b = ((i >> pf.blue.shift) & u16::from(pf.blue.max)) << (16 - pf.blue.bits);
             buf.append(&mut r.to_be_bytes().to_vec());
             buf.append(&mut g.to_be_bytes().to_vec());
             buf.append(&mut b.to_be_bytes().to_vec());
@@ -922,10 +922,10 @@ impl ClientIoHandler {
             }
         } else {
             locked_state.update_state = UpdateState::Force;
-            let x = u16::from_be_bytes([buf[2], buf[3]]) as i32;
-            let y = u16::from_be_bytes([buf[4], buf[5]]) as i32;
-            let w = u16::from_be_bytes([buf[6], buf[7]]) as i32;
-            let h = u16::from_be_bytes([buf[8], buf[9]]) as i32;
+            let x = i32::from(u16::from_be_bytes([buf[2], buf[3]]));
+            let y = i32::from(u16::from_be_bytes([buf[4], buf[5]]));
+            let w = i32::from(u16::from_be_bytes([buf[6], buf[7]]));
+            let h = i32::from(u16::from_be_bytes([buf[8], buf[9]]));
             set_area_dirty(
                 &mut client.dirty_bitmap.lock().unwrap(),
                 x,
@@ -992,8 +992,8 @@ impl ClientIoHandler {
         }
 
         let buf = self.read_incoming_msg();
-        let mut x = ((buf[2] as u16) << 8) + buf[3] as u16;
-        let mut y = ((buf[4] as u16) << 8) + buf[5] as u16;
+        let mut x = (u16::from(buf[2]) << 8) + u16::from(buf[3]);
+        let mut y = (u16::from(buf[4]) << 8) + u16::from(buf[5]);
         trace::vnc_client_point_event(&buf[1], &x, &y);
 
         // Window size alignment.
@@ -1001,8 +1001,8 @@ impl ClientIoHandler {
         let width = get_image_width(locked_surface.server_image);
         let height = get_image_height(locked_surface.server_image);
         drop(locked_surface);
-        x = ((x as u64 * ABS_MAX) / width as u64) as u16;
-        y = ((y as u64 * ABS_MAX) / height as u64) as u16;
+        x = ((u64::from(x) * ABS_MAX) / width as u64) as u16;
+        y = ((u64::from(y) * ABS_MAX) / height as u64) as u16;
 
         // ASCII -> HidCode.
         let new_button = buf[1];
@@ -1023,15 +1023,15 @@ impl ClientIoHandler {
                     VNC_INPUT_BUTTON_WHEEL_RIGHT => INPUT_BUTTON_WHEEL_RIGHT,
                     VNC_INPUT_BUTTON_WHEEL_LEFT => INPUT_BUTTON_WHEEL_LEFT,
                     VNC_INPUT_BUTTON_BACK => INPUT_POINT_BACK,
-                    _ => button_mask as u32,
+                    _ => u32::from(button_mask),
                 };
                 input_button(button, new_button & button_mask != 0)?;
             }
             self.client.client_dpm.lock().unwrap().last_button = new_button;
         }
 
-        input_move_abs(Axis::X, x as u32)?;
-        input_move_abs(Axis::Y, y as u32)?;
+        input_move_abs(Axis::X, u32::from(x))?;
+        input_move_abs(Axis::Y, u32::from(y))?;
         input_point_sync()?;
 
         self.update_event_handler(1, ClientIoHandler::handle_protocol_msg);
@@ -1061,7 +1061,7 @@ impl ClientIoHandler {
     fn auth_failed(&mut self, msg: &str) {
         let auth_rej: u8 = 1;
         let mut buf: Vec<u8> = vec![1u8];
-        buf.append(&mut (auth_rej as u32).to_be_bytes().to_vec());
+        buf.append(&mut u32::from(auth_rej).to_be_bytes().to_vec());
         // If the RFB protocol version is above 3.8, an error reason will be returned.
         if self.client.conn_state.lock().unwrap().version.minor >= 8 {
             let err_msg = msg;
@@ -1250,17 +1250,17 @@ pub fn get_rects(client: &Arc<ClientState>, server: &Arc<VncServer>, dirty_num: 
         }
 
         h = i - y;
-        x2 = cmp::min(x2, width / DIRTY_PIXELS_NUM as u64);
+        x2 = cmp::min(x2, width / u64::from(DIRTY_PIXELS_NUM));
         if x2 > x {
             rects.push(Rectangle::new(
-                (x * DIRTY_PIXELS_NUM as u64) as i32,
+                (x * u64::from(DIRTY_PIXELS_NUM)) as i32,
                 y as i32,
-                ((x2 - x) * DIRTY_PIXELS_NUM as u64) as i32,
+                ((x2 - x) * u64::from(DIRTY_PIXELS_NUM)) as i32,
                 h as i32,
             ));
         }
 
-        if x == 0 && x2 == width / DIRTY_PIXELS_NUM as u64 {
+        if x == 0 && x2 == width / u64::from(DIRTY_PIXELS_NUM) {
             y += h;
             if y == height {
                 break;
@@ -1289,9 +1289,9 @@ fn pixel_format_message(client: &Arc<ClientState>, buf: &mut Vec<u8>) {
     buf.append(&mut locked_dpm.pf.depth.to_be_bytes().to_vec()); // Depth.
     buf.append(&mut big_endian.to_be_bytes().to_vec()); // Big-endian flag.
     buf.append(&mut (1_u8).to_be_bytes().to_vec()); // True-color flag.
-    buf.append(&mut (locked_dpm.pf.red.max as u16).to_be_bytes().to_vec()); // Red max.
-    buf.append(&mut (locked_dpm.pf.green.max as u16).to_be_bytes().to_vec()); // Green max.
-    buf.append(&mut (locked_dpm.pf.blue.max as u16).to_be_bytes().to_vec()); // Blue max.
+    buf.append(&mut u16::from(locked_dpm.pf.red.max).to_be_bytes().to_vec()); // Red max.
+    buf.append(&mut u16::from(locked_dpm.pf.green.max).to_be_bytes().to_vec()); // Green max.
+    buf.append(&mut u16::from(locked_dpm.pf.blue.max).to_be_bytes().to_vec()); // Blue max.
     buf.append(&mut locked_dpm.pf.red.shift.to_be_bytes().to_vec()); // Red shift.
     buf.append(&mut locked_dpm.pf.green.shift.to_be_bytes().to_vec()); // Green shift.
     buf.append(&mut locked_dpm.pf.blue.shift.to_be_bytes().to_vec()); // Blue shift.
@@ -1416,7 +1416,7 @@ pub fn display_cursor_define(
             buf,
         );
         let dpm = client.client_dpm.lock().unwrap().clone();
-        let data_size = cursor.width * cursor.height * dpm.pf.pixel_bytes as u32;
+        let data_size = cursor.width * cursor.height * u32::from(dpm.pf.pixel_bytes);
         let data_ptr = cursor.data.as_ptr() as *mut u8;
         write_pixel(data_ptr, data_size as usize, &dpm, buf);
         buf.append(&mut mask);
@@ -1442,7 +1442,7 @@ pub fn vnc_update_output_throttle(client: &Arc<ClientState>) {
     let width = locked_dpm.client_width;
     let height = locked_dpm.client_height;
     let bytes_per_pixel = locked_dpm.pf.pixel_bytes;
-    let mut offset = width * height * (bytes_per_pixel as i32) * OUTPUT_THROTTLE_SCALE;
+    let mut offset = width * height * i32::from(bytes_per_pixel) * OUTPUT_THROTTLE_SCALE;
     drop(locked_dpm);
 
     offset = cmp::max(offset, MIN_OUTPUT_LIMIT);

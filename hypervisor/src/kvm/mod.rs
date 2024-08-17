@@ -426,7 +426,7 @@ impl KvmCpu {
                     #[cfg(target_arch = "x86_64")]
                     VcpuExit::IoOut(addr, data) => {
                         #[cfg(feature = "boot_time")]
-                        cpu::capture_boot_signal(addr as u64, data);
+                        cpu::capture_boot_signal(u64::from(addr), data);
 
                         vm.lock().unwrap().pio_out(u64::from(addr), data);
                     }
