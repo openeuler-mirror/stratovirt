@@ -276,10 +276,12 @@ impl Request {
         cache: &Option<RegionCache>,
         elem: &mut Element,
         status: &mut u8,
+        devid: &str,
     ) -> Result<Self> {
         if elem.out_iovec.is_empty() || elem.in_iovec.is_empty() {
             bail!(
-                "Missed header for block request: out {} in {} desc num {}",
+                "Missed header for block {} request: out {} in {} desc num {}",
+                devid,
                 elem.out_iovec.len(),
                 elem.in_iovec.len(),
                 elem.desc_num
@@ -332,7 +334,7 @@ impl Request {
                     // Otherwise discard the last "status" byte.
                     _ => iov_discard_back(&mut elem.in_iovec, 1),
                 }
-                .with_context(|| "Empty data for block request")?;
+                .with_context(|| format!("Empty data for block {} request", devid))?;
 
                 let (data_len, iovec) = gpa_hva_iovec_map(data_iovec, &handler.mem_space, cache)?;
                 request.data_len = data_len;
@@ -345,7 +347,7 @@ impl Request {
             }
         }
 
-        if !request.io_range_valid(handler.disk_sectors) {
+        if !request.io_range_valid(handler.disk_sectors, devid) {
             *status = VIRTIO_BLK_S_IOERR;
         }
 
@@ -389,24 +391,40 @@ impl Request {
             VIRTIO_BLK_T_IN => {
                 locked_backend
                     .read_vectored(iovecs, offset, aiocompletecb)
-                    .with_context(|| "Failed to process block request for reading")?;
+                    .with_context(|| {
+                        format!(
+                            "Failed to process block {} request for reading",
+                            iohandler.devid
+                        )
+                    })?;
             }
             VIRTIO_BLK_T_OUT => {
                 locked_backend
                     .write_vectored(iovecs, offset, aiocompletecb)
-                    .with_context(|| "Failed to process block request for writing")?;
+                    .with_context(|| {
+                        format!(
+                            "Failed to process block {} request for writing",
+                            iohandler.devid
+                        )
+                    })?;
             }
             VIRTIO_BLK_T_FLUSH => {
-                locked_backend
-                    .datasync(aiocompletecb)
-                    .with_context(|| "Failed to process block request for flushing")?;
+                locked_backend.datasync(aiocompletecb).with_context(|| {
+                    format!(
+                        "Failed to process block {} request for flushing",
+                        iohandler.devid
+                    )
+                })?;
             }
             VIRTIO_BLK_T_GET_ID => {
                 let serial = serial_num.clone().unwrap_or_else(|| String::from(""));
                 let serial_vec = get_serial_num_config(&serial);
                 let status = iov_from_buf_direct(&self.iovec, &serial_vec).map_or_else(
                     |e| {
-                        error!("Failed to process block request for getting id, {:?}", e);
+                        error!(
+                            "Failed to process block {} request for getting id, {:?}",
+                            iohandler.devid, e
+                        );
                         VIRTIO_BLK_S_IOERR
                     },
                     |_| VIRTIO_BLK_S_OK,
@@ -504,7 +522,7 @@ impl Request {
         Ok(())
     }
 
-    fn io_range_valid(&self, disk_sectors: u64) -> bool {
+    fn io_range_valid(&self, disk_sectors: u64, devid: &str) -> bool {
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
                 if self.data_len % SECTOR_SIZE != 0 {
@@ -518,8 +536,8 @@ impl Request {
                     .is_none()
                 {
                     error!(
-                        "offset {} invalid, disk sector {}",
-                        self.out_header.sector, disk_sectors
+                        "devid {} offset {} invalid, disk sector {}",
+                        devid, self.out_header.sector, disk_sectors
                     );
                     return false;
                 }
@@ -536,6 +554,8 @@ impl Request {
 
 /// Control block of Block IO.
 struct BlockIoHandler {
+    /// Device id of this block device.
+    devid: String,
     /// The virtqueue.
     queue: Arc<Mutex<Queue>>,
     /// Eventfd of the virtqueue for IO event.
@@ -648,7 +668,7 @@ impl BlockIoHandler {
             // Init and put valid request into request queue.
             let mut status = VIRTIO_BLK_S_OK;
             let cache = queue.vring.get_cache();
-            let req = Request::new(self, cache, &mut elem, &mut status)?;
+            let req = Request::new(self, cache, &mut elem, &mut status, &self.devid)?;
             if status != VIRTIO_BLK_S_OK {
                 let aiocompletecb = AioCompleteCb::new(
                     self.queue.clone(),
@@ -687,7 +707,10 @@ impl BlockIoHandler {
             if let Some(block_backend) = self.block_backend.as_ref() {
                 req_rc.execute(self, block_backend.clone(), aiocompletecb)?;
             } else {
-                warn!("Failed to execute block request, block_backend not specified");
+                warn!(
+                    "Failed to execute block {} request, block_backend not specified",
+                    &self.devid
+                );
                 aiocompletecb.complete_request(VIRTIO_BLK_S_IOERR)?;
             }
         }
@@ -1235,6 +1258,7 @@ impl VirtioDevice for Block {
             let update_evt = Arc::new(create_new_eventfd()?);
             let driver_features = self.base.driver_features;
             let handler = BlockIoHandler {
+                devid: self.blk_cfg.id.clone(),
                 queue: queue.clone(),
                 queue_evt: queue_evts[index].clone(),
                 mem_space: mem_space.clone(),
