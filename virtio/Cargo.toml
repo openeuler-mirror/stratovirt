@@ -32,4 +32,5 @@ clap = { version = "=4.1.4", default-features = false, features = ["std", "deriv
 default = []
 virtio_gpu = ["ui", "machine_manager/virtio_gpu", "util/pixman"]
 virtio_rng = []
+virtio_scsi = []
 ohui_srv = []

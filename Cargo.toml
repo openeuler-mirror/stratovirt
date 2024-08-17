@@ -48,6 +48,7 @@ hisysevent = ["hisysevent/hisysevent"]
 vfio = ["machine/vfio_device", "hypervisor/vfio_device"]
 usb_uas = ["machine/usb_uas"]
 virtio_rng = ["machine/virtio_rng"]
+virtio_scsi = ["machine/virtio_scsi"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]
