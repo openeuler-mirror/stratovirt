@@ -107,7 +107,7 @@ impl DemoDev {
                 devfn,
             },
             cmd_cfg: cfg,
-            mem_region: Region::init_container_region(u32::MAX as u64, "DemoDev"),
+            mem_region: Region::init_container_region(u64::from(u32::MAX), "DemoDev"),
             dev_id: Arc::new(AtomicU16::new(0)),
             device,
         }
@@ -160,7 +160,7 @@ impl DemoDev {
             self.mem_region.clone(),
             RegionType::Mem64Bit,
             false,
-            (self.cmd_cfg.bar_size * self.cmd_cfg.bar_num as u64).next_power_of_two(),
+            (self.cmd_cfg.bar_size * u64::from(self.cmd_cfg.bar_num)).next_power_of_two(),
         )?;
 
         Ok(())
@@ -190,7 +190,7 @@ impl Device for DemoDev {
         self.register_data_handling_bar()?;
         self.device.lock().unwrap().realize()?;
 
-        let devfn = self.base.devfn as u64;
+        let devfn = u64::from(self.base.devfn);
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         let mut locked_bus = parent_bus.lock().unwrap();
         let demo_pci_dev = Arc::new(Mutex::new(self));

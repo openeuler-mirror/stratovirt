@@ -204,7 +204,7 @@ impl DemoCameraBackend {
                             notify();
                         }
                         let interval = if locked_fmt.fps != 0 {
-                            1000 / locked_fmt.fps as u64
+                            1000 / u64::from(locked_fmt.fps)
                         } else {
                             20
                         };
@@ -544,9 +544,9 @@ fn convert_to_nv12(source: &[u8], width: u32, height: u32) -> Vec<u8> {
     for i in 0..len {
         let idx = (i * pixel) as usize;
         let (b, g, r) = (
-            source[idx] as f32,
-            source[idx + 1] as f32,
-            source[idx + 2] as f32,
+            f32::from(source[idx]),
+            f32::from(source[idx + 1]),
+            f32::from(source[idx + 2]),
         );
         let y = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
         img_nv12.push(y);
@@ -554,9 +554,9 @@ fn convert_to_nv12(source: &[u8], width: u32, height: u32) -> Vec<u8> {
     for i in 0..(width * height / 2) {
         let idx = (i * 2 * pixel) as usize;
         let (b, g, r) = (
-            source[idx] as f32,
-            source[idx + 1] as f32,
-            source[idx + 2] as f32,
+            f32::from(source[idx]),
+            f32::from(source[idx + 1]),
+            f32::from(source[idx + 2]),
         );
         let u = (-0.147 * r - 0.289 * g + 0.436 * b + 128_f32) as u8;
         let v = (0.615 * r - 0.515 * g - 0.100 * b + 128_f32) as u8;

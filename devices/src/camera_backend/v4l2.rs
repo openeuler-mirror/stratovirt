@@ -225,8 +225,8 @@ impl V4l2CameraBackend {
                 );
                 continue;
             }
-            let interval =
-                (numerator as u64 * INTERVALS_PER_SEC as u64 / denominator as u64) as u32;
+            let interval = (u64::from(numerator) * u64::from(INTERVALS_PER_SEC)
+                / u64::from(denominator)) as u32;
             list.push(interval);
         }
         Ok(list)
@@ -498,7 +498,7 @@ impl V4l2IoHandler {
             let iov = locked_buf
                 .get(buf.index as usize)
                 .with_context(|| "Buffer index overflow")?;
-            if buf.bytesused as u64 > iov.iov_len {
+            if u64::from(buf.bytesused) > iov.iov_len {
                 bail!(
                     "Buffer overflow, bytesused {} iov len {}",
                     buf.bytesused,
@@ -506,7 +506,7 @@ impl V4l2IoHandler {
                 );
             }
             locked_sample.addr = iov.iov_base;
-            locked_sample.used_len = buf.bytesused as u64;
+            locked_sample.used_len = u64::from(buf.bytesused);
             locked_sample.buf_index = buf.index;
             drop(locked_sample);
             // Notify the camera to deal with request.

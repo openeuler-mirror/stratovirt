@@ -905,7 +905,7 @@ impl UvcPayload {
                     MAX_PAYLOAD
                 );
             }
-            frame_data_size = MAX_PAYLOAD as u64 - self.payload_offset as u64;
+            frame_data_size = u64::from(MAX_PAYLOAD) - self.payload_offset as u64;
         }
         // payload start, reserve the header.
         if self.payload_offset == 0 && frame_data_size + header_len as u64 > iov_size {
@@ -998,7 +998,7 @@ impl CameraIoHandler {
             // Payload start, add header.
             pkt.transfer_packet(&mut locked_payload.header, header_len);
             locked_payload.payload_offset += header_len;
-            iovecs = iov_discard_front_direct(&mut pkt.iovecs, pkt.actual_length as u64)
+            iovecs = iov_discard_front_direct(&mut pkt.iovecs, u64::from(pkt.actual_length))
                 .with_context(|| format!("Invalid iov size {}", pkt_size))?;
         }
         let copied = locked_camera.get_frame(
@@ -1078,7 +1078,7 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
         body.push(Arc::new(UsbDescOther { data }));
     }
 
-    header_struct.wTotalLength = header_struct.bLength as u16
+    header_struct.wTotalLength = u16::from(header_struct.bLength)
         + body.clone().iter().fold(0, |len, x| len + x.data.len()) as u16;
 
     let mut vec = header_struct.as_bytes().to_vec();

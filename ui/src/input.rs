@@ -647,7 +647,7 @@ mod tests {
         for idx in 0..keysym_lists.len() {
             let keysym = keycode_lists[idx];
             let keycode = keycode_lists[idx];
-            assert!(do_key_event(true, keysym as i32, keycode).is_ok());
+            assert!(do_key_event(true, i32::from(keysym), keycode).is_ok());
             assert_eq!(test_kdb.lock().unwrap().keycode, keycode);
             assert!(test_kdb.lock().unwrap().down);
         }
