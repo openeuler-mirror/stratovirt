@@ -589,6 +589,7 @@ impl SerialPortHandler {
                 let write_end = written_count + len;
                 let mut source_slice = &buffer[written_count..write_end];
 
+                // GPAChecked: the elem_iov has been checked in pop_avail().
                 self.mem_space
                     .write(&mut source_slice, elem_iov.addr, len as u64)
                     .with_context(|| {
