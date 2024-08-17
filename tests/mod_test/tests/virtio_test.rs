@@ -78,17 +78,12 @@ fn send_one_request(
     alloc: Rc<RefCell<GuestAllocator>>,
     vq: Rc<RefCell<TestVirtQueue>>,
 ) {
-    let (free_head, req_addr) = add_request(
-        test_state.clone(),
-        alloc.clone(),
-        vq.clone(),
-        VIRTIO_BLK_T_OUT,
-        0,
-    );
+    let (free_head, req_addr) =
+        add_request(test_state.clone(), alloc, vq.clone(), VIRTIO_BLK_T_OUT, 0);
     blk.borrow().virtqueue_notify(vq.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        vq.clone(),
+        vq,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -170,9 +165,7 @@ fn check_req_result(
     addr: u64,
     timeout_us: u64,
 ) {
-    let status = blk
-        .borrow()
-        .req_result(test_state.clone(), addr, timeout_us);
+    let status = blk.borrow().req_result(test_state, addr, timeout_us);
     assert!(!blk.borrow().queue_was_notified(vq));
     assert_eq!(status, VIRTIO_BLK_S_OK);
 }
@@ -288,13 +281,7 @@ fn do_event_idx_with_flag(flag: u16) {
         DEFAULT_IO_REQS * 2 - 1,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Feature Test.
@@ -332,13 +319,7 @@ fn virtio_feature_none() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Feature Test.
@@ -414,13 +395,7 @@ fn virtio_feature_vertion_1() {
         DEFAULT_IO_REQS,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Driver just enable VIRTIO_F_VERSION_1|VIRTIO_RING_F_INDIRECT_DESC feature,
@@ -526,13 +501,7 @@ fn virtio_feature_indirect() {
         "TEST"
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Driver just enable VIRTIO_F_VERSION_1|VIRTIO_RING_F_EVENT_IDX feature,
@@ -674,13 +643,7 @@ fn virtio_feature_indirect_and_event_idx() {
         DEFAULT_IO_REQS * 2 - 1,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal status in device initialization.
@@ -759,13 +722,7 @@ fn virtio_init_device_abnormal_status() {
     check_stratovirt_status(test_state.clone());
 
     // 4. Destroy device.
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal feature in device initialization.
@@ -1133,13 +1090,7 @@ fn virtio_init_device_out_of_order_1() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Init device out of order test 2.
@@ -1192,13 +1143,7 @@ fn virtio_init_device_out_of_order_2() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Init device out of order test 3.
@@ -1253,13 +1198,7 @@ fn virtio_init_device_out_of_order_3() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Repeat the initialization operation.
@@ -1323,13 +1262,7 @@ fn virtio_init_device_repeat() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal desc addr in IO request.
@@ -1622,13 +1555,7 @@ fn virtio_io_abnormal_desc_flags_2() {
     assert!(blk.borrow().get_status() & VIRTIO_CONFIG_S_NEEDS_RESET > 0);
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal desc flag in IO request, testcase 3.
@@ -1829,13 +1756,7 @@ fn virtio_io_abnormal_desc_elem_place() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting (queue_size + 1) indirect desc elems in IO request.
@@ -1904,13 +1825,7 @@ fn virtio_io_abnormal_indirect_desc_elem_num() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting invalid flags to avail->flag in IO request.
@@ -2180,13 +2095,7 @@ fn virtio_io_abnormal_used_idx() {
         true,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Virtio test step out of order, testcase 1.
@@ -2250,13 +2159,7 @@ fn virtio_test_out_of_order_1() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Virtio test step out of order, testcase 2.
@@ -2278,13 +2181,7 @@ fn virtio_test_out_of_order_2() {
         1,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 
     let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
     let vqs = blk.borrow_mut().init_device(
@@ -2309,13 +2206,7 @@ fn virtio_test_out_of_order_2() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Virtio test step repeat.
@@ -2380,11 +2271,5 @@ fn virtio_test_repeat() {
 
     blk.borrow_mut().destroy_device(alloc.clone(), vqs.clone());
     blk.borrow_mut().destroy_device(alloc.clone(), vqs.clone());
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs.clone(),
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }

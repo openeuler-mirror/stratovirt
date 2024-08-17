@@ -860,7 +860,7 @@ mod tests {
         assert!(console_close(&con_0).is_ok());
         assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(1));
         let dev_name3 = "test_device3".to_string();
-        let con_3 = console_init(dev_name3, ConsoleType::Graphic, con_opts.clone());
+        let con_3 = console_init(dev_name3, ConsoleType::Graphic, con_opts);
         assert_eq!(con_3.unwrap().upgrade().unwrap().lock().unwrap().con_id, 3);
         assert!(console_select(Some(0)).is_ok());
         assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(0));
@@ -891,10 +891,7 @@ mod tests {
             None,
             dcl_opts.clone(),
         )));
-        let dcl_3 = Arc::new(Mutex::new(DisplayChangeListener::new(
-            None,
-            dcl_opts.clone(),
-        )));
+        let dcl_3 = Arc::new(Mutex::new(DisplayChangeListener::new(None, dcl_opts)));
 
         assert!(register_display(&dcl_0).is_ok());
         assert_eq!(dcl_0.lock().unwrap().dcl_id, Some(0));

@@ -505,7 +505,7 @@ impl TestVirtQueue {
             next: 0,
         };
         self.add_elem_to_desc(test_state.clone(), desc_elem);
-        self.update_avail(test_state.clone(), free_head);
+        self.update_avail(test_state, free_head);
 
         free_head
     }
@@ -536,7 +536,7 @@ impl TestVirtQueue {
             };
             self.add_elem_to_desc(test_state.clone(), desc_elem);
         }
-        self.update_avail(test_state.clone(), free_head);
+        self.update_avail(test_state, free_head);
         free_head
     }
 
@@ -557,7 +557,7 @@ impl TestVirtQueue {
         };
         self.add_elem_to_desc(test_state.clone(), desc_elem);
         if !mixed {
-            self.update_avail(test_state.clone(), free_head);
+            self.update_avail(test_state, free_head);
         }
         free_head
     }

@@ -25,3 +25,4 @@ trace = { path = "../trace" }
 [features]
 default = []
 vfio_device = []
+boot_time = []

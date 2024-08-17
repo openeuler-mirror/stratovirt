@@ -1526,21 +1526,21 @@ mod tests {
             .set_queue_select(VIRTIO_DEVICE_QUEUE_NUM as u16 - 1);
         let queue_select = virtio_dev.lock().unwrap().queue_select();
         virtio_dev.lock().unwrap().virtio_base_mut().queues_config[queue_select as usize]
-            .desc_table = GuestAddress(0xAABBCCDD_FFEEDDAA);
+            .desc_table = GuestAddress(0xAABB_CCDD_FFEE_DDAA);
         com_cfg_read_test!(virtio_pci, COMMON_Q_DESCLO_REG, 0xFFEEDDAA_u32);
         com_cfg_read_test!(virtio_pci, COMMON_Q_DESCHI_REG, 0xAABBCCDD_u32);
 
         // Read Queue's Available Ring address
         virtio_dev.lock().unwrap().set_queue_select(0);
         virtio_dev.lock().unwrap().virtio_base_mut().queues_config[0].avail_ring =
-            GuestAddress(0x11223344_55667788);
+            GuestAddress(0x1122_3344_5566_7788);
         com_cfg_read_test!(virtio_pci, COMMON_Q_AVAILLO_REG, 0x55667788_u32);
         com_cfg_read_test!(virtio_pci, COMMON_Q_AVAILHI_REG, 0x11223344_u32);
 
         // Read Queue's Used Ring address
         virtio_dev.lock().unwrap().set_queue_select(0);
         virtio_dev.lock().unwrap().virtio_base_mut().queues_config[0].used_ring =
-            GuestAddress(0x55667788_99AABBCC);
+            GuestAddress(0x5566_7788_99AA_BBCC);
         com_cfg_read_test!(virtio_pci, COMMON_Q_USEDLO_REG, 0x99AABBCC_u32);
         com_cfg_read_test!(virtio_pci, COMMON_Q_USEDHI_REG, 0x55667788_u32);
     }

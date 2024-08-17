@@ -597,7 +597,7 @@ impl VirtioDeviceOps for TestVirtioPciDev {
         let vq = virtqueue.borrow();
         let idx: u16 = test_state.borrow().readw(vq.avail + 2);
 
-        if (!vq.event) || (idx > vq.get_avail_event(test_state.clone())) {
+        if (!vq.event) || (idx > vq.get_avail_event(test_state)) {
             self.virtqueue_notify(virtqueue.clone());
         }
     }

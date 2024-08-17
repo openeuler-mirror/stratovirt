@@ -138,7 +138,7 @@ impl VirtioScsiTest {
         let scsi_devices: Vec<ScsiDeviceConfig> = vec![ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: scsi_type,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: readonly,
@@ -621,7 +621,7 @@ fn scsi_test_init(
     let machine = TestStdMachine::new(test_state.clone());
     let allocator = machine.allocator.clone();
 
-    let virtio_scsi = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let virtio_scsi = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
     virtio_scsi.borrow_mut().init(pci_slot, pci_fn);
 
     (virtio_scsi, test_state, allocator)
@@ -1874,7 +1874,7 @@ fn aio_model_test() {
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: false,
@@ -1889,7 +1889,7 @@ fn aio_model_test() {
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: false,
@@ -1908,7 +1908,7 @@ fn aio_model_test() {
     device_vec.push(ScsiDeviceConfig {
         cntlr_id: 0,
         device_type: ScsiDeviceType::ScsiHd,
-        image_path: image_path.clone(),
+        image_path,
         target,
         lun,
         read_only: false,
@@ -1927,7 +1927,7 @@ fn aio_model_test() {
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: false,

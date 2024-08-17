@@ -315,7 +315,7 @@ mod test {
         ));
 
         let mut qcow2_cache = Qcow2Cache::new(2);
-        qcow2_cache.lru_replace(addr, entry.clone());
+        qcow2_cache.lru_replace(addr, entry);
         qcow2_cache.lru_count = u64::MAX - cnt / 2;
         // Not in cache.
         assert!(qcow2_cache.get(0).is_none());

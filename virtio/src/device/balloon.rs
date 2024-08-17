@@ -1456,7 +1456,7 @@ mod tests {
             driver_features: bln.base.driver_features,
             mem_space: mem_space.clone(),
             inf_queue: queue1,
-            inf_evt: event_inf.clone(),
+            inf_evt: event_inf,
             def_queue: queue2,
             def_evt: event_def,
             report_queue: None,

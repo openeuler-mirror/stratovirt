@@ -321,7 +321,7 @@ pub fn query_snapshot(state: Rc<RefCell<TestState>>) -> Value {
 
 // Check if there exists snapshot with the specified name.
 pub fn check_snapshot(state: Rc<RefCell<TestState>>, snap: &str) -> bool {
-    let value = query_snapshot(state.clone());
+    let value = query_snapshot(state);
     let str = (*value.get("return").unwrap()).as_str().unwrap();
     let lines: Vec<&str> = str.split("\r\n").collect();
     for line in lines {

@@ -63,7 +63,7 @@ fn virtio_blk_discard_and_write_zeroes(
         TestVirtBlkReq::new(VIRTIO_BLK_T_WRITE_ZEROES, 1, 0, req_len)
     };
     blk_req.data = unsafe { String::from_utf8_unchecked(req_data.to_vec()) };
-    let req_addr = virtio_blk_request(test_state.clone(), alloc.clone(), blk_req, false);
+    let req_addr = virtio_blk_request(test_state.clone(), alloc, blk_req, false);
 
     let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
     data_entries.push(TestVringDescEntry {
@@ -89,7 +89,7 @@ fn virtio_blk_discard_and_write_zeroes(
     if need_poll_elem {
         blk.borrow().poll_used_elem(
             test_state.clone(),
-            virtqueue.clone(),
+            virtqueue,
             free_head,
             TIMEOUT_US,
             &mut None,
@@ -153,7 +153,7 @@ fn virtio_blk_get_id(
 ) {
     let (free_head, req_addr) = add_blk_request(
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         virtqueue.clone(),
         VIRTIO_BLK_T_GET_ID,
         0,
@@ -162,7 +162,7 @@ fn virtio_blk_get_id(
     blk.borrow().virtqueue_notify(virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -195,7 +195,7 @@ fn virtio_blk_flush(
 ) {
     let (free_head, req_addr) = add_blk_request(
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         virtqueue.clone(),
         VIRTIO_BLK_T_FLUSH,
         sector,
@@ -204,7 +204,7 @@ fn virtio_blk_flush(
     blk.borrow().virtqueue_notify(virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -226,7 +226,7 @@ fn virtio_blk_illegal_req(
 ) {
     let (free_head, req_addr) = add_blk_request(
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         virtqueue.clone(),
         req_type,
         0,
@@ -235,7 +235,7 @@ fn virtio_blk_illegal_req(
     blk.borrow().virtqueue_notify(virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -2021,13 +2021,7 @@ fn blk_snapshot_basic() {
         true,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        virtqueues,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, virtqueues, image_path);
 }
 
 /// Block device whose backend file has snapshot sends I/O request.
@@ -2052,13 +2046,7 @@ fn blk_snapshot_basic2() {
         .init_device(test_state.clone(), alloc.clone(), features, 1);
     create_snapshot(test_state.clone(), "drive0", "snap0");
     assert!(check_snapshot(test_state.clone(), "snap0"));
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        virtqueues,
-        Rc::new("".to_string()),
-    );
+    tear_down(blk, test_state, alloc, virtqueues, Rc::new("".to_string()));
 
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=false"));
@@ -2116,11 +2104,5 @@ fn blk_snapshot_basic2() {
         true,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        virtqueues,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, virtqueues, image_path);
 }

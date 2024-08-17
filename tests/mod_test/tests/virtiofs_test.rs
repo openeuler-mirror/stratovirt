@@ -75,7 +75,7 @@ fn env_prepare(temp: bool) -> (String, String, String) {
         .unwrap();
 
     Command::new("mknod")
-        .arg(virtiofs_test_character_device.clone())
+        .arg(virtiofs_test_character_device)
         .arg("c")
         .arg("1")
         .arg("1")
@@ -132,7 +132,7 @@ impl VirtioFsTest {
         let machine =
             TestStdMachine::new_bymem(test_state.clone(), memsize * 1024 * 1024, page_size);
         let allocator = machine.allocator.clone();
-        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
         dev.borrow_mut().init(pci_slot, pci_fn);
         let features = virtio_fs_default_feature(dev.clone());
         let queues =
@@ -288,7 +288,7 @@ impl VirtioFsTest {
     }
 
     fn testcase_end(&self, test_dir: String) {
-        self.testcase_check_and_end(None, test_dir.clone());
+        self.testcase_check_and_end(None, test_dir);
     }
 
     fn testcase_check_and_end(&self, absolute_virtiofs_sock: Option<String>, test_dir: String) {
@@ -297,7 +297,7 @@ impl VirtioFsTest {
             .destroy_device(self.allocator.clone(), self.queues.clone());
 
         if let Some(path) = absolute_virtiofs_sock {
-            let path_clone = path.clone();
+            let path_clone = path;
             let sock_path = Path::new(&path_clone);
             assert!(sock_path.exists());
             self.state.borrow_mut().stop();
@@ -1118,7 +1118,7 @@ fn symlink_test() {
     assert!(link_path.is_symlink());
 
     // Read link
-    let node_id = fuse_lookup(&fs, linkname.clone());
+    let node_id = fuse_lookup(&fs, linkname);
     let len = size_of::<FuseInHeader>() as u32;
     let fuse_in_head = FuseInHeader::new(len, FUSE_READLINK, 8, node_id, 0, 0, 0, 0);
     let fuse_out_head = FuseOutHeader::default();
@@ -1492,7 +1492,7 @@ fn openfile_test() {
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
     fuse_init(&fs);
-    let nodeid = fuse_lookup(&fs, file.clone());
+    let nodeid = fuse_lookup(&fs, file);
 
     // open/write/flush/close/open/read/close
     let fh = fuse_open(&fs, nodeid);
@@ -1802,7 +1802,7 @@ fn regularfile_xattr_test() {
     // The first attr is "security.selinux"
     let (_attr1, next1) = read_cstring(attr_list.clone(), 0);
     // The next attrs are what we set by FUSE_SETXATTR. Check it.
-    let (attr2, _next2) = read_cstring(attr_list.clone(), next1);
+    let (attr2, _next2) = read_cstring(attr_list, next1);
     assert_eq!(attr2.unwrap(), testattr_name);
 
     // REMOVEXATTR
