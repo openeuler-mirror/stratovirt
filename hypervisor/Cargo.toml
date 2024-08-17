@@ -21,3 +21,7 @@ migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
 trace = { path = "../trace" }
+
+[features]
+default = []
+vfio_device = []

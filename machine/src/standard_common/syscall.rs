@@ -23,6 +23,7 @@ use util::v4l2::{
     VIDIOC_G_FMT, VIDIOC_QBUF, VIDIOC_QUERYBUF, VIDIOC_QUERYCAP, VIDIOC_REQBUFS, VIDIOC_STREAMOFF,
     VIDIOC_STREAMON, VIDIOC_S_FMT, VIDIOC_S_PARM,
 };
+#[cfg(feature = "vfio_device")]
 use vfio::{
     VFIO_CHECK_EXTENSION, VFIO_DEVICE_GET_INFO, VFIO_DEVICE_GET_REGION_INFO, VFIO_DEVICE_RESET,
     VFIO_DEVICE_SET_IRQS, VFIO_GET_API_VERSION, VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS,
@@ -226,6 +227,18 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETOFFLOAD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETVNETHDRSZ() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNSETQUEUE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQFD() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_CREATE_DEVICE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32);
+
+    #[cfg(feature = "vfio_device")]
+    let bpf_rule = bpf_rule
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_SET_IRQS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_GET_STATUS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GET_API_VERSION() as u32)
@@ -237,16 +250,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_GROUP_GET_DEVICE_FD() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_INFO() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_RESET() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_REGION_INFO() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQFD() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_CREATE_DEVICE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 1, VFIO_DEVICE_GET_REGION_INFO() as u32);
 
     #[cfg(feature = "usb_camera_v4l2")]
     let bpf_rule = bpf_rule
