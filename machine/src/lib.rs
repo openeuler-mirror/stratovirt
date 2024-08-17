@@ -83,12 +83,14 @@ use devices::{
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
+#[cfg(feature = "vhostuser_net")]
+use machine_manager::config::get_chardev_socket_path;
 use machine_manager::config::{
-    complete_numa_node, get_chardev_socket_path, get_class_type, get_pci_bdf,
-    get_value_of_parameter, parse_numa_distance, parse_numa_mem, str_slip_to_clap, BootIndexInfo,
-    BootSource, ConfigCheck, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode,
-    NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo,
-    VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_class_type, get_pci_bdf, get_value_of_parameter, parse_numa_distance,
+    parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig,
+    DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
+    NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig,
+    FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
@@ -1286,20 +1288,26 @@ pub trait MachineOps: MachineLifecycle {
                     self.get_sys_mem(),
                 )))
             } else {
-                let chardev = netdev_cfg.chardev.clone().with_context(|| {
-                    format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
-                })?;
-                let chardev_cfg = vm_config
-                    .chardev
-                    .remove(&chardev)
-                    .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
-                let sock_path = get_chardev_socket_path(chardev_cfg)?;
-                Arc::new(Mutex::new(VhostUser::Net::new(
-                    &net_cfg,
-                    netdev_cfg,
-                    sock_path,
-                    self.get_sys_mem(),
-                )))
+                #[cfg(not(feature = "vhostuser_net"))]
+                bail!("Unsupported Vhostuser_net");
+
+                #[cfg(feature = "vhostuser_net")]
+                {
+                    let chardev = netdev_cfg.chardev.clone().with_context(|| {
+                        format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
+                    })?;
+                    let chardev_cfg = vm_config
+                        .chardev
+                        .remove(&chardev)
+                        .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
+                    let sock_path = get_chardev_socket_path(chardev_cfg)?;
+                    Arc::new(Mutex::new(VhostUser::Net::new(
+                        &net_cfg,
+                        netdev_cfg,
+                        sock_path,
+                        self.get_sys_mem(),
+                    )))
+                }
             }
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(net_cfg.clone(), netdev_cfg)));
