@@ -327,6 +327,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             .with_context(|| "Failed to register event notifier.")
     }
 
+    #[cfg(target_arch = "aarch64")]
     fn register_pause_event(
         &self,
         pause_req: Arc<EventFd>,
@@ -355,6 +356,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             .with_context(|| "Failed to register event notifier.")
     }
 
+    #[cfg(target_arch = "aarch64")]
     fn register_resume_event(
         &self,
         resume_req: Arc<EventFd>,

@@ -56,8 +56,6 @@ use crate::HypervisorError;
 #[cfg(target_arch = "aarch64")]
 use aarch64::cpu_caps::ArmCPUCaps as CPUCaps;
 use address_space::{AddressSpace, Listener};
-#[cfg(feature = "boot_time")]
-use cpu::capture_boot_signal;
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{
@@ -427,7 +425,7 @@ impl KvmCpu {
                     #[cfg(target_arch = "x86_64")]
                     VcpuExit::IoOut(addr, data) => {
                         #[cfg(feature = "boot_time")]
-                        capture_boot_signal(addr as u64, data);
+                        cpu::capture_boot_signal(addr as u64, data);
 
                         vm.lock().unwrap().pio_out(u64::from(addr), data);
                     }
@@ -436,7 +434,7 @@ impl KvmCpu {
                     }
                     VcpuExit::MmioWrite(addr, data) => {
                         #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
-                        capture_boot_signal(addr, data);
+                        cpu::capture_boot_signal(addr, data);
 
                         vm.lock().unwrap().mmio_write(addr, data);
                     }
@@ -1069,7 +1067,7 @@ mod test {
             vcpu_fd,
         ));
         let x86_cpu = Arc::new(Mutex::new(ArchCPU::new(0, 1)));
-        let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm.clone());
+        let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm);
         // test `set_boot_config` function
         assert!(hypervisor_cpu
             .set_boot_config(cpu.arch().clone(), &cpu_config)
@@ -1131,7 +1129,7 @@ mod test {
             hypervisor_cpu.clone(),
             0,
             Arc::new(Mutex::new(ArchCPU::default())),
-            vm.clone(),
+            vm,
         );
         let (cpu_state, _) = &*cpu.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);

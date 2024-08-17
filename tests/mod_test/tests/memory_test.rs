@@ -77,7 +77,7 @@ impl MemoryTest {
         let test_state = Rc::new(RefCell::new(test_init(extra_args)));
         let machine =
             TestStdMachine::new_bymem(test_state.clone(), memsize * 1024 * 1024, page_size);
-        let allocator = machine.allocator.clone();
+        let allocator = machine.allocator;
 
         MemoryTest {
             state: test_state,
@@ -98,7 +98,7 @@ fn ram_read_write(memory_test: &MemoryTest) {
         .state
         .borrow_mut()
         .memread(addr, str.len() as u64);
-    assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
+    assert_eq!(str, String::from_utf8(ret).unwrap());
 
     memory_test.state.borrow_mut().stop();
 }
@@ -655,7 +655,7 @@ fn ram_readwrite_numa() {
     let ret = test_state
         .borrow_mut()
         .memread(start_base, str.len() as u64);
-    assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
+    assert_eq!(str, String::from_utf8(ret).unwrap());
 
     test_state.borrow_mut().stop();
 }
@@ -716,7 +716,7 @@ fn ram_readwrite_numa1() {
     let ret = test_state
         .borrow_mut()
         .memread(start_base, str.len() as u64);
-    assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
+    assert_eq!(str, String::from_utf8(ret).unwrap());
     test_state.borrow_mut().qmp("{\"execute\": \"query-mem\"}");
 
     let file = File::create(RAM_DEV_PATH).unwrap();

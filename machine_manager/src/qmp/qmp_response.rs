@@ -273,7 +273,7 @@ mod tests {
         let msg = ErrorMessage::new(&err_cls);
         assert_eq!(msg.desc, strange_msg);
         assert_eq!(msg.errorkind, "KVMMissingCap".to_string());
-        let qmp_err = qmp_schema::QmpErrorClass::KVMMissingCap(strange_msg.clone());
+        let qmp_err = qmp_schema::QmpErrorClass::KVMMissingCap(strange_msg);
         let resp = Response::create_error_response(qmp_err, None);
         assert_eq!(resp.error, Some(msg));
     }

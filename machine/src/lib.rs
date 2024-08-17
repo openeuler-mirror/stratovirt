@@ -35,6 +35,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
+use std::u64;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
@@ -185,12 +186,9 @@ impl MachineBase {
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.max_cpus,
         );
-        let machine_ram = Arc::new(Region::init_container_region(
-            u64::max_value(),
-            "MachineRam",
-        ));
+        let machine_ram = Arc::new(Region::init_container_region(u64::MAX, "MachineRam"));
         let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "SysMem"),
+            Region::init_container_region(u64::MAX, "SysMem"),
             "sys_mem",
             Some(machine_ram.clone()),
         )
@@ -408,7 +406,7 @@ pub trait MachineOps: MachineLifecycle {
         }
         let zones = mem_config.mem_zones.as_ref().unwrap();
         let mut offset = 0_u64;
-        for (_, node) in numa_nodes.as_ref().unwrap().iter().enumerate() {
+        for node in numa_nodes.as_ref().unwrap().iter() {
             for zone in zones.iter() {
                 if zone.id.eq(&node.1.mem_dev) {
                     let ram = create_backend_mem(zone, thread_num)?;
@@ -698,7 +696,7 @@ pub trait MachineOps: MachineLifecycle {
     }
 
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        if vm_config.dev_name.get("balloon").is_some() {
+        if vm_config.dev_name.contains_key("balloon") {
             bail!("Only one balloon device is supported for each vm.");
         }
         let config = BalloonConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;

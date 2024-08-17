@@ -269,7 +269,7 @@ mod test {
         let addr = qcow2.alloc_cluster(1, true).unwrap();
         let l2_cluster: Vec<u8> = vec![0_u8; cluster_size];
         let l2_table = Rc::new(RefCell::new(
-            CacheTable::new(addr, l2_cluster.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(addr, l2_cluster, ENTRY_SIZE_U64).unwrap(),
         ));
         qcow2.table.cache_l2_table(l2_table.clone()).unwrap();
 

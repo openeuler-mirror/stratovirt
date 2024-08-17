@@ -430,8 +430,8 @@ impl TestVirtioGpu {
             .borrow_mut()
             .setup_virtqueue_intr(2, self.allocator.clone(), cursor_q.clone());
 
-        self.ctrl_q = ctrl_q.clone();
-        self.cursor_q = cursor_q.clone();
+        self.ctrl_q = ctrl_q;
+        self.cursor_q = cursor_q;
 
         self.device.borrow_mut().set_driver_ok();
     }
@@ -648,9 +648,9 @@ pub fn set_up(
     demo_dpy.borrow_mut().init(dpy_pci_slot);
 
     let virtgpu = Rc::new(RefCell::new(TestVirtioGpu::new(
-        machine.pci_bus.clone(),
-        allocator.clone(),
-        test_state.clone(),
+        machine.pci_bus,
+        allocator,
+        test_state,
     )));
     virtgpu.borrow_mut().init(gpu_pci_slot, gpu_pci_fn);
 

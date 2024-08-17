@@ -930,10 +930,10 @@ mod test {
         let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
         let listener4 = Arc::new(Mutex::new(ListenerPrior4::default()));
         let listener5 = Arc::new(Mutex::new(ListenerNeg::default()));
-        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener1).unwrap();
         space.register_listener(listener3.clone()).unwrap();
-        space.register_listener(listener5.clone()).unwrap();
-        space.register_listener(listener2.clone()).unwrap();
+        space.register_listener(listener5).unwrap();
+        space.register_listener(listener2).unwrap();
         space.register_listener(listener4.clone()).unwrap();
 
         let mut pre_prior = std::i32::MIN;
@@ -978,7 +978,7 @@ mod test {
         let space = AddressSpace::new(root, "space", None).unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
-        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener1).unwrap();
         space.register_listener(listener2.clone()).unwrap();
 
         space.unregister_listener(listener2).unwrap();

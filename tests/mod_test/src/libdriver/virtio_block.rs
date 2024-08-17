@@ -154,7 +154,7 @@ pub fn create_blk(
     let machine = TestStdMachine::new(test_state.clone());
     let allocator = machine.allocator.clone();
 
-    let virtio_blk = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let virtio_blk = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
 
     virtio_blk.borrow_mut().init(pci_slot, pci_fn);
 
@@ -233,7 +233,7 @@ pub fn add_blk_request(
         read = false;
     }
     // Get addr and write to Stratovirt.
-    let req_addr = virtio_blk_request(test_state.clone(), alloc.clone(), blk_req, align);
+    let req_addr = virtio_blk_request(test_state.clone(), alloc, blk_req, align);
     // Desc elem: [addr, len, flags, next].
 
     let data_addr = if align {
@@ -259,9 +259,7 @@ pub fn add_blk_request(
         write: true,
     });
 
-    let free_head = vq
-        .borrow_mut()
-        .add_chained(test_state.clone(), data_entries);
+    let free_head = vq.borrow_mut().add_chained(test_state, data_entries);
 
     (free_head, req_addr)
 }
@@ -292,7 +290,7 @@ pub fn virtio_blk_write(
         .kick_virtqueue(test_state.clone(), virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -320,7 +318,7 @@ pub fn virtio_blk_read(
 ) {
     let (free_head, req_addr) = add_blk_request(
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         virtqueue.clone(),
         VIRTIO_BLK_T_IN,
         sector,
@@ -331,7 +329,7 @@ pub fn virtio_blk_read(
         .kick_virtqueue(test_state.clone(), virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -376,7 +374,7 @@ pub fn virtio_blk_read_write_zeroes(
         }
         read = false;
     }
-    let req_addr = virtio_blk_request(test_state.clone(), alloc.clone(), blk_req, false);
+    let req_addr = virtio_blk_request(test_state.clone(), alloc, blk_req, false);
     let data_addr = req_addr + u64::from(REQ_ADDR_LEN);
     let data_entries: Vec<TestVringDescEntry> = vec![
         TestVringDescEntry {
@@ -401,7 +399,7 @@ pub fn virtio_blk_read_write_zeroes(
     blk.borrow().kick_virtqueue(test_state.clone(), vq.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        vq.clone(),
+        vq,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -459,7 +457,7 @@ pub fn tear_down(
     vqs: Vec<Rc<RefCell<TestVirtQueue>>>,
     image_path: Rc<String>,
 ) {
-    blk.borrow_mut().destroy_device(alloc.clone(), vqs);
+    blk.borrow_mut().destroy_device(alloc, vqs);
     test_state.borrow_mut().stop();
     if !image_path.is_empty() {
         cleanup_img(image_path.to_string());

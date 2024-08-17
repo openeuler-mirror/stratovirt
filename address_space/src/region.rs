@@ -1208,7 +1208,7 @@ mod test {
             let mut device_locked = test_dev_clone.lock().unwrap();
             device_locked.read(data, addr, offset)
         };
-        let test_dev_clone = test_dev.clone();
+        let test_dev_clone = test_dev;
         let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
             let mut device_locked = test_dev_clone.lock().unwrap();
             device_locked.write(data, addr, offset)
@@ -1219,7 +1219,7 @@ mod test {
             write: Arc::new(write_ops),
         };
 
-        let io_region = Region::init_io_region(16, test_dev_ops.clone(), "io_region");
+        let io_region = Region::init_io_region(16, test_dev_ops, "io_region");
         let data = [0x01u8; 8];
         let mut data_res = [0x0u8; 8];
         let count = data.len() as u64;
@@ -1299,7 +1299,7 @@ mod test {
         };
 
         let io_region = Region::init_io_region(1 << 4, default_ops.clone(), "io1");
-        let io_region2 = Region::init_io_region(1 << 4, default_ops.clone(), "io2");
+        let io_region2 = Region::init_io_region(1 << 4, default_ops, "io2");
         io_region2.set_priority(10);
 
         // add duplicate io-region or ram-region will fail
@@ -1364,9 +1364,9 @@ mod test {
             region_b.set_priority(2);
             region_c.set_priority(1);
             region_a.add_subregion(region_b.clone(), 2000).unwrap();
-            region_a.add_subregion(region_c.clone(), 0).unwrap();
-            region_b.add_subregion(region_d.clone(), 0).unwrap();
-            region_b.add_subregion(region_e.clone(), 2000).unwrap();
+            region_a.add_subregion(region_c, 0).unwrap();
+            region_b.add_subregion(region_d, 0).unwrap();
+            region_b.add_subregion(region_e, 2000).unwrap();
 
             let addr_range = AddressRange::from((0u64, region_a.size()));
             let view = region_a
@@ -1405,14 +1405,14 @@ mod test {
             let region_b = Region::init_container_region(5000, "region_b");
             let region_c = Region::init_io_region(1000, default_ops.clone(), "regionc");
             let region_d = Region::init_io_region(3000, default_ops.clone(), "region_d");
-            let region_e = Region::init_io_region(2000, default_ops.clone(), "region_e");
+            let region_e = Region::init_io_region(2000, default_ops, "region_e");
 
             region_a.add_subregion(region_b.clone(), 2000).unwrap();
-            region_a.add_subregion(region_c.clone(), 0).unwrap();
+            region_a.add_subregion(region_c, 0).unwrap();
             region_d.set_priority(2);
             region_e.set_priority(3);
-            region_b.add_subregion(region_d.clone(), 0).unwrap();
-            region_b.add_subregion(region_e.clone(), 2000).unwrap();
+            region_b.add_subregion(region_d, 0).unwrap();
+            region_b.add_subregion(region_e, 2000).unwrap();
 
             let addr_range = AddressRange::from((0u64, region_a.size()));
             let view = region_a

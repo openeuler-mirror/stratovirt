@@ -1956,12 +1956,9 @@ mod tests {
         // it is false when the index is more than the size of queue
         if let Err(err) = vring.add_used(&sys_space, QUEUE_SIZE, 100) {
             if let Some(e) = err.downcast_ref::<VirtioError>() {
-                match e {
-                    VirtioError::QueueIndex(offset, size) => {
-                        assert_eq!(*offset, 256);
-                        assert_eq!(*size, 256);
-                    }
-                    _ => (),
+                if let VirtioError::QueueIndex(offset, size) = e {
+                    assert_eq!(*offset, 256);
+                    assert_eq!(*size, 256);
                 }
             }
         }

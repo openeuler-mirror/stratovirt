@@ -108,7 +108,7 @@ pub struct TestGpuCmd {
 
 // Encodings Type
 #[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EncodingType {
     EncodingRaw = 0x00000000,
     EncodingCopyrect = 0x00000001,
@@ -180,7 +180,7 @@ impl From<u32> for EncodingType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RfbServerMsg {
     FramebufferUpdate = 0,
     SetColourMapEntries = 1,
@@ -784,23 +784,20 @@ impl VncClient {
         buf.drain(..auth_num as usize);
         self.write_msg((sec_type as u8).to_be_bytes().as_ref())?;
 
-        match sec_type {
-            TestAuthType::VncAuthNone => {
-                // Step 3. Handle_auth: Authstate::No, Server accept auth and client send share
-                // mode.
-                self.read_msg(&mut buf, 4)?;
-                if buf[..4].to_vec() != [0_u8; 4].to_vec() {
-                    bail!("Reject by vnc server");
-                }
-                self.write_msg(0_u8.to_be_bytes().as_ref())?;
-                buf.drain(..4);
-
-                // Step 4. display mode information init: width + height + pixelformat + app_name.
-                self.read_msg(&mut buf, 24)?;
-                self.display_mod.from_bytes(&mut buf);
-                self.display_mod.check();
+        if let TestAuthType::VncAuthNone = sec_type {
+            // Step 3. Handle_auth: Authstate::No, Server accept auth and client send share
+            // mode.
+            self.read_msg(&mut buf, 4)?;
+            if buf[..4].to_vec() != [0_u8; 4].to_vec() {
+                bail!("Reject by vnc server");
             }
-            _ => {}
+            self.write_msg(0_u8.to_be_bytes().as_ref())?;
+            buf.drain(..4);
+
+            // Step 4. display mode information init: width + height + pixelformat + app_name.
+            self.read_msg(&mut buf, 24)?;
+            self.display_mod.from_bytes(&mut buf);
+            self.display_mod.check();
         }
         self.stream_read_to_end()?;
         println!("Connection established!");
@@ -1355,7 +1352,7 @@ pub fn set_up(
     }
 
     let input = Rc::new(RefCell::new(TestDemoInputDevice::new(
-        machine.pci_bus.clone(),
+        machine.pci_bus,
         allocator,
     )));
     input.borrow_mut().init(input_conf.pci_slot);
