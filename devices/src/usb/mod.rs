@@ -20,6 +20,7 @@ pub mod hid;
 pub mod keyboard;
 pub mod storage;
 pub mod tablet;
+#[cfg(feature = "usb_uas")]
 pub mod uas;
 #[cfg(feature = "usb_host")]
 pub mod usbhost;

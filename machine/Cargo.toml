@@ -51,3 +51,4 @@ ohui_srv = ["windows_emu_pid", "ui/ohui_srv", "machine_manager/ohui_srv", "virti
 ramfb = ["devices/ramfb", "machine_manager/ramfb"]
 virtio_gpu = ["virtio/virtio_gpu", "machine_manager/virtio_gpu"]
 vfio_device = ["vfio"]
+usb_uas = ["devices/usb_uas"]
