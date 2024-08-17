@@ -1317,6 +1317,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "vhostuser_block")]
     fn add_vhost_user_blk_pci(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1370,6 +1371,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "vhostuser_block")]
     fn add_vhost_user_blk_device(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1908,11 +1910,13 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
-                ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
-                ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
                 ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                #[cfg(feature = "vhostuser_block")]
+                ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
+                #[cfg(feature = "vhostuser_block")]
+                ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 #[cfg(feature = "vhost_vsock")]
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]

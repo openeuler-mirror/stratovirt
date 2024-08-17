@@ -50,6 +50,7 @@ usb_uas = ["machine/usb_uas"]
 virtio_rng = ["machine/virtio_rng"]
 virtio_scsi = ["machine/virtio_scsi"]
 vhost_vsock = ["machine/vhost_vsock"]
+vhostuser_block = ["machine/vhostuser_block"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]
