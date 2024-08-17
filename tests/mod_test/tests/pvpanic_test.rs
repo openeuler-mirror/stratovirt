@@ -59,7 +59,7 @@ impl PvPanicDevCfg {
             test_machine_args.append(&mut args);
         }
 
-        let pvpanic_str = fmt_pvpanic_deves(self.clone());
+        let pvpanic_str = fmt_pvpanic_deves(*self);
         args = pvpanic_str[..].split(' ').collect();
         test_machine_args.append(&mut args);
 

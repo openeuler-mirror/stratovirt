@@ -1014,10 +1014,9 @@ fn blk_iops() {
 
             if blk.borrow().queue_was_notified(virtqueues[0].clone())
                 && virtqueues[0].borrow_mut().get_buf(test_state.clone())
+                && virtqueues[0].borrow().desc_len.contains_key(&free_head)
             {
-                if virtqueues[0].borrow().desc_len.contains_key(&free_head) {
-                    break;
-                }
+                break;
             }
             assert!(Instant::now() <= time_out);
         }
@@ -1062,7 +1061,7 @@ fn blk_with_different_aio() {
         let image_path = Rc::new(create_img(TEST_IMAGE_SIZE_1M, 1, &image_type));
         let device_args = Rc::new(String::from(""));
         let drive_args = if aio_probe(aio_engine).is_ok() {
-            Rc::new(format!(",direct={},aio={}", direct, aio_engine.to_string()))
+            Rc::new(format!(",direct={},aio={}", direct, aio_engine))
         } else {
             continue;
         };
@@ -1773,7 +1772,7 @@ fn blk_feature_discard() {
                 assert_eq!(image_size, full_disk_size - u64::from(num_sectors) / 2);
             } else if image_type == ImageType::Qcow2
                 && status == VIRTIO_BLK_S_OK
-                && (u64::from(num_sectors) * 512 & CLUSTER_SIZE - 1) == 0
+                && ((u64::from(num_sectors) * 512) & (CLUSTER_SIZE - 1)) == 0
             {
                 // If the disk format is equal to Qcow2.
                 // the length of the num sectors needs to be aligned with the cluster size,
@@ -1906,7 +1905,7 @@ fn blk_feature_write_zeroes() {
                     test_state.clone(),
                     alloc.clone(),
                     virtqueues[0].clone(),
-                    &req_data.as_bytes().to_vec(),
+                    req_data.as_bytes(),
                     status,
                     true,
                     false,
@@ -1944,7 +1943,7 @@ fn blk_feature_write_zeroes() {
             } else if image_type == ImageType::Qcow2
                 && status == VIRTIO_BLK_S_OK
                 && (write_zeroes == "unmap" && discard == "unmap" && flags == 1 || len != wz_len)
-                && (u64::from(num_sectors) * 512 & CLUSTER_SIZE - 1) == 0
+                && ((u64::from(num_sectors) * 512) & (CLUSTER_SIZE - 1)) == 0
             {
                 // If the disk format is equal to Qcow2.
                 // the length of the num sectors needs to be aligned with the cluster size,
@@ -1983,7 +1982,7 @@ fn blk_snapshot_basic() {
         .init_device(test_state.clone(), alloc.clone(), features, 1);
 
     create_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), true);
+    assert!(check_snapshot(test_state.clone(), "snap0"));
 
     virtio_blk_write(
         blk.clone(),
@@ -2003,7 +2002,7 @@ fn blk_snapshot_basic() {
     );
 
     delete_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), false);
+    assert!(!check_snapshot(test_state.clone(), "snap0"));
 
     virtio_blk_write(
         blk.clone(),
@@ -2052,7 +2051,7 @@ fn blk_snapshot_basic2() {
         .borrow_mut()
         .init_device(test_state.clone(), alloc.clone(), features, 1);
     create_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), true);
+    assert!(check_snapshot(test_state.clone(), "snap0"));
     tear_down(
         blk.clone(),
         test_state.clone(),
@@ -2095,10 +2094,10 @@ fn blk_snapshot_basic2() {
     );
 
     create_snapshot(test_state.clone(), "drive0", "snap1");
-    assert_eq!(check_snapshot(test_state.clone(), "snap1"), true);
+    assert!(check_snapshot(test_state.clone(), "snap1"));
 
     delete_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), false);
+    assert!(!check_snapshot(test_state.clone(), "snap0"));
 
     virtio_blk_write(
         blk.clone(),

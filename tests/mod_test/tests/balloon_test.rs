@@ -39,7 +39,7 @@ const ADDRESS_BASE: u64 = 0x4000_0000;
 
 fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
     let file = File::open(filename).unwrap();
-    return io::BufReader::new(file).lines();
+    io::BufReader::new(file).lines()
 }
 
 fn get_hugesize() -> u64 {
@@ -48,12 +48,12 @@ fn get_hugesize() -> u64 {
     for line in lines {
         if let Ok(info) = line {
             if info.starts_with("HugePages_Free:") {
-                let free: Vec<&str> = info.split(":").collect();
+                let free: Vec<&str> = info.split(':').collect();
                 free_page = free[1].trim().parse::<u64>().unwrap();
             }
             if info.starts_with("Hugepagesize:") {
-                let huges: Vec<&str> = info.split(":").collect();
-                let sizes: Vec<&str> = huges[1].trim().split(" ").collect();
+                let huges: Vec<&str> = info.split(':').collect();
+                let sizes: Vec<&str> = huges[1].trim().split(' ').collect();
                 let size = sizes[0].trim().parse::<u64>().unwrap();
                 return free_page * size;
             }
@@ -91,7 +91,7 @@ impl VirtioBalloonTest {
         let mut extra_args: Vec<&str> = Vec::new();
         let mut fpr_switch = String::from("false");
         let mut auto_switch = String::from("false");
-        let mem_path = format!("-mem-path /tmp/stratovirt/hugepages");
+        let mem_path = "-mem-path /tmp/stratovirt/hugepages".to_string();
 
         let mut machine_args = MACHINE_TYPE_ARG.to_string();
         if shared {
@@ -130,8 +130,7 @@ impl VirtioBalloonTest {
         dev.borrow_mut().init(pci_slot, 0);
 
         let features = dev.borrow_mut().get_device_features();
-        let inf_queue;
-        let def_queue;
+
         let mut fpr_queue = None;
         let mut auto_queue = None;
         let mut que_num = 2_usize;
@@ -145,8 +144,8 @@ impl VirtioBalloonTest {
         let ques =
             dev.borrow_mut()
                 .init_device(test_state.clone(), allocator.clone(), features, que_num);
-        inf_queue = ques[0].clone();
-        def_queue = ques[1].clone();
+        let inf_queue = ques[0].clone();
+        let def_queue = ques[1].clone();
         if cfg.fpr {
             fpr_queue = Some(ques[idx].clone());
             idx += 1;
@@ -213,14 +212,12 @@ impl VirtioBalloonTest {
         dev.borrow_mut().init(4, 0);
 
         let features = dev.borrow_mut().get_device_features();
-        let inf_queue;
-        let def_queue;
 
         let ques = dev
             .borrow_mut()
             .init_device(test_state.clone(), allocator.clone(), features, 2);
-        inf_queue = ques[0].clone();
-        def_queue = ques[1].clone();
+        let inf_queue = ques[0].clone();
+        let def_queue = ques[1].clone();
 
         VirtioBalloonTest {
             device: dev,
@@ -779,7 +776,7 @@ fn query() {
 
     assert_eq!(
         *ret.get("return").unwrap(),
-        json!({"actual": 2147483648 as u64})
+        json!({"actual": 2147483648_u64})
     );
 
     balloon.state.borrow_mut().stop();
@@ -835,10 +832,7 @@ fn balloon_config_001() {
     let ten_millis = time::Duration::from_millis(10);
     thread::sleep(ten_millis);
     let ret = balloon.state.borrow_mut().qmp_read();
-    assert_eq!(
-        *ret.get("data").unwrap(),
-        json!({"actual": 536870912 as u64})
-    );
+    assert_eq!(*ret.get("data").unwrap(), json!({"actual": 536870912_u64}));
 
     balloon
         .state
@@ -906,10 +900,7 @@ fn balloon_config_002() {
     let ten_millis = time::Duration::from_millis(10);
     thread::sleep(ten_millis);
     let ret = balloon.state.borrow_mut().qmp_read();
-    assert_eq!(
-        *ret.get("data").unwrap(),
-        json!({"actual": 536870912 as u64})
-    );
+    assert_eq!(*ret.get("data").unwrap(), json!({"actual": 536870912_u64}));
 
     balloon
         .state
@@ -957,7 +948,7 @@ fn balloon_deactive_001() {
         .qmp("{\"execute\": \"query-balloon\"}");
     assert_eq!(
         *ret.get("return").unwrap(),
-        json!({"actual": 1073741824 as u64})
+        json!({"actual": 1073741824_u64})
     );
     balloon.state.borrow_mut().stop();
 }
@@ -1009,7 +1000,7 @@ fn auto_balloon_test_001() {
     balloon
         .state
         .borrow_mut()
-        .memwrite(msg_addr, &stat.as_bytes());
+        .memwrite(msg_addr, stat.as_bytes());
 
     let auto_queue = balloon.auto_queue.unwrap();
 

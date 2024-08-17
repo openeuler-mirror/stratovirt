@@ -134,11 +134,7 @@ impl VirtioScsiTest {
             use_iothread: iothread,
         };
 
-        let readonly = if scsi_type == ScsiDeviceType::ScsiHd {
-            false
-        } else {
-            true
-        };
+        let readonly = scsi_type != ScsiDeviceType::ScsiHd;
         let scsi_devices: Vec<ScsiDeviceConfig> = vec![ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: scsi_type,
@@ -258,7 +254,7 @@ impl VirtioScsiTest {
                 size_of::<TestVirtioScsiCmdResp>(),
             )
         };
-        *resp = slice[0].clone();
+        *resp = slice[0];
 
         if data_in_len > 0 {
             data_in.append(
@@ -440,8 +436,8 @@ impl TestVirtioScsiCmdReq {
         let mut target_lun = [0_u8; 8];
         target_lun[0] = 1;
         target_lun[1] = target;
-        target_lun[2] = (lun >> 8) as u8 & 0xff;
-        target_lun[3] = lun as u8 & 0xff;
+        target_lun[2] = (lun >> 8) as u8;
+        target_lun[3] = lun as u8;
 
         req.lun = target_lun;
         req.cdb = cdb;
@@ -1135,7 +1131,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: TEST_SCSI_SENSE_LEN as u32,
+        data_in_length: TEST_SCSI_SENSE_LEN,
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -2340,7 +2336,7 @@ fn send_cd_command_to_hd_test() {
 fn wrong_io_test() {
     let target = 0xff;
     let lun = 0xff;
-    let size = 1 * 1024; // Disk size: 1K.
+    let size = 1024; // Disk size: 1K.
 
     let mut vst =
         VirtioScsiTest::testcase_start_with_config(ScsiDeviceType::ScsiHd, target, lun, size, true);

@@ -128,7 +128,6 @@ fn init_device_step(
                     vqs = blk
                         .borrow_mut()
                         .init_virtqueue(test_state.clone(), alloc.clone(), 1);
-                    ()
                 }
                 8 => {
                     blk.borrow().set_driver_ok();
@@ -140,7 +139,7 @@ fn init_device_step(
 
         // Try to send write and read request to StratoVirt, ignore
         // the interrupt from device.
-        if vqs.len() > 0 {
+        if !vqs.is_empty() {
             let (_, _) = add_request(
                 test_state.clone(),
                 alloc.clone(),
@@ -193,7 +192,7 @@ fn check_queue(blk: Rc<RefCell<TestVirtioPciDev>>, desc: u64, avail: u64, used: 
         let addr = blk
             .borrow()
             .pci_dev
-            .io_readl(bar, common_base as u64 + offset as u64);
+            .io_readl(bar, common_base + offset as u64);
         assert_eq!(addr, value as u32);
     }
 }
@@ -455,11 +454,10 @@ fn virtio_feature_indirect() {
         let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
         test_state
             .borrow()
-            .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-        test_state.borrow().writew(
-            vqs[0].borrow().desc + offset as u64 + 2,
-            free_head as u16 + 1,
-        );
+            .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+        test_state
+            .borrow()
+            .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
         let mut indirect_req = TestVringIndirectDesc::new();
         indirect_req.setup(alloc.clone(), test_state.clone(), 2);
         indirect_req.add_desc(test_state.clone(), req_addr + 8, 520, false);
@@ -488,11 +486,10 @@ fn virtio_feature_indirect() {
     let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
     indirect_req.add_desc(test_state.clone(), req_addr + 8, 8, false);
@@ -598,11 +595,10 @@ fn virtio_feature_indirect_and_event_idx() {
     let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     // 2 desc elems in indirect desc table.
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
@@ -949,7 +945,7 @@ fn virtio_init_device_abnormal_vring_info() {
             + u64::from(size_of::<u16>() as u32 * (3 + queue_size))
             + u64::from(VIRTIO_PCI_VRING_ALIGN)
             - 1)
-            & !(u64::from(VIRTIO_PCI_VRING_ALIGN) - 1) + 16;
+            & (!(u64::from(VIRTIO_PCI_VRING_ALIGN) - 1) + 16);
         vq.borrow_mut().used = used + 16;
 
         match err_type {
@@ -1599,11 +1595,10 @@ fn virtio_io_abnormal_desc_flags_2() {
     let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
     indirect_req.add_desc(
@@ -1674,11 +1669,10 @@ fn virtio_io_abnormal_desc_flags_3() {
         let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
         test_state
             .borrow()
-            .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-        test_state.borrow().writew(
-            vqs[0].borrow().desc + offset as u64 + 2,
-            free_head as u16 + 1,
-        );
+            .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+        test_state
+            .borrow()
+            .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
         let mut indirect_req = TestVringIndirectDesc::new();
         indirect_req.setup(alloc.clone(), test_state.clone(), 2);
         indirect_req.add_desc(test_state.clone(), req_addr + 8, 520, false);
@@ -1875,11 +1869,10 @@ fn virtio_io_abnormal_indirect_desc_elem_num() {
     let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), queue_size as u16 + 1);
     for i in 0..queue_size {

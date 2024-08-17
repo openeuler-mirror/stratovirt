@@ -1594,18 +1594,18 @@ mod tests {
     fn test_serial_num_config() {
         let serial_num = "fldXlNNdCeqMvoIfEFogBxlL";
         let serial_num_arr = serial_num.as_bytes();
-        let id_bytes = get_serial_num_config(&serial_num);
+        let id_bytes = get_serial_num_config(serial_num);
         assert_eq!(id_bytes[..], serial_num_arr[..20]);
         assert_eq!(id_bytes.len(), 20);
 
         let serial_num = "7681194149";
         let serial_num_arr = serial_num.as_bytes();
-        let id_bytes = get_serial_num_config(&serial_num);
+        let id_bytes = get_serial_num_config(serial_num);
         assert_eq!(id_bytes[..10], serial_num_arr[..]);
         assert_eq!(id_bytes.len(), 20);
 
         let serial_num = "";
-        let id_bytes_temp = get_serial_num_config(&serial_num);
+        let id_bytes_temp = get_serial_num_config(serial_num);
         assert_eq!(id_bytes_temp[..], [0; 20]);
         assert_eq!(id_bytes_temp.len(), 20);
     }
@@ -1650,7 +1650,7 @@ mod tests {
                     VirtioInterruptType::Config => VIRTIO_MMIO_INT_CONFIG,
                     VirtioInterruptType::Vring => VIRTIO_MMIO_INT_VRING,
                 };
-                interrupt_status.fetch_or(status as u32, Ordering::SeqCst);
+                interrupt_status.fetch_or(status, Ordering::SeqCst);
                 interrupt_evt
                     .write(1)
                     .with_context(|| VirtioError::EventFdWrite)?;
@@ -1709,20 +1709,17 @@ mod tests {
             next: 2,
         };
         mem_space
-            .write_object::<SplitVringDesc>(
-                &desc,
-                GuestAddress(queue_config.desc_table.0 + 16 as u64),
-            )
+            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0 + 16_u64))
             .unwrap();
 
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4 as u64))
+            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4_u64))
             .unwrap();
 
         // write avail_ring id
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2 as u64))
+            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2_u64))
             .unwrap();
 
         // imitating guest OS to send notification.
@@ -1740,7 +1737,7 @@ mod tests {
 
             // get used_ring data
             let idx = mem_space
-                .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2 as u64))
+                .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2_u64))
                 .unwrap();
             if idx == 1 {
                 break;

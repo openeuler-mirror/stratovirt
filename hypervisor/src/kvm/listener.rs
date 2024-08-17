@@ -628,7 +628,7 @@ mod test {
 
     #[test]
     fn test_alloc_slot() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -652,7 +652,7 @@ mod test {
 
     #[test]
     fn test_add_del_ram_region() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -678,7 +678,7 @@ mod test {
 
     #[test]
     fn test_add_region_align() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -700,7 +700,7 @@ mod test {
 
     #[test]
     fn test_add_del_ioeventfd() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -746,7 +746,7 @@ mod test {
 
     #[test]
     fn test_ioeventfd_with_data_match() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -767,7 +767,7 @@ mod test {
 
         // Delete ioeventfd with wrong address will cause an error.
         let mut evtfd_to_del = evtfd.clone();
-        evtfd_to_del.addr_range.base.0 = evtfd_to_del.addr_range.base.0 - 2;
+        evtfd_to_del.addr_range.base.0 -= 2;
         assert!(kml
             .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
             .is_err());
@@ -800,7 +800,7 @@ mod test {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_kvm_io_listener() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }

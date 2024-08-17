@@ -382,7 +382,7 @@ mod test {
 
         let file_bytes = file_name.as_bytes();
         // SATETY: The "alloc" field of union consists of u8 members, so the access is safe.
-        let alloc = unsafe { &table_loader.cmds.get(0).unwrap().entry.alloc };
+        let alloc = unsafe { &table_loader.cmds.first().unwrap().entry.alloc };
         assert_eq!(
             alloc.file[0..file_bytes.len()].to_vec(),
             file_bytes.to_vec()
@@ -450,7 +450,7 @@ mod test {
             .add_cksum_entry(&file, 0_u32, 0_u32, file_len + 1)
             .is_err());
         assert!(table_loader
-            .add_cksum_entry(&file, (file_len - 1) as u32, 80, 20)
+            .add_cksum_entry(&file, file_len - 1, 80, 20)
             .is_ok());
         assert!(table_loader
             .add_cksum_entry(&file, file_len - 1, 0, 50)

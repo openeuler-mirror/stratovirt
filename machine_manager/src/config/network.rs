@@ -189,10 +189,10 @@ impl NetworkInterfaceConfig {
     pub fn auto_iothread(&mut self) {
         // If rx_iothread or tx_iothread is not configured, the default iothread will be used.
         if self.rx_iothread.is_none() {
-            self.rx_iothread = self.iothread.clone();
+            self.rx_iothread.clone_from(&self.iothread);
         }
         if self.tx_iothread.is_none() {
-            self.tx_iothread = self.iothread.clone();
+            self.tx_iothread.clone_from(&self.iothread);
         }
     }
 }
@@ -317,7 +317,7 @@ impl VmConfig {
 
     pub fn add_netdev_with_config(&mut self, conf: NetDevcfg) -> Result<()> {
         let netdev_id = conf.id.clone();
-        if self.netdevs.get(&netdev_id).is_some() {
+        if self.netdevs.contains_key(&netdev_id) {
             bail!("Netdev {:?} has been added", netdev_id);
         }
         self.netdevs.insert(netdev_id, conf);
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(netdev_cfg.id, "eth0");
         assert_eq!(netdev_cfg.ifname, "tap0");
         assert!(netdev_cfg.tap_fds.is_none());
-        assert_eq!(netdev_cfg.vhost_kernel, false);
+        assert!(!netdev_cfg.vhost_kernel);
         assert!(netdev_cfg.vhost_fds.is_none());
         assert_eq!(netdev_cfg.queues, 2);
         assert!(netdev_cfg.vhost_type().is_none());
@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(net_cfg.addr.unwrap(), (1, 2));
         assert_eq!(net_cfg.mac.unwrap(), "12:34:56:78:9A:BC");
         assert_eq!(net_cfg.vectors, 6);
-        assert_eq!(net_cfg.mq, true);
+        assert!(net_cfg.mq);
         assert_eq!(net_cfg.queue_size, 2048);
         assert_eq!(net_cfg.multifunction, Some(true));
         let netdev_cfg = vm_config.netdevs.get(&net_cfg.netdev).unwrap();
@@ -479,7 +479,7 @@ mod tests {
         let net_cfg =
             NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false)).unwrap();
         assert_eq!(net_cfg.queue_size, 256);
-        assert_eq!(net_cfg.mq, false);
+        assert!(!net_cfg.mq);
         assert_eq!(net_cfg.vectors, 0);
         let netdev_cfg = vm_config.netdevs.get(&net_cfg.netdev).unwrap();
         assert_eq!(netdev_cfg.vhost_type().unwrap(), "vhost-user");
@@ -561,7 +561,7 @@ mod tests {
             let mut net_conf = NetDevcfg::default();
             net_conf.id = String::from(*id);
             assert!(vm_config.netdevs.get(*id).is_some());
-            assert!(vm_config.del_netdev_by_id(*id).is_ok());
+            assert!(vm_config.del_netdev_by_id(id).is_ok());
             assert!(vm_config.netdevs.get(*id).is_none());
         }
     }
@@ -664,7 +664,7 @@ mod tests {
             queues: Some(u16::MAX),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[0]);
+        check_err_msg(netdev, err_msgs[0]);
 
         // Abnornal test with invalid 'queues': MAX_QUEUE_PAIRS + 1.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -683,7 +683,7 @@ mod tests {
             vhostfds: Some("21:22:23:24".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[1]);
+        check_err_msg(netdev, err_msgs[1]);
 
         // Abnornal test with 'fds' and 'vhostfd'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -691,7 +691,7 @@ mod tests {
             vhostfd: Some("21".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[2]);
+        check_err_msg(netdev, err_msgs[2]);
 
         // Abnornal test with different num of 'fds' and 'vhostfds'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -699,7 +699,7 @@ mod tests {
             vhostfds: Some("21:22:23".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[3]);
+        check_err_msg(netdev, err_msgs[3]);
 
         // Abnornal test with 'net_type=vhost-user'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -709,7 +709,7 @@ mod tests {
             net_type: Some("vhost-user".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[4]);
+        check_err_msg(netdev, err_msgs[4]);
 
         // Abnornal test with 'fds/vhostfds' and no 'vhost'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -717,13 +717,13 @@ mod tests {
             vhostfds: Some("21:22:23:24".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[5]);
+        check_err_msg(netdev, err_msgs[5]);
 
         // Abnornal test with all default value.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[6]);
+        check_err_msg(netdev, err_msgs[6]);
 
         // Abnornal test with invalid fd value.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {

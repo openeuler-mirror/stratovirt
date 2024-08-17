@@ -36,7 +36,7 @@ impl VmConfig {
         let tlscred =
             TlsCredObjConfig::try_parse_from(str_slip_to_clap(tlscred_config, true, false))?;
         let id = tlscred.id.clone();
-        if self.object.tls_object.get(&id).is_some() {
+        if self.object.tls_object.contains_key(&id) {
             return Err(anyhow!(ConfigError::IdRepeat("tlscred".to_string(), id)));
         }
         self.object.tls_object.insert(id, tlscred);
@@ -58,7 +58,7 @@ mod tests {
         if !dir.is_dir() {
             fs::create_dir(dir.clone()).unwrap();
         }
-        assert_eq!(dir.is_dir(), true);
+        assert!(dir.is_dir());
 
         // Certificate directory is exist.
         let tls_config: String = format!(
@@ -72,12 +72,12 @@ mod tests {
         if let Some(tls_cred_cfg) = vm_config.object.tls_object.get(&id) {
             assert_eq!(tls_cred_cfg.dir, dir.to_str().unwrap());
             assert_eq!(tls_cred_cfg.endpoint, Some("server".to_string()));
-            assert_eq!(tls_cred_cfg.verifypeer, false);
+            assert!(!tls_cred_cfg.verifypeer);
         }
 
         // Delete file.
         fs::remove_dir(dir.clone()).unwrap();
-        assert_eq!(dir.is_dir(), false);
+        assert!(!dir.is_dir());
         // Certificate directory does not exist.
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_object(tls_config.as_str()).is_err());

@@ -417,8 +417,8 @@ mod tests {
             ..Default::default()
         };
         let sys_mem = address_space_init();
-        let vsock = Vsock::new(&vsock_conf, &sys_mem);
-        vsock
+
+        Vsock::new(&vsock_conf, &sys_mem)
     }
 
     #[test]
@@ -473,23 +473,23 @@ mod tests {
 
         // test vsock read_config
         let mut buf: [u8; 8] = [0; 8];
-        assert_eq!(vsock.read_config(0, &mut buf).is_ok(), true);
+        assert!(vsock.read_config(0, &mut buf).is_ok());
         let value = LittleEndian::read_u64(&buf);
         assert_eq!(value, vsock.vsock_cfg.guest_cid);
 
         let mut buf: [u8; 4] = [0; 4];
-        assert_eq!(vsock.read_config(0, &mut buf).is_ok(), true);
+        assert!(vsock.read_config(0, &mut buf).is_ok());
         let value = LittleEndian::read_u32(&buf);
         assert_eq!(value, vsock.vsock_cfg.guest_cid as u32);
 
         let mut buf: [u8; 4] = [0; 4];
-        assert_eq!(vsock.read_config(4, &mut buf).is_ok(), true);
+        assert!(vsock.read_config(4, &mut buf).is_ok());
         let value = LittleEndian::read_u32(&buf);
         assert_eq!(value, (vsock.vsock_cfg.guest_cid >> 32) as u32);
 
         let mut buf: [u8; 4] = [0; 4];
-        assert_eq!(vsock.read_config(5, &mut buf).is_err(), true);
-        assert_eq!(vsock.read_config(3, &mut buf).is_err(), true);
+        assert!(vsock.read_config(5, &mut buf).is_err());
+        assert!(vsock.read_config(3, &mut buf).is_err());
     }
 
     #[test]
@@ -508,12 +508,9 @@ mod tests {
 
         // test vsock set_guest_cid
         let backend = vsock.backend.unwrap();
-        assert_eq!(backend.set_guest_cid(3).is_ok(), true);
-        assert_eq!(
-            backend.set_guest_cid(u64::from(u32::max_value())).is_ok(),
-            false
-        );
-        assert_eq!(backend.set_guest_cid(2).is_ok(), false);
-        assert_eq!(backend.set_guest_cid(0).is_ok(), false);
+        assert!(backend.set_guest_cid(3).is_ok());
+        assert!(backend.set_guest_cid(u64::from(u32::max_value())).is_err());
+        assert!(backend.set_guest_cid(2).is_err());
+        assert!(backend.set_guest_cid(0).is_err());
     }
 }

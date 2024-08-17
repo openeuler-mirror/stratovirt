@@ -209,7 +209,7 @@ mod tests {
             .add_numa("node,nodeid=0,cpus=[0-1:3-5],memdev=mem0")
             .is_ok());
 
-        let numa = vm_config.numa_nodes.get(0).unwrap();
+        let numa = vm_config.numa_nodes.first().unwrap();
         let numa_config = parse_numa_mem(numa.1.as_str()).unwrap();
         assert_eq!(numa_config.cpus, vec![0, 1]);
         assert_eq!(numa_config.mem_dev, "mem0");
@@ -235,7 +235,7 @@ mod tests {
         assert!(vm_config.add_numa("dist,src=0,dst=1").is_ok());
         assert!(vm_config.add_numa("dist,src=0,dst=1,val=10").is_ok());
 
-        let numa = vm_config.numa_nodes.get(0).unwrap();
+        let numa = vm_config.numa_nodes.first().unwrap();
         let dist_cfg = parse_numa_distance(numa.1.as_str()).unwrap();
         assert_eq!(dist_cfg.numa_id, 0);
         assert_eq!(dist_cfg.destination, 1);

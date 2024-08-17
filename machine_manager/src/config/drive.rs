@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fmt::Display;
 use std::fs::{metadata, File};
 use std::os::linux::fs::MetadataExt;
 use std::path::Path;
@@ -79,11 +80,11 @@ impl FromStr for DiskFormat {
     }
 }
 
-impl ToString for DiskFormat {
-    fn to_string(&self) -> String {
-        match *self {
-            DiskFormat::Raw => "raw".to_string(),
-            DiskFormat::Qcow2 => "qcow2".to_string(),
+impl Display for DiskFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DiskFormat::Raw => write!(f, "raw"),
+            DiskFormat::Qcow2 => write!(f, "qcow2"),
         }
     }
 }
@@ -291,7 +292,7 @@ impl VmConfig {
     /// * `drive_conf` - The drive config to be added to the vm.
     pub fn add_drive_with_config(&mut self, drive_conf: DriveConfig) -> Result<()> {
         let drive_id = drive_conf.id.clone();
-        if self.drives.get(&drive_id).is_some() {
+        if self.drives.contains_key(&drive_id) {
             bail!("Drive {} has been added", drive_id);
         }
         self.drives.insert(drive_id, drive_conf);
@@ -304,7 +305,7 @@ impl VmConfig {
     ///
     /// * `drive_id` - Drive id.
     pub fn del_drive_by_id(&mut self, drive_id: &str) -> Result<String> {
-        if self.drives.get(drive_id).is_some() {
+        if self.drives.contains_key(drive_id) {
             Ok(self.drives.remove(drive_id).unwrap().path_on_host)
         } else {
             bail!("Drive {} not found", drive_id);
@@ -347,7 +348,7 @@ mod tests {
         let pflash_cfg = &pflash[0];
         assert_eq!(pflash_cfg.unit.unwrap(), 0);
         assert_eq!(pflash_cfg.path_on_host, "flash0.fd".to_string());
-        assert_eq!(pflash_cfg.readonly, true);
+        assert!(pflash_cfg.readonly);
 
         // Test2: Change parameters sequence.
         let mut vm_config = VmConfig::default();
@@ -376,11 +377,11 @@ mod tests {
         let pflash_cfg = &pflash[0];
         assert_eq!(pflash_cfg.unit.unwrap(), 0);
         assert_eq!(pflash_cfg.path_on_host, "flash0.fd".to_string());
-        assert_eq!(pflash_cfg.readonly, true);
+        assert!(pflash_cfg.readonly);
         let pflash_cfg = &pflash[1];
         assert_eq!(pflash_cfg.unit.unwrap(), 1);
         assert_eq!(pflash_cfg.path_on_host, "flash1.fd".to_string());
-        assert_eq!(pflash_cfg.readonly, false);
+        assert!(!pflash_cfg.readonly);
 
         // Test4: Illegal parameters unit/format.
         let mut vm_config = VmConfig::default();
@@ -412,10 +413,10 @@ mod tests {
         assert_eq!(drive_cfg.id, "rootfs");
         assert_eq!(drive_cfg.path_on_host, "/path/to/rootfs");
         assert_eq!(drive_cfg.format.to_string(), "qcow2");
-        assert_eq!(drive_cfg.readonly, false);
-        assert_eq!(drive_cfg.direct, true);
+        assert!(!drive_cfg.readonly);
+        assert!(drive_cfg.direct);
         assert_eq!(drive_cfg.iops.unwrap(), 200);
-        assert_eq!(drive_cfg.discard, true);
+        assert!(drive_cfg.discard);
         assert_eq!(
             drive_cfg.write_zeroes,
             WriteZeroesState::from_str("unmap").unwrap()
@@ -502,7 +503,7 @@ mod tests {
             let mut drive_conf = DriveConfig::default();
             drive_conf.id = String::from(*id);
             assert!(vm_config.drives.get(*id).is_some());
-            assert!(vm_config.del_drive_by_id(*id).is_ok());
+            assert!(vm_config.del_drive_by_id(id).is_ok());
             assert!(vm_config.drives.get(*id).is_none());
         }
     }
@@ -513,19 +514,19 @@ mod tests {
         let drive_conf = vm_config
             .add_drive("id=rootfs,file=/path/to/rootfs,discard=ignore")
             .unwrap();
-        assert_eq!(drive_conf.discard, false);
+        assert!(!drive_conf.discard);
 
         let mut vm_config = VmConfig::default();
         let drive_conf = vm_config
             .add_drive("id=rootfs,file=/path/to/rootfs,discard=unmap")
             .unwrap();
-        assert_eq!(drive_conf.discard, true);
+        assert!(drive_conf.discard);
 
         let mut vm_config = VmConfig::default();
         let ret = vm_config
             .add_drive("id=rootfs,file=/path/to/rootfs,discard=invalid")
             .is_err();
-        assert_eq!(ret, true);
+        assert!(ret);
     }
 
     #[test]
@@ -552,6 +553,6 @@ mod tests {
         let ret = vm_config
             .add_drive("id=rootfs,file=/path/to/rootfs,detect-zeroes=invalid")
             .is_err();
-        assert_eq!(ret, true);
+        assert!(ret);
     }
 }

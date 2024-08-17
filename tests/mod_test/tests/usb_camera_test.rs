@@ -234,7 +234,7 @@ fn qmp_plug_camera(test_state: &Rc<RefCell<TestState>>, id: &str, camdev: &str) 
     let test_state = test_state.borrow_mut();
     let cmd = r#"{"execute": "device_add", "arguments": {"id": "ID", "driver": "usb-camera", "cameradev": "CAMDEV"}}"#;
     let cmd = cmd.replace("ID", id);
-    let cmd = cmd.replace("CAMDEV", &camdev);
+    let cmd = cmd.replace("CAMDEV", camdev);
     test_state.qmp(&cmd)
 }
 

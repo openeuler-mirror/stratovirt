@@ -86,14 +86,14 @@ mod tests {
         assert_eq!(vnc_config.addr.0, String::from("0.0.0.0"));
         assert_eq!(vnc_config.addr.1, 5901);
         assert_eq!(vnc_config.tls_creds, String::from("vnc-tls-creds0"));
-        assert_eq!(vnc_config.sasl, true);
+        assert!(vnc_config.sasl);
         assert_eq!(vnc_config.sasl_authz, String::from("authz0"));
 
         let mut vm_config = VmConfig::default();
         let config_line = "0.0.0.0:5900,tls-creds=vnc-tls-creds0";
         assert!(vm_config.add_vnc(config_line).is_ok());
         let vnc_config = vm_config.vnc.unwrap();
-        assert_eq!(vnc_config.sasl, false);
+        assert!(!vnc_config.sasl);
         assert_eq!(vnc_config.addr.1, 11800);
 
         let mut vm_config = VmConfig::default();

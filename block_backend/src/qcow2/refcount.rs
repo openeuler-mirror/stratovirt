@@ -890,7 +890,7 @@ mod test {
             for j in (i + 1)..len {
                 let addr2 = res_data[j].0 as usize;
                 let size2 = res_data[j].1 as usize;
-                assert_eq!(ranges_overlap(addr1, size1, addr2, size2).unwrap(), false);
+                assert!(!ranges_overlap(addr1, size1, addr2, size2).unwrap());
             }
         }
 
@@ -936,7 +936,7 @@ mod test {
         let mut new_rc_table = vec![0_u8; new_rct_size];
         cloned_file
             .as_ref()
-            .read_at(&mut new_rc_table, new_rct_offset as u64)
+            .read_at(&mut new_rc_table, new_rct_offset)
             .unwrap();
         for i in 0..old_rct_size {
             assert_eq!(old_rc_table[i], new_rc_table[i]);
@@ -992,7 +992,7 @@ mod test {
             &Qcow2DiscardType::Never,
         );
         if let Err(err) = ret {
-            let err_msg = format!("Invalid refcount block address 0x0, index is 2");
+            let err_msg = "Invalid refcount block address 0x0, index is 2".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
             assert!(false);
@@ -1016,7 +1016,7 @@ mod test {
         // Test refcount overflow.
         let ret = refcount.set_refcount(0, 0, 1, 65535, &Qcow2DiscardType::Never);
         if let Err(err) = ret {
-            let err_msg = format!("Refcount 2 add 65535 cause overflows, index is 0");
+            let err_msg = "Refcount 2 add 65535 cause overflows, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
             assert!(false);
@@ -1025,7 +1025,7 @@ mod test {
         // Test refcount underflow.
         let ret = refcount.set_refcount(0, 0, 1, -65535, &Qcow2DiscardType::Never);
         if let Err(err) = ret {
-            let err_msg = format!("Refcount 2 sub 65535 cause overflows, index is 0");
+            let err_msg = "Refcount 2 sub 65535 cause overflows, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
             assert!(false);

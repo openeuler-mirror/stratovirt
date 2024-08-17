@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_get_maximum_gsi_cnt() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -245,11 +245,11 @@ mod tests {
 
     #[test]
     fn test_alloc_and_release_gsi() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
-        let irq_route_table = Mutex::new(IrqRouteTable::new(&kvm_hyp.fd.as_ref().unwrap()));
+        let irq_route_table = Mutex::new(IrqRouteTable::new(kvm_hyp.fd.as_ref().unwrap()));
         let irq_manager = Arc::new(KVMInterruptManager::new(
             true,
             kvm_hyp.vm_fd.clone().unwrap(),

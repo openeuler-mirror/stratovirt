@@ -385,7 +385,7 @@ impl AmlBuilder for PowerDev {
         acpi_acad_dev
             .aml_bytes()
             .into_iter()
-            .chain(acpi_bat_dev.aml_bytes().into_iter())
+            .chain(acpi_bat_dev.aml_bytes())
             .collect()
     }
 }

@@ -226,7 +226,7 @@ mod tests {
             running: true,
             status: qmp_schema::RunState::running,
         };
-        let resp = Response::create_response(serde_json::to_value(&resp_value).unwrap(), None);
+        let resp = Response::create_response(serde_json::to_value(resp_value).unwrap(), None);
 
         let json_msg = r#"{"return":{"running":true,"singlestep":false,"status":"running"}}"#;
         assert_eq!(serde_json::to_string(&resp).unwrap(), json_msg);

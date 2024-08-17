@@ -40,7 +40,7 @@ fn set_up(cpu: u8, max_cpus: Option<u8>) -> TestState {
     args = cpu_args[..].split(' ').collect();
     extra_args.append(&mut args);
 
-    let mem_args = format!("-m 512");
+    let mem_args = "-m 512".to_string();
     args = mem_args[..].split(' ').collect();
     extra_args.append(&mut args);
 
@@ -48,11 +48,12 @@ fn set_up(cpu: u8, max_cpus: Option<u8>) -> TestState {
     extra_args.push("root=/dev/vda panic=1");
 
     let uefi_drive =
-        format!("-drive file=/usr/share/edk2/ovmf/OVMF_CODE.fd,if=pflash,unit=0,readonly=true");
+        "-drive file=/usr/share/edk2/ovmf/OVMF_CODE.fd,if=pflash,unit=0,readonly=true".to_string();
     args = uefi_drive[..].split(' ').collect();
     extra_args.append(&mut args);
 
-    let root_device = format!("-device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.1");
+    let root_device =
+        "-device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.1".to_string();
     args = root_device[..].split(' ').collect();
     extra_args.append(&mut args);
 

@@ -434,12 +434,12 @@ mod tests {
         let mut bitmap = Bitmap::<u16>::new(1);
         assert!(bitmap.set(15).is_ok());
         assert!(bitmap.set(16).is_err());
-        assert_eq!(bitmap.contain(15).unwrap(), true);
+        assert!(bitmap.contain(15).unwrap());
         assert_eq!(bitmap.count_front_bits(16).unwrap(), 1);
         assert_eq!(bitmap.count_front_bits(15).unwrap(), 0);
         assert!(bitmap.change(15).is_ok());
         assert!(bitmap.change(16).is_err());
-        assert_eq!(bitmap.contain(15).unwrap(), false);
+        assert!(!bitmap.contain(15).unwrap());
     }
 
     #[test]
@@ -451,25 +451,25 @@ mod tests {
         bitmap.clear_all();
 
         assert!(bitmap.set_range(65, 10).is_ok());
-        assert_eq!(bitmap.contain(64).unwrap(), false);
-        assert_eq!(bitmap.contain(65).unwrap(), true);
-        assert_eq!(bitmap.contain(70).unwrap(), true);
-        assert_eq!(bitmap.contain(74).unwrap(), true);
-        assert_eq!(bitmap.contain(75).unwrap(), false);
+        assert!(!bitmap.contain(64).unwrap());
+        assert!(bitmap.contain(65).unwrap());
+        assert!(bitmap.contain(70).unwrap());
+        assert!(bitmap.contain(74).unwrap());
+        assert!(!bitmap.contain(75).unwrap());
         bitmap.clear_all();
 
         assert!(bitmap.set_range(63, 1).is_ok());
-        assert_eq!(bitmap.contain(62).unwrap(), false);
-        assert_eq!(bitmap.contain(63).unwrap(), true);
-        assert_eq!(bitmap.contain(64).unwrap(), false);
+        assert!(!bitmap.contain(62).unwrap());
+        assert!(bitmap.contain(63).unwrap());
+        assert!(!bitmap.contain(64).unwrap());
         bitmap.clear_all();
 
         assert!(bitmap.set_range(63, 66).is_ok());
-        assert_eq!(bitmap.contain(62).unwrap(), false);
-        assert_eq!(bitmap.contain(63).unwrap(), true);
-        assert_eq!(bitmap.contain(67).unwrap(), true);
-        assert_eq!(bitmap.contain(128).unwrap(), true);
-        assert_eq!(bitmap.contain(129).unwrap(), false);
+        assert!(!bitmap.contain(62).unwrap());
+        assert!(bitmap.contain(63).unwrap());
+        assert!(bitmap.contain(67).unwrap());
+        assert!(bitmap.contain(128).unwrap());
+        assert!(!bitmap.contain(129).unwrap());
         bitmap.clear_all();
     }
 
@@ -483,25 +483,25 @@ mod tests {
 
         assert!(bitmap.set_range(0, 256).is_ok());
         assert!(bitmap.clear_range(65, 10).is_ok());
-        assert_eq!(bitmap.contain(64).unwrap(), true);
-        assert_eq!(bitmap.contain(65).unwrap(), false);
-        assert_eq!(bitmap.contain(70).unwrap(), false);
-        assert_eq!(bitmap.contain(74).unwrap(), false);
-        assert_eq!(bitmap.contain(75).unwrap(), true);
+        assert!(bitmap.contain(64).unwrap());
+        assert!(!bitmap.contain(65).unwrap());
+        assert!(!bitmap.contain(70).unwrap());
+        assert!(!bitmap.contain(74).unwrap());
+        assert!(bitmap.contain(75).unwrap());
 
         assert!(bitmap.set_range(0, 256).is_ok());
         assert!(bitmap.clear_range(63, 1).is_ok());
-        assert_eq!(bitmap.contain(62).unwrap(), true);
-        assert_eq!(bitmap.contain(63).unwrap(), false);
-        assert_eq!(bitmap.contain(64).unwrap(), true);
+        assert!(bitmap.contain(62).unwrap());
+        assert!(!bitmap.contain(63).unwrap());
+        assert!(bitmap.contain(64).unwrap());
 
         assert!(bitmap.set_range(0, 256).is_ok());
         assert!(bitmap.clear_range(63, 66).is_ok());
-        assert_eq!(bitmap.contain(62).unwrap(), true);
-        assert_eq!(bitmap.contain(63).unwrap(), false);
-        assert_eq!(bitmap.contain(67).unwrap(), false);
-        assert_eq!(bitmap.contain(128).unwrap(), false);
-        assert_eq!(bitmap.contain(129).unwrap(), true);
+        assert!(bitmap.contain(62).unwrap());
+        assert!(!bitmap.contain(63).unwrap());
+        assert!(!bitmap.contain(67).unwrap());
+        assert!(!bitmap.contain(128).unwrap());
+        assert!(bitmap.contain(129).unwrap());
 
         assert!(bitmap.clear_range(0, 256).is_ok());
     }

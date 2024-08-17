@@ -343,7 +343,7 @@ fn execute_cmd(cmd: String, check: bool) {
 
     let output = cmd_exe
         .output()
-        .expect(format!("Failed to execute {}", cmd).as_str());
+        .unwrap_or_else(|_| panic!("Failed to execute {}", cmd));
     println!("{:?}", args);
     if check {
         assert!(output.status.success());
@@ -361,25 +361,21 @@ fn execute_cmd_checked(cmd: String) {
 fn create_tap(id: u8, mq: bool) {
     let br_name = "mst_net_qbr".to_string() + &id.to_string();
     let tap_name = "mst_net_qtap".to_string() + &id.to_string();
-    execute_cmd_checked("ip link add name ".to_string() + &br_name + &" type bridge".to_string());
+    execute_cmd_checked("ip link add name ".to_string() + &br_name + " type bridge");
     if mq {
-        execute_cmd_checked(
-            "ip tuntap add ".to_string() + &tap_name + &" mode tap multi_queue".to_string(),
-        );
+        execute_cmd_checked("ip tuntap add ".to_string() + &tap_name + " mode tap multi_queue");
     } else {
-        execute_cmd_checked("ip tuntap add ".to_string() + &tap_name + &" mode tap".to_string());
+        execute_cmd_checked("ip tuntap add ".to_string() + &tap_name + " mode tap");
     }
-    execute_cmd_checked(
-        "ip link set ".to_string() + &tap_name + &" master ".to_string() + &br_name,
-    );
-    execute_cmd_checked("ip link set ".to_string() + &br_name + &" up".to_string());
-    execute_cmd_checked("ip link set ".to_string() + &tap_name + &" up".to_string());
+    execute_cmd_checked("ip link set ".to_string() + &tap_name + " master " + &br_name);
+    execute_cmd_checked("ip link set ".to_string() + &br_name + " up");
+    execute_cmd_checked("ip link set ".to_string() + &tap_name + " up");
     execute_cmd_checked(
         "ip address add ".to_string()
             + &id.to_string()
-            + &".1.1.".to_string()
+            + ".1.1."
             + &id.to_string()
-            + &"/24 dev ".to_string()
+            + "/24 dev "
             + &br_name,
     );
 }
@@ -387,16 +383,14 @@ fn create_tap(id: u8, mq: bool) {
 fn clear_tap(id: u8, mq: bool) {
     let br_name = "mst_net_qbr".to_string() + &id.to_string();
     let tap_name = "mst_net_qtap".to_string() + &id.to_string();
-    execute_cmd_unchecked("ip link set ".to_string() + &tap_name + &" down".to_string());
-    execute_cmd_unchecked("ip link set ".to_string() + &br_name + &" down".to_string());
+    execute_cmd_unchecked("ip link set ".to_string() + &tap_name + " down");
+    execute_cmd_unchecked("ip link set ".to_string() + &br_name + " down");
     if mq {
-        execute_cmd_unchecked(
-            "ip tuntap del ".to_string() + &tap_name + &" mode tap multi_queue".to_string(),
-        );
+        execute_cmd_unchecked("ip tuntap del ".to_string() + &tap_name + " mode tap multi_queue");
     } else {
-        execute_cmd_unchecked("ip tuntap del ".to_string() + &tap_name + &" mode tap".to_string());
+        execute_cmd_unchecked("ip tuntap del ".to_string() + &tap_name + " mode tap");
     }
-    execute_cmd_unchecked("ip link delete ".to_string() + &br_name + &" type bridge".to_string());
+    execute_cmd_unchecked("ip link delete ".to_string() + &br_name + " type bridge");
 }
 
 #[allow(unused)]
@@ -718,13 +712,13 @@ fn send_arp_request(
         test_state.clone(),
         alloc.clone(),
         vqs[1].clone(),
-        &arp_request,
+        arp_request,
     );
     check_arp_mac(
         net.clone(),
         test_state.clone(),
         vqs[0].clone(),
-        &arp_request,
+        arp_request,
         need_reply,
     );
 }
@@ -750,7 +744,7 @@ fn check_device_status(net: Rc<RefCell<TestVirtioPciDev>>, status: u8) {
 ///   1/2/3: success.
 #[test]
 fn virtio_net_rx_tx_test() {
-    let id = 1 * TEST_MAC_ADDR_NUMS;
+    let id = TEST_MAC_ADDR_NUMS;
     let (net, test_state, alloc) = set_up(id, false, 0, false);
 
     // Three virtqueues: tx/rx/ctrl.
@@ -768,7 +762,7 @@ fn virtio_net_rx_tx_test() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &arp_request.as_bytes(),
+        arp_request.as_bytes(),
         true,
     );
 
@@ -809,7 +803,7 @@ fn virtio_net_rx_tx_test_iothread() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &arp_request.as_bytes(),
+        arp_request.as_bytes(),
         true,
     );
 
@@ -877,7 +871,7 @@ fn virtio_net_ctrl_mq_test() {
             class: VIRTIO_NET_CTRL_MQ,
             cmd,
         };
-        test_state.borrow().memwrite(addr, &ctrl_hdr.as_bytes());
+        test_state.borrow().memwrite(addr, ctrl_hdr.as_bytes());
         test_state
             .borrow()
             .writew(addr + size_of::<CtrlHdr>() as u64, vq_pairs);
@@ -1072,7 +1066,7 @@ fn send_ctrl_vq_request(
 ) {
     let ctrl_vq = &vqs[2];
     let addr = alloc.borrow_mut().alloc(ctrl_data.len() as u64);
-    test_state.borrow().memwrite(addr, &ctrl_data);
+    test_state.borrow().memwrite(addr, ctrl_data);
     let data_entries: Vec<TestVringDescEntry> = vec![
         TestVringDescEntry {
             data: addr,
@@ -1187,7 +1181,7 @@ fn ctrl_vq_set_mac_address(
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &ctrl_mac_addr.as_bytes(),
+        ctrl_mac_addr.as_bytes(),
         VIRTIO_NET_OK,
     );
     // Check mac address result.
@@ -1231,7 +1225,7 @@ fn virtio_net_ctrl_vlan_test() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &ctrl_rx_info.as_bytes(),
+        ctrl_rx_info.as_bytes(),
         VIRTIO_NET_OK,
     );
 
@@ -1250,7 +1244,7 @@ fn virtio_net_ctrl_vlan_test() {
             test_state.clone(),
             alloc.clone(),
             vqs.clone(),
-            &ctrl_vlan_info.as_bytes(),
+            ctrl_vlan_info.as_bytes(),
             ack,
         );
     }
@@ -1262,7 +1256,7 @@ fn virtio_net_ctrl_vlan_test() {
             test_state.clone(),
             alloc.clone(),
             vqs.clone(),
-            &ctrl_vlan_info.as_bytes(),
+            ctrl_vlan_info.as_bytes(),
             ack,
         );
     }
@@ -1273,7 +1267,7 @@ fn virtio_net_ctrl_vlan_test() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &ctrl_vlan_info.as_bytes(),
+        ctrl_vlan_info.as_bytes(),
         VIRTIO_NET_ERR,
     );
     // Test invalid cmd.
@@ -1283,7 +1277,7 @@ fn virtio_net_ctrl_vlan_test() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &ctrl_vlan_info.as_bytes(),
+        ctrl_vlan_info.as_bytes(),
         VIRTIO_NET_ERR,
     );
     // Test invalid vid length.
@@ -1303,7 +1297,7 @@ fn virtio_net_ctrl_vlan_test() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &get_arp_request(id).as_bytes(),
+        get_arp_request(id).as_bytes(),
         true,
     );
     send_arp_request(
@@ -1311,7 +1305,7 @@ fn virtio_net_ctrl_vlan_test() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &get_arp_request_vlan(id).as_bytes(),
+        get_arp_request_vlan(id).as_bytes(),
         false,
     );
 
@@ -1406,7 +1400,7 @@ fn virtio_net_ctrl_mac_test() {
                     test_state.clone(),
                     alloc.clone(),
                     vqs.clone(),
-                    &ctrl_rx_info.as_bytes(),
+                    ctrl_rx_info.as_bytes(),
                     VIRTIO_NET_OK,
                 );
 
@@ -1470,7 +1464,7 @@ fn virtio_net_ctrl_mac_test() {
             test_state.clone(),
             alloc.clone(),
             vqs.clone(),
-            &arp_request.as_bytes(),
+            arp_request.as_bytes(),
             true,
         );
 
@@ -1556,7 +1550,7 @@ fn virtio_net_ctrl_rx_test() {
             test_state.clone(),
             alloc.clone(),
             vqs.clone(),
-            &ctrl_rx_info.as_bytes(),
+            ctrl_rx_info.as_bytes(),
             VIRTIO_NET_OK,
         );
         let mut ctrl_rx_info = CtrlRxInfo::new(VIRTIO_NET_CTRL_RX, 0, 0);
@@ -1602,7 +1596,7 @@ fn virtio_net_ctrl_rx_test() {
                 test_state.clone(),
                 alloc.clone(),
                 vqs.clone(),
-                &ctrl_rx_info.as_bytes(),
+                ctrl_rx_info.as_bytes(),
                 ack,
             );
         }
@@ -1617,7 +1611,7 @@ fn virtio_net_ctrl_rx_test() {
             test_state.clone(),
             alloc.clone(),
             vqs.clone(),
-            &arp_request.as_bytes(),
+            arp_request.as_bytes(),
             need_reply,
         );
 
@@ -1663,7 +1657,7 @@ fn virtio_net_ctrl_abnormal_test() {
     for i in 0..test_num {
         let ctrl_vq = &vqs[2];
         let addr = alloc.borrow_mut().alloc(ctrl_data.len() as u64);
-        test_state.borrow().memwrite(addr, &ctrl_data);
+        test_state.borrow().memwrite(addr, ctrl_data);
 
         // ctrl_rx_info.switch: u8
         let mut data_len = 1;
@@ -1750,7 +1744,7 @@ fn virtio_net_abnormal_rx_tx_test() {
     assert_eq!(size, QUEUE_SIZE_NET);
     for _ in 0..size {
         let addr = alloc.borrow_mut().alloc(length);
-        test_state.borrow().memwrite(addr, &request.as_bytes());
+        test_state.borrow().memwrite(addr, request.as_bytes());
         vqs[1]
             .borrow_mut()
             .add(test_state.clone(), addr, length as u32, false);
@@ -1830,7 +1824,7 @@ fn virtio_net_abnormal_rx_tx_test_2() {
         let request = get_arp_request(id);
         let length = request.as_bytes().len() as u64;
         let addr = alloc.borrow_mut().alloc(length);
-        test_state.borrow().memwrite(addr, &request.as_bytes());
+        test_state.borrow().memwrite(addr, request.as_bytes());
         vqs[1]
             .borrow_mut()
             .add(test_state.clone(), addr, length as u32, false);
@@ -1897,7 +1891,7 @@ fn virtio_net_set_abnormal_feature() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &arp_request.as_bytes(),
+        arp_request.as_bytes(),
         true,
     );
 
@@ -1943,7 +1937,7 @@ fn virtio_net_send_abnormal_packet() {
         test_state.clone(),
         alloc.clone(),
         vqs.clone(),
-        &arp_request.as_bytes(),
+        arp_request.as_bytes(),
         false,
     );
 
@@ -1961,7 +1955,7 @@ fn virtio_net_send_abnormal_packet() {
             test_state.clone(),
             alloc.clone(),
             vqs[1].clone(),
-            &data_bytes,
+            data_bytes,
         );
     }
 
@@ -2022,7 +2016,7 @@ fn virtio_net_rx_tx_mq_test() {
             test_state.clone(),
             alloc.clone(),
             vqs[i as usize * 2 + 1].clone(),
-            &get_arp_request(id + i as u8 * TEST_MAC_ADDR_NUMS).as_bytes(),
+            get_arp_request(id + i as u8 * TEST_MAC_ADDR_NUMS).as_bytes(),
         );
     }
 
@@ -2079,7 +2073,7 @@ fn virtio_net_abnormal_rx_tx_test_3() {
             + u64::from(notify_off) * u64::from(net.borrow().notify_off_multiplier);
 
         net.borrow()
-            .setup_virtqueue_intr((i + 1) as u16, alloc.clone(), vq.clone());
+            .setup_virtqueue_intr(i + 1, alloc.clone(), vq.clone());
         vqs.push(vq);
     }
     fill_rx_vq(test_state.clone(), alloc.clone(), vqs[0].clone());
@@ -2091,7 +2085,7 @@ fn virtio_net_abnormal_rx_tx_test_3() {
     let request = get_arp_request(id);
     let length = request.as_bytes().len() as u64;
     let addr = alloc.borrow_mut().alloc(length);
-    test_state.borrow().memwrite(addr, &request.as_bytes());
+    test_state.borrow().memwrite(addr, request.as_bytes());
     vqs[1]
         .borrow_mut()
         .add(test_state.clone(), addr, length as u32, false);

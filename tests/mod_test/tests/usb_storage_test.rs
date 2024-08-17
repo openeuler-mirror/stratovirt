@@ -104,10 +104,10 @@ fn data_phase(
 ) {
     let mut iovecs = Vec::new();
     let ptr = guest_allocator.alloc(buf.len() as u64);
-    let iovec = TestIovec::new(ptr, buf.len() as usize, false);
+    let iovec = TestIovec::new(ptr, buf.len(), false);
 
     if !to_host {
-        xhci.mem_write(ptr, &buf);
+        xhci.mem_write(ptr, buf);
     }
 
     iovecs.push(iovec);

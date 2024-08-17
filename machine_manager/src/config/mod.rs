@@ -39,7 +39,6 @@ pub use boot_source::*;
 #[cfg(feature = "usb_camera")]
 pub use camera::*;
 pub use chardev::*;
-pub use devices::*;
 #[cfg(any(feature = "gtk", feature = "ohui_srv"))]
 pub use display::*;
 pub use drive::*;
@@ -217,7 +216,7 @@ impl VmConfig {
                 let rng_cfg =
                     RngObjConfig::try_parse_from(str_slip_to_clap(object_args, true, false))?;
                 let id = rng_cfg.id.clone();
-                if self.object.rng_object.get(&id).is_some() {
+                if self.object.rng_object.contains_key(&id) {
                     bail!("Object: {} has been added", id);
                 }
                 self.object.rng_object.insert(id, rng_cfg);
@@ -252,7 +251,7 @@ impl VmConfig {
 
         if let Some(fast_unplug_value) = global_config.fast_unplug {
             let fast_unplug_key = String::from("pcie-root-port.fast-unplug");
-            if self.global_config.get(&fast_unplug_key).is_some() {
+            if self.global_config.contains_key(&fast_unplug_key) {
                 bail!("Global config {} has been added", fast_unplug_key);
             }
             self.global_config

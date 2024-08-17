@@ -396,8 +396,8 @@ mod tests {
 
         let image = create_pixman_image(
             pixman_format_code_t::PIXMAN_x8r8g8b8,
-            image_width as i32,
-            image_height as i32,
+            image_width,
+            image_height,
             image_data.as_ptr() as *mut u32,
             image_stride,
         );
@@ -427,8 +427,8 @@ mod tests {
 
         let image = create_pixman_image(
             pixman_format_code_t::PIXMAN_x8r8g8b8,
-            image_width as i32,
-            image_height as i32,
+            image_width,
+            image_height,
             image_data.as_ptr() as *mut u32,
             image_stride,
         );
@@ -458,8 +458,8 @@ mod tests {
 
         let image = create_pixman_image(
             pixman_format_code_t::PIXMAN_x8r8g8b8,
-            image_width as i32,
-            image_height as i32,
+            image_width,
+            image_height,
             image_data.as_ptr() as *mut u32,
             image_stride,
         );

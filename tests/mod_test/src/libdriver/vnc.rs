@@ -57,17 +57,12 @@ pub const PIXMAN_YUY2: u32 = 4;
 pub const REFRESH_TIME_INTERVAL: u64 = 3000 * 1000 * 1000;
 
 /// Input event.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum InputEvent {
     KbdEvent = 0,
     MouseEvent = 1,
+    #[default]
     InvalidEvent = 255,
-}
-
-impl Default for InputEvent {
-    fn default() -> Self {
-        InputEvent::InvalidEvent
-    }
 }
 
 impl From<u8> for InputEvent {
@@ -91,19 +86,14 @@ pub struct InputMessage {
 }
 
 /// GPU device Event.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum GpuEvent {
     ReplaceSurface = 0,
     ReplaceCursor = 1,
     GraphicUpdateArea = 2,
     GraphicUpdateDirty = 3,
+    #[default]
     Deactive = 4,
-}
-
-impl Default for GpuEvent {
-    fn default() -> Self {
-        GpuEvent::Deactive
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -691,7 +681,7 @@ impl VncClient {
 
     pub fn epoll_ctl(&mut self, event: EpollEvent) -> io::Result<()> {
         self.epoll
-            .ctl(ControlOperation::Add, self.stream.as_raw_fd() as i32, event)
+            .ctl(ControlOperation::Add, self.stream.as_raw_fd(), event)
     }
 
     /// Wait for events on the epoll.
@@ -701,13 +691,8 @@ impl VncClient {
     /// 2. Return if event happen or time out.
     pub fn epoll_wait(&mut self, event_set: EventSet) -> io::Result<usize> {
         let event = EpollEvent::new(event_set, self.stream.as_raw_fd() as u64);
-        if let Err(e) = self.epoll.ctl(
-            ControlOperation::Modify,
-            self.stream.as_raw_fd() as i32,
-            event,
-        ) {
-            return Err(e);
-        }
+        self.epoll
+            .ctl(ControlOperation::Modify, self.stream.as_raw_fd(), event)?;
         self.epoll
             .wait(EPOLL_DEFAULT_TIMEOUT, &mut self.ready_events[..])
     }
@@ -716,11 +701,8 @@ impl VncClient {
     pub fn stream_read_to_end(&mut self) -> Result<()> {
         let mut buf: Vec<u8> = Vec::new();
         let event = EpollEvent::new(EventSet::IN, self.stream.as_raw_fd() as u64);
-        self.epoll.ctl(
-            ControlOperation::Modify,
-            self.stream.as_raw_fd() as i32,
-            event,
-        )?;
+        self.epoll
+            .ctl(ControlOperation::Modify, self.stream.as_raw_fd(), event)?;
 
         match self
             .epoll
@@ -787,7 +769,7 @@ impl VncClient {
         if "RFB 003.008\n".as_bytes().to_vec() != buf[..12].to_vec() {
             bail!("Unsupported RFB version");
         }
-        self.write_msg(&"RFB 003.008\n".as_bytes().to_vec())?;
+        self.write_msg("RFB 003.008\n".as_bytes())?;
         buf.drain(..12);
 
         // Step 2: Auth num is 1.
@@ -800,7 +782,7 @@ impl VncClient {
             bail!("Unsupported security type!");
         }
         buf.drain(..auth_num as usize);
-        self.write_msg(&(sec_type as u8).to_be_bytes().to_vec())?;
+        self.write_msg((sec_type as u8).to_be_bytes().as_ref())?;
 
         match sec_type {
             TestAuthType::VncAuthNone => {
@@ -810,7 +792,7 @@ impl VncClient {
                 if buf[..4].to_vec() != [0_u8; 4].to_vec() {
                     bail!("Reject by vnc server");
                 }
-                self.write_msg(&0_u8.to_be_bytes().to_vec())?;
+                self.write_msg(0_u8.to_be_bytes().as_ref())?;
                 buf.drain(..4);
 
                 // Step 4. display mode information init: width + height + pixelformat + app_name.
@@ -856,10 +838,7 @@ impl VncClient {
         let mut test_event = TestSetupEncoding::new();
         if let Some(encoding) = enc {
             test_event.encs.push(encoding);
-            test_event.num_encodings = match enc_num {
-                Some(num) => num,
-                None => 1_u16,
-            };
+            test_event.num_encodings = enc_num.unwrap_or(1_u16);
         } else {
             for encoding in EncodingType::ENCODINGTYPE {
                 test_event.encs.push(encoding);
@@ -1020,7 +999,7 @@ impl VncClient {
         let message_len: usize =
             frame_buff.w as usize * frame_buff.h as usize * (pf.bit_per_pixel as usize / 8);
         println!("Total bytes of image data: {:?}", message_len);
-        self.read_msg(buf, message_len as usize)?;
+        self.read_msg(buf, message_len)?;
         buf.drain(..message_len);
         Ok(())
     }
@@ -1211,7 +1190,7 @@ impl TestDemoGpuDevice {
         test_state.borrow_mut().writel(addr + 13, cmd.h);
         test_state.borrow_mut().writel(addr + 17, cmd.data_len);
         // Write to specific address.
-        self.pci_dev.io_writeq(self.bar_addr, 0 as u64, addr);
+        self.pci_dev.io_writeq(self.bar_addr, 0_u64, addr);
         test_state.borrow().clock_step_ns(REFRESH_TIME_INTERVAL);
         println!("cmd : {:?}", cmd);
     }

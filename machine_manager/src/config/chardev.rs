@@ -265,7 +265,7 @@ impl VmConfig {
     /// * `conf` - The chardev config to be added to the vm.
     pub fn add_chardev_with_config(&mut self, conf: ChardevConfig) -> Result<()> {
         let chardev_id = conf.id();
-        if self.chardev.get(&chardev_id).is_some() {
+        if self.chardev.contains_key(&chardev_id) {
             bail!("Chardev {:?} has been added", chardev_id);
         }
         self.chardev.insert(chardev_id, conf);

@@ -50,6 +50,7 @@ fn create_pid_file(path: &str) -> Result<()> {
     let mut pid_file: File = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .mode(0o600)
         .open(path)?;
     write!(pid_file, "{}", pid)?;

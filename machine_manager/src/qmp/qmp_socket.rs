@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fmt::Display;
 use std::net::IpAddr;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -62,13 +63,13 @@ impl QmpSocketPath {
     }
 }
 
-impl ToString for QmpSocketPath {
-    fn to_string(&self) -> String {
+impl Display for QmpSocketPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             QmpSocketPath::Tcp { host, port } => {
-                format!("{}:{}", &host, &port)
+                write!(f, "{}:{}", &host, &port)
             }
-            QmpSocketPath::Unix { path } => path.clone(),
+            QmpSocketPath::Unix { path } => write!(f, "{}", path),
         }
     }
 }
@@ -591,7 +592,7 @@ mod tests {
     // Environment Recovery for UnixSocket
     fn recover_unix_socket_environment(socket_id: &str) {
         let socket_name: String = format!("test_{}.sock", socket_id);
-        std::fs::remove_file(&socket_name).unwrap();
+        std::fs::remove_file(socket_name).unwrap();
     }
 
     #[test]
@@ -602,20 +603,20 @@ mod tests {
 
         // life cycle test
         // 1.Unconnected
-        assert_eq!(socket.is_connected(), false);
+        assert!(!socket.is_connected());
 
         // 2.Connected
         socket.bind_stream(server);
-        assert_eq!(socket.is_connected(), true);
+        assert!(socket.is_connected());
 
         // 3.Unbind SocketStream, reset state
         socket.drop_stream();
-        assert_eq!(socket.is_connected(), false);
+        assert!(!socket.is_connected());
 
         // 4.Accept and reconnect a new UnixStream
         let _new_client = UnixStream::connect("test_04.sock");
         socket.accept();
-        assert_eq!(socket.is_connected(), true);
+        assert!(socket.is_connected());
 
         // After test. Environment Recover
         recover_unix_socket_environment("04");
@@ -663,7 +664,7 @@ mod tests {
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         match qmp_event {
             qmp_schema::QmpEvent::Shutdown { data, timestamp: _ } => {
-                assert_eq!(data.guest, true);
+                assert!(data.guest);
                 assert_eq!(data.reason, "guest-shutdown".to_string());
             }
             _ => assert!(false),
@@ -692,7 +693,7 @@ mod tests {
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_greeting = QmpGreeting::create_greeting(1, 0, 5);
         assert_eq!(qmp_greeting, qmp_response);
-        assert_eq!(res.is_err(), false);
+        assert!(res.is_ok());
 
         // 2.send empty response
         let res = socket.send_response(false);
@@ -701,7 +702,7 @@ mod tests {
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_empty_response = Response::create_empty_response();
         assert_eq!(qmp_empty_response, qmp_response);
-        assert_eq!(res.is_err(), false);
+        assert!(res.is_ok());
 
         // After test. Environment Recover
         recover_unix_socket_environment("07");

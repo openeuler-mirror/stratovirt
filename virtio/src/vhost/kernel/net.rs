@@ -459,7 +459,7 @@ mod tests {
         }
         // without assigned value of tap_fd and vhost_fd,
         // vhost-net device can be realized successfully.
-        assert_eq!(vhost_net.realize().is_ok(), true);
+        assert!(vhost_net.realize().is_ok());
 
         // test for get/set_driver_features
         vhost_net.base.device_features = 0;
@@ -482,22 +482,22 @@ mod tests {
         let len = vhost_net.config_space.lock().unwrap().as_bytes().len() as u64;
         let offset: u64 = 0;
         let data: Vec<u8> = vec![1; len as usize];
-        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), true);
+        assert!(vhost_net.write_config(offset, &data).is_ok());
 
         let mut read_data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), true);
+        assert!(vhost_net.read_config(offset, &mut read_data).is_ok());
         assert_ne!(read_data, data);
 
         let offset: u64 = 1;
         let data: Vec<u8> = vec![1; len as usize];
-        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), true);
+        assert!(vhost_net.write_config(offset, &data).is_ok());
 
         let offset: u64 = len + 1;
         let mut read_data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), false);
+        assert!(vhost_net.read_config(offset, &mut read_data).is_err());
 
         let offset: u64 = len - 1;
         let mut read_data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), false);
+        assert!(vhost_net.read_config(offset, &mut read_data).is_err());
     }
 }

@@ -93,10 +93,10 @@ impl VmConfig {
     }
 
     pub fn del_cameradev_by_id(&mut self, id: &str) -> Result<()> {
-        if self.camera_backend.get(&id.to_string()).is_none() {
+        if !self.camera_backend.contains_key(id) {
             bail!("no cameradev with id {}", id);
         }
-        self.camera_backend.remove(&id.to_string());
+        self.camera_backend.remove(id);
 
         Ok(())
     }

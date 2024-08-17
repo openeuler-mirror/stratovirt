@@ -481,7 +481,7 @@ impl VmConfig {
             bail!("Object type: {} config path err", zone_config.mem_type);
         }
 
-        if self.object.mem_object.get(&zone_config.id).is_some() {
+        if self.object.mem_object.contains_key(&zone_config.id) {
             bail!("Object: {} has been added", zone_config.id);
         }
         self.object
@@ -632,9 +632,9 @@ mod tests {
 
         machine_config.nr_cpus = MIN_NR_CPUS as u8;
         machine_config.mem_config.mem_size = MIN_MEMSIZE - 1;
-        assert!(!machine_config.check().is_ok());
+        assert!(machine_config.check().is_err());
         machine_config.mem_config.mem_size = MAX_MEMSIZE + 1;
-        assert!(!machine_config.check().is_ok());
+        assert!(machine_config.check().is_err());
         machine_config.mem_config.mem_size = MIN_MEMSIZE;
 
         assert!(machine_config.check().is_ok());
@@ -831,8 +831,8 @@ mod tests {
         assert!(machine_cfg_ret.is_ok());
         let machine_cfg = vm_config.machine_config;
         assert_eq!(machine_cfg.mach_type, MachineType::None);
-        assert_eq!(machine_cfg.mem_config.dump_guest_core, true);
-        assert_eq!(machine_cfg.mem_config.mem_share, true);
+        assert!(machine_cfg.mem_config.dump_guest_core);
+        assert!(machine_cfg.mem_config.mem_share);
 
         let mut vm_config = VmConfig::default();
         let memory_cfg_str = "none,dump-guest-core=off,mem-share=off,accel=kvm,usb=off";
@@ -841,8 +841,8 @@ mod tests {
         let machine_cfg = vm_config.machine_config;
         assert_eq!(machine_cfg.mach_type, MachineType::None);
         assert_eq!(machine_cfg.hypervisor, HypervisorType::Kvm);
-        assert_eq!(machine_cfg.mem_config.dump_guest_core, false);
-        assert_eq!(machine_cfg.mem_config.mem_share, false);
+        assert!(!machine_cfg.mem_config.dump_guest_core);
+        assert!(!machine_cfg.mem_config.mem_share);
 
         let mut vm_config = VmConfig::default();
         let memory_cfg_str = "type=none,accel=kvm-tcg";
@@ -903,10 +903,10 @@ mod tests {
         let mut vm_config = VmConfig::default();
         let mem_prealloc = vm_config.machine_config.mem_config.mem_prealloc;
         // default value is false.
-        assert_eq!(mem_prealloc, false);
+        assert!(!mem_prealloc);
         vm_config.enable_mem_prealloc();
         let mem_prealloc = vm_config.machine_config.mem_config.mem_prealloc;
-        assert_eq!(mem_prealloc, true);
+        assert!(mem_prealloc);
     }
 
     #[test]
@@ -961,18 +961,18 @@ mod tests {
             .add_mem_zone("memory-backend-ram,size=2M,id=mem3,share=on")
             .unwrap();
         assert_eq!(zone_config_3.size, 2 * 1024 * 1024);
-        assert_eq!(zone_config_3.share, true);
+        assert!(zone_config_3.share);
 
         let zone_config_4 = vm_config
             .add_mem_zone("memory-backend-ram,size=2M,id=mem4")
             .unwrap();
-        assert_eq!(zone_config_4.share, false);
-        assert_eq!(zone_config_4.memfd(), false);
+        assert!(!zone_config_4.share);
+        assert!(!zone_config_4.memfd());
 
         let zone_config_5 = vm_config
             .add_mem_zone("memory-backend-memfd,size=2M,id=mem5")
             .unwrap();
-        assert_eq!(zone_config_5.memfd(), true);
+        assert!(zone_config_5.memfd());
     }
 
     #[test]
