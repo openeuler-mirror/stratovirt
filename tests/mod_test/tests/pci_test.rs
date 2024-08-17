@@ -728,7 +728,7 @@ fn unmask_msix_global(pci_dev: TestPciDev) {
 }
 
 fn mask_msix_vector(pci_dev: TestPciDev, vector: u16) {
-    let offset: u64 = pci_dev.msix_table_off + (vector * PCI_MSIX_ENTRY_SIZE) as u64;
+    let offset: u64 = pci_dev.msix_table_off + u64::from(vector * PCI_MSIX_ENTRY_SIZE);
 
     let vector_mask = pci_dev.io_readl(
         pci_dev.msix_table_bar,
@@ -743,7 +743,7 @@ fn mask_msix_vector(pci_dev: TestPciDev, vector: u16) {
 }
 
 fn unmask_msix_vector(pci_dev: TestPciDev, vector: u16) {
-    let offset: u64 = pci_dev.msix_table_off + (vector * PCI_MSIX_ENTRY_SIZE) as u64;
+    let offset: u64 = pci_dev.msix_table_off + u64::from(vector * PCI_MSIX_ENTRY_SIZE);
 
     let vector_control = pci_dev.io_readl(
         pci_dev.msix_table_bar,
@@ -1268,13 +1268,13 @@ fn test_pci_type1_reset() {
     let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
 
     let command = root_port.rp_dev.config_readw(PCI_COMMAND);
-    let cmd_memory = command & PCI_COMMAND_MEMORY as u16;
+    let cmd_memory = command & u16::from(PCI_COMMAND_MEMORY);
 
     // Bitwise inversion of memory space enable.
     let write_cmd = if cmd_memory != 0 {
-        command & !PCI_COMMAND_MEMORY as u16
+        command & u16::from(!PCI_COMMAND_MEMORY)
     } else {
-        command | PCI_COMMAND_MEMORY as u16
+        command | u16::from(PCI_COMMAND_MEMORY)
     };
     root_port.rp_dev.config_writew(PCI_COMMAND, write_cmd);
     let old_command = root_port.rp_dev.config_readw(PCI_COMMAND);
@@ -1304,7 +1304,7 @@ fn test_out_boundary_config_access() {
 
     let devfn = 1 << 3 | 1;
     let addr = machine.borrow().pci_bus.borrow().ecam_alloc_ptr
-        + ((0 as u32) << 20 | (devfn as u32) << 12 | 0 as u32) as u64
+        + u64::from((0 as u32) << 20 | (devfn as u32) << 12 | 0 as u32)
         - 1;
 
     let write_value = u16::max_value();
@@ -1333,7 +1333,7 @@ fn test_out_size_config_access() {
     let value = root_port.rp_dev.config_readq(0);
     assert_ne!(
         value,
-        (vendor_device_id as u64) << 32 | command_status as u64
+        u64::from(vendor_device_id) << 32 | u64::from(command_status)
     );
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
@@ -2953,7 +2953,7 @@ fn test_pci_combine_001() {
 
     // set memory enabled = 0
     let mut val = dev_locked.config_readw(PCI_COMMAND);
-    val &= !(PCI_COMMAND_MEMORY as u16);
+    val &= !u16::from(PCI_COMMAND_MEMORY);
     dev_locked.config_writew(PCI_COMMAND, val);
 
     // mmio r/w stops working.
@@ -2962,7 +2962,7 @@ fn test_pci_combine_001() {
     assert_ne!(out, 10);
 
     // set memory enabled = 1
-    val |= PCI_COMMAND_MEMORY as u16;
+    val |= u16::from(PCI_COMMAND_MEMORY);
     dev_locked.config_writew(PCI_COMMAND, val);
 
     // mmio r/w gets back to work.

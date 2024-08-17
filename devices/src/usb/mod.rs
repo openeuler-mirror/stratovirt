@@ -104,7 +104,7 @@ impl UsbEndpoint {
             _ => 1,
         };
 
-        self.max_packet_size = size as u32 * micro_frames;
+        self.max_packet_size = u32::from(size) * micro_frames;
     }
 }
 
@@ -208,9 +208,9 @@ impl UsbDeviceBase {
         packet: &mut UsbPacket,
         device_req: &UsbDeviceRequest,
     ) -> Result<bool> {
-        let value = device_req.value as u32;
-        let index = device_req.index as u32;
-        let length = device_req.length as u32;
+        let value = u32::from(device_req.value);
+        let index = u32::from(device_req.index);
+        let length = u32::from(device_req.length);
         match device_req.request_type {
             USB_DEVICE_IN_REQUEST => match device_req.request {
                 USB_REQUEST_GET_DESCRIPTOR => {
@@ -473,7 +473,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>, ep_id: u8) -> Result<(
             locked_xhci.port_notify(&usb_port, PORTSC_PLC)?;
         }
     }
-    if let Err(e) = locked_xhci.wakeup_endpoint(slot_id as u32, ep_id as u32, 0) {
+    if let Err(e) = locked_xhci.wakeup_endpoint(u32::from(slot_id), u32::from(ep_id), 0) {
         error!("Failed to wakeup endpoint {:?}", e);
     }
     Ok(())
@@ -607,7 +607,7 @@ mod tests {
         let buf = [0_u8; 10];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_IN as u32;
+        packet.pid = u32::from(USB_TOKEN_IN);
         packet.iovecs.push(Iovec::new(hva, 4));
         packet.iovecs.push(Iovec::new(hva + 4, 2));
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
@@ -621,7 +621,7 @@ mod tests {
         let buf = [0_u8; 10];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_IN as u32;
+        packet.pid = u32::from(USB_TOKEN_IN);
         packet.iovecs.push(Iovec::new(hva, 4));
 
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
@@ -635,7 +635,7 @@ mod tests {
         let buf = [0_u8; 10];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_IN as u32;
+        packet.pid = u32::from(USB_TOKEN_IN);
         packet.iovecs.push(Iovec::new(hva, 4));
 
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
@@ -649,7 +649,7 @@ mod tests {
         let buf = [0_u8; 10];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_IN as u32;
+        packet.pid = u32::from(USB_TOKEN_IN);
         packet.iovecs.push(Iovec::new(hva, 10));
 
         let mut data: Vec<u8> = vec![1, 2, 3, 4, 5, 6];
@@ -663,7 +663,7 @@ mod tests {
         let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_OUT as u32;
+        packet.pid = u32::from(USB_TOKEN_OUT);
         packet.iovecs.push(Iovec::new(hva, 4));
         packet.iovecs.push(Iovec::new(hva + 4, 2));
 
@@ -678,7 +678,7 @@ mod tests {
         let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_OUT as u32;
+        packet.pid = u32::from(USB_TOKEN_OUT);
         packet.iovecs.push(Iovec::new(hva, 4));
         packet.iovecs.push(Iovec::new(hva + 4, 2));
 
@@ -693,7 +693,7 @@ mod tests {
         let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_OUT as u32;
+        packet.pid = u32::from(USB_TOKEN_OUT);
         packet.iovecs.push(Iovec::new(hva, 4));
 
         let mut data = [0_u8; 10];
@@ -707,7 +707,7 @@ mod tests {
         let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 0, 0, 0, 0];
         let hva = buf.as_ptr() as u64;
         let mut packet = UsbPacket::default();
-        packet.pid = USB_TOKEN_OUT as u32;
+        packet.pid = u32::from(USB_TOKEN_OUT);
         packet.iovecs.push(Iovec::new(hva, 6));
 
         let mut data = [0_u8; 2];

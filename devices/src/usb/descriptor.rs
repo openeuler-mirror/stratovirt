@@ -257,7 +257,7 @@ impl UsbDescriptor {
         let mut ifs = self.get_interfaces_descriptor(conf.interfaces.as_ref())?;
 
         config_desc.wTotalLength =
-            config_desc.bLength as u16 + iads.len() as u16 + ifs.len() as u16;
+            u16::from(config_desc.bLength) + iads.len() as u16 + ifs.len() as u16;
 
         let mut buf = config_desc.as_bytes().to_vec();
         buf.append(&mut iads);
@@ -369,7 +369,7 @@ impl UsbDescriptor {
     }
 
     fn get_bos_descriptor(&self, speed: u32) -> Result<Vec<u8>> {
-        let mut total = USB_DT_BOS_SIZE as u16;
+        let mut total = u16::from(USB_DT_BOS_SIZE);
         let mut cap = Vec::new();
         let mut cap_num = 0;
 
@@ -483,7 +483,7 @@ impl UsbDescriptorOps for UsbDeviceBase {
             for i in 0..num as usize {
                 if desc.configs[i].config_desc.bConfigurationValue == v {
                     self.descriptor.interface_number =
-                        desc.configs[i].config_desc.bNumInterfaces as u32;
+                        u32::from(desc.configs[i].config_desc.bNumInterfaces);
                     self.descriptor.configuration_selected = Some(desc.configs[i].clone());
                     found = true;
                 }

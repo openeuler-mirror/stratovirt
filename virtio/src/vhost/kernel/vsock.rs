@@ -464,11 +464,11 @@ mod tests {
         vsock.base.device_features = 0x0123_4567_89ab_cdef;
         // check for unsupported feature
         vsock.set_driver_features(0, 0x7000_0000);
-        assert_eq!(vsock.driver_features(0) as u64, 0_u64);
+        assert_eq!(u64::from(vsock.driver_features(0)), 0_u64);
         assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
         // check for supported feature
         vsock.set_driver_features(0, 0x8000_0000);
-        assert_eq!(vsock.driver_features(0) as u64, 0x8000_0000_u64);
+        assert_eq!(u64::from(vsock.driver_features(0)), 0x8000_0000_u64);
         assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
 
         // test vsock read_config
@@ -510,7 +510,7 @@ mod tests {
         let backend = vsock.backend.unwrap();
         assert_eq!(backend.set_guest_cid(3).is_ok(), true);
         assert_eq!(
-            backend.set_guest_cid(u32::max_value() as u64).is_ok(),
+            backend.set_guest_cid(u64::from(u32::max_value())).is_ok(),
             false
         );
         assert_eq!(backend.set_guest_cid(2).is_ok(), false);

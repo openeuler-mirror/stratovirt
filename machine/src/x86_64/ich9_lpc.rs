@@ -94,9 +94,10 @@ impl LPCBridge {
         self.base
             .config
             .read(PM_BASE_OFFSET as usize, pm_base_addr.as_mut_bytes());
-        self.sys_io
-            .root()
-            .add_subregion(pmtmr_region, pm_base_addr as u64 + PM_TIMER_OFFSET as u64)?;
+        self.sys_io.root().add_subregion(
+            pmtmr_region,
+            u64::from(pm_base_addr) + u64::from(PM_TIMER_OFFSET),
+        )?;
 
         Ok(())
     }
@@ -143,7 +144,7 @@ impl LPCBridge {
         let rst_ctrl_region = Region::init_io_region(0x1, ops, "RstCtrlRegion");
         self.sys_io
             .root()
-            .add_subregion(rst_ctrl_region, RST_CTRL_OFFSET as u64)?;
+            .add_subregion(rst_ctrl_region, u64::from(RST_CTRL_OFFSET))?;
 
         Ok(())
     }
@@ -170,7 +171,7 @@ impl LPCBridge {
         let sleep_reg_region = Region::init_io_region(0x1, ops, "SleepReg");
         self.sys_io
             .root()
-            .add_subregion(sleep_reg_region, SLEEP_CTRL_OFFSET as u64)?;
+            .add_subregion(sleep_reg_region, u64::from(SLEEP_CTRL_OFFSET))?;
         Ok(())
     }
 
@@ -192,7 +193,7 @@ impl LPCBridge {
         let pm_evt_region = Region::init_io_region(0x4, ops, "PmEvtRegion");
         self.sys_io
             .root()
-            .add_subregion(pm_evt_region, PM_EVENT_OFFSET as u64)?;
+            .add_subregion(pm_evt_region, u64::from(PM_EVENT_OFFSET))?;
 
         Ok(())
     }
@@ -222,7 +223,7 @@ impl LPCBridge {
         let pm_ctrl_region = Region::init_io_region(0x4, ops, "PmCtrl");
         self.sys_io
             .root()
-            .add_subregion(pm_ctrl_region, PM_CTRL_OFFSET as u64)?;
+            .add_subregion(pm_ctrl_region, u64::from(PM_CTRL_OFFSET))?;
 
         Ok(())
     }
@@ -258,7 +259,7 @@ impl Device for LPCBridge {
         le_write_u16(
             &mut self.base.config.config,
             HEADER_TYPE as usize,
-            (HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC) as u16,
+            u16::from(HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC),
         )?;
 
         self.init_sleep_reg()

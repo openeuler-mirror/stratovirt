@@ -166,16 +166,16 @@ impl AddressRange {
     ///
     /// * `other` - Other AddressRange.
     pub fn find_intersection(&self, other: AddressRange) -> Option<AddressRange> {
-        let begin = self.base.raw_value() as u128;
-        let end = self.size as u128 + begin;
-        let other_begin = other.base.raw_value() as u128;
-        let other_end = other.size as u128 + other_begin;
+        let begin = u128::from(self.base.raw_value());
+        let end = u128::from(self.size) + begin;
+        let other_begin = u128::from(other.base.raw_value());
+        let other_end = u128::from(other.size) + other_begin;
 
         if end <= other_begin || other_end <= begin {
             return None;
         }
         let start = std::cmp::max(self.base, other.base);
-        let size_inter = (std::cmp::min(end, other_end) - start.0 as u128) as u64;
+        let size_inter = (std::cmp::min(end, other_end) - u128::from(start.0)) as u64;
 
         Some(AddressRange {
             base: start,

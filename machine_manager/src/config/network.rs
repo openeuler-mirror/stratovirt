@@ -199,7 +199,7 @@ impl NetworkInterfaceConfig {
 
 fn valid_network_queue_size(s: &str) -> Result<u16> {
     let size: u64 = s.parse()?;
-    valid_virtqueue_size(size, DEFAULT_VIRTQUEUE_SIZE as u64, MAX_QUEUE_SIZE_NET)?;
+    valid_virtqueue_size(size, u64::from(DEFAULT_VIRTQUEUE_SIZE), MAX_QUEUE_SIZE_NET)?;
 
     Ok(size as u16)
 }

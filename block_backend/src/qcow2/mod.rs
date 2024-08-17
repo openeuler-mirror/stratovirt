@@ -335,8 +335,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     }
 
     pub fn load_refcount_table(&mut self) -> Result<()> {
-        let sz =
-            self.header.refcount_table_clusters as u64 * (self.header.cluster_size() / ENTRY_SIZE);
+        let sz = u64::from(self.header.refcount_table_clusters)
+            * (self.header.cluster_size() / ENTRY_SIZE);
         self.refcount.refcount_table = self
             .sync_aio
             .borrow_mut()
@@ -479,7 +479,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
     /// Extend the l1 table.
     pub fn grow_l1_table(&mut self, new_l1_size: u64) -> Result<()> {
-        let old_l1_size = self.header.l1_size as u64;
+        let old_l1_size = u64::from(self.header.l1_size);
         if new_l1_size <= old_l1_size {
             return Ok(());
         }
@@ -542,7 +542,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     /// Output: target entry.
     pub fn get_table_cluster(&mut self, guest_offset: u64) -> Result<Rc<RefCell<CacheTable>>> {
         let l1_index = self.table.get_l1_table_index(guest_offset);
-        if l1_index >= self.header.l1_size as u64 {
+        if l1_index >= u64::from(self.header.l1_size) {
             bail!("Need to grow l1 table size.");
         }
 
@@ -828,11 +828,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let snap = self.snapshot.snapshots[snap_id as usize].clone();
 
         // Validate snapshot table
-        if snap.l1_size as u64 > MAX_L1_SIZE / ENTRY_SIZE {
+        if u64::from(snap.l1_size) > MAX_L1_SIZE / ENTRY_SIZE {
             bail!("Snapshot L1 table too large");
         }
 
-        if i64::MAX as u64 - snap.l1_size as u64 * ENTRY_SIZE < snap.l1_table_offset
+        if i64::MAX as u64 - u64::from(snap.l1_size) * ENTRY_SIZE < snap.l1_table_offset
             || !is_aligned(self.header.cluster_size(), snap.l1_table_offset)
         {
             bail!("Snapshot L1 table offset invalid");
@@ -842,12 +842,12 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut snap_l1_table = self
             .sync_aio
             .borrow_mut()
-            .read_ctrl_cluster(snap.l1_table_offset, snap.l1_size as u64)?;
+            .read_ctrl_cluster(snap.l1_table_offset, u64::from(snap.l1_size))?;
         // SAFETY: Upper limit of l1_size is decided by disk virtual size.
         snap_l1_table.resize(snap.l1_size as usize, 0);
 
         let cluster_size = self.header.cluster_size();
-        let snap_l1_table_bytes = snap.l1_size as u64 * ENTRY_SIZE;
+        let snap_l1_table_bytes = u64::from(snap.l1_size) * ENTRY_SIZE;
         let snap_l1_table_clusters = bytes_to_clusters(snap_l1_table_bytes, cluster_size).unwrap();
         let new_l1_table_offset = self.alloc_cluster(snap_l1_table_clusters, true)?;
 
@@ -882,7 +882,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Free the snaphshot L1 table.
         let old_l1_table_clusters =
-            bytes_to_clusters(old_l1_size as u64 * ENTRY_SIZE, cluster_size).unwrap();
+            bytes_to_clusters(u64::from(old_l1_size) * ENTRY_SIZE, cluster_size).unwrap();
         self.refcount.update_refcount(
             old_l1_table_offset,
             old_l1_table_clusters,
@@ -933,7 +933,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Free the snaphshot L1 table.
         let l1_table_clusters =
-            bytes_to_clusters(snap.l1_size as u64 * ENTRY_SIZE, cluster_size).unwrap();
+            bytes_to_clusters(u64::from(snap.l1_size) * ENTRY_SIZE, cluster_size).unwrap();
         self.refcount.update_refcount(
             snap.l1_table_offset,
             l1_table_clusters,
@@ -972,7 +972,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(SnapshotInfo {
             id: snap.id.to_string(),
             name: snap.name.clone(),
-            vm_state_size: snap.vm_state_size as u64,
+            vm_state_size: u64::from(snap.vm_state_size),
             date_sec: snap.date_sec,
             date_nsec: snap.date_nsec,
             vm_clock_nsec: snap.vm_clock_nsec,
@@ -993,7 +993,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Alloc cluster and copy L1 table for snapshot.
         let cluster_size = self.header.cluster_size();
-        let l1_table_len = self.header.l1_size as u64 * ENTRY_SIZE;
+        let l1_table_len = u64::from(self.header.l1_size) * ENTRY_SIZE;
         let l1_table_clusters = bytes_to_clusters(l1_table_len, cluster_size).unwrap();
         let new_l1_table_offset = self.alloc_cluster(l1_table_clusters, true)?;
         self.sync_aio
@@ -1272,7 +1272,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 _ => snap.icount.to_string(),
             };
 
-            let date = get_format_time(snap.date_sec as i64);
+            let date = get_format_time(i64::from(snap.date_sec));
             let date_str = format!(
                 "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
                 date[0], date[1], date[2], date[3], date[4], date[5]
@@ -1985,10 +1985,10 @@ mod test {
                 .custom_flags(libc::O_CREAT | libc::O_TRUNC)
                 .open(path)
                 .unwrap();
-            file.set_len(cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE)
+            file.set_len(cluster_sz * 3 + u64::from(header.l1_size) * ENTRY_SIZE)
                 .unwrap();
             let zero_buf =
-                vec![0_u8; (cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE) as usize];
+                vec![0_u8; (cluster_sz * 3 + u64::from(header.l1_size) * ENTRY_SIZE) as usize];
             file.write_all(&zero_buf).unwrap();
             file.seek(SeekFrom::Start(0)).unwrap();
             file.write_all(&header.to_vec()).unwrap();

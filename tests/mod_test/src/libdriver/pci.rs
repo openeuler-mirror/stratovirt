@@ -133,13 +133,13 @@ impl TestPciDev {
 
     pub fn enable(&self) {
         let mut cmd = self.config_readw(PCI_COMMAND);
-        cmd |= (PCI_COMMAND_IO | PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER) as u16;
+        cmd |= u16::from(PCI_COMMAND_IO | PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
         self.config_writew(PCI_COMMAND, cmd);
 
         cmd = self.config_readw(PCI_COMMAND);
-        assert!(cmd & PCI_COMMAND_IO as u16 == PCI_COMMAND_IO as u16);
-        assert!(cmd & PCI_COMMAND_MEMORY as u16 == PCI_COMMAND_MEMORY as u16);
-        assert!(cmd & PCI_COMMAND_MASTER as u16 == PCI_COMMAND_MASTER as u16);
+        assert!(cmd & u16::from(PCI_COMMAND_IO) == u16::from(PCI_COMMAND_IO));
+        assert!(cmd & u16::from(PCI_COMMAND_MEMORY) == u16::from(PCI_COMMAND_MEMORY));
+        assert!(cmd & u16::from(PCI_COMMAND_MASTER) == u16::from(PCI_COMMAND_MASTER));
     }
 
     pub fn find_capability(&self, id: u8, start_addr: u8) -> u8 {
@@ -200,7 +200,7 @@ impl TestPciDev {
         } else {
             self.io_map(bar_table as u8)
         };
-        self.msix_table_off = (table & !PCI_MSIX_TABLE_BIR) as u64;
+        self.msix_table_off = u64::from(table & !PCI_MSIX_TABLE_BIR);
 
         let table = self.config_readl(addr + PCI_MSIX_PBA);
         let bar_pba = table & PCI_MSIX_TABLE_BIR;
@@ -209,7 +209,7 @@ impl TestPciDev {
         } else {
             self.msix_pba_bar = self.msix_table_bar;
         }
-        self.msix_pba_off = (table & !PCI_MSIX_TABLE_BIR) as u64;
+        self.msix_pba_off = u64::from(table & !PCI_MSIX_TABLE_BIR);
         self.msix_enabled = true;
     }
 
@@ -413,7 +413,7 @@ impl TestPciDev {
 impl PciMsixOps for TestPciDev {
     fn set_msix_vector(&self, msix_entry: u16, msix_addr: u64, msix_data: u32) {
         assert!(self.msix_enabled);
-        let offset = self.msix_table_off + (msix_entry * 16) as u64;
+        let offset = self.msix_table_off + u64::from(msix_entry * 16);
 
         let msix_table_bar = self.msix_table_bar;
         self.io_writel(

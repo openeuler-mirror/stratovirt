@@ -1616,7 +1616,7 @@ impl AmlIrqNoFlags {
 
 impl AmlBuilder for AmlIrqNoFlags {
     fn aml_bytes(&self) -> Vec<u8> {
-        let irq_mask = 1 << (self.irq as u16);
+        let irq_mask = 1 << u16::from(self.irq);
         vec![0x22, (irq_mask & 0xFF) as u8, (irq_mask >> 8) as u8]
     }
 }

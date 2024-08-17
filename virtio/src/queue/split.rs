@@ -116,7 +116,7 @@ impl QueueConfig {
     }
 
     fn get_desc_size(&self) -> u64 {
-        min(self.size, self.max_size) as u64 * DESCRIPTOR_LEN
+        u64::from(min(self.size, self.max_size)) * DESCRIPTOR_LEN
     }
 
     fn get_used_size(&self, features: u64) -> u64 {
@@ -126,7 +126,7 @@ impl QueueConfig {
             0_u64
         };
 
-        size + VRING_FLAGS_AND_IDX_LEN + (min(self.size, self.max_size) as u64) * USEDELEM_LEN
+        size + VRING_FLAGS_AND_IDX_LEN + u64::from(min(self.size, self.max_size)) * USEDELEM_LEN
     }
 
     fn get_avail_size(&self, features: u64) -> u64 {
@@ -137,7 +137,7 @@ impl QueueConfig {
         };
 
         size + VRING_FLAGS_AND_IDX_LEN
-            + (min(self.size, self.max_size) as u64) * (size_of::<u16>() as u64)
+            + u64::from(min(self.size, self.max_size)) * (size_of::<u16>() as u64)
     }
 
     pub fn reset(&mut self) {
@@ -290,7 +290,7 @@ impl SplitVringDesc {
         let mut miss_cached = true;
         if let Some(reg_cache) = cache {
             let base = self.addr.0;
-            let offset = self.len as u64;
+            let offset = u64::from(self.len);
             let end = match base.checked_add(offset) {
                 Some(addr) => addr,
                 None => {
@@ -361,7 +361,7 @@ impl SplitVringDesc {
     fn is_valid_indirect_desc(&self) -> bool {
         if self.len == 0
             || u64::from(self.len) % DESCRIPTOR_LEN != 0
-            || u64::from(self.len) / DESCRIPTOR_LEN > u16::MAX as u64
+            || u64::from(self.len) / DESCRIPTOR_LEN > u64::from(u16::MAX)
         {
             error!("The indirect descriptor is invalid, len: {}", self.len);
             return false;
@@ -435,7 +435,7 @@ impl SplitVringDesc {
                 elem.out_iovec.push(iovec);
             }
             elem.desc_num += 1;
-            desc_total_len += iovec.len as u64;
+            desc_total_len += u64::from(iovec.len);
 
             if desc.has_next() {
                 desc = Self::next_desc(sys_mem, desc_table_host, queue_size, desc.next, cache)?;
@@ -1030,7 +1030,7 @@ mod tests {
                 return Err(anyhow!(VirtioError::QueueIndex(index, self.size)));
             }
 
-            let desc_addr_offset = DESCRIPTOR_LEN * index as u64;
+            let desc_addr_offset = DESCRIPTOR_LEN * u64::from(index);
             let desc = SplitVringDesc {
                 addr,
                 len,
@@ -1065,7 +1065,7 @@ mod tests {
             avail_pos: u16,
             desc_index: u16,
         ) -> Result<()> {
-            let avail_idx_offset = VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * (avail_pos as u64);
+            let avail_idx_offset = VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(avail_pos);
             sys_mem.write_object::<u16>(
                 &desc_index,
                 GuestAddress(self.avail_ring.0 + avail_idx_offset),
@@ -1075,14 +1075,14 @@ mod tests {
 
         fn get_avail_event(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
             let avail_event_idx_offset =
-                VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * (self.actual_size() as u64);
+                VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
             let event_idx = sys_mem
                 .read_object::<u16>(GuestAddress(self.used_ring.0 + avail_event_idx_offset))?;
             Ok(event_idx)
         }
 
         fn get_used_elem(&self, sys_mem: &Arc<AddressSpace>, index: u16) -> Result<UsedElem> {
-            let used_elem_offset = VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * (index as u64);
+            let used_elem_offset = VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(index);
             let used_elem = sys_mem
                 .read_object::<UsedElem>(GuestAddress(self.used_ring.0 + used_elem_offset))?;
             Ok(used_elem)
@@ -1103,7 +1103,7 @@ mod tests {
 
         fn set_used_event_idx(&self, sys_mem: &Arc<AddressSpace>, idx: u16) -> Result<()> {
             let event_idx_offset =
-                VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * (self.actual_size() as u64);
+                VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(self.actual_size());
             sys_mem
                 .write_object::<u16>(&idx, GuestAddress(self.avail_ring.0 + event_idx_offset))?;
             Ok(())
@@ -1154,11 +1154,11 @@ mod tests {
 
         // it is valid
         queue_config.desc_table = GuestAddress(0);
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.ready = true;
@@ -1194,11 +1194,11 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.ready = true;
@@ -1208,7 +1208,7 @@ mod tests {
 
         // it is invalid when the address of descriptor table is out of bound
         queue_config.desc_table =
-            GuestAddress(SYSTEM_SPACE_SIZE - (QUEUE_SIZE as u64) * DESCRIPTOR_LEN + 1 as u64);
+            GuestAddress(SYSTEM_SPACE_SIZE - u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN + 1 as u64);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
@@ -1219,29 +1219,29 @@ mod tests {
         // it is invalid when the address of avail ring is out of bound
         queue_config.avail_ring = GuestAddress(
             SYSTEM_SPACE_SIZE
-                - (VRING_AVAIL_LEN_EXCEPT_AVAILELEM + AVAILELEM_LEN * (QUEUE_SIZE as u64))
+                - (VRING_AVAIL_LEN_EXCEPT_AVAILELEM + AVAILELEM_LEN * u64::from(QUEUE_SIZE))
                 + 1 as u64,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), true);
 
         // it is invalid when the address of used ring is out of bound
         queue_config.used_ring = GuestAddress(
             SYSTEM_SPACE_SIZE
-                - (VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * (QUEUE_SIZE as u64))
+                - (VRING_USED_LEN_EXCEPT_USEDELEM + USEDELEM_LEN * u64::from(QUEUE_SIZE))
                 + 1 as u64,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
@@ -1254,11 +1254,11 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.ready = true;
@@ -1271,29 +1271,29 @@ mod tests {
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), true);
 
         // it is invalid when the address of descriptor table is overlapped to the address of avail
         // ring.
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN - 1);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN - 1);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), true);
 
         // it is invalid when the address of avail ring is equal to the address of used ring
-        queue_config.used_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.used_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
@@ -1301,18 +1301,18 @@ mod tests {
 
         // it is invalid when the address of avail ring is overlapped to the address of used ring
         queue_config.used_ring = GuestAddress(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64)
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE)
                 - 1,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
@@ -1325,11 +1325,11 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.ready = true;
@@ -1347,28 +1347,28 @@ mod tests {
         assert_eq!(queue.is_valid(&sys_space), true);
 
         // it is invalid when the address of avail ring is not aligned to 2
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN + 1);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN + 1);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), true);
 
         // it is invalid when the address of used ring is not aligned to 4
         queue_config.used_ring = GuestAddress(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64)
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE)
                 + 3,
         );
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
         assert_eq!(queue.is_valid(&sys_space), false);
         // recover the address for valid queue
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         let queue = Queue::new(queue_config, QUEUE_TYPE_SPLIT_VRING).unwrap();
@@ -1383,13 +1383,13 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             sys_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.addr_cache.avail_ring_host =
             sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.addr_cache.used_ring_host =
@@ -1434,7 +1434,7 @@ mod tests {
         // set 1 to the idx of avail ring
         vring.set_avail_ring_idx(&sys_space, 1).unwrap();
 
-        let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
+        let features = 1 << u64::from(VIRTIO_F_RING_EVENT_IDX);
         let elem = match vring.pop_avail(&sys_space, features) {
             Ok(ret) => ret,
             Err(_) => Element {
@@ -1473,13 +1473,13 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             sys_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.addr_cache.avail_ring_host =
             sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.addr_cache.used_ring_host =
@@ -1540,7 +1540,7 @@ mod tests {
         // set 1 to the idx of avail ring
         vring.set_avail_ring_idx(&sys_space, 1).unwrap();
 
-        let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
+        let features = 1 << u64::from(VIRTIO_F_RING_EVENT_IDX);
         let elem = match vring.pop_avail(&sys_space, features) {
             Ok(ret) => ret,
             Err(_) => Element {
@@ -1573,13 +1573,13 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             sys_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.addr_cache.avail_ring_host =
             sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.addr_cache.used_ring_host =
@@ -1592,7 +1592,7 @@ mod tests {
         // it is error when the idx of avail ring which is equal to next_avail
         // set 0 to the idx of avail ring which is equal to next_avail
         vring.set_avail_ring_idx(&sys_space, 0).unwrap();
-        let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
+        let features = 1 << u64::from(VIRTIO_F_RING_EVENT_IDX);
         if let Ok(elem) = vring.pop_avail(&sys_space, features) {
             if elem.desc_num != 0 {
                 assert!(false);
@@ -1768,13 +1768,13 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             sys_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.addr_cache.avail_ring_host =
             sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.addr_cache.used_ring_host =
@@ -1835,7 +1835,7 @@ mod tests {
         // Set 1 to the idx of avail ring.
         vring.set_avail_ring_idx(&sys_space, 1).unwrap();
 
-        let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
+        let features = 1 << u64::from(VIRTIO_F_RING_EVENT_IDX);
         if let Err(err) = vring.pop_avail(&sys_space, features) {
             assert_eq!(err.to_string(), "Failed to get vring element");
         } else {
@@ -1932,13 +1932,13 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             sys_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.addr_cache.avail_ring_host =
             sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.addr_cache.used_ring_host =
@@ -1976,13 +1976,13 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             sys_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * DESCRIPTOR_LEN);
+        queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
         queue_config.addr_cache.avail_ring_host =
             sys_space.get_host_address(queue_config.avail_ring).unwrap();
         queue_config.used_ring = GuestAddress(align(
-            (QUEUE_SIZE as u64) * DESCRIPTOR_LEN
+            u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
-                + AVAILELEM_LEN * (QUEUE_SIZE as u64),
+                + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
         queue_config.addr_cache.used_ring_host =
@@ -2007,7 +2007,7 @@ mod tests {
 
         // it's true when the feature of event idx is open and
         // (new - event_idx - Wrapping(1) < new -old)
-        let features = 1 << VIRTIO_F_RING_EVENT_IDX as u64;
+        let features = 1 << u64::from(VIRTIO_F_RING_EVENT_IDX);
         vring.last_signal_used = Wrapping(5); // old
         assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
         assert!(vring.set_used_event_idx(&sys_space, 6).is_ok()); // event_idx

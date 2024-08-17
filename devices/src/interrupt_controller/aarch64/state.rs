@@ -280,7 +280,7 @@ impl GICv3 {
             ..Default::default()
         };
 
-        let offset = dist.irq_base / (GIC_IRQ_INTERNAL as u64 / REGISTER_SIZE);
+        let offset = dist.irq_base / (u64::from(GIC_IRQ_INTERNAL) / REGISTER_SIZE);
         self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, false)?;
         self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, false)?;
         self.access_gic_distributor(dist.irq_base, &mut dist.line_level, false)?;
@@ -290,7 +290,7 @@ impl GICv3 {
         // edge trigger
         for i in 0..NR_GICD_ICFGR {
             if ((i * GIC_IRQ_INTERNAL as usize / NR_GICD_ICFGR) as u64 + dist.irq_base)
-                > self.nr_irqs as u64
+                > u64::from(self.nr_irqs)
             {
                 break;
             }
@@ -299,7 +299,7 @@ impl GICv3 {
         }
 
         for i in 0..NR_GICD_IPRIORITYR {
-            if (i as u64 * REGISTER_SIZE + dist.irq_base) > self.nr_irqs as u64 {
+            if (i as u64 * REGISTER_SIZE + dist.irq_base) > u64::from(self.nr_irqs) {
                 break;
             }
             let offset = dist.irq_base + REGISTER_SIZE * i as u64;
@@ -311,7 +311,7 @@ impl GICv3 {
         }
 
         for i in 0..NR_GICD_IROUTER {
-            if (i as u64 + dist.irq_base) > self.nr_irqs as u64 {
+            if (i as u64 + dist.irq_base) > u64::from(self.nr_irqs) {
                 break;
             }
             let offset = dist.irq_base + i as u64;
@@ -328,12 +328,12 @@ impl GICv3 {
     }
 
     fn set_dist(&self, mut dist: GICv3DistState) -> Result<()> {
-        let offset = dist.irq_base / (GIC_IRQ_INTERNAL as u64 / REGISTER_SIZE);
+        let offset = dist.irq_base / (u64::from(GIC_IRQ_INTERNAL) / REGISTER_SIZE);
         self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, true)?;
         self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, true)?;
 
         for i in 0..NR_GICD_IROUTER {
-            if (i as u64 + dist.irq_base) > self.nr_irqs as u64 {
+            if (i as u64 + dist.irq_base) > u64::from(self.nr_irqs) {
                 break;
             }
             let offset = dist.irq_base + i as u64;
@@ -349,7 +349,7 @@ impl GICv3 {
         // edge trigger
         for i in 0..NR_GICD_ICFGR {
             if ((i * GIC_IRQ_INTERNAL as usize / NR_GICD_ICFGR) as u64 + dist.irq_base)
-                > self.nr_irqs as u64
+                > u64::from(self.nr_irqs)
             {
                 break;
             }
@@ -362,7 +362,7 @@ impl GICv3 {
         self.access_gic_distributor(GICD_ISACTIVER + offset, &mut dist.gicd_isactiver, true)?;
 
         for i in 0..NR_GICD_IPRIORITYR {
-            if (i as u64 * REGISTER_SIZE + dist.irq_base) > self.nr_irqs as u64 {
+            if (i as u64 * REGISTER_SIZE + dist.irq_base) > u64::from(self.nr_irqs) {
                 break;
             }
             let offset = dist.irq_base + REGISTER_SIZE * i as u64;
@@ -634,7 +634,7 @@ impl StateTransfer for GICv3 {
             .map_err(|e| MigrationError::GetGicRegsError("gicd_statusr", e.to_string()))?;
         for irq in (GIC_IRQ_INTERNAL..self.nr_irqs).step_by(32) {
             state.irq_dist[state.dist_len] = self
-                .get_dist(irq as u64)
+                .get_dist(u64::from(irq))
                 .map_err(|e| MigrationError::GetGicRegsError("dist", e.to_string()))?;
             state.dist_len += 1;
         }

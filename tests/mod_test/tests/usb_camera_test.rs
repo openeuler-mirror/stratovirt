@@ -155,7 +155,7 @@ fn check_multi_frames(
             slot_id,
             VS_ENDPOINT_ID,
             frame_len,
-            UVC_HEADER_LEN as u32,
+            u32::from(UVC_HEADER_LEN),
             max_payload,
         );
         for buf in &payload_list {
@@ -314,7 +314,7 @@ fn test_xhci_camera_invalid_frame_len() {
         slot_id,
         VS_ENDPOINT_ID,
         len as u32,
-        UVC_HEADER_LEN as u32,
+        u32::from(UVC_HEADER_LEN),
         cur.dwMaxPayloadTransferSize,
     );
     for item in payload_list {

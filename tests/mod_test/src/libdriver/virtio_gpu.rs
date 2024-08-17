@@ -697,7 +697,7 @@ pub fn current_curosr_check(dpy: &Rc<RefCell<TestDemoDpyDevice>>, local: &Vec<u8
     if size as usize != local.len() {
         return false;
     }
-    let remote = dpy.borrow_mut().get_cursor(size as u64);
+    let remote = dpy.borrow_mut().get_cursor(u64::from(size));
 
     for (i, v) in remote.iter().enumerate() {
         if v != local.get(i).unwrap() {
@@ -712,7 +712,7 @@ pub fn current_surface_check(dpy: &Rc<RefCell<TestDemoDpyDevice>>, local: &Vec<u
     if size as usize != local.len() {
         return false;
     }
-    let remote = dpy.borrow_mut().get_surface(size as u64);
+    let remote = dpy.borrow_mut().get_surface(u64::from(size));
 
     for (i, v) in remote.iter().enumerate() {
         if v != local.get(i).unwrap() {

@@ -73,7 +73,7 @@ pub fn create_timestamp() -> TimeStamp {
         .expect("Time went backwards");
     let seconds = u128::from(since_the_epoch.as_secs());
     let microseconds =
-        (since_the_epoch.as_nanos() - seconds * (NANOSECONDS_PER_SECOND as u128)) / (1_000_u128);
+        (since_the_epoch.as_nanos() - seconds * u128::from(NANOSECONDS_PER_SECOND)) / (1_000_u128);
     TimeStamp {
         seconds: seconds as u64,
         microseconds: microseconds as u64,

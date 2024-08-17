@@ -95,7 +95,7 @@ fn bcd_to_bin(src: u8) -> u64 {
         return 0_u64;
     }
 
-    (((src >> 4) * 10) + (src & 0x0f)) as u64
+    u64::from(((src >> 4) * 10) + (src & 0x0f))
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -267,7 +267,7 @@ impl RTC {
 
     /// Get current clock value.
     fn get_current_value(&self) -> i64 {
-        (self.base_time.elapsed().as_secs() as i128 + self.tick_offset as i128) as i64
+        (i128::from(self.base_time.elapsed().as_secs()) + i128::from(self.tick_offset)) as i64
     }
 
     fn set_rtc_cmos(&mut self, tm: libc::tm) {

@@ -281,7 +281,7 @@ impl QcowSnapshot {
         // Snapshot Extra data.
         // vm_state_size_large is used for vm snapshot.
         // It's equal to vm_state_size which is also 0 in disk snapshot.
-        BigEndian::write_u64(&mut buf[40..48], self.vm_state_size as u64);
+        BigEndian::write_u64(&mut buf[40..48], u64::from(self.vm_state_size));
         BigEndian::write_u64(&mut buf[48..56], self.disk_size);
         if self.extra_data_size == SNAPSHOT_EXTRA_DATA_LEN_24 as u32 {
             BigEndian::write_u64(&mut buf[56..64], self.icount);

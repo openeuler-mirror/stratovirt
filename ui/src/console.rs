@@ -777,8 +777,8 @@ pub fn console_select(con_id: Option<usize>) -> Result<()> {
 /// * `height` - height of image.
 /// * `msg` - test messages showed in display.
 pub fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySurface> {
-    if !(0..MAX_WINDOW_WIDTH as i32).contains(&width)
-        || !(0..MAX_WINDOW_HEIGHT as i32).contains(&height)
+    if !(0..i32::from(MAX_WINDOW_WIDTH)).contains(&width)
+        || !(0..i32::from(MAX_WINDOW_HEIGHT)).contains(&height)
     {
         error!("The size of image is invalid!");
         return None;

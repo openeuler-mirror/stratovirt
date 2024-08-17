@@ -1326,7 +1326,7 @@ fn get_xattr(fs: &VirtioFsTest, name: String, nodeid: u64) -> (FuseOutHeader, St
     let fuse_read_out = fs
         .state
         .borrow()
-        .memread(outbodyaddr, DEFAULT_XATTR_SIZE as u64);
+        .memread(outbodyaddr, u64::from(DEFAULT_XATTR_SIZE));
     let attr = String::from_utf8(fuse_read_out).unwrap();
 
     (out_header, attr)
@@ -1804,7 +1804,7 @@ fn regularfile_xattr_test() {
     let attr_list = fs
         .state
         .borrow()
-        .memread(outbodyaddr, DEFAULT_XATTR_SIZE as u64);
+        .memread(outbodyaddr, u64::from(DEFAULT_XATTR_SIZE));
     // The first attr is "security.selinux"
     let (_attr1, next1) = read_cstring(attr_list.clone(), 0);
     // The next attrs are what we set by FUSE_SETXATTR. Check it.

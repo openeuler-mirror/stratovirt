@@ -229,7 +229,7 @@ impl HypervisorOps for KvmHypervisor {
             .vm_fd
             .as_ref()
             .unwrap()
-            .create_vcpu(vcpu_id as u64)
+            .create_vcpu(u64::from(vcpu_id))
             .with_context(|| "Create vcpu failed")?;
         Ok(Arc::new(KvmCpu::new(
             vcpu_id,

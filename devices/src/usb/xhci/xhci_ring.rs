@@ -101,9 +101,12 @@ impl XhciCommandRing {
                     self.ccs = !self.ccs;
                 }
             } else {
-                self.dequeue = self.dequeue.checked_add(TRB_SIZE as u64).ok_or(
-                    UsbError::MemoryAccessOverflow(self.dequeue, TRB_SIZE as u64),
-                )?;
+                self.dequeue = self
+                    .dequeue
+                    .checked_add(u64::from(TRB_SIZE))
+                    .ok_or_else(|| {
+                        UsbError::MemoryAccessOverflow(self.dequeue, u64::from(TRB_SIZE))
+                    })?;
                 return Ok(Some(trb));
             }
         }
@@ -181,8 +184,8 @@ impl XhciTransferRing {
             } else {
                 td.push(trb);
                 dequeue = dequeue
-                    .checked_add(TRB_SIZE as u64)
-                    .ok_or(UsbError::MemoryAccessOverflow(dequeue, TRB_SIZE as u64))?;
+                    .checked_add(u64::from(TRB_SIZE))
+                    .ok_or_else(|| UsbError::MemoryAccessOverflow(dequeue, u64::from(TRB_SIZE)))?;
                 if trb_type == TRBType::TrSetup {
                     ctrl_td = true;
                 } else if trb_type == TRBType::TrStatus {
@@ -214,7 +217,7 @@ impl XhciTransferRing {
 
     pub fn update_dequeue_to_ctx(&self, ctx: &mut [u32]) {
         let dequeue = self.get_dequeue_ptr();
-        ctx[0] = dequeue as u32 | self.get_cycle_bit() as u32;
+        ctx[0] = dequeue as u32 | u32::from(self.get_cycle_bit());
         ctx[1] = (dequeue >> 32) as u32;
     }
 }

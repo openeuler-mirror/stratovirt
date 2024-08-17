@@ -102,7 +102,7 @@ impl PL031 {
 
     /// Get current clock value.
     fn get_current_value(&self) -> u32 {
-        (self.base_time.elapsed().as_secs() as u128 + self.tick_offset as u128) as u32
+        (u128::from(self.base_time.elapsed().as_secs()) + u128::from(self.tick_offset)) as u32
     }
 }
 

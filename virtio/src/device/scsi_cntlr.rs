@@ -194,7 +194,7 @@ impl VirtioDevice for ScsiCntlr {
         // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.
         self.config_space.cmd_per_lun = 128;
         // seg_max: queue size - 2, 32 bit.
-        self.config_space.seg_max = self.queue_size_max() as u32 - 2;
+        self.config_space.seg_max = u32::from(self.queue_size_max()) - 2;
         self.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
         self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN;
         // num_queues: request queues number.
@@ -753,7 +753,7 @@ impl ScsiRequestOps for CmdQueueRequest {
 //   | Byte 0 | Byte 1 | Byte 2 | Byte 3 | Byte 4 | Byte 5 | Byte 6 | Byte 7 |
 //   |    1   | target |       lun       |                 0                 |
 fn virtio_scsi_get_lun_id(lun: [u8; 8]) -> u16 {
-    (((lun[2] as u16) << 8) | (lun[3] as u16)) & 0x3FFF
+    ((u16::from(lun[2]) << 8) | u16::from(lun[3])) & 0x3FFF
 }
 
 struct ScsiCmdQueueHandler {

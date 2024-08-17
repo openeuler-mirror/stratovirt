@@ -146,7 +146,7 @@ impl VirtioDevice for Block {
                 .set_protocol_features(self.protocol_features)
                 .with_context(|| "Failed to set protocol features for vhost-user blk")?;
 
-            if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_CONFIG as u32) {
+            if virtio_has_feature(protocol_features, u32::from(VHOST_USER_PROTOCOL_F_CONFIG)) {
                 let config = locked_client
                     .get_virtio_blk_config()
                     .with_context(|| "Failed to get config for vhost-user blk")?;
@@ -158,7 +158,7 @@ impl VirtioDevice for Block {
                 );
             }
 
-            if virtio_has_feature(protocol_features, VHOST_USER_PROTOCOL_F_MQ as u32) {
+            if virtio_has_feature(protocol_features, u32::from(VHOST_USER_PROTOCOL_F_MQ)) {
                 let max_queue_num = locked_client
                     .get_max_queue_num()
                     .with_context(|| "Failed to get queue num for vhost-user blk")?;

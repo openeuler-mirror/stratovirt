@@ -685,8 +685,8 @@ impl XhciEvent {
         XhciTRB {
             parameter: self.ptr,
             status: self.length | (self.ccode as u32) << EVENT_TRB_CCODE_SHIFT,
-            control: (self.slot_id as u32) << EVENT_TRB_SLOT_ID_SHIFT
-                | (self.ep_id as u32) << EVENT_TRB_EP_ID_SHIFT
+            control: u32::from(self.slot_id) << EVENT_TRB_SLOT_ID_SHIFT
+                | u32::from(self.ep_id) << EVENT_TRB_EP_ID_SHIFT
                 | self.flags
                 | (self.trb_type as u32) << TRB_TYPE_SHIFT,
             addr: 0,
@@ -1056,7 +1056,7 @@ impl XhciDevice {
     pub fn stop(&mut self) {
         trace::usb_xhci_stop();
         self.oper.set_usb_status_flag(USB_STS_HCH);
-        self.oper.cmd_ring_ctrl &= !(CMD_RING_CTRL_CRR as u64);
+        self.oper.cmd_ring_ctrl &= !u64::from(CMD_RING_CTRL_CRR);
     }
 
     pub fn running(&self) -> bool {
@@ -1136,7 +1136,7 @@ impl XhciDevice {
             return Ok(());
         }
         let mut evt = XhciEvent::new(TRBType::ErPortStatusChange, TRBCCode::Success);
-        evt.ptr = ((locked_port.port_id as u32) << PORT_EVENT_ID_SHIFT) as u64;
+        evt.ptr = u64::from(u32::from(locked_port.port_id) << PORT_EVENT_ID_SHIFT);
         self.intrs[0].lock().unwrap().send_event(&evt)?;
         Ok(())
     }
@@ -1445,7 +1445,7 @@ impl XhciDevice {
         let packet_id = self.generate_packet_id();
         let p = Arc::new(Mutex::new(UsbPacket::new(
             packet_id,
-            USB_TOKEN_OUT as u32,
+            u32::from(USB_TOKEN_OUT),
             0,
             0,
             Vec::new(),
@@ -1459,8 +1459,10 @@ impl XhciDevice {
     fn get_device_context_addr(&self, slot_id: u32) -> Result<u64> {
         self.oper
             .dcbaap
-            .checked_add((8 * slot_id) as u64)
-            .with_context(|| UsbError::MemoryAccessOverflow(self.oper.dcbaap, (8 * slot_id) as u64))
+            .checked_add(u64::from(8 * slot_id))
+            .with_context(|| {
+                UsbError::MemoryAccessOverflow(self.oper.dcbaap, u64::from(8 * slot_id))
+            })
     }
 
     fn configure_endpoint(&mut self, slot_id: u32, trb: &XhciTRB) -> Result<TRBCCode> {
@@ -1658,7 +1660,7 @@ impl XhciDevice {
         output_ctx: DmaAddr,
     ) -> Result<TRBCCode> {
         trace::usb_xhci_enable_endpoint(&slot_id, &ep_id);
-        let entry_offset = (ep_id - 1) as u64 * EP_INPUT_CTX_ENTRY_SIZE;
+        let entry_offset = u64::from(ep_id - 1) * EP_INPUT_CTX_ENTRY_SIZE;
         let mut ep_ctx = XhciEpCtx::default();
         dma_read_u32(
             &self.mem_space,
@@ -2076,16 +2078,17 @@ impl XhciDevice {
         let epctx = &self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
 
         if xfer.td[0].control & TRB_TR_SIA != 0 {
-            let asap = ((mfindex as u32 + epctx.interval - 1) & !(epctx.interval - 1)) as u64;
-            if asap >= epctx.mfindex_last && asap <= epctx.mfindex_last + epctx.interval as u64 * 4
+            let asap = u64::from((mfindex as u32 + epctx.interval - 1) & !(epctx.interval - 1));
+            if asap >= epctx.mfindex_last
+                && asap <= epctx.mfindex_last + u64::from(epctx.interval) * 4
             {
-                xfer.mfindex_kick = epctx.mfindex_last + epctx.interval as u64;
+                xfer.mfindex_kick = epctx.mfindex_last + u64::from(epctx.interval);
             } else {
                 xfer.mfindex_kick = asap;
             }
         } else {
             xfer.mfindex_kick =
-                (((xfer.td[0].control >> TRB_TR_FRAMEID_SHIFT) & TRB_TR_FRAMEID_MASK) as u64) << 3;
+                u64::from((xfer.td[0].control >> TRB_TR_FRAMEID_SHIFT) & TRB_TR_FRAMEID_MASK) << 3;
             xfer.mfindex_kick |= mfindex & !(MFINDEX_WRAP_NUM - 1);
             if xfer.mfindex_kick + 0x100 < mfindex {
                 xfer.mfindex_kick += MFINDEX_WRAP_NUM;
@@ -2213,7 +2216,7 @@ impl XhciDevice {
                 self.mem_space.get_address_map(
                     &None,
                     GuestAddress(dma_addr),
-                    chunk as u64,
+                    u64::from(chunk),
                     &mut vec,
                 )?;
             }
@@ -2232,7 +2235,7 @@ impl XhciDevice {
         let xfer_ops = Arc::downgrade(xfer) as Weak<Mutex<dyn TransferOps>>;
         let packet = UsbPacket::new(
             packet_id,
-            dir as u32,
+            u32::from(dir),
             ep_number,
             stream,
             vec,
@@ -2373,7 +2376,10 @@ impl XhciDevice {
         let base_addr = GuestAddress(addr64_from_u32(seg.addr_lo, seg.addr_hi));
         // SAFETY: seg size is a 16 bit register, will not overflow.
         let er_len = seg.size * TRB_SIZE;
-        if !self.mem_space.address_in_memory(base_addr, er_len as u64) {
+        if !self
+            .mem_space
+            .address_in_memory(base_addr, u64::from(er_len))
+        {
             bail!("The event ring does not locate in guest ram");
         }
 
@@ -2508,7 +2514,7 @@ pub fn dma_write_u32(
 }
 
 fn addr64_from_u32(low: u32, high: u32) -> u64 {
-    (((high << 16) as u64) << 16) | low as u64
+    (u64::from(high << 16) << 16) | u64::from(low)
 }
 
 // | ep id | < = > | ep direction | ep number |

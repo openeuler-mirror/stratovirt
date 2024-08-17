@@ -105,7 +105,7 @@ impl<T: Clone> AioContext<T> for IoUringContext {
             self.events.push(AioEvent {
                 user_data: cqe.user_data(),
                 status: 0,
-                res: cqe.result() as i64,
+                res: i64::from(cqe.result()),
             });
         }
         &self.events

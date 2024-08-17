@@ -600,7 +600,7 @@ mod test {
             let mut buf = vec![0; QcowHeader::len()];
             assert!(file.read_at(&mut buf, 0).is_ok());
             let header = QcowHeader::from_vec(&buf).unwrap();
-            assert_eq!(header.cluster_bits as u64, cluster_bits);
+            assert_eq!(u64::from(header.cluster_bits), cluster_bits);
 
             Self {
                 header,
@@ -897,14 +897,14 @@ mod test {
             let file_len = test_image.file_len();
             let l1_size = test_image.header.l1_size;
             let reftable_clusters = test_image.header.refcount_table_clusters;
-            let reftable_size = reftable_clusters as u64 * cluster_size / ENTRY_SIZE;
+            let reftable_size = u64::from(reftable_clusters) * cluster_size / ENTRY_SIZE;
             let refblock_size = cluster_size / (refcount_bits / 8);
 
             assert_ne!(l1_size, 0);
             assert_ne!(reftable_clusters, 0);
-            assert!(l1_size as u64 * cluster_size * cluster_size / ENTRY_SIZE >= image_size);
+            assert!(u64::from(l1_size) * cluster_size * cluster_size / ENTRY_SIZE >= image_size);
             assert!(reftable_size * refblock_size * cluster_size >= file_len);
-            assert_eq!(test_image.header.cluster_bits as u64, cluster_bits);
+            assert_eq!(u64::from(test_image.header.cluster_bits), cluster_bits);
             assert_eq!(test_image.header.size, image_size);
 
             // Check refcount.

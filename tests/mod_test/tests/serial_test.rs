@@ -214,7 +214,8 @@ impl SerialTest {
 
         // Port Ready.
         for port in self.ports.clone().iter() {
-            let ready_msg = VirtioConsoleControl::new(*port.0 as u32, VIRTIO_CONSOLE_PORT_READY, 1);
+            let ready_msg =
+                VirtioConsoleControl::new(u32::from(*port.0), VIRTIO_CONSOLE_PORT_READY, 1);
             self.out_control_event(ready_msg);
 
             // If it's a console port.
@@ -258,7 +259,7 @@ impl SerialTest {
 
                 // driver -> device: port open.
                 let open_msg: VirtioConsoleControl =
-                    VirtioConsoleControl::new(*port.0 as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
+                    VirtioConsoleControl::new(u32::from(*port.0), VIRTIO_CONSOLE_PORT_OPEN, 1);
                 self.out_control_event(open_msg);
             }
         }
@@ -321,7 +322,7 @@ impl SerialTest {
         // Connect Guest.
         // driver -> device: port open.
         let open_msg: VirtioConsoleControl =
-            VirtioConsoleControl::new(port.nr as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
+            VirtioConsoleControl::new(u32::from(port.nr), VIRTIO_CONSOLE_PORT_OPEN, 1);
         self.out_control_event(open_msg);
 
         // IO: Guest -> Host.
@@ -461,7 +462,7 @@ fn create_serial(ports_config: Vec<PortConfig>, pci_slot: u8, pci_fn: u8) -> Ser
 
 fn verify_output_data(test_state: Rc<RefCell<TestState>>, addr: u64, len: u32, test_data: &String) {
     let mut data_buf: Vec<u8> = Vec::with_capacity(len as usize);
-    data_buf.append(test_state.borrow().memread(addr, len as u64).as_mut());
+    data_buf.append(test_state.borrow().memread(addr, u64::from(len)).as_mut());
     let data = String::from_utf8(data_buf).unwrap();
     assert_eq!(data, *test_data);
 }
@@ -662,12 +663,13 @@ fn virtconsole_pty_err_out_control_msg() {
 
     // Error out control msg which has invalid event. Just discard this invalid msg. Nothing
     // happened.
-    let invalid_event_msg = VirtioConsoleControl::new(nr as u32, VIRTIO_CONSOLE_PORT_NAME, 1);
+    let invalid_event_msg = VirtioConsoleControl::new(u32::from(nr), VIRTIO_CONSOLE_PORT_NAME, 1);
     st.out_control_event(invalid_event_msg);
 
     // Error out control msg which has non-existed port id. Just discard this invalid msg. Nothing
     // happened.
-    let invalid_event_msg = VirtioConsoleControl::new((nr + 5) as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
+    let invalid_event_msg =
+        VirtioConsoleControl::new(u32::from(nr + 5), VIRTIO_CONSOLE_PORT_OPEN, 1);
     st.out_control_event(invalid_event_msg);
 
     // Error out control msg which size is illegal.

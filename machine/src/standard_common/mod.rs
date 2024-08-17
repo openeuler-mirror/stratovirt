@@ -412,7 +412,7 @@ pub(crate) trait AcpiBuilder {
             table_end - table_begin,
         )?;
 
-        Ok(table_begin as u64)
+        Ok(u64::from(table_begin))
     }
 
     /// Build ACPI DSDT table, returns the offset of ACPI DSDT table in `acpi_data`.
@@ -583,7 +583,7 @@ pub(crate) trait AcpiBuilder {
             mcfg_begin,
             mcfg_end - mcfg_begin,
         )?;
-        Ok(mcfg_begin as u64)
+        Ok(u64::from(mcfg_begin))
     }
 
     /// Build ACPI FADT table, returns the offset of ACPI FADT table in `acpi_data`.
@@ -646,24 +646,24 @@ pub(crate) trait AcpiBuilder {
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);
-            fadt.set_field(120, RST_CTRL_OFFSET as u64);
+            fadt.set_field(120, u64::from(RST_CTRL_OFFSET));
             fadt.set_field(128, 0x0F_u8);
             // PM1a event register bit, offset is 148.
             fadt.set_field(148, 0x01_u8);
             fadt.set_field(149, 0x20_u8);
-            fadt.set_field(152, PM_EVENT_OFFSET as u64);
+            fadt.set_field(152, u64::from(PM_EVENT_OFFSET));
             // PM1a control register bit, offset is 172.
             fadt.set_field(172, 0x01_u8);
             fadt.set_field(173, 0x10_u8);
-            fadt.set_field(176, PM_CTRL_OFFSET as u64);
+            fadt.set_field(176, u64::from(PM_CTRL_OFFSET));
             // Sleep control register, offset is 244.
             fadt.set_field(244, 0x01_u8);
             fadt.set_field(245, 0x08_u8);
-            fadt.set_field(248, SLEEP_CTRL_OFFSET as u64);
+            fadt.set_field(248, u64::from(SLEEP_CTRL_OFFSET));
             // Sleep status tegister, offset is 256.
             fadt.set_field(256, 0x01_u8);
             fadt.set_field(257, 0x08_u8);
-            fadt.set_field(260, SLEEP_CTRL_OFFSET as u64);
+            fadt.set_field(260, u64::from(SLEEP_CTRL_OFFSET));
         }
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
@@ -703,7 +703,7 @@ pub(crate) trait AcpiBuilder {
             fadt_end - fadt_begin,
         )?;
 
-        Ok(fadt_begin as u64)
+        Ok(u64::from(fadt_begin))
     }
 
     /// Get the Hardware Signature used to build FACS table.
@@ -741,7 +741,7 @@ pub(crate) trait AcpiBuilder {
         locked_acpi_data.extend(facs_data);
         drop(locked_acpi_data);
 
-        Ok(facs_begin as u64)
+        Ok(u64::from(facs_begin))
     }
 
     /// Build ACPI SRAT CPU table.
@@ -861,7 +861,7 @@ pub(crate) trait AcpiBuilder {
             xsdt_end - xsdt_begin,
         )?;
 
-        Ok(xsdt_begin as u64)
+        Ok(u64::from(xsdt_begin))
     }
 
     /// Build ACPI RSDP and add it to FwCfg as file-entry.

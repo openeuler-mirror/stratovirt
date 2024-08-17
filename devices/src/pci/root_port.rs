@@ -180,7 +180,7 @@ impl RootPort {
         if locked_msix.enabled {
             locked_msix.notify(0, self.dev_id.load(Ordering::Acquire));
         } else if self.base.config.config[INTERRUPT_PIN as usize] != 0 {
-            intx.lock().unwrap().notify(self.hpev_notified as u8);
+            intx.lock().unwrap().notify(u8::from(self.hpev_notified));
         }
     }
 
@@ -277,7 +277,7 @@ impl RootPort {
             (cap_offset + PCI_EXP_SLTSTA) as usize,
         )
         .unwrap();
-        let val: u16 = data[0] as u16 + ((data[1] as u16) << 8);
+        let val: u16 = u16::from(data[0]) + (u16::from(data[1]) << 8);
         if (val & !old_status & PCI_EXP_SLOTSTA_EVENTS) != 0 {
             let tmpstat =
                 (status & !PCI_EXP_SLOTSTA_EVENTS) | (old_status & PCI_EXP_SLOTSTA_EVENTS);
@@ -400,7 +400,8 @@ impl Device for RootPort {
             PcieDevType::RootPort as u8,
         )?;
 
-        self.dev_id.store(self.base.devfn as u16, Ordering::SeqCst);
+        self.dev_id
+            .store(u16::from(self.base.devfn), Ordering::SeqCst);
         init_msix(&mut self.base, 0, 1, self.dev_id.clone(), None, None)?;
 
         init_intx(
@@ -433,7 +434,7 @@ impl Device for RootPort {
         child_pci_bus.base.parent = Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn Device>>);
         child_pci_bus.hotplug_controller =
             Some(Arc::downgrade(&root_port) as Weak<Mutex<dyn HotplugOps>>);
-        parent_pci_bus.attach_child(locked_root_port.base.devfn as u64, root_port.clone())?;
+        parent_pci_bus.attach_child(u64::from(locked_root_port.base.devfn), root_port.clone())?;
         // Need to drop locked_root_port in order to register root_port instance.
         drop(locked_root_port);
         MigrationManager::register_device_instance(
@@ -653,7 +654,7 @@ impl HotplugOps for RootPort {
             bail!("Don't support hot-unplug!");
         }
         PCI_BUS_DEVICE!(dev, locked_dev, pci_dev);
-        let devfn = pci_dev.pci_base().devfn as u64;
+        let devfn = u64::from(pci_dev.pci_base().devfn);
         pci_dev.unrealize()?;
         let child_bus = self.child_bus().unwrap();
         child_bus.lock().unwrap().detach_child(devfn)?;

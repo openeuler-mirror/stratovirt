@@ -56,12 +56,12 @@ impl<T: Clone + 'static> RawDriver<T> {
     // get_file_alignment() detects the alignment length by submitting IO to the first sector.
     // If this area is fallocated, misaligned IO will also return success, so we pre fill this area.
     pub fn alloc_first_block(&mut self, new_size: u64) -> Result<()> {
-        let write_size = if new_size < MAX_FILE_ALIGN as u64 {
+        let write_size = if new_size < u64::from(MAX_FILE_ALIGN) {
             SECTOR_SIZE
         } else {
-            MAX_FILE_ALIGN as u64
+            u64::from(MAX_FILE_ALIGN)
         };
-        let max_align = std::cmp::max(MAX_FILE_ALIGN as u64, host_page_size()) as usize;
+        let max_align = std::cmp::max(u64::from(MAX_FILE_ALIGN), host_page_size()) as usize;
         // SAFETY: allocate aligned memory and free it later.
         let align_buf = unsafe { libc::memalign(max_align, write_size as usize) };
         if align_buf.is_null() {

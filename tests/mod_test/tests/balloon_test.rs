@@ -327,18 +327,18 @@ fn balloon_fun(shared: bool, huge: bool) {
     let free_page = balloon
         .allocator
         .borrow_mut()
-        .alloc(page_num as u64 * PAGE_SIZE_UNIT);
+        .alloc(u64::from(page_num) * PAGE_SIZE_UNIT);
     let pfn = (free_page >> 12) as u32;
     let pfn_addr = balloon.allocator.borrow_mut().alloc(PAGE_SIZE_UNIT);
     while idx < page_num {
         balloon
             .state
             .borrow_mut()
-            .writel(pfn_addr + 4 * idx as u64, pfn + idx);
+            .writel(pfn_addr + 4 * u64::from(idx), pfn + idx);
         balloon
             .state
             .borrow_mut()
-            .writeb(free_page + PAGE_SIZE_UNIT * idx as u64, 1);
+            .writeb(free_page + PAGE_SIZE_UNIT * u64::from(idx), 1);
         idx += 1;
     }
 
@@ -348,7 +348,7 @@ fn balloon_fun(shared: bool, huge: bool) {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };
@@ -377,7 +377,7 @@ fn balloon_fun(shared: bool, huge: bool) {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };
@@ -655,18 +655,18 @@ fn balloon_fpr_fun(shared: bool) {
     let free_page = balloon
         .allocator
         .borrow_mut()
-        .alloc(page_num as u64 * PAGE_SIZE_UNIT);
+        .alloc(u64::from(page_num) * PAGE_SIZE_UNIT);
     let pfn = (free_page >> 12) as u32;
     let pfn_addr = balloon.allocator.borrow_mut().alloc(PAGE_SIZE_UNIT);
     while idx < page_num {
         balloon
             .state
             .borrow_mut()
-            .writel(pfn_addr + 4 * idx as u64, pfn + idx);
+            .writel(pfn_addr + 4 * u64::from(idx), pfn + idx);
         balloon
             .state
             .borrow_mut()
-            .writeb(free_page + PAGE_SIZE_UNIT * idx as u64, 1);
+            .writeb(free_page + PAGE_SIZE_UNIT * u64::from(idx), 1);
         idx += 1;
     }
     // balloon Illegal addresses
@@ -694,7 +694,7 @@ fn balloon_fpr_fun(shared: bool) {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: true,
         };
@@ -940,7 +940,7 @@ fn balloon_deactive_001() {
     let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, cfg);
 
     let bar = balloon.device.borrow().bar;
-    let common_base = balloon.device.borrow().common_base as u64;
+    let common_base = u64::from(balloon.device.borrow().common_base);
 
     balloon.device.borrow().pci_dev.io_writel(
         bar,
@@ -1070,11 +1070,11 @@ fn balloon_numa1() {
         balloon
             .state
             .borrow_mut()
-            .writel(pfn_addr + 4 * idx as u64, pfn + idx);
+            .writel(pfn_addr + 4 * u64::from(idx), pfn + idx);
         balloon
             .state
             .borrow_mut()
-            .writeb(free_page + PAGE_SIZE_UNIT * idx as u64, 1);
+            .writeb(free_page + PAGE_SIZE_UNIT * u64::from(idx), 1);
         idx += 1;
     }
 
@@ -1084,7 +1084,7 @@ fn balloon_numa1() {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };
@@ -1113,7 +1113,7 @@ fn balloon_numa1() {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };

@@ -92,7 +92,7 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
     while align <= MAX_FILE_ALIGN {
         if is_io_aligned(
             file,
-            aligned_buffer as u64 + align as u64,
+            aligned_buffer as u64 + u64::from(align),
             MAX_FILE_ALIGN as usize,
         ) {
             buf_align = align;

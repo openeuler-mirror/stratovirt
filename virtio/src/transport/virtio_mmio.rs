@@ -271,10 +271,10 @@ impl VirtioMmioDevice {
                 .map(|config| u32::from(config.max_size))?,
             QUEUE_READY_REG => locked_device
                 .queue_config()
-                .map(|config| config.ready as u32)?,
+                .map(|config| u32::from(config.ready))?,
             INTERRUPT_STATUS_REG => locked_device.interrupt_status(),
             STATUS_REG => locked_device.device_status(),
-            CONFIG_GENERATION_REG => locked_device.config_generation() as u32,
+            CONFIG_GENERATION_REG => u32::from(locked_device.config_generation()),
             // SHM_SEL is unimplemented. According to the Virtio v1.2 spec: Reading from a non-existent
             // region(i.e. where the ID written to SHMSel is unused) results in a length of -1.
             SHM_LEN_LOW | SHM_LEN_HIGH => u32::MAX,
@@ -745,7 +745,7 @@ mod tests {
             virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG),
             true
         );
-        assert_eq!(LittleEndian::read_u32(&buf[..]), QUEUE_SIZE as u32);
+        assert_eq!(LittleEndian::read_u32(&buf[..]), u32::from(QUEUE_SIZE));
         // for queue_select as 1
         let mut buf: Vec<u8> = vec![0xff, 0xff, 0xff, 0xff];
         virtio_device.lock().unwrap().set_queue_select(1);
@@ -753,7 +753,7 @@ mod tests {
             virtio_mmio_device.read(&mut buf[..], addr, QUEUE_NUM_MAX_REG),
             true
         );
-        assert_eq!(LittleEndian::read_u32(&buf[..]), QUEUE_SIZE as u32);
+        assert_eq!(LittleEndian::read_u32(&buf[..]), u32::from(QUEUE_SIZE));
 
         // read the register representing the status of queue
         // for queue_select as 0
@@ -1179,9 +1179,9 @@ mod tests {
         locked_device.set_device_status(CONFIG_STATUS_FEATURES_OK);
         if let Ok(config) = locked_device.queue_config_mut(true) {
             config.desc_table = GuestAddress(0);
-            config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * 16);
+            config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * 16);
             config.used_ring = GuestAddress(align(
-                (QUEUE_SIZE as u64) * 16 + 8 + 2 * (QUEUE_SIZE as u64),
+                u64::from(QUEUE_SIZE) * 16 + 8 + 2 * u64::from(QUEUE_SIZE),
                 4096,
             ));
             config.size = QUEUE_SIZE;
@@ -1190,9 +1190,9 @@ mod tests {
         locked_device.set_queue_select(1);
         if let Ok(config) = locked_device.queue_config_mut(true) {
             config.desc_table = GuestAddress(0);
-            config.avail_ring = GuestAddress((QUEUE_SIZE as u64) * 16);
+            config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * 16);
             config.used_ring = GuestAddress(align(
-                (QUEUE_SIZE as u64) * 16 + 8 + 2 * (QUEUE_SIZE as u64),
+                u64::from(QUEUE_SIZE) * 16 + 8 + 2 * u64::from(QUEUE_SIZE),
                 4096,
             ));
             config.size = QUEUE_SIZE / 2;

@@ -402,7 +402,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
         DiskFormat::Raw => {
             let mut raw_file = RawDriver::new(file, aio, prop.clone());
             let file_size = raw_file.disk_size()?;
-            if file_size & (prop.req_align as u64 - 1) != 0 {
+            if file_size & (u64::from(prop.req_align) - 1) != 0 {
                 bail!("The size of raw file is not aligned to {}.", prop.req_align);
             }
             Ok(Arc::new(Mutex::new(raw_file)))
@@ -415,7 +415,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                 .with_context(|| "Failed to load metadata")?;
 
             let file_size = qcow2.disk_size()?;
-            if file_size & (prop.req_align as u64 - 1) != 0 {
+            if file_size & (u64::from(prop.req_align) - 1) != 0 {
                 bail!(
                     "The size of qcow2 file is not aligned to {}.",
                     prop.req_align

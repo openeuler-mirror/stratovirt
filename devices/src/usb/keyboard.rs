@@ -152,14 +152,14 @@ impl KeyboardOpts for UsbKeyboardAdapter {
         let mut scan_codes = Vec::new();
         let mut keycode = keycode;
         if keycode & SCANCODE_GREY != 0 {
-            scan_codes.push(SCANCODE_EMUL0 as u32);
+            scan_codes.push(u32::from(SCANCODE_EMUL0));
             keycode &= !SCANCODE_GREY;
         }
 
         if !down {
             keycode |= SCANCODE_UP;
         }
-        scan_codes.push(keycode as u32);
+        scan_codes.push(u32::from(keycode));
 
         let mut locked_kbd = self.usb_kbd.lock().unwrap();
         if scan_codes.len() as u32 + locked_kbd.hid.num > QUEUE_LENGTH {

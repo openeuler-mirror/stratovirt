@@ -202,7 +202,7 @@ impl Device for Ivshmem {
         self.dev_id
             .store(pci_bus.generate_dev_id(self.base.devfn), Ordering::Release);
         let dev = Arc::new(Mutex::new(self));
-        locked_bus.attach_child(dev.lock().unwrap().base.devfn as u64, dev.clone())?;
+        locked_bus.attach_child(u64::from(dev.lock().unwrap().base.devfn), dev.clone())?;
         Ok(dev)
     }
 }

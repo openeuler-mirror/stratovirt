@@ -547,9 +547,9 @@ pub trait VirtioDevice: Send + AsAny {
         }
 
         let features = if page == 0 {
-            (self.driver_features(1) as u64) << 32 | (v as u64)
+            u64::from(self.driver_features(1)) << 32 | u64::from(v)
         } else {
-            (v as u64) << 32 | (self.driver_features(0) as u64)
+            u64::from(v) << 32 | u64::from(self.driver_features(0))
         };
         self.virtio_base_mut().driver_features = features;
     }
@@ -819,7 +819,7 @@ pub fn iov_to_buf(
 
     for iov in iovec {
         let mut addr_map = Vec::new();
-        mem_space.get_address_map(cache, iov.addr, iov.len as u64, &mut addr_map)?;
+        mem_space.get_address_map(cache, iov.addr, u64::from(iov.len), &mut addr_map)?;
         for addr in addr_map.into_iter() {
             end = cmp::min(start + addr.iov_len as usize, buf.len());
             mem_to_buf(&mut buf[start..end], addr.iov_base)?;
@@ -835,12 +835,12 @@ pub fn iov_to_buf(
 /// Discard "size" bytes of the front of iovec.
 pub fn iov_discard_front(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [ElemIovec]> {
     for (index, iov) in iovec.iter_mut().enumerate() {
-        if iov.len as u64 > size {
+        if u64::from(iov.len) > size {
             iov.addr.0 += size;
             iov.len -= size as u32;
             return Some(&mut iovec[index..]);
         }
-        size -= iov.len as u64;
+        size -= u64::from(iov.len);
     }
     None
 }
@@ -849,11 +849,11 @@ pub fn iov_discard_front(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut 
 pub fn iov_discard_back(iovec: &mut [ElemIovec], mut size: u64) -> Option<&mut [ElemIovec]> {
     let len = iovec.len();
     for (index, iov) in iovec.iter_mut().rev().enumerate() {
-        if iov.len as u64 > size {
+        if u64::from(iov.len) > size {
             iov.len -= size as u32;
             return Some(&mut iovec[..(len - index)]);
         }
-        size -= iov.len as u64;
+        size -= u64::from(iov.len);
     }
     None
 }
@@ -869,8 +869,8 @@ fn gpa_hva_iovec_map(
     let mut hva_iovec = Vec::with_capacity(gpa_elemiovec.len());
 
     for elem in gpa_elemiovec.iter() {
-        mem_space.get_address_map(cache, elem.addr, elem.len as u64, &mut hva_iovec)?;
-        iov_size += elem.len as u64;
+        mem_space.get_address_map(cache, elem.addr, u64::from(elem.len), &mut hva_iovec)?;
+        iov_size += u64::from(elem.len);
     }
 
     Ok((iov_size, hva_iovec))

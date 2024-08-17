@@ -139,7 +139,7 @@ impl RngHandler {
                 .write(
                     &mut buffer[offset..].as_ref(),
                     iov.addr,
-                    min(size - offset as u32, iov.len) as u64,
+                    u64::from(min(size - offset as u32, iov.len)),
                 )
                 .with_context(|| "Failed to write request data for virtio rng")?;
 
@@ -166,7 +166,7 @@ impl RngHandler {
                 get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
-                if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), size as u64) {
+                if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), u64::from(size)) {
                     queue_lock.vring.push_back();
                     break;
                 }
@@ -326,7 +326,7 @@ impl VirtioDevice for Rng {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.base.device_features = 1 << VIRTIO_F_VERSION_1 as u64;
+        self.base.device_features = 1 << u64::from(VIRTIO_F_VERSION_1);
         Ok(())
     }
 
@@ -494,30 +494,30 @@ mod tests {
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(rng.base.driver_features, 0_u64);
-        assert_eq!(rng.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(rng.driver_features(page)), 0_u64);
         assert_eq!(rng.device_features(0_u32), 0_u32);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(rng.base.driver_features, 0_u64);
-        assert_eq!(rng.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(rng.driver_features(page)), 0_u64);
         assert_eq!(rng.device_features(1_u32), 0_u32);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time, this driver feature bit is supported.
         rng.base.device_features =
-            1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64;
+            1_u64 << VIRTIO_F_VERSION_1 | 1_u64 << u64::from(VIRTIO_F_RING_INDIRECT_DESC);
         let driver_feature: u32 = 1_u32 << VIRTIO_F_RING_INDIRECT_DESC;
         let page = 0_u32;
         rng.set_driver_features(page, driver_feature);
         assert_eq!(
             rng.base.driver_features,
-            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
+            (1_u64 << u64::from(VIRTIO_F_RING_INDIRECT_DESC))
         );
         assert_eq!(
-            rng.driver_features(page) as u64,
-            (1_u64 << VIRTIO_F_RING_INDIRECT_DESC as u64)
+            u64::from(rng.driver_features(page)),
+            (1_u64 << u64::from(VIRTIO_F_RING_INDIRECT_DESC))
         );
         assert_eq!(
             rng.device_features(page),
@@ -543,7 +543,7 @@ mod tests {
                 len: u32::max_value(),
             },
             ElemIovec {
-                addr: GuestAddress(u32::max_value() as u64),
+                addr: GuestAddress(u64::from(u32::max_value())),
                 len: 1_u32,
             },
         ];
@@ -557,7 +557,7 @@ mod tests {
                 len,
             },
             ElemIovec {
-                addr: GuestAddress(u32::max_value() as u64),
+                addr: GuestAddress(u64::from(u32::max_value())),
                 len,
             },
         ];
@@ -591,10 +591,10 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
+        queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
+        queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
@@ -639,7 +639,7 @@ mod tests {
             .read(
                 &mut read_buffer.as_mut_slice(),
                 GuestAddress(0x40000),
-                data_len as u64
+                u64::from(data_len)
             )
             .is_ok());
         assert_eq!(read_buffer, buffer);
@@ -674,10 +674,10 @@ mod tests {
         queue_config.desc_table = GuestAddress(0);
         queue_config.addr_cache.desc_table_host =
             mem_space.get_host_address(queue_config.desc_table).unwrap();
-        queue_config.avail_ring = GuestAddress(16 * DEFAULT_VIRTQUEUE_SIZE as u64);
+        queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
         queue_config.addr_cache.avail_ring_host =
             mem_space.get_host_address(queue_config.avail_ring).unwrap();
-        queue_config.used_ring = GuestAddress(32 * DEFAULT_VIRTQUEUE_SIZE as u64);
+        queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
         queue_config.addr_cache.used_ring_host =
             mem_space.get_host_address(queue_config.used_ring).unwrap();
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
@@ -742,7 +742,7 @@ mod tests {
             .read(
                 &mut read_buffer.as_mut_slice(),
                 GuestAddress(0x40000),
-                data_len as u64
+                u64::from(data_len)
             )
             .is_ok());
         assert_eq!(read_buffer, buffer1_check);
@@ -750,7 +750,7 @@ mod tests {
             .read(
                 &mut read_buffer.as_mut_slice(),
                 GuestAddress(0x50000),
-                data_len as u64
+                u64::from(data_len)
             )
             .is_ok());
         assert_eq!(read_buffer, buffer2_check);

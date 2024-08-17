@@ -209,8 +209,8 @@ fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
     let nr_pages = (size + page_size - 1) / page_size;
-    let pages_per_thread = nr_pages / (threads as u64);
-    let left = nr_pages % (threads as u64);
+    let pages_per_thread = nr_pages / u64::from(threads);
+    let left = nr_pages % u64::from(threads);
     let mut addr = host_addr;
     let mut threads_join = Vec::new();
     for i in 0..threads {
