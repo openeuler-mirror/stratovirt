@@ -556,6 +556,110 @@ pub struct LinuxPlatform {
     pub intelRdt: Option<IntelRdt>,
 }
 
+/// Arrays that specifies the sets of capabilities for the process.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Capbilities {
+    /// Array of effective capabilities that are kept for the process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective: Option<Vec<String>>,
+    /// Array of bounding capabilities that are kept for the process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounding: Option<Vec<String>>,
+    /// Array of inheritable capabilities that are kept for the process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inheritable: Option<Vec<String>>,
+    /// Array of permitted capabilities that are kept for the process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permitted: Option<Vec<String>>,
+    /// Array of ambient capabilities that are kept for the process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambient: Option<Vec<String>>,
+}
+
+/// Scheduling policy.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SchedPolicy {
+    SchedOther,
+    SchedFifo,
+    SchedRr,
+    SchedBatch,
+    SchedIdle,
+}
+
+impl From<SchedPolicy> for libc::c_int {
+    fn from(value: SchedPolicy) -> Self {
+        match value {
+            SchedPolicy::SchedOther => libc::SCHED_OTHER,
+            SchedPolicy::SchedFifo => libc::SCHED_FIFO,
+            SchedPolicy::SchedRr => libc::SCHED_RR,
+            SchedPolicy::SchedBatch => libc::SCHED_BATCH,
+            SchedPolicy::SchedIdle => libc::SCHED_IDLE,
+        }
+    }
+}
+
+/// Scheduler properties for the process.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Scheduler {
+    /// Scheduling policy.
+    pub policy: SchedPolicy,
+    /// Nice value for the process, affecting its priority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nice: Option<i32>,
+    /// Static priority of the process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
+    /// Array of strings representing scheduling flags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flags: Option<Vec<String>>,
+    /// Amount of time in nanoseconds during which the process is
+    /// allowed to run in a given period, used by the deadline
+    /// scheduler.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<u64>,
+    /// Absolute deadline for the process to complete its execution,
+    /// used by the deadline scheduler.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<u64>,
+    /// Length of the period in nanoseconds used for determining the
+    /// process runtime, used by the deadline scheduler.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period: Option<u64>,
+}
+
+/// I/O scheduling class.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum IoPriClass {
+    IoprioClassRt,
+    IoprioClassBe,
+    IoprioClassIdle,
+}
+
+/// I/O priority settings for the container's processes within the
+/// process group.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IoPriority {
+    /// I/O scheduling class.
+    pub class: IoPriClass,
+    /// Priority level within the class.
+    pub priority: i64,
+}
+
+/// CPU affinity used to execute the process.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ExecCpuAffinity {
+    /// List of CPUs a runtime parent process to be run on initially,
+    /// before the transition to container's cgroup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial: Option<String>,
+    /// List of CPUs the process will be run on after the transition
+    /// to container's cgroup.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "final")]
+    pub final_cpus: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json;
