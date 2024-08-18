@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{anyhow, Result};
 use nix::sched::CloneFlags;
@@ -484,6 +484,76 @@ pub struct Seccomp {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Match a syscall in seccomp.
     pub syscalls: Option<Vec<SeccompSyscall>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Linux execution personality.
+pub struct Personality {
+    /// Execution domain.
+    pub domain: String,
+    /// Additional flags to apply.
+    pub flags: Option<Vec<String>>,
+}
+
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Linux-specific configuration.
+pub struct LinuxPlatform {
+    /// A namespace wraps a global system resource in an abstraction.
+    pub namespaces: Vec<Namespace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// User namespace uid mappings from the host to the container.
+    pub uidMappings: Option<Vec<IdMapping>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// User namespace gid mappings from the host to the container.
+    pub gidMappings: Option<Vec<IdMapping>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Offset for Time Namespace.
+    pub timeOffsets: Option<TimeOffsets>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Lists devices that MUST be available in the container.
+    pub devices: Option<Vec<Device>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Path to the cgroups.
+    pub cgroupsPath: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Rootfs's mount propagation.
+    pub rootfsPropagation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Mask over the provided paths inside the container so
+    /// that they cannot be read.
+    pub maskedPaths: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Set the provided paths as readonly inside the container.
+    pub readonlyPaths: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Selinux context for the mounts in the container.
+    pub mountLabel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Linux execution personality.
+    pub personality: Option<Personality>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Configure a container's cgroups.
+    pub resources: Option<Cgroups>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The cgroup subsystem rdma.
+    pub rdma: Option<RdmaCgroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Allows cgroup v2 parameters to be to be set and modified
+    /// for the container.
+    pub unified: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Kernel parameters to be modified at runtime for the
+    /// container.
+    pub sysctl: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Seccomp provides application sandboxing mechanism in
+    /// the Linux kernel.
+    pub seccomp: Option<Seccomp>,
+    #[cfg(target_arch = "x86_64")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Intel Resource Director Technology.
+    pub intelRdt: Option<IntelRdt>,
 }
 
 #[cfg(test)]
@@ -1033,5 +1103,23 @@ mod tests {
         assert_eq!(syscall_names[0].names[0], "getcwd");
         assert_eq!(syscall_names[0].names[1], "chmod");
         assert_eq!(syscall_names[0].action, SeccompAction::ScmpActErrno);
+    }
+
+    #[test]
+    fn test_personality() {
+        let json = r#"{
+            "personality": {
+                "domain": "LINUX"
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            personality: Personality,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.personality.domain, "LINUX");
+        assert_eq!(section.personality.flags, None);
     }
 }
