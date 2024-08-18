@@ -913,16 +913,20 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             bail!("Snapshot with name {} does not exist", name);
         }
 
+        // Record the old snapshot table size which will be used to free these old snapshot table clusters.
+        let cluster_size = self.header.cluster_size();
+        let old_snapshot_table_clusters =
+            bytes_to_clusters(self.snapshot.snapshot_size, cluster_size).unwrap();
+
         // Delete snapshot information in memory.
         let snap = self.snapshot.del_snapshot(snapshot_idx as usize);
 
         // Alloc new cluster to save snapshots(except the deleted one) to disk.
-        let cluster_size = self.header.cluster_size();
         let mut new_snapshots_offset = 0_u64;
-        let snapshot_table_clusters =
+        let new_snapshot_table_clusters =
             bytes_to_clusters(self.snapshot.snapshot_size, cluster_size).unwrap();
         if self.snapshot.snapshots_number() > 0 {
-            new_snapshots_offset = self.alloc_cluster(snapshot_table_clusters, true)?;
+            new_snapshots_offset = self.alloc_cluster(new_snapshot_table_clusters, true)?;
             self.snapshot
                 .save_snapshot_table(new_snapshots_offset, &snap, false)?;
         }
@@ -952,7 +956,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         // Free the cluster of the old snapshot table.
         self.refcount.update_refcount(
             self.header.snapshots_offset,
-            snapshot_table_clusters,
+            old_snapshot_table_clusters,
             -1,
             false,
             &Qcow2DiscardType::Snapshot,
