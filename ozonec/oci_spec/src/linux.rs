@@ -394,6 +394,98 @@ pub struct IntelRdt {
     pub enableMBM: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[repr(u32)]
+/// Action for seccomp rules.
+pub enum SeccompAction {
+    ScmpActKill = 0x0000_0000,
+    ScmpActKillProcess = 0x8000_0000,
+    ScmpActTrap = 0x0003_0000,
+    ScmpActErrno = 0x0005_0001,
+    ScmpActNotify = 0x7fc0_0000,
+    ScmpActTrace = 0x7ff0_0001,
+    ScmpActLog = 0x7ffc_0000,
+    ScmpActAllow = 0x7fff_0000,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[repr(u32)]
+/// Operator for syscall arguments in seccomp.
+pub enum SeccompOp {
+    ScmpCmpNe = 1,
+    ScmpCmpLt = 2,
+    ScmpCmpLe = 3,
+    #[default]
+    ScmpCmpEq = 4,
+    ScmpCmpGe = 5,
+    ScmpCmpGt = 6,
+    ScmpCmpMaskedEq = 7,
+}
+
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// The specific syscall in seccomp.
+pub struct SeccompSyscallArg {
+    /// Index for syscall arguments.
+    pub index: usize,
+    /// Value for syscall arguments.
+    pub value: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Value for syscall arguments.
+    pub valueTwo: Option<u64>,
+    /// Operator for syscall arguments.
+    pub op: SeccompOp,
+}
+
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Match a syscall in seccomp.
+pub struct SeccompSyscall {
+    /// Names of the syscalls.
+    pub names: Vec<String>,
+    /// Action for seccomp rules.
+    pub action: SeccompAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Errno return code to use.
+    pub errnoRet: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Specific syscall in seccomp.
+    pub args: Option<Vec<SeccompSyscallArg>>,
+}
+
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Seccomp provides application sandboxing mechanism in the Linux kernel.
+pub struct Seccomp {
+    /// Default action for seccomp.
+    pub defaultAction: SeccompAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Errno return code to use.
+    pub defaultErrnoRet: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Architecture used for system calls.
+    pub architectures: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// List of flags to use with seccomp.
+    pub flags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Path of UNIX domain socket over which the runtime will send the
+    /// container process state data structure when the SCMP_ACT_NOTIFY
+    /// action is used.
+    pub listennerPath: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Seccomp file descriptor returned by the seccomp syscall.
+    pub seccompFd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Opaque data to pass to the seccomp agent.
+    pub listenerMetadata: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Match a syscall in seccomp.
+    pub syscalls: Option<Vec<SeccompSyscall>>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json;
@@ -902,5 +994,44 @@ mod tests {
         );
         assert_eq!(section.intelRdt.enableCMT, Some(true));
         assert_eq!(section.intelRdt.enableMBM, Some(true));
+    }
+
+    #[test]
+    fn test_seccomp() {
+        let json = r#"{
+            "seccomp": {
+                "defaultAction": "SCMP_ACT_ALLOW",
+                "architectures": [
+                    "SCMP_ARCH_X86",
+                    "SCMP_ARCH_X32"
+                ],
+                "syscalls": [
+                    {
+                        "names": [
+                            "getcwd",
+                            "chmod"
+                        ],
+                        "action": "SCMP_ACT_ERRNO"
+                    }
+                ]
+            }
+        }"#;
+
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            seccomp: Seccomp,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.seccomp.defaultAction, SeccompAction::ScmpActAllow);
+        let architectures = section.seccomp.architectures.as_ref().unwrap();
+        assert_eq!(architectures.len(), 2);
+        assert_eq!(architectures[0], "SCMP_ARCH_X86");
+        assert_eq!(architectures[1], "SCMP_ARCH_X32");
+        let syscall_names = section.seccomp.syscalls.as_ref().unwrap();
+        assert_eq!(syscall_names[0].names.len(), 2);
+        assert_eq!(syscall_names[0].names[0], "getcwd");
+        assert_eq!(syscall_names[0].names[1], "chmod");
+        assert_eq!(syscall_names[0].action, SeccompAction::ScmpActErrno);
     }
 }
