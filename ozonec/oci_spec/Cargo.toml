@@ -8,6 +8,7 @@ description = "Open Container Initiative (OCI) Specifications in Rust"
 
 [dependencies]
 anyhow = "= 1.0.71"
+libc = "= 0.2.146"
 nix = "= 0.26.2"
 serde = { version = "= 1.0.163", features = ["derive"] }
 serde_json = "= 1.0.96"

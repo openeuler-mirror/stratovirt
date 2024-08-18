@@ -10,8 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "linux")]
 pub mod posix;
+pub mod process;
 pub mod runtime;
 pub mod state;
 pub mod vm;
