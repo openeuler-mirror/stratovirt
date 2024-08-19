@@ -12,36 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    linux::{Capbilities, ExecCpuAffinity, IdMapping, IoPriority, Scheduler},
-    posix::{Rlimits, User},
-};
-
-/// Additional mounts beyond root.
-#[allow(non_snake_case)]
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Mount {
-    /// Destination of mount point: path inside container.
-    pub destination: String,
-    /// A device name, but can also be a file or directory name for bind mounts
-    /// or a dummy.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    /// Mount options of the filesystem to be used.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
-    /// The type of the filesystem to be mounted.
-    #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
-    pub fs_type: Option<String>,
-    /// The mapping to convert UIDs from the source file system to the
-    /// destination mount point.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub uidMappings: Option<IdMapping>,
-    /// The mapping to convert GIDs from the source file system to the
-    /// destination mount point.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gidMappings: Option<IdMapping>,
-}
+#[cfg(target_os = "linux")]
+use crate::linux::{Capbilities, ExecCpuAffinity, IoPriority, Scheduler};
+#[cfg(target_family = "unix")]
+use crate::posix::{Rlimits, User};
 
 /// Console size in characters of the terminal.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -194,7 +168,6 @@ mod tests {
             }
         }"#;
 
-        #[allow(non_snake_case)]
         #[derive(Serialize, Deserialize)]
         struct Section {
             process: Process,
