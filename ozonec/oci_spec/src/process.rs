@@ -118,3 +118,150 @@ pub struct Process {
     /// which user the process runs as.
     pub user: User,
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::linux::IoPriClass;
+
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_process() {
+        let json = r#"{
+            "process": {
+                "terminal": true,
+                "consoleSize": {
+                    "height": 25,
+                    "width": 80
+                },
+                "user": {
+                    "uid": 1,
+                    "gid": 1,
+                    "umask": 63,
+                    "additionalGids": [5, 6]
+                },
+                "env": [
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "TERM=xterm"
+                ],
+                "cwd": "/root",
+                "args": [
+                    "sh"
+                ],
+                "apparmorProfile": "acme_secure_profile",
+                "selinuxLabel": "system_u:system_r:svirt_lxc_net_t:s0:c124,c675",
+                "ioPriority": {
+                    "class": "IOPRIO_CLASS_IDLE",
+                    "priority": 4
+                },
+                "noNewPrivileges": true,
+                "capabilities": {
+                    "bounding": [
+                        "CAP_AUDIT_WRITE",
+                        "CAP_KILL",
+                        "CAP_NET_BIND_SERVICE"
+                    ],
+                    "permitted": [
+                        "CAP_AUDIT_WRITE",
+                        "CAP_KILL",
+                        "CAP_NET_BIND_SERVICE"
+                    ],
+                    "inheritable": [
+                        "CAP_AUDIT_WRITE",
+                        "CAP_KILL",
+                        "CAP_NET_BIND_SERVICE"
+                    ],
+                    "effective": [
+                        "CAP_AUDIT_WRITE",
+                        "CAP_KILL"
+                    ],
+                    "ambient": [
+                        "CAP_NET_BIND_SERVICE"
+                    ]
+                },
+                "rlimits": [
+                    {
+                        "type": "RLIMIT_NOFILE",
+                        "hard": 1024,
+                        "soft": 1024
+                    }
+                ],
+                "execCPUAffinity": {
+                    "initial": "7",
+                    "final": "0-3,7"
+                }
+            }
+        }"#;
+
+        #[allow(non_snake_case)]
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            process: Process,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.process.terminal, true);
+        let console_size = section.process.consoleSize.as_ref().unwrap();
+        assert_eq!(console_size.height, Some(25));
+        assert_eq!(console_size.width, Some(80));
+        assert_eq!(section.process.user.uid, 1);
+        assert_eq!(section.process.user.gid, 1);
+        assert_eq!(section.process.user.umask, Some(63));
+        assert_eq!(section.process.user.additionalGids, Some(vec![5, 6]));
+        let env = section.process.env.as_ref().unwrap();
+        assert_eq!(env.len(), 2);
+        assert_eq!(
+            env[0],
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        );
+        assert_eq!(env[1], "TERM=xterm");
+        assert_eq!(section.process.cwd, "/root");
+        let args = section.process.args.as_ref().unwrap();
+        assert_eq!(args.len(), 1);
+        assert_eq!(args[0], "sh");
+        assert_eq!(
+            section.process.apparmorProfile,
+            Some("acme_secure_profile".to_string())
+        );
+        assert_eq!(
+            section.process.selinuxLabel,
+            Some("system_u:system_r:svirt_lxc_net_t:s0:c124,c675".to_string())
+        );
+        let io_pri = section.process.ioPriority.as_ref().unwrap();
+        assert_eq!(io_pri.class, IoPriClass::IoprioClassIdle);
+        assert_eq!(io_pri.priority, 4);
+        assert_eq!(section.process.noNewPrivileges, Some(true));
+        let caps = section.process.capabilities.as_ref().unwrap();
+        let bonding_caps = caps.bounding.as_ref().unwrap();
+        assert_eq!(bonding_caps.len(), 3);
+        assert_eq!(bonding_caps[0], "CAP_AUDIT_WRITE");
+        assert_eq!(bonding_caps[1], "CAP_KILL");
+        assert_eq!(bonding_caps[2], "CAP_NET_BIND_SERVICE");
+        let permitted_caps = caps.permitted.as_ref().unwrap();
+        assert_eq!(permitted_caps.len(), 3);
+        assert_eq!(permitted_caps[0], "CAP_AUDIT_WRITE");
+        assert_eq!(permitted_caps[1], "CAP_KILL");
+        assert_eq!(permitted_caps[2], "CAP_NET_BIND_SERVICE");
+        let inheritable_caps = caps.inheritable.as_ref().unwrap();
+        assert_eq!(inheritable_caps.len(), 3);
+        assert_eq!(inheritable_caps[0], "CAP_AUDIT_WRITE");
+        assert_eq!(inheritable_caps[1], "CAP_KILL");
+        assert_eq!(inheritable_caps[2], "CAP_NET_BIND_SERVICE");
+        let effective_caps = caps.effective.as_ref().unwrap();
+        assert_eq!(effective_caps.len(), 2);
+        assert_eq!(effective_caps[0], "CAP_AUDIT_WRITE");
+        assert_eq!(effective_caps[1], "CAP_KILL");
+        let ambient_caps = caps.ambient.as_ref().unwrap();
+        assert_eq!(ambient_caps.len(), 1);
+        assert_eq!(ambient_caps[0], "CAP_NET_BIND_SERVICE");
+        let rlimits = section.process.rlimits.as_ref().unwrap();
+        assert_eq!(rlimits.len(), 1);
+        assert_eq!(rlimits[0].rlimit_type, "RLIMIT_NOFILE");
+        assert_eq!(rlimits[0].hard, 1024);
+        assert_eq!(rlimits[0].soft, 1024);
+        let exec_cpu_affinity = section.process.execCPUAffinity.as_ref().unwrap();
+        assert_eq!(exec_cpu_affinity.initial, Some("7".to_string()));
+        assert_eq!(exec_cpu_affinity.final_cpus, Some("0-3,7".to_string()));
+    }
+}
