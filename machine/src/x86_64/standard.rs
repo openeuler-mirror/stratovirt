@@ -411,6 +411,7 @@ impl MachineOps for StdMachine {
         let boot_source = self.base.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
+        // MEM_LAYOUT is defined statically, will not overflow.
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
         let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
@@ -419,6 +420,7 @@ impl MachineOps for StdMachine {
             initrd,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
             cpu_count: self.base.cpu_topo.nrcpus,
+            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
@@ -441,6 +443,7 @@ impl MachineOps for StdMachine {
         let mut rtc = RTC::new(&self.base.sysbus).with_context(|| "Failed to create RTC device")?;
         rtc.set_memory(
             mem_size,
+            // MEM_LAYOUT is defined statically, will not overflow.
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1,
         );
@@ -590,7 +593,10 @@ impl MachineOps for StdMachine {
                 // KiB is for BIOS code which is stored in the first PFlash.
                 let rom_base = 0xe0000;
                 let rom_size = 0x20000;
-                file.as_ref().seek(SeekFrom::Start(pfl_size - rom_size))?;
+                let seek_start = pfl_size
+                    .checked_sub(rom_size)
+                    .with_context(|| "pflash file size less than rom size")?;
+                file.as_ref().seek(SeekFrom::Start(seek_start))?;
 
                 let ram1 = Arc::new(HostMemMapping::new(
                     GuestAddress(rom_base),
@@ -614,6 +620,9 @@ impl MachineOps for StdMachine {
 
             let sector_len: u32 = 1024 * 4;
             let backend = Some(file);
+            let region_base = flash_end
+                .checked_sub(pfl_size)
+                .with_context(|| "flash end is less than flash size")?;
             let pflash = PFlash::new(
                 pfl_size,
                 backend,
@@ -622,12 +631,13 @@ impl MachineOps for StdMachine {
                 1_u32,
                 config.readonly,
                 &self.base.sysbus,
-                flash_end - pfl_size,
+                region_base,
             )
             .with_context(|| MachineError::InitPflashErr)?;
             pflash
                 .realize()
                 .with_context(|| MachineError::RlzPflashErr)?;
+            // sub has been checked above.
             flash_end -= pfl_size;
         }
 
@@ -822,6 +832,7 @@ impl AcpiBuilder for StdMachine {
         node: &NumaNode,
         srat: &mut AcpiTable,
     ) -> u64 {
+        // MEM_LAYOUT is defined statically, will not overflow.
         let mem_below_4g = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
         let mem_above_4g = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;

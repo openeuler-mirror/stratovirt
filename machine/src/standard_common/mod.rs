@@ -409,6 +409,7 @@ pub(crate) trait AcpiBuilder {
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // table_begin is much less than u32::MAX, will not overflow.
             table_begin + TABLE_CHECKSUM_OFFSET,
             table_begin,
             table_end - table_begin,
@@ -568,7 +569,7 @@ pub(crate) trait AcpiBuilder {
         mcfg.append_child(ecam_addr.as_bytes());
         // PCI Segment Group Number
         mcfg.append_child(0_u16.as_bytes());
-        // Start Bus Number and End Bus Number
+        // Start Bus Number and End Bus Number. max_nr_bus is no less than 1.
         mcfg.append_child(&[0_u8, (max_nr_bus - 1) as u8]);
         // Reserved
         mcfg.append_child(&[0_u8; 4]);
@@ -581,6 +582,7 @@ pub(crate) trait AcpiBuilder {
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // mcfg_begin is much less than u32::MAX, will not overflow.
             mcfg_begin + TABLE_CHECKSUM_OFFSET,
             mcfg_begin,
             mcfg_end - mcfg_begin,
@@ -680,6 +682,7 @@ pub(crate) trait AcpiBuilder {
         let facs_size = 4_u8;
         loader.add_pointer_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + facs_offset,
             facs_size,
             ACPI_TABLE_FILE,
@@ -692,6 +695,7 @@ pub(crate) trait AcpiBuilder {
         let xdsdt_size = 8_u8;
         loader.add_pointer_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + xdsdt_offset,
             xdsdt_size,
             ACPI_TABLE_FILE,
@@ -700,6 +704,7 @@ pub(crate) trait AcpiBuilder {
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + TABLE_CHECKSUM_OFFSET,
             fadt_begin,
             fadt_end - fadt_begin,
@@ -833,6 +838,7 @@ pub(crate) trait AcpiBuilder {
     {
         let mut xsdt = AcpiTable::new(*b"XSDT", 1, *b"STRATO", *b"VIRTXSDT", 1);
 
+        // usize is enough for storing table len.
         xsdt.set_table_len(xsdt.table_len() + size_of::<u64>() * xsdt_entries.len());
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
@@ -848,16 +854,19 @@ pub(crate) trait AcpiBuilder {
         for entry in xsdt_entries {
             loader.add_pointer_entry(
                 ACPI_TABLE_FILE,
+                // xsdt_begin is much less than u32::MAX, will not overflow.
                 xsdt_begin + entry_offset,
                 entry_size,
                 ACPI_TABLE_FILE,
                 entry as u32,
             )?;
+            // u32 is enough for storing offset.
             entry_offset += u32::from(entry_size);
         }
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // xsdt_begin is much less than u32::MAX, will not overflow.
             xsdt_begin + TABLE_CHECKSUM_OFFSET,
             xsdt_begin,
             xsdt_end - xsdt_begin,
@@ -931,6 +940,7 @@ impl StdMachine {
                 bail!("Cpu-id {} already exist.", cpu_id)
             }
             if cpu_id >= max_cpus {
+                // max_cpus is no less than 1.
                 bail!("Max cpu-id is {}", max_cpus - 1)
             }
 
@@ -1100,7 +1110,7 @@ impl DeviceInterface for StdMachine {
         for cpu_index in 0..cpu_topo.max_cpus {
             if cpu_topo.get_mask(cpu_index as usize) == 1 {
                 let thread_id = cpus[cpu_index as usize].tid();
-                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
+                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index);
                 let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
@@ -1616,6 +1626,7 @@ impl DeviceInterface for StdMachine {
                 }
 
                 for (i, data) in data.iter_mut().enumerate().take(std::mem::size_of::<u64>()) {
+                    // i is less than 8, multiply will not overflow.
                     *data = (self.head >> (8 * i)) as u8;
                 }
                 true
