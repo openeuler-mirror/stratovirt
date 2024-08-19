@@ -31,8 +31,8 @@ const DEFAULT_CLUSTERS: u8 = 1;
 const DEFAULT_SOCKETS: u8 = 1;
 const DEFAULT_MAX_CPUS: u8 = 1;
 const DEFAULT_MEMSIZE: u64 = 256;
-const MAX_NR_CPUS: u64 = 254;
-const MIN_NR_CPUS: u64 = 1;
+const MAX_NR_CPUS: u8 = 254;
+const MIN_NR_CPUS: u8 = 1;
 const MAX_MEMSIZE: u64 = 549_755_813_888;
 const MIN_MEMSIZE: u64 = 134_217_728;
 pub const K: u64 = 1024;
@@ -291,20 +291,20 @@ struct MachineCmdConfig {
 #[derive(Parser)]
 #[command(no_binary_name(true))]
 struct SmpConfig {
-    #[arg(long, alias = "classtype", value_parser = clap::value_parser!(u64).range(MIN_NR_CPUS..=MAX_NR_CPUS))]
-    cpus: u64,
+    #[arg(long, alias = "classtype", value_parser = clap::value_parser!(u8).range(i64::from(MIN_NR_CPUS)..=i64::from(MAX_NR_CPUS)))]
+    cpus: u8,
     #[arg(long, default_value = "0")]
-    maxcpus: u64,
-    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
-    sockets: u64,
-    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u64).range(1..u8::MAX as u64))]
-    dies: u64,
-    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u64).range(1..u8::MAX as u64))]
-    clusters: u64,
-    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
-    cores: u64,
-    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u64).range(..u8::MAX as u64))]
-    threads: u64,
+    maxcpus: u8,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u8).range(..i64::from(u8::MAX)))]
+    sockets: u8,
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u8).range(1..i64::from(u8::MAX)))]
+    dies: u8,
+    #[arg(long, default_value = "1", value_parser = clap::value_parser!(u8).range(1..i64::from(u8::MAX)))]
+    clusters: u8,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u8).range(..i64::from(u8::MAX)))]
+    cores: u8,
+    #[arg(long, default_value = "0", value_parser = clap::value_parser!(u8).range(..i64::from(u8::MAX)))]
+    threads: u8,
 }
 
 impl SmpConfig {
@@ -315,8 +315,21 @@ impl SmpConfig {
         let mut threads = self.threads;
 
         if max_cpus == 0 {
-            if sockets * self.dies * self.clusters * cores * threads > 0 {
-                max_cpus = sockets * self.dies * self.clusters * cores * threads;
+            let mut tmp_max = sockets
+                .checked_mul(self.dies)
+                .with_context(|| "Illegal smp config")?;
+            tmp_max = tmp_max
+                .checked_mul(self.clusters)
+                .with_context(|| "Illegal smp config")?;
+            tmp_max = tmp_max
+                .checked_mul(cores)
+                .with_context(|| "Illegal smp config")?;
+            tmp_max = tmp_max
+                .checked_mul(threads)
+                .with_context(|| "Illegal smp config")?;
+
+            if tmp_max > 0 {
+                max_cpus = tmp_max;
             } else {
                 max_cpus = self.cpus;
             }
@@ -346,9 +359,9 @@ impl SmpConfig {
         if !(min_max_cpus..=MAX_NR_CPUS).contains(&max_cpus) {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "MAX CPU number".to_string(),
-                min_max_cpus,
+                u64::from(min_max_cpus),
                 true,
-                MAX_NR_CPUS,
+                u64::from(MAX_NR_CPUS),
                 true,
             )));
         }

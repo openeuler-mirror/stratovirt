@@ -601,16 +601,18 @@ impl CpuTopology {
     /// # Arguments
     ///
     /// * `vcpu_id` - ID of vcpu.
-    fn get_topo_item(&self, vcpu_id: usize) -> (u8, u8, u8, u8, u8) {
-        let socketid: u8 = vcpu_id as u8 / (self.dies * self.clusters * self.cores * self.threads);
-        let dieid: u8 = (vcpu_id as u8 / (self.clusters * self.cores * self.threads)) % self.dies;
-        let clusterid: u8 = (vcpu_id as u8 / (self.cores * self.threads)) % self.clusters;
-        let coreid: u8 = (vcpu_id as u8 / self.threads) % self.cores;
-        let threadid: u8 = vcpu_id as u8 % self.threads;
+    fn get_topo_item(&self, vcpu_id: u8) -> (u8, u8, u8, u8, u8) {
+        // nr_cpus is no more than u8::MAX, multiply will not overflow.
+        // nr_xxx is no less than 1, div and mod operations will not panic.
+        let socketid: u8 = vcpu_id / (self.dies * self.clusters * self.cores * self.threads);
+        let dieid: u8 = (vcpu_id / (self.clusters * self.cores * self.threads)) % self.dies;
+        let clusterid: u8 = (vcpu_id / (self.cores * self.threads)) % self.clusters;
+        let coreid: u8 = (vcpu_id / self.threads) % self.cores;
+        let threadid: u8 = vcpu_id % self.threads;
         (socketid, dieid, clusterid, coreid, threadid)
     }
 
-    pub fn get_topo_instance_for_qmp(&self, cpu_index: usize) -> qmp_schema::CpuInstanceProperties {
+    pub fn get_topo_instance_for_qmp(&self, cpu_index: u8) -> qmp_schema::CpuInstanceProperties {
         let (socketid, _dieid, _clusterid, coreid, threadid) = self.get_topo_item(cpu_index);
         qmp_schema::CpuInstanceProperties {
             node_id: None,

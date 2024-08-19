@@ -1290,7 +1290,11 @@ impl CompileFDTHelper for StdMachine {
         match &boot_source.initrd {
             Some(initrd) => {
                 fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
-                fdt.set_property_u64("linux,initrd-end", initrd.initrd_addr + initrd.initrd_size)?;
+                let initrd_end = initrd
+                    .initrd_addr
+                    .checked_add(initrd.initrd_size)
+                    .with_context(|| "initrd end overflow")?;
+                fdt.set_property_u64("linux,initrd-end", initrd_end)?;
             }
             None => {}
         }

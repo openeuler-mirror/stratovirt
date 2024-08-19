@@ -411,7 +411,9 @@ pub trait MachineOps: MachineLifecycle {
                 if zone.id.eq(&node.1.mem_dev) {
                     let ram = create_backend_mem(zone, thread_num)?;
                     root.add_subregion_not_update(ram, offset)?;
-                    offset += zone.size;
+                    offset = offset
+                        .checked_add(zone.size)
+                        .with_context(|| "total zone size overflow")?;
                     break;
                 }
             }
@@ -477,7 +479,7 @@ pub trait MachineOps: MachineLifecycle {
         #[cfg(target_arch = "aarch64")]
         let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
         #[cfg(target_arch = "x86_64")]
-        let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(max_cpus));
+        let arch_cpu = ArchCPU::new(u32::from(vcpu_id), max_cpus);
 
         let cpu = Arc::new(CPU::new(
             hypervisor_cpu,

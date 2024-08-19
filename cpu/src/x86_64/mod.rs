@@ -123,11 +123,11 @@ impl X86CPUTopology {
 #[derive(Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
 pub struct X86CPUState {
-    max_vcpus: u32,
-    nr_threads: u32,
-    nr_cores: u32,
-    nr_dies: u32,
-    nr_sockets: u32,
+    max_vcpus: u8,
+    nr_threads: u8,
+    nr_cores: u8,
+    nr_dies: u8,
+    nr_sockets: u8,
     pub apic_id: u32,
     pub regs: Regs,
     pub sregs: Sregs,
@@ -177,7 +177,7 @@ impl X86CPUState {
     ///
     /// * `vcpu_id` - ID of this `CPU`.
     /// * `max_vcpus` - Number of vcpus.
-    pub fn new(vcpu_id: u32, max_vcpus: u32) -> Self {
+    pub fn new(vcpu_id: u32, max_vcpus: u8) -> Self {
         let mp_state = MpState {
             mp_state: if vcpu_id == 0 {
                 MP_STATE_RUNNABLE
@@ -221,9 +221,9 @@ impl X86CPUState {
     ///
     /// * `topology` - X86 CPU Topology
     pub fn set_cpu_topology(&mut self, topology: &X86CPUTopology) -> Result<()> {
-        self.nr_threads = u32::from(topology.threads);
-        self.nr_cores = u32::from(topology.cores);
-        self.nr_dies = u32::from(topology.dies);
+        self.nr_threads = topology.threads;
+        self.nr_cores = topology.cores;
+        self.nr_dies = topology.dies;
         Ok(())
     }
 
@@ -359,6 +359,7 @@ impl X86CPUState {
                 data,
                 ..Default::default()
             };
+            // usize is enough for storing msr len.
             self.msr_len += 1;
         }
     }
@@ -392,6 +393,7 @@ impl X86CPUState {
     }
 
     pub fn setup_cpuid(&self, cpuid: &mut CpuId) -> Result<()> {
+        // nr_xx is no less than 1.
         let core_offset = 32u32 - (self.nr_threads - 1).leading_zeros();
         let die_offset = (32u32 - (self.nr_cores - 1).leading_zeros()) + core_offset;
         let pkg_offset = (32u32 - (self.nr_dies - 1).leading_zeros()) + die_offset;
@@ -430,7 +432,8 @@ impl X86CPUState {
                     );
                     entry.eax &= !0xfc00_0000;
                     if entry.eax & 0x0001_ffff != 0 && self.max_vcpus > 1 {
-                        entry.eax |= (self.max_vcpus - 1) << 26;
+                        // max_vcpus is no less than 1.
+                        entry.eax |= (u32::from(self.max_vcpus) - 1) << 26;
                     }
                 }
                 6 => {
@@ -452,12 +455,13 @@ impl X86CPUState {
                     match entry.index {
                         0 => {
                             entry.eax = core_offset;
-                            entry.ebx = self.nr_threads;
+                            entry.ebx = u32::from(self.nr_threads);
                             entry.ecx |= ECX_THREAD;
                         }
                         1 => {
                             entry.eax = pkg_offset;
-                            entry.ebx = self.nr_threads * self.nr_cores;
+                            // nr_cpus is no more than u8::MAX, multiply will not overflow.
+                            entry.ebx = u32::from(self.nr_threads * self.nr_cores);
                             entry.ecx |= ECX_CORE;
                         }
                         _ => {
@@ -483,17 +487,19 @@ impl X86CPUState {
                     match entry.index {
                         0 => {
                             entry.eax = core_offset;
-                            entry.ebx = self.nr_threads;
+                            entry.ebx = u32::from(self.nr_threads);
                             entry.ecx |= ECX_THREAD;
                         }
                         1 => {
                             entry.eax = die_offset;
-                            entry.ebx = self.nr_cores * self.nr_threads;
+                            // nr_cpus is no more than u8::MAX, multiply will not overflow.
+                            entry.ebx = u32::from(self.nr_cores * self.nr_threads);
                             entry.ecx |= ECX_CORE;
                         }
                         2 => {
                             entry.eax = pkg_offset;
-                            entry.ebx = self.nr_dies * self.nr_cores * self.nr_threads;
+                            // nr_cpus is no more than u8::MAX, multiply will not overflow.
+                            entry.ebx = u32::from(self.nr_dies * self.nr_cores * self.nr_threads);
                             entry.ecx |= ECX_DIE;
                         }
                         _ => {
