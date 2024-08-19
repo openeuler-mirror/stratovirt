@@ -106,14 +106,15 @@ use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, 
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Rng, RngConfig,
-    RngState,
+    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState,
     ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig},
     Serial, SerialPort, VhostKern, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
     VirtioMmioState, VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
+#[cfg(feature = "virtio_rng")]
+use virtio::{Rng, RngConfig, RngState};
 
 #[cfg(feature = "windows_emu_pid")]
 const WINDOWS_EMU_PID_DEFAULT_INTERVAL: u64 = 4000;
@@ -290,7 +291,7 @@ macro_rules! create_device_add_matches {
     ( $command:expr; $controller: expr;
         $(($($driver_name:tt)|+, $function_name:tt, $($arg:tt),*)),*;
         $(#[cfg($($features: tt)*)]
-        ($driver_name1:tt, $function_name1:tt, $($arg1:tt),*)),*
+        ($($driver_name1:tt)|+, $function_name1:tt, $($arg1:tt),*)),*
     ) => {
         match $command {
             $(
@@ -300,7 +301,7 @@ macro_rules! create_device_add_matches {
             )*
             $(
                 #[cfg($($features)*)]
-                $driver_name1 => {
+                $($driver_name1)|+ => {
                     $controller.$function_name1($($arg1),*).with_context(|| format!("add {} fail.", $command))?;
                 },
             )*
@@ -856,6 +857,7 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration arguments.
+    #[cfg(feature = "virtio_rng")]
     fn add_virtio_rng(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let rng_cfg = RngConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         rng_cfg.bytes_per_sec()?;
@@ -1900,12 +1902,13 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
-                ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
                 ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                #[cfg(feature = "virtio_rng")]
+                ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 #[cfg(feature = "vfio_device")]
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]
