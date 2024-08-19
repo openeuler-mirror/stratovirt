@@ -107,13 +107,15 @@ use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "virtio_scsi")]
 use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
+#[cfg(any(feature = "vhost_vsock"))]
+use virtio::VhostKern;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
     virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Serial,
-    SerialPort, VhostKern, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
-    VirtioMmioState, VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    SerialPort, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
+    VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
@@ -590,6 +592,7 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `cfg_args` - Device configuration.
+    #[cfg(feature = "vhost_vsock")]
     fn add_virtio_vsock(&mut self, cfg_args: &str) -> Result<()> {
         let device_cfg =
             VhostKern::VsockConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -1902,7 +1905,6 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-net-device", add_virtio_mmio_net, vm_config, cfg_args),
                 ("virtio-net-pci", add_virtio_pci_net, vm_config, cfg_args, false),
                 ("pcie-root-port", add_pci_root_port, cfg_args),
-                ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
@@ -1911,6 +1913,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
                 ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                #[cfg(feature = "vhost_vsock")]
+                ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 #[cfg(feature = "vfio_device")]
