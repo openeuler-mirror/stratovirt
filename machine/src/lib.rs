@@ -29,6 +29,7 @@ use std::net::TcpListener;
 use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
+#[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
