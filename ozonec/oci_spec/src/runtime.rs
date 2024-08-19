@@ -92,3 +92,51 @@ impl RuntimeConfig {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_mounts() {
+        let json = r#"{
+            "mounts": [
+                {
+                    "destination": "/proc",
+                    "type": "proc",
+                    "source": "proc"
+                },
+                {
+                    "destination": "/dev",
+                    "type": "tmpfs",
+                    "source": "tmpfs",
+                    "options": [
+                        "nosuid",
+                        "strictatime",
+                        "mode=755",
+                        "size=65536k"
+                    ]
+                }
+            ]
+        }"#;
+
+        #[allow(non_snake_case)]
+        #[derive(Serialize, Deserialize)]
+        struct Section {
+            mounts: Vec<Mount>,
+        }
+
+        let section: Section = serde_json::from_str(json).unwrap();
+        assert_eq!(section.mounts.len(), 2);
+        assert_eq!(section.mounts[0].destination, "/proc");
+        assert_eq!(section.mounts[0].fs_type, Some("proc".to_string()));
+        assert_eq!(section.mounts[0].source, Some("proc".to_string()));
+        let options = section.mounts[1].options.as_ref().unwrap();
+        assert_eq!(options.len(), 4);
+        assert_eq!(options[0], "nosuid");
+        assert_eq!(options[1], "strictatime");
+        assert_eq!(options[2], "mode=755");
+        assert_eq!(options[3], "size=65536k");
+    }
+}
