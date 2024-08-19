@@ -9,3 +9,86 @@
 // KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
+
+use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+#[cfg(target_os = "linux")]
+use crate::linux::IdMapping;
+#[cfg(target_family = "unix")]
+use crate::posix::Root;
+use crate::{linux::LinuxPlatform, posix::Hooks, process::Process, vm::VmPlatform};
+
+/// Additional mounts beyond root.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Mount {
+    /// Destination of mount point: path inside container.
+    pub destination: String,
+    /// A device name, but can also be a file or directory name for bind mounts
+    /// or a dummy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Mount options of the filesystem to be used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+    /// The type of the filesystem to be mounted.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
+    pub fs_type: Option<String>,
+    /// The mapping to convert UIDs from the source file system to the
+    /// destination mount point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uidMappings: Option<IdMapping>,
+    /// The mapping to convert GIDs from the source file system to the
+    /// destination mount point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gidMappings: Option<IdMapping>,
+}
+
+/// Metadata necessary to implement standard operations against the container.
+#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RuntimeConfig {
+    /// Version of the Open Container Initiative Runtime Specification
+    /// with which the bundle complies.
+    pub ociVersion: String,
+    /// Container's root filesystem.
+    pub root: Root,
+    /// Additional mounts beyond root.
+    pub mounts: Vec<Mount>,
+    /// Container process.
+    pub process: Process,
+    /// Container's hostname as seen by processes running inside the container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Container's domainname as seen by processes running inside the
+    /// container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domainname: Option<String>,
+    /// Linux-specific section of the container configuration.
+    #[cfg(target_os = "linux")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linux: Option<LinuxPlatform>,
+    /// Vm-specific section of the container configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm: Option<VmPlatform>,
+    /// Custom actions related to the lifecycle of the container.
+    #[cfg(target_family = "unix")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<Hooks>,
+    /// Arbitrary metadata for the container.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<HashMap<String, String>>,
+}
+
+impl RuntimeConfig {
+    pub fn from_file(path: &String) -> Result<RuntimeConfig> {
+        let file = File::open(Path::new(path)).with_context(|| "Failed to open config.json")?;
+        let reader = BufReader::new(file);
+        let config =
+            serde_json::from_reader(reader).with_context(|| "Failed to load config.json")?;
+        Ok(config)
+    }
+}
