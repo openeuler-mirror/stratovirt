@@ -1564,7 +1564,7 @@ pub trait MachineOps: MachineLifecycle {
         }
         drop(locked_bus);
         // It's safe to call devfn.unwrap(), because the bus exists.
-        match locked_pci_host.find_device(0, devfn.unwrap() as u8) {
+        match locked_pci_host.find_device(0, u8::try_from(devfn.unwrap())?) {
             Some(dev) => dev
                 .lock()
                 .unwrap()

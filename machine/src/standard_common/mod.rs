@@ -570,7 +570,7 @@ pub(crate) trait AcpiBuilder {
         // PCI Segment Group Number
         mcfg.append_child(0_u16.as_bytes());
         // Start Bus Number and End Bus Number. max_nr_bus is no less than 1.
-        mcfg.append_child(&[0_u8, (max_nr_bus - 1) as u8]);
+        mcfg.append_child(&[0_u8, u8::try_from(max_nr_bus - 1)?]);
         // Reserved
         mcfg.append_child(&[0_u8; 4]);
 
@@ -686,7 +686,7 @@ pub(crate) trait AcpiBuilder {
             fadt_begin + facs_offset,
             facs_size,
             ACPI_TABLE_FILE,
-            facs_addr as u32,
+            u32::try_from(facs_addr)?,
         )?;
 
         // xDSDT address field's offset in FADT.
@@ -699,7 +699,7 @@ pub(crate) trait AcpiBuilder {
             fadt_begin + xdsdt_offset,
             xdsdt_size,
             ACPI_TABLE_FILE,
-            dsdt_addr as u32,
+            u32::try_from(dsdt_addr)?,
         )?;
 
         loader.add_cksum_entry(
@@ -858,7 +858,7 @@ pub(crate) trait AcpiBuilder {
                 xsdt_begin + entry_offset,
                 entry_size,
                 ACPI_TABLE_FILE,
-                entry as u32,
+                u32::try_from(entry)?,
             )?;
             // u32 is enough for storing offset.
             entry_offset += u32::from(entry_size);
@@ -898,7 +898,7 @@ pub(crate) trait AcpiBuilder {
             xsdt_offset,
             xsdt_size,
             ACPI_TABLE_FILE,
-            xsdt_addr as u32,
+            u32::try_from(xsdt_addr)?,
         )?;
 
         let cksum_offset = 8_u32;
@@ -1745,6 +1745,12 @@ impl DeviceInterface for StdMachine {
             }
         };
 
+        if i32::try_from(args.priority).is_err() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("priority illegal".to_string()),
+                None,
+            );
+        }
         region.set_priority(args.priority as i32);
         if let Some(read_only) = args.romd {
             if region.set_rom_device_romd(read_only).is_err() {
