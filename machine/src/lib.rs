@@ -29,6 +29,7 @@ use std::net::TcpListener;
 use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
+#[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
@@ -66,6 +67,7 @@ use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
 use devices::usb::storage::{UsbStorage, UsbStorageConfig};
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
+#[cfg(feature = "usb_uas")]
 use devices::usb::uas::{UsbUas, UsbUasConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
@@ -73,18 +75,23 @@ use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
 use devices::usb::UsbDevice;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use devices::ScsiBus::get_scsi_key;
-use devices::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use devices::{convert_bus_ref, Bus, Device, PCI_BUS, SYS_BUS_DEVICE};
+#[cfg(feature = "virtio_scsi")]
+use devices::{
+    ScsiBus::get_scsi_key,
+    ScsiDisk::{ScsiDevConfig, ScsiDevice},
+};
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
+#[cfg(feature = "vhostuser_net")]
+use machine_manager::config::get_chardev_socket_path;
 use machine_manager::config::{
-    complete_numa_node, get_chardev_socket_path, get_class_type, get_pci_bdf,
-    get_value_of_parameter, parse_numa_distance, parse_numa_mem, str_slip_to_clap, BootIndexInfo,
-    BootSource, ConfigCheck, DriveConfig, DriveFile, Incoming, MachineMemConfig, MigrateMode,
-    NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo,
-    VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_class_type, get_pci_bdf, get_value_of_parameter, parse_numa_distance,
+    parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig,
+    DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
+    NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig,
+    FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
@@ -101,18 +108,24 @@ use util::loop_context::{
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 #[cfg(feature = "vfio_device")]
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
+#[cfg(feature = "virtio_scsi")]
+use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
+#[cfg(any(feature = "vhost_vsock", feature = "vhost_net"))]
+use virtio::VhostKern;
+#[cfg(any(feature = "vhostuser_block", feature = "vhostuser_net"))]
+use virtio::VhostUser;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Rng, RngConfig,
-    RngState,
-    ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig},
-    Serial, SerialPort, VhostKern, VhostUser, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
-    VirtioMmioState, VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Serial,
+    SerialPort, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
+    VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
+#[cfg(feature = "virtio_rng")]
+use virtio::{Rng, RngConfig, RngState};
 
 #[cfg(feature = "windows_emu_pid")]
 const WINDOWS_EMU_PID_DEFAULT_INTERVAL: u64 = 4000;
@@ -289,7 +302,7 @@ macro_rules! create_device_add_matches {
     ( $command:expr; $controller: expr;
         $(($($driver_name:tt)|+, $function_name:tt, $($arg:tt),*)),*;
         $(#[cfg($($features: tt)*)]
-        ($driver_name1:tt, $function_name1:tt, $($arg1:tt),*)),*
+        ($($driver_name1:tt)|+, $function_name1:tt, $($arg1:tt),*)),*
     ) => {
         match $command {
             $(
@@ -299,7 +312,7 @@ macro_rules! create_device_add_matches {
             )*
             $(
                 #[cfg($($features)*)]
-                $driver_name1 => {
+                $($driver_name1)|+ => {
                     $controller.$function_name1($($arg1),*).with_context(|| format!("add {} fail.", $command))?;
                 },
             )*
@@ -584,6 +597,7 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `cfg_args` - Device configuration.
+    #[cfg(feature = "vhost_vsock")]
     fn add_virtio_vsock(&mut self, cfg_args: &str) -> Result<()> {
         let device_cfg =
             VhostKern::VsockConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -855,6 +869,7 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration arguments.
+    #[cfg(feature = "virtio_rng")]
     fn add_virtio_rng(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let rng_cfg = RngConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         rng_cfg.bytes_per_sec()?;
@@ -1161,6 +1176,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "virtio_scsi")]
     fn add_virtio_pci_scsi(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1192,6 +1208,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "virtio_scsi")]
     fn add_scsi_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let device_cfg = ScsiDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let drive_arg = vm_config
@@ -1264,30 +1281,46 @@ pub trait MachineOps: MachineLifecycle {
         let bdf = PciBdf::new(net_cfg.bus.clone().unwrap(), net_cfg.addr.unwrap());
         let multi_func = net_cfg.multifunction.unwrap_or_default();
 
+        #[cfg(all(not(feature = "vhost_net"), not(feature = "vhostuser_net")))]
+        let need_irqfd = false;
+        #[cfg(any(feature = "vhost_net", feature = "vhostuser_net"))]
         let mut need_irqfd = false;
         let device: Arc<Mutex<dyn VirtioDevice>> = if netdev_cfg.vhost_type().is_some() {
-            need_irqfd = true;
             if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
-                Arc::new(Mutex::new(VhostKern::Net::new(
-                    &net_cfg,
-                    netdev_cfg,
-                    self.get_sys_mem(),
-                )))
+                #[cfg(not(feature = "vhost_net"))]
+                bail!("Unsupported Vhost_net");
+
+                #[cfg(feature = "vhost_net")]
+                {
+                    need_irqfd = true;
+                    Arc::new(Mutex::new(VhostKern::Net::new(
+                        &net_cfg,
+                        netdev_cfg,
+                        self.get_sys_mem(),
+                    )))
+                }
             } else {
-                let chardev = netdev_cfg.chardev.clone().with_context(|| {
-                    format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
-                })?;
-                let chardev_cfg = vm_config
-                    .chardev
-                    .remove(&chardev)
-                    .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
-                let sock_path = get_chardev_socket_path(chardev_cfg)?;
-                Arc::new(Mutex::new(VhostUser::Net::new(
-                    &net_cfg,
-                    netdev_cfg,
-                    sock_path,
-                    self.get_sys_mem(),
-                )))
+                #[cfg(not(feature = "vhostuser_net"))]
+                bail!("Unsupported Vhostuser_net");
+
+                #[cfg(feature = "vhostuser_net")]
+                {
+                    need_irqfd = true;
+                    let chardev = netdev_cfg.chardev.clone().with_context(|| {
+                        format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
+                    })?;
+                    let chardev_cfg = vm_config
+                        .chardev
+                        .remove(&chardev)
+                        .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
+                    let sock_path = get_chardev_socket_path(chardev_cfg)?;
+                    Arc::new(Mutex::new(VhostUser::Net::new(
+                        &net_cfg,
+                        netdev_cfg,
+                        sock_path,
+                        self.get_sys_mem(),
+                    )))
+                }
             }
         } else {
             let device = Arc::new(Mutex::new(virtio::Net::new(net_cfg.clone(), netdev_cfg)));
@@ -1305,6 +1338,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "vhostuser_block")]
     fn add_vhost_user_blk_pci(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1358,6 +1392,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "vhostuser_block")]
     fn add_vhost_user_blk_device(
         &mut self,
         vm_config: &mut VmConfig,
@@ -1823,6 +1858,7 @@ pub trait MachineOps: MachineLifecycle {
                     .realize()
                     .with_context(|| "Failed to realize usb storage device")?
             }
+            #[cfg(feature = "usb_uas")]
             "usb-uas" => {
                 let device_cfg =
                     UsbUasConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -1889,25 +1925,31 @@ pub trait MachineOps: MachineLifecycle {
                 dev.0.as_str(); self;
                 ("virtio-blk-device", add_virtio_mmio_block, vm_config, cfg_args),
                 ("virtio-blk-pci", add_virtio_pci_blk, vm_config, cfg_args, false),
-                ("virtio-scsi-pci", add_virtio_pci_scsi, vm_config, cfg_args, false),
-                ("scsi-hd" | "scsi-cd", add_scsi_device, vm_config, cfg_args),
                 ("virtio-net-device", add_virtio_mmio_net, vm_config, cfg_args),
                 ("virtio-net-pci", add_virtio_pci_net, vm_config, cfg_args, false),
                 ("pcie-root-port", add_pci_root_port, cfg_args),
-                ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
-                ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
-                ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
-                ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
                 ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                #[cfg(feature = "vhostuser_block")]
+                ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
+                #[cfg(feature = "vhostuser_block")]
+                ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
+                #[cfg(feature = "vhost_vsock")]
+                ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
+                #[cfg(feature = "virtio_rng")]
+                ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 #[cfg(feature = "vfio_device")]
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]
                 ("virtio-gpu-pci", add_virtio_pci_gpu, cfg_args),
+                #[cfg(feature = "virtio_scsi")]
+                ("virtio-scsi-pci", add_virtio_pci_scsi, vm_config, cfg_args, false),
+                #[cfg(feature = "virtio_scsi")]
+                ("scsi-hd" | "scsi-cd", add_scsi_device, vm_config, cfg_args),
                 #[cfg(feature = "ramfb")]
                 ("ramfb", add_ramfb, cfg_args),
                 #[cfg(feature = "demo_device")]

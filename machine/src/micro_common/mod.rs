@@ -52,11 +52,13 @@ use cpu::CpuLifecycleState;
 use devices::sysbus::SysBusDevOps;
 use devices::sysbus::{IRQ_BASE, IRQ_MAX};
 use devices::Device;
+#[cfg(feature = "vhostuser_net")]
+use machine_manager::config::get_chardev_socket_path;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::Param;
 use machine_manager::config::{
-    get_chardev_socket_path, parse_incoming_uri, str_slip_to_clap, ConfigCheck, DriveConfig,
-    MigrateMode, NetDevcfg, NetworkInterfaceConfig, VmConfig,
+    parse_incoming_uri, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode, NetDevcfg,
+    NetworkInterfaceConfig, VmConfig,
 };
 use machine_manager::machine::{
     DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
@@ -70,9 +72,13 @@ use migration::MigrationManager;
 use util::loop_context::{create_new_eventfd, EventLoopManager};
 use util::{num_ops::str_to_num, set_termi_canon_mode};
 use virtio::device::block::VirtioBlkDevConfig;
+#[cfg(feature = "vhost_net")]
+use virtio::VhostKern;
+#[cfg(feature = "vhostuser_net")]
+use virtio::VhostUser;
 use virtio::{
-    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VhostKern, VhostUser,
-    VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    create_tap, qmp_balloon, qmp_query_balloon, Block, BlockState, Net, VirtioDevice,
+    VirtioMmioDevice, VirtioMmioState, VirtioNetState,
 };
 
 // The replaceable block device maximum count.
@@ -415,28 +421,40 @@ impl LightMachine {
             .with_context(|| format!("Netdev: {:?} not found for net device", &net_cfg.netdev))?;
         if netdev_cfg.vhost_type().is_some() {
             if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
-                let net = Arc::new(Mutex::new(VhostKern::Net::new(
-                    &net_cfg,
-                    netdev_cfg,
-                    &self.base.sys_mem,
-                )));
-                self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
+                #[cfg(not(feature = "vhost_net"))]
+                bail!("Unsupported Vhost_Net");
+
+                #[cfg(feature = "vhost_net")]
+                {
+                    let net = Arc::new(Mutex::new(VhostKern::Net::new(
+                        &net_cfg,
+                        netdev_cfg,
+                        &self.base.sys_mem,
+                    )));
+                    self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
+                }
             } else {
-                let chardev = netdev_cfg.chardev.clone().with_context(|| {
-                    format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
-                })?;
-                let chardev_cfg = vm_config
-                    .chardev
-                    .remove(&chardev)
-                    .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
-                let sock_path = get_chardev_socket_path(chardev_cfg)?;
-                let net = Arc::new(Mutex::new(VhostUser::Net::new(
-                    &net_cfg,
-                    netdev_cfg,
-                    sock_path,
-                    &self.base.sys_mem,
-                )));
-                self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
+                #[cfg(not(feature = "vhostuser_net"))]
+                bail!("Unsupported Vhostuser_Net");
+
+                #[cfg(feature = "vhostuser_net")]
+                {
+                    let chardev = netdev_cfg.chardev.clone().with_context(|| {
+                        format!("Chardev not configured for netdev {:?}", netdev_cfg.id)
+                    })?;
+                    let chardev_cfg = vm_config
+                        .chardev
+                        .remove(&chardev)
+                        .with_context(|| format!("Chardev: {:?} not found for netdev", chardev))?;
+                    let sock_path = get_chardev_socket_path(chardev_cfg)?;
+                    let net = Arc::new(Mutex::new(VhostUser::Net::new(
+                        &net_cfg,
+                        netdev_cfg,
+                        sock_path,
+                        &self.base.sys_mem,
+                    )));
+                    self.add_virtio_mmio_device(net_cfg.id.clone(), net)?;
+                }
             };
         } else {
             let index = MMIO_REPLACEABLE_BLK_NR + self.replaceable_info.net_count;
