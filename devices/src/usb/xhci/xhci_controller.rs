@@ -1459,9 +1459,10 @@ impl XhciDevice {
     fn get_device_context_addr(&self, slot_id: u32) -> Result<u64> {
         self.oper
             .dcbaap
+            .raw_value()
             .checked_add(u64::from(8 * slot_id))
             .with_context(|| {
-                UsbError::MemoryAccessOverflow(self.oper.dcbaap, u64::from(8 * slot_id))
+                UsbError::MemoryAccessOverflow(self.oper.dcbaap.raw_value(), u64::from(8 * slot_id))
             })
     }
 
@@ -1700,7 +1701,7 @@ impl XhciDevice {
         }
         self.cancel_all_ep_transfers(slot_id, ep_id, TRBCCode::Invalid)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
-        if self.oper.dcbaap != 0 {
+        if self.oper.dcbaap.raw_value() != 0 {
             epctx.set_state(EP_DISABLED, None)?;
         }
         epctx.enabled = false;

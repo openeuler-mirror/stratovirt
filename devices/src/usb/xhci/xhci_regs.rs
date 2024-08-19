@@ -124,7 +124,7 @@ pub struct XhciOperReg {
     /// Command Ring Control
     pub cmd_ring_ctrl: u64,
     /// Device Context Base Address Array Pointer
-    pub dcbaap: u64,
+    pub dcbaap: GuestAddress,
     /// Configure
     pub config: u32,
 }
@@ -135,7 +135,7 @@ impl XhciOperReg {
         self.set_usb_status(USB_STS_HCH);
         self.dev_notify_ctrl = 0;
         self.cmd_ring_ctrl = 0;
-        self.dcbaap = 0;
+        self.dcbaap = GuestAddress(0);
         self.config = 0;
     }
 
@@ -453,8 +453,8 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 // Table 5-24 shows read CRP always returns 0.
                 0
             }
-            XHCI_OPER_REG_DCBAAP_LO => read_u32(locked_xhci.oper.dcbaap, 0),
-            XHCI_OPER_REG_DCBAAP_HI => read_u32(locked_xhci.oper.dcbaap, 1),
+            XHCI_OPER_REG_DCBAAP_LO => read_u32(locked_xhci.oper.dcbaap.raw_value(), 0),
+            XHCI_OPER_REG_DCBAAP_HI => read_u32(locked_xhci.oper.dcbaap.raw_value(), 1),
             XHCI_OPER_REG_CONFIG => locked_xhci.oper.config,
             _ => {
                 error!(
@@ -535,10 +535,12 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 locked_xhci.oper.cmd_ring_ctrl = write_u64_low(crc_hi, crc_lo);
             }
             XHCI_OPER_REG_DCBAAP_LO => {
-                locked_xhci.oper.dcbaap = write_u64_low(locked_xhci.oper.dcbaap, value & 0xffffffc0)
+                let dcbaap = write_u64_low(locked_xhci.oper.dcbaap.raw_value(), value & 0xffffffc0);
+                locked_xhci.oper.dcbaap = GuestAddress(dcbaap);
             }
             XHCI_OPER_REG_DCBAAP_HI => {
-                locked_xhci.oper.dcbaap = write_u64_high(locked_xhci.oper.dcbaap, value)
+                let dcbaap = write_u64_high(locked_xhci.oper.dcbaap.raw_value(), value);
+                locked_xhci.oper.dcbaap = GuestAddress(dcbaap);
             }
             XHCI_OPER_REG_CONFIG => locked_xhci.oper.config = value & 0xff,
             _ => {
