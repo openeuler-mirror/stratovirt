@@ -785,7 +785,7 @@ fn test_set_encoding_abnormal(test_state: Rc<RefCell<TestState>>, port: u16) -> 
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     assert!(vnc_client.test_setup_encodings(Some(100), None).is_ok());
     // Send a qmp to query vnc client state.
-    let value = qmp_query_vnc(test_state.clone());
+    let value = qmp_query_vnc(test_state);
     let client_num = value["return"]["clients"].as_array().unwrap().len();
     assert_eq!(client_num, 1);
     assert!(vnc_client.disconnect().is_ok());
@@ -805,7 +805,7 @@ fn test_client_cut_event(test_state: Rc<RefCell<TestState>>, port: u16) -> Resul
     };
     assert!(vnc_client.test_send_client_cut(client_cut).is_ok());
     // Send a qmp to query vnc client state.
-    let value = qmp_query_vnc(test_state.clone());
+    let value = qmp_query_vnc(test_state);
     let client_num = value["return"]["clients"].as_array().unwrap().len();
     assert_eq!(client_num, 1);
     assert!(vnc_client.disconnect().is_ok());

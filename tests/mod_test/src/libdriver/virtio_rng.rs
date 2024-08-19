@@ -49,7 +49,7 @@ pub fn create_rng(
     let machine = TestStdMachine::new(test_state.clone());
     let allocator = machine.allocator.clone();
 
-    let rng = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let rng = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
 
     rng.borrow_mut().init(pci_slot, pci_fn);
 

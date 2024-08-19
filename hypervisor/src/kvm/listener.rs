@@ -633,7 +633,7 @@ mod test {
             return;
         }
 
-        let kml = KvmMemoryListener::new(4, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(4, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let host_addr = 0u64;
 
         assert_eq!(kml.get_free_slot(0, 100, host_addr).unwrap(), 0);
@@ -657,7 +657,7 @@ mod test {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let ram_size = host_page_size();
         let ram_fr1 = create_ram_range(0, ram_size, 0);
 
@@ -683,7 +683,7 @@ mod test {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         // flat-range not aligned
         let page_size = host_page_size();
         let ram_fr2 = create_ram_range(page_size, 2 * page_size, 1000);
@@ -705,7 +705,7 @@ mod test {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
@@ -751,7 +751,7 @@ mod test {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let evtfd_addr = 0x1000_u64;
         let mut evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
         evtfd.addr_range.size = 3_u64;
@@ -805,7 +805,7 @@ mod test {
             return;
         }
 
-        let iol = KvmIoListener::new(kvm_hyp.vm_fd.clone());
+        let iol = KvmIoListener::new(kvm_hyp.vm_fd);
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)

@@ -565,7 +565,7 @@ fn test_xhci_camera_hotplug_invalid() {
     #[cfg(target_env = "ohos")]
     assert_eq!(desc, "OH Camera: failed to init cameras");
     // Invalid device id.
-    let value = qmp_unplug_camera(&test_state.clone(), "usbcam0");
+    let value = qmp_unplug_camera(&test_state, "usbcam0");
     let desc = value["error"]["desc"].as_str().unwrap().to_string();
     assert_eq!(desc, "Failed to detach device: id usbcam0 not found");
     // Invalid cameradev id.

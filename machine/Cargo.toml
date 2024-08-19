@@ -32,7 +32,7 @@ clap = { version = "=4.1.4", default-features = false, features = ["std", "deriv
 
 [features]
 default = []
-boot_time = ["cpu/boot_time"]
+boot_time = ["cpu/boot_time", "hypervisor/boot_time"]
 scream = ["devices/scream", "machine_manager/scream"]
 scream_alsa = ["scream", "devices/scream_alsa", "machine_manager/scream_alsa"]
 scream_pulseaudio = ["scream", "devices/scream_pulseaudio","machine_manager/scream_pulseaudio"]

@@ -95,6 +95,7 @@ impl MachineOps for LightMachine {
         let boot_source = self.base.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
+        // MEM_LAYOUT is defined statically, will not overflow.
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
         let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
@@ -103,6 +104,7 @@ impl MachineOps for LightMachine {
             initrd,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
             cpu_count: self.base.cpu_topo.nrcpus,
+            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,

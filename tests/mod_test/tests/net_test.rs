@@ -445,7 +445,7 @@ pub fn create_net(
     let test_state = Rc::new(RefCell::new(test_init(extra_args)));
     let machine = TestStdMachine::new(test_state.clone());
     let allocator = machine.allocator.clone();
-    let virtio_net = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let virtio_net = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
     virtio_net.borrow_mut().init(pci_slot, pci_fn);
 
     (virtio_net, test_state, allocator)
@@ -490,7 +490,7 @@ fn tear_down(
     id: u8,
     mq: bool,
 ) {
-    net.borrow_mut().destroy_device(alloc.clone(), vqs);
+    net.borrow_mut().destroy_device(alloc, vqs);
     test_state.borrow_mut().stop();
     clear_tap(id, mq);
 }
@@ -507,7 +507,7 @@ fn fill_rx_vq(
         vq.borrow_mut()
             .add(test_state.clone(), addr, MAX_PACKET_LEN as u32, true);
     }
-    vq.borrow().set_used_event(test_state.clone(), 0);
+    vq.borrow().set_used_event(test_state, 0);
 }
 
 fn init_net_device(
@@ -689,14 +689,8 @@ fn send_request(
         .borrow_mut()
         .add(test_state.clone(), addr, request.len() as u32, false);
     net.borrow().virtqueue_notify(vq.clone());
-    net.borrow().poll_used_elem(
-        test_state.clone(),
-        vq,
-        free_head,
-        TIMEOUT_US,
-        &mut None,
-        true,
-    );
+    net.borrow()
+        .poll_used_elem(test_state, vq, free_head, TIMEOUT_US, &mut None, true);
 }
 
 fn send_arp_request(
@@ -710,17 +704,11 @@ fn send_arp_request(
     send_request(
         net.clone(),
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         vqs[1].clone(),
         arp_request,
     );
-    check_arp_mac(
-        net.clone(),
-        test_state.clone(),
-        vqs[0].clone(),
-        arp_request,
-        need_reply,
-    );
+    check_arp_mac(net, test_state, vqs[0].clone(), arp_request, need_reply);
 }
 
 fn check_device_status(net: Rc<RefCell<TestVirtioPciDev>>, status: u8) {
@@ -766,14 +754,7 @@ fn virtio_net_rx_tx_test() {
         true,
     );
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }
 
 /// Send and receive packet test with iothread.
@@ -807,14 +788,7 @@ fn virtio_net_rx_tx_test_iothread() {
         true,
     );
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }
 
 /// Test the control mq command.
@@ -919,14 +893,7 @@ fn virtio_net_ctrl_mq_test() {
         assert_eq!(ack, status);
     }
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        true,
-    );
+    tear_down(net, test_state, alloc, vqs, id, true);
 }
 
 /// Write or Read mac address from device config.
@@ -1148,14 +1115,7 @@ fn ctrl_vq_set_mac_table(
         ctrl_data.len()
     );
 
-    send_ctrl_vq_request(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs.clone(),
-        &ctrl_data,
-        ack,
-    );
+    send_ctrl_vq_request(net, test_state, alloc, vqs, &ctrl_data, ack);
 }
 
 fn ctrl_vq_set_mac_address(
@@ -1178,14 +1138,14 @@ fn ctrl_vq_set_mac_address(
     };
     send_ctrl_vq_request(
         net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs.clone(),
+        test_state,
+        alloc,
+        vqs,
         ctrl_mac_addr.as_bytes(),
         VIRTIO_NET_OK,
     );
     // Check mac address result.
-    let config_mac = net_config_mac_rw(net.clone(), None);
+    let config_mac = net_config_mac_rw(net, None);
     assert_eq!(config_mac, ARP_SOURCE_MAC);
 }
 
@@ -1309,14 +1269,7 @@ fn virtio_net_ctrl_vlan_test() {
         false,
     );
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }
 
 /// Test the control mac command.
@@ -1692,14 +1645,7 @@ fn virtio_net_ctrl_abnormal_test() {
         check_device_status(net.clone(), VIRTIO_CONFIG_S_NEEDS_RESET);
     }
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }
 
 /// Test the abnormal rx/tx request.
@@ -1769,14 +1715,7 @@ fn virtio_net_abnormal_rx_tx_test() {
         assert!(time::Instant::now() - start_time < timeout_us);
     }
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }
 
 /// Test the abnormal rx/tx request 2.
@@ -1895,14 +1834,7 @@ fn virtio_net_set_abnormal_feature() {
         true,
     );
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }
 
 /// Send abnormal packet.
@@ -1978,14 +1910,7 @@ fn virtio_net_send_abnormal_packet() {
         .qmp("{\"execute\": \"qmp_capabilities\"}");
     assert_eq!(*ret.get("return").unwrap(), json!({}));
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }
 
 /// Send and receive packet test with mq.
@@ -2020,14 +1945,7 @@ fn virtio_net_rx_tx_mq_test() {
         );
     }
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        true,
-    );
+    tear_down(net, test_state, alloc, vqs, id, true);
 }
 
 /// Test the abnormal rx/tx request 3.
@@ -2096,12 +2014,5 @@ fn virtio_net_abnormal_rx_tx_test_3() {
         .readw(vqs[1].borrow().used + offset_of!(VringUsed, idx) as u64);
     assert_eq!(used_idx, 0);
 
-    tear_down(
-        net.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        id,
-        false,
-    );
+    tear_down(net, test_state, alloc, vqs, id, false);
 }

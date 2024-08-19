@@ -66,7 +66,7 @@ impl PvPanicDevCfg {
         let test_state = Rc::new(RefCell::new(test_init(test_machine_args)));
         let machine = Rc::new(RefCell::new(TestStdMachine::new(test_state.clone())));
 
-        let mut pvpanic_pci_dev = TestPciDev::new(machine.clone().borrow().pci_bus.clone());
+        let mut pvpanic_pci_dev = TestPciDev::new(machine.borrow().pci_bus.clone());
         let devfn = self.addr << 3;
         pvpanic_pci_dev.devfn = devfn;
 

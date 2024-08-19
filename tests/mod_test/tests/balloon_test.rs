@@ -126,7 +126,7 @@ impl VirtioBalloonTest {
         let machine = TestStdMachine::new_bymem(test_state.clone(), memsize * MBSIZE, page_size);
         let allocator = machine.allocator.clone();
 
-        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
         dev.borrow_mut().init(pci_slot, 0);
 
         let features = dev.borrow_mut().get_device_features();
@@ -208,7 +208,7 @@ impl VirtioBalloonTest {
         let machine = TestStdMachine::new_bymem(test_state.clone(), 2 * MBSIZE, 4096);
         let allocator = machine.allocator.clone();
 
-        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
         dev.borrow_mut().init(4, 0);
 
         let features = dev.borrow_mut().get_device_features();
@@ -567,12 +567,12 @@ fn balloon_feature_001() {
     let machine = TestStdMachine::new_bymem(test_state.clone(), 128 * MBSIZE, PAGE_SIZE_UNIT);
     let allocator = machine.allocator.clone();
 
-    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
     dev.borrow_mut().init(pci_slot, pci_fn);
 
     dev.borrow_mut().pci_dev.enable_msix(None);
     dev.borrow_mut()
-        .setup_msix_configuration_vector(allocator.clone(), 0);
+        .setup_msix_configuration_vector(allocator, 0);
 
     let features = dev.borrow_mut().get_device_features();
 
@@ -614,12 +614,12 @@ fn balloon_feature_002() {
     let machine = TestStdMachine::new_bymem(test_state.clone(), 128 * MBSIZE, PAGE_SIZE_UNIT);
     let allocator = machine.allocator.clone();
 
-    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
     dev.borrow_mut().init(pci_slot, pci_fn);
 
     dev.borrow_mut().pci_dev.enable_msix(None);
     dev.borrow_mut()
-        .setup_msix_configuration_vector(allocator.clone(), 0);
+        .setup_msix_configuration_vector(allocator, 0);
 
     let features = dev.borrow_mut().get_device_features();
 
@@ -705,7 +705,7 @@ fn balloon_fpr_fun(shared: bool) {
         .kick_virtqueue(balloon.state.clone(), fpr.clone());
     balloon.device.borrow_mut().poll_used_elem(
         balloon.state.clone(),
-        fpr.clone(),
+        fpr,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -1016,7 +1016,7 @@ fn auto_balloon_test_001() {
         .kick_virtqueue(balloon.state.clone(), auto_queue.clone());
     balloon.device.borrow_mut().poll_used_elem(
         balloon.state.clone(),
-        auto_queue.clone(),
+        auto_queue,
         free_head,
         TIMEOUT_US,
         &mut None,

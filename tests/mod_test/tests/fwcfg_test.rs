@@ -163,7 +163,7 @@ fn test_filedir_by_dma() {
     bios_args(&mut args);
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let file_name = "etc/boot-fail-wait";
     let mut read_data: Vec<u8> = Vec::with_capacity(mem::size_of::<u32>());
@@ -207,7 +207,7 @@ fn test_boot_index() {
 
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let file_name = "bootorder";
     let mut read_data: Vec<u8> = Vec::with_capacity(dev_path.len());
@@ -240,7 +240,7 @@ fn test_smbios_type0() {
 
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let anchor_file = "etc/smbios/smbios-anchor";
     let tables_file = "etc/smbios/smbios-tables";
@@ -304,7 +304,7 @@ fn test_smbios_type1() {
 
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let anchor_file = "etc/smbios/smbios-anchor";
     let tables_file = "etc/smbios/smbios-tables";
@@ -409,7 +409,7 @@ fn test_smbios_type2() {
 
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let anchor_file = "etc/smbios/smbios-anchor";
     let tables_file = "etc/smbios/smbios-tables";
@@ -484,7 +484,7 @@ fn test_smbios_type3() {
 
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let anchor_file = "etc/smbios/smbios-anchor";
     let tables_file = "etc/smbios/smbios-tables";
@@ -559,7 +559,7 @@ fn test_smbios_type4() {
 
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let anchor_file = "etc/smbios/smbios-anchor";
     let tables_file = "etc/smbios/smbios-tables";
@@ -644,7 +644,7 @@ fn test_smbios_type17() {
 
     let test_state = Rc::new(RefCell::new(test_init(args)));
     let machine = TestStdMachine::new(test_state.clone());
-    let allocator = machine.allocator.clone();
+    let allocator = machine.allocator;
 
     let anchor_file = "etc/smbios/smbios-anchor";
     let tables_file = "etc/smbios/smbios-tables";

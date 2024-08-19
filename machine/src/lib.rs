@@ -35,6 +35,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
+use std::u64;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
@@ -185,12 +186,9 @@ impl MachineBase {
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.max_cpus,
         );
-        let machine_ram = Arc::new(Region::init_container_region(
-            u64::max_value(),
-            "MachineRam",
-        ));
+        let machine_ram = Arc::new(Region::init_container_region(u64::MAX, "MachineRam"));
         let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "SysMem"),
+            Region::init_container_region(u64::MAX, "SysMem"),
             "sys_mem",
             Some(machine_ram.clone()),
         )
@@ -408,12 +406,14 @@ pub trait MachineOps: MachineLifecycle {
         }
         let zones = mem_config.mem_zones.as_ref().unwrap();
         let mut offset = 0_u64;
-        for (_, node) in numa_nodes.as_ref().unwrap().iter().enumerate() {
+        for node in numa_nodes.as_ref().unwrap().iter() {
             for zone in zones.iter() {
                 if zone.id.eq(&node.1.mem_dev) {
                     let ram = create_backend_mem(zone, thread_num)?;
                     root.add_subregion_not_update(ram, offset)?;
-                    offset += zone.size;
+                    offset = offset
+                        .checked_add(zone.size)
+                        .with_context(|| "total zone size overflow")?;
                     break;
                 }
             }
@@ -479,7 +479,7 @@ pub trait MachineOps: MachineLifecycle {
         #[cfg(target_arch = "aarch64")]
         let arch_cpu = ArchCPU::new(u32::from(vcpu_id));
         #[cfg(target_arch = "x86_64")]
-        let arch_cpu = ArchCPU::new(u32::from(vcpu_id), u32::from(max_cpus));
+        let arch_cpu = ArchCPU::new(u32::from(vcpu_id), max_cpus);
 
         let cpu = Arc::new(CPU::new(
             hypervisor_cpu,
@@ -698,7 +698,7 @@ pub trait MachineOps: MachineLifecycle {
     }
 
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        if vm_config.dev_name.get("balloon").is_some() {
+        if vm_config.dev_name.contains_key("balloon") {
             bail!("Only one balloon device is supported for each vm.");
         }
         let config = BalloonConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -1564,7 +1564,7 @@ pub trait MachineOps: MachineLifecycle {
         }
         drop(locked_bus);
         // It's safe to call devfn.unwrap(), because the bus exists.
-        match locked_pci_host.find_device(0, devfn.unwrap() as u8) {
+        match locked_pci_host.find_device(0, u8::try_from(devfn.unwrap())?) {
             Some(dev) => dev
                 .lock()
                 .unwrap()

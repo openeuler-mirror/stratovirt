@@ -82,7 +82,7 @@ fn virtio_rng_read_batch(
         .kick_virtqueue(test_state.clone(), virtqueue.clone());
     rng.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut len,
@@ -123,7 +123,7 @@ fn virtio_rng_read_chained(
         .kick_virtqueue(test_state.clone(), virtqueue.clone());
     rng.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut len,
@@ -142,7 +142,7 @@ fn tear_down(
     alloc: Rc<RefCell<GuestAllocator>>,
     vqs: Vec<Rc<RefCell<TestVirtQueue>>>,
 ) {
-    rng.borrow_mut().destroy_device(alloc.clone(), vqs);
+    rng.borrow_mut().destroy_device(alloc, vqs);
     test_state.borrow_mut().stop();
 }
 
@@ -186,7 +186,7 @@ fn rng_read() {
     );
     assert!(random_num_check(data));
 
-    tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
+    tear_down(rng, test_state, alloc, virtqueues);
 }
 
 /// Rng device batch read random numbers function test.
@@ -229,7 +229,7 @@ fn rng_read_batch() {
     );
     assert!(random_num_check(data));
 
-    tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
+    tear_down(rng, test_state, alloc, virtqueues);
 }
 
 /// Rng device rate limit random numbers reading test.
@@ -300,7 +300,7 @@ fn rng_limited_rate() {
         RNG_DATA_BYTES
     )));
 
-    tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
+    tear_down(rng, test_state, alloc, virtqueues);
 }
 
 /// Rng device read a large number of random numbers test.
@@ -344,7 +344,7 @@ fn rng_read_with_max() {
     );
     assert!(random_num_check(data));
 
-    tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
+    tear_down(rng, test_state, alloc, virtqueues);
 }
 
 /// Rng device read/write config space.
@@ -376,5 +376,5 @@ fn rng_rw_config() {
     let config = rng.borrow().config_readq(0);
     assert_ne!(config, 0xff);
 
-    tear_down(rng.clone(), test_state.clone(), alloc.clone(), virtqueues);
+    tear_down(rng, test_state, alloc, virtqueues);
 }

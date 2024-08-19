@@ -155,7 +155,7 @@ impl SerialTest {
 
         self.serial
             .borrow()
-            .kick_virtqueue(self.state.clone(), queue.clone());
+            .kick_virtqueue(self.state.clone(), queue);
 
         (addr, free_head)
     }
@@ -599,7 +599,7 @@ fn virtserialport_socket_basic() {
         nowait: true,
     };
     let port = PortConfig {
-        chardev_type: socket.clone(),
+        chardev_type: socket,
         nr: 1,
         is_console: false,
     };
@@ -657,7 +657,7 @@ fn virtconsole_pty_err_out_control_msg() {
     };
     let pci_slot = 0x04;
     let pci_fn = 0x0;
-    let mut st = create_serial(vec![port.clone()], pci_slot, pci_fn);
+    let mut st = create_serial(vec![port], pci_slot, pci_fn);
 
     st.serial_init();
 
@@ -707,7 +707,7 @@ fn virtconsole_pty_invalid_in_control_buffer() {
     };
     let pci_slot = 0x04;
     let pci_fn = 0x0;
-    let mut st = create_serial(vec![port.clone()], pci_slot, pci_fn);
+    let mut st = create_serial(vec![port], pci_slot, pci_fn);
 
     // Init virtqueues.
     st.virtqueue_setup(DEFAULT_SERIAL_VIRTQUEUES);
@@ -776,7 +776,7 @@ fn virtserialport_socket_not_connect() {
         nowait: true,
     };
     let port = PortConfig {
-        chardev_type: socket.clone(),
+        chardev_type: socket,
         nr,
         is_console: false,
     };

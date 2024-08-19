@@ -327,6 +327,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             .with_context(|| "Failed to register event notifier.")
     }
 
+    #[cfg(target_arch = "aarch64")]
     fn register_pause_event(
         &self,
         pause_req: Arc<EventFd>,
@@ -355,6 +356,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             .with_context(|| "Failed to register event notifier.")
     }
 
+    #[cfg(target_arch = "aarch64")]
     fn register_resume_event(
         &self,
         resume_req: Arc<EventFd>,
@@ -407,6 +409,7 @@ pub(crate) trait AcpiBuilder {
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // table_begin is much less than u32::MAX, will not overflow.
             table_begin + TABLE_CHECKSUM_OFFSET,
             table_begin,
             table_end - table_begin,
@@ -545,7 +548,7 @@ pub(crate) trait AcpiBuilder {
     {
         let mut mcfg = AcpiTable::new(*b"MCFG", 1, *b"STRATO", *b"VIRTMCFG", 1);
         // Bits 20~28 (totally 9 bits) in PCIE ECAM represents bus number.
-        let bus_number_mask = (1 << 9) - 1;
+        let bus_number_mask = (1u64 << 9) - 1;
         let ecam_addr: u64;
         let max_nr_bus: u64;
         #[cfg(target_arch = "x86_64")]
@@ -566,8 +569,8 @@ pub(crate) trait AcpiBuilder {
         mcfg.append_child(ecam_addr.as_bytes());
         // PCI Segment Group Number
         mcfg.append_child(0_u16.as_bytes());
-        // Start Bus Number and End Bus Number
-        mcfg.append_child(&[0_u8, (max_nr_bus - 1) as u8]);
+        // Start Bus Number and End Bus Number. max_nr_bus is no less than 1.
+        mcfg.append_child(&[0_u8, u8::try_from(max_nr_bus - 1)?]);
         // Reserved
         mcfg.append_child(&[0_u8; 4]);
 
@@ -579,6 +582,7 @@ pub(crate) trait AcpiBuilder {
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // mcfg_begin is much less than u32::MAX, will not overflow.
             mcfg_begin + TABLE_CHECKSUM_OFFSET,
             mcfg_begin,
             mcfg_end - mcfg_begin,
@@ -608,31 +612,31 @@ pub(crate) trait AcpiBuilder {
         fadt.set_table_len(208_usize);
         // PM1A_EVENT bit, offset is 56.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(56, 0x600);
+        fadt.set_field(56, 0x600_u32);
         // PM1A_CONTROL bit, offset is 64.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(64, 0x604);
+        fadt.set_field(64, 0x604_u32);
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(76, 0x608);
+        fadt.set_field(76, 0x608_u32);
         // PM1_EVT_LEN, offset is 88.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(88, 4);
+        fadt.set_field(88, 4_u8);
         // PM1_CNT_LEN, offset is 89.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(89, 2);
+        fadt.set_field(89, 2_u8);
         // PM_TMR_LEN, offset is 91.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(91, 4);
+        fadt.set_field(91, 4_u8);
         #[cfg(target_arch = "aarch64")]
         {
             // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
-            fadt.set_field(112, 1 << 20 | 1 << 10 | 1 << 8);
+            fadt.set_field(112, 1_u32 << 20 | 1_u32 << 10 | 1_u32 << 8);
             // ARM Boot Architecture Flags
             fadt.set_field(129, 0x3_u16);
         }
         // FADT minor revision
-        fadt.set_field(131, 3);
+        fadt.set_field(131, 3_u8);
         // X_PM_TMR_BLK bit, offset is 208.
         #[cfg(target_arch = "x86_64")]
         fadt.append_child(&AcpiGenericAddress::new_io_address(0x608_u32).aml_bytes());
@@ -642,7 +646,7 @@ pub(crate) trait AcpiBuilder {
         #[cfg(target_arch = "x86_64")]
         {
             // FADT flag: disable HW_REDUCED_ACPI bit on x86 plantform.
-            fadt.set_field(112, 1 << 10 | 1 << 8);
+            fadt.set_field(112, 1_u32 << 10 | 1_u32 << 8);
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);
@@ -678,10 +682,11 @@ pub(crate) trait AcpiBuilder {
         let facs_size = 4_u8;
         loader.add_pointer_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + facs_offset,
             facs_size,
             ACPI_TABLE_FILE,
-            facs_addr as u32,
+            u32::try_from(facs_addr)?,
         )?;
 
         // xDSDT address field's offset in FADT.
@@ -690,14 +695,16 @@ pub(crate) trait AcpiBuilder {
         let xdsdt_size = 8_u8;
         loader.add_pointer_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + xdsdt_offset,
             xdsdt_size,
             ACPI_TABLE_FILE,
-            dsdt_addr as u32,
+            u32::try_from(dsdt_addr)?,
         )?;
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + TABLE_CHECKSUM_OFFSET,
             fadt_begin,
             fadt_end - fadt_begin,
@@ -831,6 +838,7 @@ pub(crate) trait AcpiBuilder {
     {
         let mut xsdt = AcpiTable::new(*b"XSDT", 1, *b"STRATO", *b"VIRTXSDT", 1);
 
+        // usize is enough for storing table len.
         xsdt.set_table_len(xsdt.table_len() + size_of::<u64>() * xsdt_entries.len());
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
@@ -846,16 +854,19 @@ pub(crate) trait AcpiBuilder {
         for entry in xsdt_entries {
             loader.add_pointer_entry(
                 ACPI_TABLE_FILE,
+                // xsdt_begin is much less than u32::MAX, will not overflow.
                 xsdt_begin + entry_offset,
                 entry_size,
                 ACPI_TABLE_FILE,
-                entry as u32,
+                u32::try_from(entry)?,
             )?;
+            // u32 is enough for storing offset.
             entry_offset += u32::from(entry_size);
         }
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // xsdt_begin is much less than u32::MAX, will not overflow.
             xsdt_begin + TABLE_CHECKSUM_OFFSET,
             xsdt_begin,
             xsdt_end - xsdt_begin,
@@ -887,7 +898,7 @@ pub(crate) trait AcpiBuilder {
             xsdt_offset,
             xsdt_size,
             ACPI_TABLE_FILE,
-            xsdt_addr as u32,
+            u32::try_from(xsdt_addr)?,
         )?;
 
         let cksum_offset = 8_u32;
@@ -929,6 +940,7 @@ impl StdMachine {
                 bail!("Cpu-id {} already exist.", cpu_id)
             }
             if cpu_id >= max_cpus {
+                // max_cpus is no less than 1.
                 bail!("Max cpu-id is {}", max_cpus - 1)
             }
 
@@ -1098,7 +1110,7 @@ impl DeviceInterface for StdMachine {
         for cpu_index in 0..cpu_topo.max_cpus {
             if cpu_topo.get_mask(cpu_index as usize) == 1 {
                 let thread_id = cpus[cpu_index as usize].tid();
-                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
+                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index);
                 let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
@@ -1614,6 +1626,7 @@ impl DeviceInterface for StdMachine {
                 }
 
                 for (i, data) in data.iter_mut().enumerate().take(std::mem::size_of::<u64>()) {
+                    // i is less than 8, multiply will not overflow.
                     *data = (self.head >> (8 * i)) as u8;
                 }
                 true
@@ -1732,6 +1745,12 @@ impl DeviceInterface for StdMachine {
             }
         };
 
+        if i32::try_from(args.priority).is_err() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("priority illegal".to_string()),
+                None,
+            );
+        }
         region.set_priority(args.priority as i32);
         if let Some(read_only) = args.romd {
             if region.set_rom_device_romd(read_only).is_err() {
