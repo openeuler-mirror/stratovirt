@@ -239,19 +239,19 @@ impl X86CPUState {
         self.lapic = lapic;
 
         // SAFETY: The member regs in struct LapicState is a u8 array with 1024 entries,
-        // so it's saft to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
+        // so it's safe to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
         // Safe because all value in this unsafe block is certain.
         unsafe {
             let apic_lvt_lint0 = &mut self.lapic.regs[APIC_LVT0..] as *mut [i8] as *mut u32;
-            *apic_lvt_lint0 &= !0x700;
-            *apic_lvt_lint0 |= APIC_MODE_EXTINT << 8;
+            let modified = (apic_lvt_lint0.read_unaligned() & !0x700) | (APIC_MODE_EXTINT << 8);
+            apic_lvt_lint0.write_unaligned(modified);
 
             let apic_lvt_lint1 = &mut self.lapic.regs[APIC_LVT1..] as *mut [i8] as *mut u32;
-            *apic_lvt_lint1 &= !0x700;
-            *apic_lvt_lint1 |= APIC_MODE_NMI << 8;
+            let modified = (apic_lvt_lint1.read_unaligned() & !0x700) | (APIC_MODE_NMI << 8);
+            apic_lvt_lint1.write_unaligned(modified);
 
             let apic_id = &mut self.lapic.regs[APIC_ID..] as *mut [i8] as *mut u32;
-            *apic_id = self.apic_id << 24;
+            apic_id.write_unaligned(self.apic_id << 24);
         }
 
         Ok(())
