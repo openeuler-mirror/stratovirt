@@ -118,7 +118,7 @@ impl GICv3Access for KvmGICv3 {
     }
 
     fn vcpu_gicr_attr(&self, cpu: usize) -> u64 {
-        let clustersz = 16;
+        let clustersz = 16usize;
 
         let aff1 = (cpu / clustersz) as u64;
         let aff0 = (cpu % clustersz) as u64;

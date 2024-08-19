@@ -665,7 +665,7 @@ impl CPUHypervisorOps for KvmCpu {
         }
 
         // It shall wait for the vCPU pause state from hypervisor exits.
-        let mut sleep_times = 0;
+        let mut sleep_times = 0u32;
         while !pause_signal.load(Ordering::SeqCst) {
             if sleep_times >= 5 {
                 bail!(CpuError::StopVcpu("timeout".to_string()));
