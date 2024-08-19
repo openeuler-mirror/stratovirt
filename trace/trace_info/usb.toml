@@ -528,7 +528,7 @@ enabled = true
 
 [[events]]
 name = "usb_uas_try_start_next_transfer"
-args = "device_id: &str, xfer_len: i32"
+args = "device_id: &str, xfer_len: i64"
 message = "UAS {} device is trying to start next transfer of length {}."
 enabled = true
 

@@ -933,7 +933,7 @@ impl ScsiCmdQueueHandler {
         }
 
         let sreq = scsi_req.unwrap();
-        if sreq.cmd.xfer > sreq.datalen && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
+        if sreq.cmd.xfer > u64::from(sreq.datalen) && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
             // Wrong virtio scsi request which doesn't provide enough datain/dataout buffer.
             qrequest.resp.response = VIRTIO_SCSI_S_OVERRUN;
             qrequest.complete()?;

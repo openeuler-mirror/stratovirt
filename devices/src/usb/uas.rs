@@ -540,7 +540,7 @@ impl UsbUas {
         )
         .with_context(|| "failed to create SCSI request")?;
 
-        if scsi_request.cmd.xfer > scsi_request.datalen
+        if scsi_request.cmd.xfer > u64::from(scsi_request.datalen)
             && scsi_request.cmd.mode != ScsiXferMode::ScsiXferNone
         {
             bail!(
