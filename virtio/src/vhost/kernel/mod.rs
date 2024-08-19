@@ -11,9 +11,11 @@
 // See the Mulan PSL v2 for more details.
 
 mod net;
+#[cfg(feature = "vhost_vsock")]
 mod vsock;
 
 pub use net::Net;
+#[cfg(feature = "vhost_vsock")]
 pub use vsock::{Vsock, VsockConfig, VsockState};
 
 use std::fs::{File, OpenOptions};
