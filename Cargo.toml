@@ -47,6 +47,7 @@ trace_to_hitrace = ["trace/trace_to_hitrace"]
 hisysevent = ["hisysevent/hisysevent"]
 vfio = ["machine/vfio_device", "hypervisor/vfio_device"]
 usb_uas = ["machine/usb_uas"]
+virtio_rng = ["machine/virtio_rng"]
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]
