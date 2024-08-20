@@ -46,7 +46,7 @@ fn get_maximum_gsi_cnt(kvmfd: &Kvm) -> u32 {
         gsi_count = 0;
     }
 
-    gsi_count as u32
+    u32::try_from(gsi_count).unwrap_or_default()
 }
 
 /// Return `IrqRouteEntry` according to gsi, irqchip kind and pin.
@@ -180,7 +180,7 @@ impl IrqRouteTable {
             .find_next_zero(0)
             .with_context(|| "Failed to get new free gsi")?;
         self.gsi_bitmap.set(free_gsi)?;
-        Ok(free_gsi as u32)
+        Ok(u32::try_from(free_gsi)?)
     }
 
     /// Release gsi number to free.
@@ -208,11 +208,12 @@ impl IrqRouteTable {
         trace::kvm_commit_irq_routing();
         // SAFETY: data in `routes` is reliable.
         unsafe {
+            // layout is aligned, so casting of ptr is allowed.
             let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
             if irq_routing.is_null() {
                 bail!("Failed to alloc irq routing");
             }
-            (*irq_routing).nr = routes.len() as u32;
+            (*irq_routing).nr = u32::try_from(routes.len())?;
             (*irq_routing).flags = 0;
             let entries: &mut [IrqRouteEntry] = (*irq_routing).entries.as_mut_slice(routes.len());
             entries.copy_from_slice(&routes);

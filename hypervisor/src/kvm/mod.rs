@@ -135,6 +135,7 @@ impl KvmHypervisor {
     }
 
     fn create_memory_listener(&self) -> Arc<Mutex<dyn Listener>> {
+        // Memslot will not exceed u32::MAX, so use as translate data type.
         Arc::new(Mutex::new(KvmMemoryListener::new(
             self.fd.as_ref().unwrap().get_nr_memslots() as u32,
             self.vm_fd.clone(),
@@ -298,7 +299,7 @@ impl MigrateOps for KvmHypervisor {
         self.vm_fd
             .as_ref()
             .unwrap()
-            .get_dirty_log(slot, mem_size as usize)
+            .get_dirty_log(slot, usize::try_from(mem_size)?)
             .with_context(|| {
                 format!(
                     "Failed to get dirty log, error is {}",
