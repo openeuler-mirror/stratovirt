@@ -1684,7 +1684,7 @@ impl VirtioDevice for Net {
 
     // configs[0]: NetDevcfg. configs[1]: NetworkInterfaceConfig.
     fn update_config(&mut self, dev_config: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
-        if !dev_config.is_empty() {
+        if dev_config.len() == 2 {
             self.netdev_cfg = dev_config[0]
                 .as_any()
                 .downcast_ref::<NetDevcfg>()
