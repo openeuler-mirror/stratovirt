@@ -81,7 +81,7 @@ impl AlsaStreamData {
             hwp.set_rate_resample(true)?;
             hwp.set_access(Access::RWInterleaved)?;
             hwp.set_format(self.format)?;
-            hwp.set_channels(channels as u32)?;
+            hwp.set_channels(u32::from(channels))?;
             hwp.set_rate(self.rate, ValueOr::Nearest)?;
             // Set the latency in microseconds.
             hwp.set_buffer_time_near(self.latency * 1000, ValueOr::Nearest)?;
@@ -184,12 +184,14 @@ impl AudioInterface for AlsaStreamData {
         };
 
         let samples =
-            recv_data.audio_size / (self.bytes_per_sample * recv_data.fmt.channels as u32);
+            recv_data.audio_size / (self.bytes_per_sample * u32::from(recv_data.fmt.channels));
         while frames < samples {
             let send_frame_num = min(samples - frames, MAX_FRAME_NUM);
-            let offset = (frames * self.bytes_per_sample * recv_data.fmt.channels as u32) as usize;
+            let offset =
+                (frames * self.bytes_per_sample * u32::from(recv_data.fmt.channels)) as usize;
             let end = offset
-                + (send_frame_num * self.bytes_per_sample * recv_data.fmt.channels as u32) as usize;
+                + (send_frame_num * self.bytes_per_sample * u32::from(recv_data.fmt.channels))
+                    as usize;
             match io.write(&data[offset..end]) {
                 Err(e) => {
                     debug!("Failed to write data to ALSA buffer: {:?}", e);
@@ -203,7 +205,8 @@ impl AudioInterface for AlsaStreamData {
                 }
                 Ok(n) => {
                     trace::scream_alsa_send_frames(frames, offset, end);
-                    frames += n as u32 / (self.bytes_per_sample * recv_data.fmt.channels as u32);
+                    frames +=
+                        n as u32 / (self.bytes_per_sample * u32::from(recv_data.fmt.channels));
                 }
             }
         }
@@ -231,11 +234,12 @@ impl AudioInterface for AlsaStreamData {
         };
 
         let samples =
-            recv_data.audio_size / (self.bytes_per_sample * recv_data.fmt.channels as u32);
+            recv_data.audio_size / (self.bytes_per_sample * u32::from(recv_data.fmt.channels));
         while frames < samples {
-            let offset = (frames * self.bytes_per_sample * recv_data.fmt.channels as u32) as usize;
+            let offset =
+                (frames * self.bytes_per_sample * u32::from(recv_data.fmt.channels)) as usize;
             let end = offset
-                + ((samples - frames) * self.bytes_per_sample * recv_data.fmt.channels as u32)
+                + ((samples - frames) * self.bytes_per_sample * u32::from(recv_data.fmt.channels))
                     as usize;
             match io.read(&mut data[offset..end]) {
                 Err(e) => {
@@ -250,7 +254,8 @@ impl AudioInterface for AlsaStreamData {
                 }
                 Ok(n) => {
                     trace::scream_alsa_receive_frames(frames, offset, end);
-                    frames += n as u32 / (self.bytes_per_sample * recv_data.fmt.channels as u32);
+                    frames +=
+                        n as u32 / (self.bytes_per_sample * u32::from(recv_data.fmt.channels));
 
                     // During the host headset switchover, io.read is blocked for a long time.
                     // As a result, the VM recording delay exceeds 1s. Thereforce, check whether
@@ -259,7 +264,7 @@ impl AudioInterface for AlsaStreamData {
                         warn!("Scream alsa can't get frames delay: {e:?}");
                         0
                     });
-                    if delay > self.rate as i64 >> 1 {
+                    if delay > i64::from(self.rate) >> 1 {
                         warn!("Scream alsa read audio blocked too long, delay {delay} frames, init again!");
                         self.init = false;
                     }

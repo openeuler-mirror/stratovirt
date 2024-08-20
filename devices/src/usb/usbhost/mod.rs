@@ -243,7 +243,7 @@ impl IsoTransfer {
     pub fn copy_data(&mut self, packet: Arc<Mutex<UsbPacket>>, ep_max_packet_size: u32) -> bool {
         let mut lockecd_packet = packet.lock().unwrap();
         let mut size: usize;
-        if lockecd_packet.pid == USB_TOKEN_OUT as u32 {
+        if lockecd_packet.pid == u32::from(USB_TOKEN_OUT) {
             size = lockecd_packet.get_iovecs_size() as usize;
             if size > ep_max_packet_size as usize {
                 size = ep_max_packet_size as usize;
@@ -783,7 +783,7 @@ impl UsbHost {
             .set_alternate_setting(iface as u8, alt as u8)
         {
             Ok(_) => {
-                self.base.altsetting[iface as usize] = alt as u32;
+                self.base.altsetting[iface as usize] = u32::from(alt);
                 self.ep_update();
             }
             Err(e) => {
@@ -871,7 +871,7 @@ impl UsbHost {
     pub fn handle_iso_data_in(&mut self, packet: Arc<Mutex<UsbPacket>>) {
         let cloned_packet = packet.clone();
         let locked_packet = packet.lock().unwrap();
-        let in_direction = locked_packet.pid == USB_TOKEN_IN as u32;
+        let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
         let iso_queue = if self.find_iso_queue(locked_packet.ep_number).is_some() {
             self.find_iso_queue(locked_packet.ep_number).unwrap()
         } else {
@@ -905,7 +905,7 @@ impl UsbHost {
 
         let mut locked_iso_queue = iso_queue.lock().unwrap();
 
-        let in_direction = locked_packet.pid == USB_TOKEN_IN as u32;
+        let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
         let ep = self
             .base
             .get_endpoint(in_direction, locked_packet.ep_number);

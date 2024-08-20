@@ -152,7 +152,7 @@ impl V4l2Backend {
                 );
             }
             locked_buf[i as usize].iov_base = ret as u64;
-            locked_buf[i as usize].iov_len = buf.length as u64;
+            locked_buf[i as usize].iov_len = u64::from(buf.length);
             // Queue buffer to get data.
             self.queue_buffer(&buf)?;
         }

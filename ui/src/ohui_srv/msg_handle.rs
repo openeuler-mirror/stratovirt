@@ -89,7 +89,7 @@ impl WindowState {
     }
 
     fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
-        let (pos_x, pos_y) = trans_mouse_pos(x, y, self.width as f64, self.height as f64);
+        let (pos_x, pos_y) = trans_mouse_pos(x, y, f64::from(self.width), f64::from(self.height));
         input_move_abs(Axis::X, pos_x)?;
         input_move_abs(Axis::Y, pos_y)?;
         input_point_sync()
@@ -148,7 +148,7 @@ impl OhUiMsgHandler {
 
         let hdr = &reader.header;
         let event_type = hdr.event_type;
-        let body_size = hdr.size as size;
+        let body_size = hdr.size as usize;
         trace::trace_scope_start!(handle_msg, args = (&event_type));
 
         let body_bytes = reader.body.as_ref().unwrap();

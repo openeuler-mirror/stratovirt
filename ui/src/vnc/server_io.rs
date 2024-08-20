@@ -173,7 +173,7 @@ struct ImageInfo {
 impl ImageInfo {
     fn new(image: *mut pixman_image_t) -> Self {
         let bpp = pixman_format_bpp(get_image_format(image) as u32);
-        let length = get_image_width(image) * round_up_div(bpp as u64, 8) as i32;
+        let length = get_image_width(image) * round_up_div(u64::from(bpp), 8) as i32;
         ImageInfo {
             data: get_image_data(image) as *mut u8,
             stride: get_image_stride(image),
@@ -310,8 +310,8 @@ impl VncSurface {
             guest_dirty_bitmap: Bitmap::<u64>::new(
                 MAX_WINDOW_HEIGHT as usize
                     * round_up_div(
-                        (MAX_WINDOW_WIDTH / DIRTY_PIXELS_NUM) as u64,
-                        u64::BITS as u64,
+                        u64::from(MAX_WINDOW_WIDTH / DIRTY_PIXELS_NUM),
+                        u64::from(u64::BITS),
                     ) as usize,
             ),
             server_image: ptr::null_mut(),
@@ -424,7 +424,7 @@ impl VncSurface {
         let width = self.get_min_width();
         let line_bytes = cmp::min(s_info.stride, g_info.length);
 
-        while x < round_up_div(width as u64, DIRTY_PIXELS_NUM as u64) as usize {
+        while x < round_up_div(width as u64, u64::from(DIRTY_PIXELS_NUM)) as usize {
             if !self
                 .guest_dirty_bitmap
                 .contain(x + y * VNC_BITMAP_WIDTH as usize)

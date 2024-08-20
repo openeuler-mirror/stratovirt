@@ -84,8 +84,8 @@ impl PulseStreamData {
 
         // Set buffer size for requested latency.
         let buffer_attr = BufferAttr {
-            maxlength: ss.usec_to_bytes(MicroSeconds(MAX_LATENCY_MS as u64 * 1000)) as u32,
-            tlength: ss.usec_to_bytes(MicroSeconds(TARGET_LATENCY_MS as u64 * 1000)) as u32,
+            maxlength: ss.usec_to_bytes(MicroSeconds(u64::from(MAX_LATENCY_MS) * 1000)) as u32,
+            tlength: ss.usec_to_bytes(MicroSeconds(u64::from(TARGET_LATENCY_MS) * 1000)) as u32,
             prebuf: std::u32::MAX,
             minreq: std::u32::MAX,
             fragsize: std::u32::MAX,
@@ -198,9 +198,10 @@ impl PulseStreamData {
         if self.ss.rate > 0 {
             // Sample spec has changed, so the playback buffer size for the requested latency must
             // be recalculated as well.
-            self.buffer_attr.tlength =
-                self.ss
-                    .usec_to_bytes(MicroSeconds(self.latency as u64 * 1000)) as u32;
+            self.buffer_attr.tlength = self
+                .ss
+                .usec_to_bytes(MicroSeconds(u64::from(self.latency) * 1000))
+                as u32;
 
             self.simple = Simple::new(
                 None,

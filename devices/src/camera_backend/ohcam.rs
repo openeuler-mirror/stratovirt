@@ -236,7 +236,7 @@ impl CameraBackend for OhCameraBackend {
         let mut fmt_list: Vec<CameraFormatList> = Vec::new();
 
         for idx in 0..self.profile_cnt {
-            match self.ctx.get_profile(idx as i32) {
+            match self.ctx.get_profile(i32::from(idx)) {
                 Ok((fmt, width, height, fps)) => {
                     if !FRAME_FORMAT_WHITELIST.iter().any(|&x| x == fmt)
                         || !RESOLUTION_WHITELIST.iter().any(|&x| x == (width, height))

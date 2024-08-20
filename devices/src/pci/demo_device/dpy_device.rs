@@ -128,8 +128,8 @@ impl DisplayChangeListenerOperations for DpyInterface {
         }
 
         let mut i = 0;
-        let mut offset = y * stride + x * bpp as i32 / 8;
-        let count = w * bpp as i32 / 8;
+        let mut offset = y * stride + x * i32::from(bpp) / 8;
+        let count = w * i32::from(bpp) / 8;
         while i < h {
             error!(
                 "update from {} to {}, before is {}",

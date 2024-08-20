@@ -356,8 +356,9 @@ impl OhAudioProcess for OhAudioCapture {
         self.align = sh_header.chunk_size;
         self.new_chunks.store(0, Ordering::Release);
         self.shm_addr = start_addr;
-        self.shm_len = sh_header.max_chunks as u64 * sh_header.chunk_size as u64;
-        self.cur_pos = start_addr + sh_header.chunk_idx as u64 * sh_header.chunk_size as u64;
+        self.shm_len = u64::from(sh_header.max_chunks) * u64::from(sh_header.chunk_size);
+        self.cur_pos =
+            start_addr + u64::from(sh_header.chunk_idx) * u64::from(sh_header.chunk_size);
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
@@ -442,7 +443,8 @@ extern "C" fn on_read_data_cb(
             break;
         }
     }
-    let old_pos = capture.cur_pos - ((capture.cur_pos - capture.shm_addr) % capture.align as u64);
+    let old_pos =
+        capture.cur_pos - ((capture.cur_pos - capture.shm_addr) % u64::from(capture.align));
     let buf_end = capture.shm_addr + capture.shm_len;
     let mut src_addr = buffer as u64;
     let mut left = length as u64;
@@ -466,8 +468,8 @@ extern "C" fn on_read_data_cb(
     }
 
     let new_chunks = match capture.cur_pos <= old_pos {
-        true => (capture.shm_len - (old_pos - capture.cur_pos)) / capture.align as u64,
-        false => (capture.cur_pos - old_pos) / capture.align as u64,
+        true => (capture.shm_len - (old_pos - capture.cur_pos)) / u64::from(capture.align),
+        false => (capture.cur_pos - old_pos) / u64::from(capture.align),
     };
     capture
         .new_chunks

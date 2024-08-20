@@ -234,10 +234,10 @@ impl DisplayChangeListenerOperations for VncInterface {
             return Ok(());
         }
         let server = VNC_SERVERS.lock().unwrap()[0].clone();
-        let width = cursor.width as u64;
-        let height = cursor.height as u64;
+        let width = u64::from(cursor.width);
+        let height = u64::from(cursor.height);
         trace::vnc_dpy_cursor_update(&width, &height);
-        let bpl = round_up_div(width, BIT_PER_BYTE as u64);
+        let bpl = round_up_div(width, u64::from(BIT_PER_BYTE));
         // Set the bit for mask.
         let bit_mask: u8 = 0x80;
 
@@ -254,7 +254,7 @@ impl DisplayChangeListenerOperations for VncInterface {
                 let idx = ((i + j * width) as usize) * bytes_per_pixel() + first_bit;
                 if let Some(n) = cursor.data.get(idx) {
                     if *n == 0xff {
-                        mask[(j * bpl + i / BIT_PER_BYTE as u64) as usize] |= bit;
+                        mask[(j * bpl + i / u64::from(BIT_PER_BYTE)) as usize] |= bit;
                     }
                 }
                 bit >>= 1;
@@ -426,16 +426,16 @@ pub fn set_area_dirty(
     let width: i32 = vnc_width(g_w);
     let height: i32 = vnc_height(g_h);
 
-    w += x % DIRTY_PIXELS_NUM as i32;
-    x -= x % DIRTY_PIXELS_NUM as i32;
+    w += x % i32::from(DIRTY_PIXELS_NUM);
+    x -= x % i32::from(DIRTY_PIXELS_NUM);
 
     x = cmp::min(x, width);
     y = cmp::min(y, height);
     w = cmp::min(x + w, width) - x;
     h = cmp::min(y + h, height);
     while y < h {
-        let pos = (y * VNC_BITMAP_WIDTH as i32 + x / DIRTY_PIXELS_NUM as i32) as usize;
-        let len = round_up_div(w as u64, DIRTY_PIXELS_NUM as u64) as usize;
+        let pos = (y * VNC_BITMAP_WIDTH as i32 + x / i32::from(DIRTY_PIXELS_NUM)) as usize;
+        let len = round_up_div(w as u64, u64::from(DIRTY_PIXELS_NUM)) as usize;
         dirty.set_range(pos, len)?;
         y += 1;
     }
@@ -445,14 +445,14 @@ pub fn set_area_dirty(
 /// Get the width of image.
 fn vnc_width(width: i32) -> i32 {
     cmp::min(
-        MAX_WINDOW_WIDTH as i32,
-        round_up(width as u64, DIRTY_PIXELS_NUM as u64) as i32,
+        i32::from(MAX_WINDOW_WIDTH),
+        round_up(width as u64, u64::from(DIRTY_PIXELS_NUM)) as i32,
     )
 }
 
 /// Get the height of image.
 fn vnc_height(height: i32) -> i32 {
-    cmp::min(MAX_WINDOW_HEIGHT as i32, height)
+    cmp::min(i32::from(MAX_WINDOW_HEIGHT), height)
 }
 
 /// Update server image

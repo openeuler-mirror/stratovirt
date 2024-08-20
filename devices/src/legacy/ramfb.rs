@@ -121,13 +121,13 @@ impl RamfbState {
         }
 
         if stride == 0 {
-            let linesize = width * pixman_format_bpp(format as u32) as u32 / BYTES_PER_PIXELS;
+            let linesize = width * u32::from(pixman_format_bpp(format as u32)) / BYTES_PER_PIXELS;
             stride = linesize;
         }
 
         let fb_addr = match self.sys_mem.addr_cache_init(GuestAddress(addr)) {
             Some((hva, len)) => {
-                if len < stride as u64 {
+                if len < u64::from(stride) {
                     error!("Insufficient contiguous memory length");
                     return;
                 }

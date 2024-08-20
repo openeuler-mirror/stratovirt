@@ -123,9 +123,9 @@ pub fn get_video_frame_size(width: u32, height: u32, fmt: FmtType) -> Result<u32
 
 pub fn get_bit_rate(width: u32, height: u32, interval: u32, fmt: FmtType) -> Result<u32> {
     let fm_size = get_video_frame_size(width, height, fmt)?;
-    let size_in_bit = fm_size as u64 * INTERVALS_PER_SEC as u64 * 8;
+    let size_in_bit = u64::from(fm_size) * u64::from(INTERVALS_PER_SEC) * 8;
     let rate = size_in_bit
-        .checked_div(interval as u64)
+        .checked_div(u64::from(interval))
         .with_context(|| format!("Invalid size {} or interval {}", size_in_bit, interval))?;
     Ok(rate as u32)
 }
