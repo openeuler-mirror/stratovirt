@@ -12,21 +12,17 @@
 
 use core::arch::x86_64::__cpuid_count;
 
-pub fn host_cpuid(
+pub unsafe fn host_cpuid(
     leaf: u32,
     subleaf: u32,
-    eax: *mut u32,
-    ebx: *mut u32,
-    ecx: *mut u32,
-    edx: *mut u32,
+    eax: &mut u32,
+    ebx: &mut u32,
+    ecx: &mut u32,
+    edx: &mut u32,
 ) {
-    // SAFETY: cpuid is created in get_supported_cpuid().
-    unsafe {
-        let cpuid = __cpuid_count(leaf, subleaf);
-
-        *eax = cpuid.eax;
-        *ebx = cpuid.ebx;
-        *ecx = cpuid.ecx;
-        *edx = cpuid.edx;
-    }
+    let cpuid = __cpuid_count(leaf, subleaf);
+    *eax = cpuid.eax;
+    *ebx = cpuid.ebx;
+    *ecx = cpuid.ecx;
+    *edx = cpuid.edx;
 }

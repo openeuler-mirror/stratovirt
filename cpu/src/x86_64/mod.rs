@@ -410,26 +410,32 @@ impl X86CPUState {
                     }
                 }
                 2 => {
-                    host_cpuid(
-                        2,
-                        0,
-                        &mut entry.eax,
-                        &mut entry.ebx,
-                        &mut entry.ecx,
-                        &mut entry.edx,
-                    );
+                    // SAFETY: entry is from KVM_GET_SUPPORTED_CPUID.
+                    unsafe {
+                        host_cpuid(
+                            2,
+                            0,
+                            &mut entry.eax,
+                            &mut entry.ebx,
+                            &mut entry.ecx,
+                            &mut entry.edx,
+                        );
+                    }
                 }
                 4 => {
                     // cache info: needed for Pentium Pro compatibility
                     // Passthrough host cache info directly to guest
-                    host_cpuid(
-                        4,
-                        entry.index,
-                        &mut entry.eax,
-                        &mut entry.ebx,
-                        &mut entry.ecx,
-                        &mut entry.edx,
-                    );
+                    // SAFETY: entry is from KVM_GET_SUPPORTED_CPUID.
+                    unsafe {
+                        host_cpuid(
+                            4,
+                            entry.index,
+                            &mut entry.eax,
+                            &mut entry.ebx,
+                            &mut entry.ecx,
+                            &mut entry.edx,
+                        );
+                    }
                     entry.eax &= !0xfc00_0000;
                     if entry.eax & 0x0001_ffff != 0 && self.max_vcpus > 1 {
                         // max_vcpus is no less than 1.
@@ -511,14 +517,17 @@ impl X86CPUState {
                 }
                 0x8000_0002..=0x8000_0004 => {
                     // Passthrough host cpu model name directly to guest
-                    host_cpuid(
-                        entry.function,
-                        entry.index,
-                        &mut entry.eax,
-                        &mut entry.ebx,
-                        &mut entry.ecx,
-                        &mut entry.edx,
-                    );
+                    // SAFETY: entry is from KVM_GET_SUPPORTED_CPUID.
+                    unsafe {
+                        host_cpuid(
+                            entry.function,
+                            entry.index,
+                            &mut entry.eax,
+                            &mut entry.ebx,
+                            &mut entry.ecx,
+                            &mut entry.edx,
+                        );
+                    }
                 }
                 _ => (),
             }
