@@ -282,7 +282,7 @@ impl Request {
         let mut hvaset = Vec::new();
 
         for iov in self.iovec.iter() {
-            let mut offset = 0;
+            let mut offset = 0_u64;
 
             while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
                 offset += std::mem::size_of::<u32>() as u64;
@@ -305,7 +305,7 @@ impl Request {
         }
 
         let host_page_size = host_page_size();
-        let mut advice = 0;
+        let mut advice = 0_i32;
         // If host_page_size equals BALLOON_PAGE_SIZE and have the same share properties,
         // we can directly call the madvise function without any problem. And if the advice is
         // MADV_WILLNEED, we just hint the whole host page it lives on, since we can't do
