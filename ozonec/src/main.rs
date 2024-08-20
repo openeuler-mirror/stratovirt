@@ -10,14 +10,23 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod commands;
+mod container;
+mod linux;
 mod utils;
 
-use std::{path::PathBuf, process::exit};
+use std::{
+    fs::remove_dir_all,
+    path::{Path, PathBuf},
+    process::exit,
+};
 
 use anyhow::{Context, Result};
 use clap::{crate_description, Args, Parser, Subcommand};
+use log::info;
+use nix::unistd::geteuid;
 
-use crate::utils::logger;
+use crate::{commands::Create, utils::logger};
 
 // Global options which are not binded to any specific command.
 #[derive(Args, Debug)]
@@ -38,7 +47,9 @@ struct GlobalOpts {
 // and [OCI Command Line Interface]
 // (https://github.com/opencontainers/runtime-tools/blob/master/docs/command-line-interface.md).
 #[derive(Subcommand, Debug)]
-enum StandardCmd {}
+enum StandardCmd {
+    Create(Create),
+}
 
 // Extended commands not documented in [OCI Command Line Interface].
 #[derive(Subcommand, Debug)]
@@ -62,12 +73,37 @@ struct Cli {
     cmd: Command,
 }
 
+fn cmd_run(command: Command, root: &Path) -> Result<()> {
+    match command {
+        Command::Standard(cmd) => match cmd {
+            StandardCmd::Create(create) => {
+                info!("Exec command: {:?}", create);
+
+                let mut root_exist = false;
+                create.run(root, &mut root_exist).inspect_err(|_| {
+                    if !root_exist {
+                        let _ = remove_dir_all(root);
+                    }
+                })?
+            }
+        },
+        Command::Extend(cmd) => (),
+    }
+    Ok(())
+}
+
 fn real_main() -> Result<()> {
     let cli = Cli::parse();
 
     logger::init(&cli.global.log, cli.global.debug).with_context(|| "Failed to init logger")?;
 
-    Ok(())
+    let root_path = if let Some(root) = cli.global.root {
+        root
+    } else {
+        let euid = geteuid();
+        PathBuf::from(format!("/var/run/user/{}/ozonec", euid))
+    };
+    cmd_run(cli.cmd, &root_path)
 }
 
 fn main() {
