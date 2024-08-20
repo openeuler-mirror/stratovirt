@@ -396,6 +396,11 @@ extern "C" fn on_write_data_cb(
     buffer: *mut ::std::os::raw::c_void,
     length: i32,
 ) -> i32 {
+    if buffer.is_null() || user_data.is_null() {
+        error!("on_write_data_cb: Invalid input");
+        return 0;
+    }
+
     // SAFETY: we make sure that it is OhAudioRender when register callback.
     let render = unsafe {
         (user_data as *mut OhAudioRender)
@@ -426,6 +431,11 @@ extern "C" fn on_read_data_cb(
     buffer: *mut ::std::os::raw::c_void,
     length: i32,
 ) -> i32 {
+    if buffer.is_null() || user_data.is_null() {
+        error!("on_read_data_cb: Invalid input");
+        return 0;
+    }
+
     // SAFETY: we make sure that it is OhAudioCapture when register callback.
     let capture = unsafe {
         (user_data as *mut OhAudioCapture)
