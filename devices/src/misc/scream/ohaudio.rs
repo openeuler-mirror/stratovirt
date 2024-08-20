@@ -80,7 +80,7 @@ struct StreamQueue {
 impl Read for StreamQueue {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let len = buf.len();
-        let mut ret = 0;
+        let mut ret = 0_usize;
         while ret < len {
             if self.queue.is_empty() {
                 break;
@@ -191,7 +191,7 @@ impl OhAudioRender {
 
     fn flush(&mut self) {
         self.set_flushing(true);
-        let mut cnt = 0;
+        let mut cnt = 0_u64;
         while cnt < FLUSH_DELAY_CNT {
             thread::sleep(Duration::from_millis(FLUSH_DELAY_MS));
             cnt += 1;

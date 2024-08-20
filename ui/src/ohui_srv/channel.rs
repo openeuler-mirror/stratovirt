@@ -65,7 +65,7 @@ impl OhUiChannel {
 
 pub fn recv_slice(stream: &mut dyn Read, data: &mut [u8]) -> Result<usize> {
     let len = data.len();
-    let mut ret = 0;
+    let mut ret = 0_usize;
 
     while ret < len {
         match stream.read(&mut data[ret..len]) {

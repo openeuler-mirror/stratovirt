@@ -1109,8 +1109,8 @@ fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
 
 fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
     let bits_per_pixel = match fmt.format {
-        FmtType::Yuy2 | FmtType::Rgb565 => 0x10,
-        FmtType::Nv12 => 0xc,
+        FmtType::Yuy2 | FmtType::Rgb565 => 0x10_u8,
+        FmtType::Nv12 => 0xc_u8,
         _ => 0,
     };
     let header = match fmt.format {

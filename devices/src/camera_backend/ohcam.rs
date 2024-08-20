@@ -340,7 +340,7 @@ impl CameraBackend for OhCameraBackend {
             .with_context(|| "Invalid camid in callback table")?
             .get_buffer();
 
-        if src_len == 0 {
+        if src_len == 0_u64 {
             bail!("Invalid frame src_len {}", src_len);
         }
 
@@ -350,7 +350,7 @@ impl CameraBackend for OhCameraBackend {
 
         trace::trace_scope_start!(ohcam_get_frame, args = (frame_offset, len));
 
-        let mut copied = 0;
+        let mut copied = 0_usize;
         for iov in iovecs {
             if len == copied {
                 break;
