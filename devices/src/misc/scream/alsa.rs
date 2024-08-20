@@ -168,7 +168,7 @@ impl AudioInterface for AlsaStreamData {
             return;
         }
 
-        let mut frames = 0;
+        let mut frames = 0_u32;
         let mut io = self.pcm.as_ref().unwrap().io_bytes();
 
         // Make sure audio read does not bypass chunk_idx read.
@@ -215,7 +215,7 @@ impl AudioInterface for AlsaStreamData {
             return 0;
         }
 
-        let mut frames = 0;
+        let mut frames = 0_u32;
         let mut io = self.pcm.as_ref().unwrap().io_bytes();
 
         // Make sure audio read does not bypass chunk_idx read.
