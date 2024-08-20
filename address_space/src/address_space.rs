@@ -230,7 +230,7 @@ impl AddressSpace {
         }
         locked_listener.enable();
 
-        let mut idx = 0;
+        let mut idx = 0_usize;
         let mut mls = self.listeners.lock().unwrap();
         for ml in mls.iter() {
             if ml.lock().unwrap().priority() >= locked_listener.priority() {
@@ -381,8 +381,8 @@ impl AddressSpace {
     /// * `new_evtfds` - New `RegionIoEventFd` array.
     fn update_ioeventfds_pass(&self, new_evtfds: &[RegionIoEventFd]) -> Result<()> {
         let old_evtfds = self.ioeventfds.lock().unwrap();
-        let mut old_idx = 0;
-        let mut new_idx = 0;
+        let mut old_idx = 0_usize;
+        let mut new_idx = 0_usize;
 
         while old_idx < old_evtfds.len() || new_idx < new_evtfds.len() {
             let old_fd = old_evtfds.get(old_idx);
