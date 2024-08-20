@@ -93,7 +93,7 @@ impl KvmMemoryListener {
 
         for (index, slot) in slots.iter_mut().enumerate() {
             if slot.size == 0 {
-                slot.index = index as u32;
+                slot.index = u32::try_from(index)?;
                 slot.guest_addr = guest_addr;
                 slot.size = size;
                 slot.host_addr = host_addr;
@@ -316,8 +316,8 @@ impl KvmMemoryListener {
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, u16::try_from(ioevtfd.data)?),
+                4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, u32::try_from(ioevtfd.data)?),
                 8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
@@ -357,8 +357,8 @@ impl KvmMemoryListener {
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, u16::try_from(ioevtfd.data)?),
+                4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, u32::try_from(ioevtfd.data)?),
                 8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }

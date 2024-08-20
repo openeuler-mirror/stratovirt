@@ -118,7 +118,7 @@ impl GICv3Access for KvmGICv3 {
     }
 
     fn vcpu_gicr_attr(&self, cpu: usize) -> u64 {
-        let clustersz = 16;
+        let clustersz = 16usize;
 
         let aff1 = (cpu / clustersz) as u64;
         let aff0 = (cpu % clustersz) as u64;
@@ -128,6 +128,7 @@ impl GICv3Access for KvmGICv3 {
 
         let last = u64::from((self.vcpu_count - 1) == cpu as u64);
 
+        // Allow conversion of variables from i64 to u64.
         ((cpu_affid << 32) | (1 << 24) | (1 << 8) | (last << 4))
             & kvm_bindings::KVM_DEV_ARM_VGIC_V3_MPIDR_MASK as u64
     }

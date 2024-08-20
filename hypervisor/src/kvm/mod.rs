@@ -135,6 +135,7 @@ impl KvmHypervisor {
     }
 
     fn create_memory_listener(&self) -> Arc<Mutex<dyn Listener>> {
+        // Memslot will not exceed u32::MAX, so use as translate data type.
         Arc::new(Mutex::new(KvmMemoryListener::new(
             self.fd.as_ref().unwrap().get_nr_memslots() as u32,
             self.vm_fd.clone(),
@@ -298,7 +299,7 @@ impl MigrateOps for KvmHypervisor {
         self.vm_fd
             .as_ref()
             .unwrap()
-            .get_dirty_log(slot, mem_size as usize)
+            .get_dirty_log(slot, usize::try_from(mem_size)?)
             .with_context(|| {
                 format!(
                     "Failed to get dirty log, error is {}",
@@ -665,7 +666,7 @@ impl CPUHypervisorOps for KvmCpu {
         }
 
         // It shall wait for the vCPU pause state from hypervisor exits.
-        let mut sleep_times = 0;
+        let mut sleep_times = 0u32;
         while !pause_signal.load(Ordering::SeqCst) {
             if sleep_times >= 5 {
                 bail!(CpuError::StopVcpu("timeout".to_string()));
