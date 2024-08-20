@@ -125,15 +125,15 @@ pub fn do_mmap(
         return Err(std::io::Error::last_os_error()).with_context(|| "Mmap failed.");
     }
     if !dump_guest_core {
-        set_memory_undumpable(hva, len);
+        // SAFETY: The hva and len are mmap-ed above and are verified.
+        unsafe { set_memory_undumpable(hva, len) };
     }
 
     Ok(hva as u64)
 }
 
-fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
-    // SAFETY: host_addr and size are valid and return value is checked.
-    let ret = unsafe { libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP) };
+unsafe fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
+    let ret = libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP);
     if ret < 0 {
         error!(
             "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {:?}",
