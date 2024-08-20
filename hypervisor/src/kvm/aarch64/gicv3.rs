@@ -128,6 +128,7 @@ impl GICv3Access for KvmGICv3 {
 
         let last = u64::from((self.vcpu_count - 1) == cpu as u64);
 
+        // Allow conversion of variables from i64 to u64.
         ((cpu_affid << 32) | (1 << 24) | (1 << 8) | (last << 4))
             & kvm_bindings::KVM_DEV_ARM_VGIC_V3_MPIDR_MASK as u64
     }
