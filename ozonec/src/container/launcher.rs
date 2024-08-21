@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{process::Process, state::State, Container};
+use crate::{linux::Process, utils::OzonecErr};
+
+use super::{state::State, Container};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
@@ -25,7 +27,7 @@ pub enum Action {
 
 pub struct Launcher {
     pub bundle: PathBuf,
-    pub state_root: PathBuf,
+    pub root: PathBuf,
     /// init is set to true when creating a container.
     pub init: bool,
     pub runner: Box<dyn Container>,
@@ -35,14 +37,14 @@ pub struct Launcher {
 impl Launcher {
     pub fn new(
         bundle: &Path,
-        state_root: &Path,
+        root: &Path,
         init: bool,
         runner: Box<dyn Container>,
         pid_file: Option<PathBuf>,
     ) -> Self {
         Self {
             bundle: bundle.to_path_buf(),
-            state_root: state_root.to_path_buf(),
+            root: root.to_path_buf(),
             init,
             runner,
             pid_file,
@@ -92,14 +94,15 @@ impl Launcher {
     fn get_state(&self) -> Result<State> {
         let state = self.runner.get_oci_state()?;
         let pid = self.runner.get_pid();
-        let proc = procfs::process::Process::new(pid)?;
+        let proc =
+            procfs::process::Process::new(pid).with_context(|| OzonecErr::ReadProcPid(pid))?;
         let start_time = proc
             .stat()
-            .with_context(|| format!("Failed to access /proc/{}/status", pid))?
+            .with_context(|| OzonecErr::ReadProcStat(pid))?
             .starttime;
 
         Ok(State::new(
-            &self.state_root,
+            &self.root,
             &self.bundle,
             state,
             start_time,

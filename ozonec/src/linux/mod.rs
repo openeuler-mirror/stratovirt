@@ -12,6 +12,8 @@
 
 mod container;
 mod notify_socket;
+mod process;
 
 pub use container::LinuxContainer;
 pub use notify_socket::NotifyListener;
+pub use process::Process;

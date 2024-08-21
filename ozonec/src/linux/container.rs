@@ -19,15 +19,22 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use libc::pid_t;
-use log::error;
+use log::{debug, error, info};
 use nix::{
-    sys::signal::Signal,
+    errno::Errno,
+    sys::{
+        signal::Signal,
+        wait::{waitpid, WaitStatus},
+    },
     unistd::{chown, getegid, geteuid},
 };
 use procfs::process::ProcState;
 
-use super::notify_socket::NOTIFY_SOCKET;
-use crate::container::{Container, Process};
+use super::{notify_socket::NOTIFY_SOCKET, process::clone_process, NotifyListener, Process};
+use crate::{
+    container::Container,
+    utils::{Channel, Message, OzonecErr},
+};
 use oci_spec::{
     runtime::RuntimeConfig,
     state::{ContainerStatus, State},
@@ -81,6 +88,64 @@ impl LinuxContainer {
         if config.linux.is_none() {
             bail!("There is no linux specific configuration in config.json for Linux container");
         }
+        if config.process.args.is_none() {
+            bail!("args in process is not set in config.json.");
+        }
+        Ok(())
+    }
+
+    fn do_first_stage(
+        &mut self,
+        process: &mut Process,
+        parent_channel: &Channel<Message>,
+        fst_stage_channel: &Channel<Message>,
+        notify_listener: Option<NotifyListener>,
+    ) -> Result<()> {
+        debug!("First stage process start");
+
+        fst_stage_channel
+            .receiver
+            .close()
+            .with_context(|| "Failed to close receiver end of first stage channel")?;
+
+        // Spawn a child process to perform the second stage to initialize container.
+        let init_pid = clone_process("ozonec:[2:INIT]", || {
+            self.do_second_stage(process, parent_channel, notify_listener)
+                .with_context(|| "Second stage process encounters errors")?;
+            Ok(0)
+        })?;
+
+        // Send the final container pid to the parent process.
+        parent_channel.send_init_pid(init_pid)?;
+
+        debug!("First stage process exit");
+        Ok(())
+    }
+
+    fn do_second_stage(
+        &mut self,
+        process: &mut Process,
+        parent_channel: &Channel<Message>,
+        notify_listener: Option<NotifyListener>,
+    ) -> Result<()> {
+        debug!("Second stage process start");
+
+        // Tell the parent process that the init process has been cloned.
+        parent_channel.send_container_created()?;
+        parent_channel
+            .sender
+            .close()
+            .with_context(|| "Failed to close sender of parent channel")?;
+
+        // Listening on the notify socket to start container.
+        if let Some(listener) = notify_listener {
+            listener.wait_for_start_container()?;
+            listener
+                .close()
+                .with_context(|| "Failed to close notify socket")?;
+        }
+
+        debug!("Container process exit");
         Ok(())
     }
 
@@ -97,7 +162,7 @@ impl LinuxContainer {
         let proc_stat = proc
             .unwrap()
             .stat()
-            .with_context(|| format!("Failed to read /proc/{}/stat", self.pid))?;
+            .with_context(|| OzonecErr::ReadProcStat(self.pid))?;
         // If starttime is not the same, then pid is reused, and the original process has stopped.
         if proc_stat.starttime != self.start_time {
             return Ok(ContainerStatus::Stopped);
@@ -162,6 +227,65 @@ impl Container for LinuxContainer {
     }
 
     fn create(&mut self, process: &mut Process) -> Result<()> {
+        // Create notify socket to notify the container process to start.
+        let notify_listener = if process.init {
+            Some(NotifyListener::new(PathBuf::from(&self.root))?)
+        } else {
+            None
+        };
+
+        // Create channels to communicate with child processes.
+        let parent_channel = Channel::<Message>::new()
+            .with_context(|| "Failed to create message channel for parent process")?;
+        let fst_stage_channel = Channel::<Message>::new()?;
+        // Set receivers timeout: 50ms.
+        parent_channel.receiver.set_timeout(50000)?;
+        fst_stage_channel.receiver.set_timeout(50000)?;
+
+        // Spawn a child process to perform Stage 1.
+        let fst_stage_pid = clone_process("ozonec:[1:CHILD]", || {
+            self.do_first_stage(
+                process,
+                &parent_channel,
+                &fst_stage_channel,
+                notify_listener,
+            )
+            .with_context(|| "First stage process encounters errors")?;
+            Ok(0)
+        })?;
+
+        let init_pid = parent_channel
+            .recv_init_pid()
+            .with_context(|| "Failed to receive init pid")?;
+        parent_channel.recv_container_created()?;
+        parent_channel
+            .receiver
+            .close()
+            .with_context(|| "Failed to close receiver end of parent channel")?;
+
+        self.pid = init_pid.as_raw();
+        self.start_time = procfs::process::Process::new(self.pid)
+            .with_context(|| OzonecErr::ReadProcPid(self.pid))?
+            .stat()
+            .with_context(|| OzonecErr::ReadProcStat(self.pid))?
+            .starttime;
+
+        match waitpid(fst_stage_pid, None) {
+            Ok(WaitStatus::Exited(_, 0)) => (),
+            Ok(WaitStatus::Exited(_, s)) => {
+                info!("First stage process exits with status: {}", s);
+            }
+            Ok(WaitStatus::Signaled(_, sig, _)) => {
+                info!("First stage process killed by signal: {}", sig)
+            }
+            Ok(_) => (),
+            Err(Errno::ECHILD) => {
+                info!("First stage process has already been reaped");
+            }
+            Err(e) => {
+                bail!("Failed to waitpid for first stage process: {e}");
+            }
+        }
         Ok(())
     }
 
