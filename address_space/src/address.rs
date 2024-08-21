@@ -175,6 +175,7 @@ impl AddressRange {
             return None;
         }
         let start = std::cmp::max(self.base, other.base);
+        // SAFETY: The range of a region will not exceed 64 bits.
         let size_inter = (std::cmp::min(end, other_end) - u128::from(start.0)) as u64;
 
         Some(AddressRange {
