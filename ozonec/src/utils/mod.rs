@@ -11,3 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 pub mod logger;
+
+mod channel;
+
+pub use channel::{Channel, Message};
