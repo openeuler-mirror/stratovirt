@@ -10,10 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-pub mod logger;
+use thiserror::Error;
 
-mod channel;
-mod error;
-
-pub use channel::{Channel, Message};
-pub use error::OzonecErr;
+#[derive(Error, Debug)]
+pub enum OzonecErr {
+    #[error("Failed to access /proc/{0}")]
+    ReadProcPid(i32),
+    #[error("Failed to access /proc/{0}/status")]
+    ReadProcStat(i32),
+}

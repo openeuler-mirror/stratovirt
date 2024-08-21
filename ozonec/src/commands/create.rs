@@ -19,6 +19,7 @@ use crate::container::{Action, Container, Launcher};
 use crate::linux::LinuxContainer;
 use oci_spec::runtime::RuntimeConfig;
 
+/// Create a container from a bundle directory
 #[derive(Parser, Debug)]
 pub struct Create {
     /// File to write the container PID to

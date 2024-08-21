@@ -11,11 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 mod launcher;
-mod process;
 mod state;
 
 pub use launcher::{Action, Launcher};
-pub use process::Process;
 
 use std::time::SystemTime;
 
@@ -24,6 +22,8 @@ use libc::pid_t;
 use nix::sys::signal::Signal;
 
 use oci_spec::{runtime::RuntimeConfig, state::State as OciState};
+
+use crate::linux::Process;
 
 pub trait Container {
     fn get_config(&self) -> &RuntimeConfig;
