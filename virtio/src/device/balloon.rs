@@ -719,7 +719,7 @@ impl BalloonIoHandler {
                 .with_context(|| "Fail to parse available descriptor chain")?;
             // SAFETY: There is no confliction when writing global variable BALLOON_DEV, in other
             // words, this function will not be called simultaneously.
-            if let Some(dev) = unsafe { &BALLOON_DEV } {
+            if let Some(dev) = unsafe { BALLOON_DEV.as_ref() } {
                 let mut balloon_dev = dev.lock().unwrap();
                 for iov in req.iovec.iter() {
                     if let Some(stat) = iov_to_buf::<BalloonStat>(&self.mem_space, iov, 0) {
@@ -1218,7 +1218,7 @@ impl VirtioDevice for Balloon {
 pub fn qmp_balloon(target: u64) -> bool {
     // SAFETY: there is no confliction when writing global variable BALLOON_DEV, in other
     // words, this function will not be called simultaneously.
-    if let Some(dev) = unsafe { &BALLOON_DEV } {
+    if let Some(dev) = unsafe { BALLOON_DEV.as_ref() } {
         match dev.lock().unwrap().set_guest_memory_size(target) {
             Ok(()) => {
                 return true;
@@ -1236,7 +1236,7 @@ pub fn qmp_balloon(target: u64) -> bool {
 pub fn qmp_query_balloon() -> Option<u64> {
     // SAFETY: There is no confliction when writing global variable BALLOON_DEV, in other
     // words, this function will not be called simultaneously.
-    if let Some(dev) = unsafe { &BALLOON_DEV } {
+    if let Some(dev) = unsafe { BALLOON_DEV.as_ref() } {
         let unlocked_dev = dev.lock().unwrap();
         return Some(unlocked_dev.get_guest_memory_size());
     }
