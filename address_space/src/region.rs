@@ -201,7 +201,7 @@ macro_rules! rw_multi_ops {
         let offset = $args.offset;
         let cnt = $args.count;
         let access_size = $args.access_size;
-        let mut pos = 0;
+        let mut pos = 0_u64;
         for _ in 0..(cnt / access_size) {
             if !$ops(
                 &mut $slice[pos as usize..(pos + access_size) as usize],
