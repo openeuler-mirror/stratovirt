@@ -458,17 +458,17 @@ impl BlnMemInfo {
 
     fn get_host_address(&self, addr: GuestAddress) -> Option<(u64, bool)> {
         let all_regions = self.regions.lock().unwrap();
-        for i in 0..all_regions.len() {
-            if addr.raw_value() < all_regions[i].guest_phys_addr + all_regions[i].memory_size
-                && addr.raw_value() >= all_regions[i].guest_phys_addr
+        for region in all_regions.iter() {
+            if addr.raw_value() < region.guest_phys_addr + region.memory_size
+                && addr.raw_value() >= region.guest_phys_addr
             {
                 return Some((
-                    all_regions[i].userspace_addr + addr.raw_value()
-                        - all_regions[i].guest_phys_addr,
-                    all_regions[i].mem_share,
+                    region.userspace_addr + addr.raw_value() - region.guest_phys_addr,
+                    region.mem_share,
                 ));
             }
         }
+
         None
     }
 
