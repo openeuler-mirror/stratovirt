@@ -12,13 +12,14 @@
 
 use std::{
     collections::HashMap,
-    fs::{canonicalize, create_dir_all},
+    fs::{canonicalize, create_dir_all, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     time::SystemTime,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use libc::pid_t;
+use libc::{c_char, pid_t, setdomainname};
 use log::{debug, error, info};
 use nix::{
     errno::Errno,
@@ -26,16 +27,21 @@ use nix::{
         signal::Signal,
         wait::{waitpid, WaitStatus},
     },
-    unistd::{chown, getegid, geteuid},
+    unistd::{chown, getegid, geteuid, sethostname, Gid, Pid, Uid},
 };
+use prctl::set_dumpable;
 use procfs::process::ProcState;
 
-use super::{notify_socket::NOTIFY_SOCKET, process::clone_process, NotifyListener, Process};
+use super::{
+    namespace::NsController, notify_socket::NOTIFY_SOCKET, process::clone_process, NotifyListener,
+    Process,
+};
 use crate::{
     container::Container,
     utils::{Channel, Message, OzonecErr},
 };
 use oci_spec::{
+    linux::{IdMapping, NamespaceType},
     runtime::RuntimeConfig,
     state::{ContainerStatus, State},
 };
@@ -103,10 +109,15 @@ impl LinuxContainer {
     ) -> Result<()> {
         debug!("First stage process start");
 
+        self.set_user_namespace(parent_channel, fst_stage_channel, process)?;
+
         fst_stage_channel
             .receiver
             .close()
             .with_context(|| "Failed to close receiver end of first stage channel")?;
+
+        // New pid namespace goes intto effect in cloned child processes.
+        self.set_pid_namespace()?;
 
         // Spawn a child process to perform the second stage to initialize container.
         let init_pid = clone_process("ozonec:[2:INIT]", || {
@@ -130,6 +141,10 @@ impl LinuxContainer {
     ) -> Result<()> {
         debug!("Second stage process start");
 
+        self.set_rest_namespaces()?;
+
+        process.set_additional_gids()?;
+
         // Tell the parent process that the init process has been cloned.
         parent_channel.send_container_created()?;
         parent_channel
@@ -144,9 +159,7 @@ impl LinuxContainer {
                 .close()
                 .with_context(|| "Failed to close notify socket")?;
         }
-
-        debug!("Container process exit");
-        Ok(())
+        process.exec_program();
     }
 
     fn container_status(&self) -> Result<ContainerStatus> {
@@ -178,6 +191,175 @@ impl LinuxContainer {
                 Ok(ContainerStatus::Running)
             }
         }
+    }
+
+    fn ns_controller(&self) -> Result<NsController> {
+        Ok(self
+            .config
+            .linux
+            .as_ref()
+            .unwrap()
+            .namespaces
+            .clone()
+            .try_into()?)
+    }
+
+    fn set_user_namespace(
+        &self,
+        parent_channel: &Channel<Message>,
+        fst_stage_channel: &Channel<Message>,
+        process: &Process,
+    ) -> Result<()> {
+        let ns_controller: NsController = self.ns_controller()?;
+
+        if let Some(ns) = ns_controller.get(NamespaceType::User)? {
+            ns_controller
+                .set_namespace(NamespaceType::User)
+                .with_context(|| "Failed to set user namespace")?;
+
+            if ns.path.is_none() {
+                // Child process needs to be dumpable, otherwise the parent process is not
+                // allowed to write the uid/gid mappings.
+                set_dumpable(true).map_err(|e| anyhow!("Failed to set process dumpable: {e}"))?;
+                parent_channel
+                    .send_id_mappings()
+                    .with_context(|| "Failed to send id mappings")?;
+                fst_stage_channel
+                    .recv_id_mappings_done()
+                    .with_context(|| "Failed to receive id mappings done")?;
+                set_dumpable(false)
+                    .map_err(|e| anyhow!("Failed to set process undumpable: {e}"))?;
+            }
+
+            // After UID/GID mappings are configured, ozonec wants to make sure continue as
+            // the root user inside the new user namespace. This is required because the
+            // process of configuring the container process will require root, even though
+            // the root in the user namespace is likely mapped to an non-privileged user.
+            process.set_id(Gid::from_raw(0), Uid::from_raw(0))?;
+        }
+        Ok(())
+    }
+
+    fn is_namespace_set(&self, ns_type: NamespaceType) -> Result<bool> {
+        let ns_controller: NsController = self.ns_controller()?;
+        Ok(ns_controller.get(ns_type)?.is_some())
+    }
+
+    fn set_pid_namespace(&self) -> Result<()> {
+        let ns_controller = self.ns_controller()?;
+
+        if ns_controller.get(NamespaceType::Pid)?.is_some() {
+            ns_controller
+                .set_namespace(NamespaceType::Pid)
+                .with_context(|| "Failed to set pid namespace")?;
+        }
+        Ok(())
+    }
+
+    fn set_rest_namespaces(&self) -> Result<()> {
+        let ns_config = &self.config.linux.as_ref().unwrap().namespaces;
+        let ns_controller: NsController = ns_config.clone().try_into()?;
+
+        for ns in ns_config {
+            match ns.ns_type {
+                // User namespace and pid namespace have been set in the first stage.
+                // Mount namespace is going to be set later to avoid failure with
+                // existed namespaces.
+                NamespaceType::User | NamespaceType::Pid | NamespaceType::Mount => (),
+                _ => ns_controller.set_namespace(ns.ns_type).with_context(|| {
+                    format!(
+                        "Failed to set {} namespace",
+                        <NamespaceType as Into<String>>::into(ns.ns_type)
+                    )
+                })?,
+            }
+
+            if ns.ns_type == NamespaceType::Uts && ns.path.is_none() {
+                if let Some(hostname) = &self.config.hostname {
+                    sethostname(hostname).with_context(|| "Failed to set hostname")?;
+                }
+                if let Some(domainname) = &self.config.domainname {
+                    let errno;
+
+                    // SAFETY: FFI call with valid arguments.
+                    match unsafe {
+                        setdomainname(
+                            domainname.as_bytes().as_ptr() as *const c_char,
+                            domainname.len(),
+                        )
+                    } {
+                        0 => return Ok(()),
+                        -1 => errno = nix::Error::last(),
+                        _ => errno = nix::Error::UnknownErrno,
+                    }
+                    bail!("Failed to set domainname: {}", errno);
+                }
+            }
+        }
+
+        ns_controller
+            .set_namespace(NamespaceType::Mount)
+            .with_context(|| "Failed to set mount namespace")?;
+        Ok(())
+    }
+
+    fn set_id_mappings(
+        &self,
+        parent_channel: &Channel<Message>,
+        fst_stage_channel: &Channel<Message>,
+        fst_stage_pid: &Pid,
+    ) -> Result<()> {
+        parent_channel
+            .recv_id_mappings()
+            .with_context(|| "Failed to receive id mappings")?;
+        LinuxContainer::set_groups(fst_stage_pid, false)
+            .with_context(|| "Failed to disable setting groups")?;
+
+        if let Some(linux) = self.config.linux.as_ref() {
+            if let Some(uid_mappings) = linux.uidMappings.as_ref() {
+                self.write_id_mapping(uid_mappings, fst_stage_pid, "uid_map")?;
+            }
+            if let Some(gid_mappings) = linux.gidMappings.as_ref() {
+                self.write_id_mapping(gid_mappings, fst_stage_pid, "gid_map")?;
+            }
+        }
+
+        fst_stage_channel
+            .send_id_mappings_done()
+            .with_context(|| "Failed to send id mapping done")?;
+        fst_stage_channel
+            .sender
+            .close()
+            .with_context(|| "Failed to close fst_stage_channel sender")?;
+        Ok(())
+    }
+
+    fn write_id_mapping(&self, mappings: &Vec<IdMapping>, pid: &Pid, file: &str) -> Result<()> {
+        let path = format!("/proc/{}/{}", pid.as_raw().to_string(), file);
+        let mut opened_file = OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .with_context(|| OzonecErr::OpenFile(path))?;
+        let mut id_mappings = String::from("");
+
+        for m in mappings {
+            let mapping = format!("{} {} {}\n", m.containerID, m.hostID, m.size);
+            id_mappings = id_mappings + &mapping;
+        }
+        opened_file
+            .write_all(&id_mappings.as_bytes())
+            .with_context(|| "Failed to write id mappings")?;
+        Ok(())
+    }
+
+    fn set_groups(pid: &Pid, allow: bool) -> Result<()> {
+        let path = format!("/proc/{}/setgroups", pid.as_raw().to_string());
+        if allow == true {
+            std::fs::write(&path, "allow")?
+        } else {
+            std::fs::write(&path, "deny")?
+        }
+        Ok(())
     }
 }
 
@@ -234,6 +416,13 @@ impl Container for LinuxContainer {
             None
         };
 
+        // Make the process undumpable to avoid various race conditions that could cause
+        // processes in namespaces to join to access host resources (or execute code).
+        if !self.config.linux.as_ref().unwrap().namespaces.is_empty() {
+            prctl::set_dumpable(false)
+                .map_err(|e| anyhow!("Failed to set process undumpable: {}", e))?;
+        }
+
         // Create channels to communicate with child processes.
         let parent_channel = Channel::<Message>::new()
             .with_context(|| "Failed to create message channel for parent process")?;
@@ -253,6 +442,10 @@ impl Container for LinuxContainer {
             .with_context(|| "First stage process encounters errors")?;
             Ok(0)
         })?;
+
+        if self.is_namespace_set(NamespaceType::User)? {
+            self.set_id_mappings(&parent_channel, &fst_stage_channel, &fst_stage_pid)?;
+        }
 
         let init_pid = parent_channel
             .recv_init_pid()
