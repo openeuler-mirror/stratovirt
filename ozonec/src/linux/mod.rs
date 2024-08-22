@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 mod container;
+mod namespace;
 mod notify_socket;
 mod process;
 
