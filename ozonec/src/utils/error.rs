@@ -20,4 +20,6 @@ pub enum OzonecErr {
     ReadProcStat(i32),
     #[error("Failed to open {0}")]
     OpenFile(String),
+    #[error("Failed to create directory {0}")]
+    CreateDir(String),
 }
