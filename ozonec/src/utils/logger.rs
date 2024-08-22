@@ -24,6 +24,8 @@ use anyhow::{Context, Result};
 use log::{set_boxed_logger, set_max_level, Level, LevelFilter, Log, Metadata, Record};
 use nix::unistd::{getpid, gettid};
 
+use super::OzonecErr;
+
 // Maximum size of log file is 100MB.
 const LOG_ROTATE_SIZE_MAX: usize = 100 * 1024 * 1024;
 // Logs are retained for seven days at most.
@@ -91,7 +93,7 @@ fn open_log_file(path: &PathBuf) -> Result<File> {
         .create(true)
         .mode(0o640)
         .open(path)
-        .with_context(|| "Failed to open log file")
+        .with_context(|| OzonecErr::OpenFile(path.to_string_lossy().to_string()))
 }
 
 fn formatted_time(seconds: i64) -> [i32; 6] {
