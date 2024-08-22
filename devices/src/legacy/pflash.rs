@@ -861,7 +861,7 @@ impl SysBusDevOps for PFlash {
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        let mut value = 0;
+        let mut value = 0_u32;
         if !read_data_u32(data, &mut value) {
             return false;
         }
