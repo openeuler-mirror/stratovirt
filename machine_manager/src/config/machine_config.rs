@@ -436,13 +436,13 @@ impl VmConfig {
             SmpConfig::try_parse_from(str_slip_to_clap(cpu_config, !has_cpus_label, false))?;
         smp_cfg.auto_adjust_topology()?;
 
-        self.machine_config.nr_cpus = smp_cfg.cpus as u8;
-        self.machine_config.nr_threads = smp_cfg.threads as u8;
-        self.machine_config.nr_cores = smp_cfg.cores as u8;
-        self.machine_config.nr_dies = smp_cfg.dies as u8;
-        self.machine_config.nr_clusters = smp_cfg.clusters as u8;
-        self.machine_config.nr_sockets = smp_cfg.sockets as u8;
-        self.machine_config.max_cpus = smp_cfg.maxcpus as u8;
+        self.machine_config.nr_cpus = smp_cfg.cpus;
+        self.machine_config.nr_threads = smp_cfg.threads;
+        self.machine_config.nr_cores = smp_cfg.cores;
+        self.machine_config.nr_dies = smp_cfg.dies;
+        self.machine_config.nr_clusters = smp_cfg.clusters;
+        self.machine_config.nr_sockets = smp_cfg.sockets;
+        self.machine_config.max_cpus = smp_cfg.maxcpus;
 
         Ok(())
     }
