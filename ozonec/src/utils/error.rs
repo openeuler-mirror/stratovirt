@@ -18,4 +18,6 @@ pub enum OzonecErr {
     ReadProcPid(i32),
     #[error("Failed to access /proc/{0}/status")]
     ReadProcStat(i32),
+    #[error("Failed to open {0}")]
+    OpenFile(String),
 }

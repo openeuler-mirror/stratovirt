@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use oci_spec::{runtime::RuntimeConfig, state::State as OciState};
 
+use crate::utils::OzonecErr;
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct State {
@@ -79,8 +81,8 @@ impl State {
             .write(true)
             .create(true)
             .truncate(true)
-            .open(path)
-            .with_context(|| "Failed to open state file")?;
+            .open(&path)
+            .with_context(|| OzonecErr::OpenFile(path.to_string_lossy().to_string()))?;
         serde_json::to_writer(&state_file, self)?;
         Ok(())
     }
