@@ -11,16 +11,25 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
+    collections::HashMap,
     fs::{self, canonicalize, create_dir_all, read_to_string, File},
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
-use nix::mount::MsFlags;
-
-use oci_spec::runtime::Mount as OciMount;
+use anyhow::{anyhow, bail, Context, Result};
+use nix::{
+    mount::MsFlags,
+    sys::statfs::{statfs, CGROUP2_SUPER_MAGIC},
+};
 
 use crate::utils::OzonecErr;
+use oci_spec::runtime::Mount as OciMount;
+use procfs::process::{MountInfo, Process};
+
+enum CgroupType {
+    CgroupV1,
+    CgroupV2,
+}
 
 pub struct Mount {
     rootfs: PathBuf,
@@ -143,7 +152,8 @@ impl Mount {
                     None::<&str>,
                     MsFlags::MS_BIND | MsFlags::MS_REC,
                     Some(data.as_str()),
-                )?;
+                )
+                .with_context(|| OzonecErr::Mount(src_path.to_string_lossy().to_string()))?;
             }
             _ => {
                 create_dir_all(&dest_path).with_context(|| {
@@ -160,7 +170,8 @@ impl Mount {
                     fs_type,
                     flag,
                     Some(data.as_str()),
-                )?;
+                )
+                .with_context(|| OzonecErr::Mount(src_path.to_string_lossy().to_string()))?;
             }
         }
 
@@ -186,10 +197,99 @@ impl Mount {
     pub fn do_mounts(&self, mounts: &Vec<OciMount>, label: &Option<String>) -> Result<()> {
         for mount in mounts {
             match mount.fs_type.as_deref() {
-                Some("cgroup") => (),
+                Some("cgroup") => match self.cgroup_type()? {
+                    CgroupType::CgroupV1 => self
+                        .do_cgroup_mount(mount)
+                        .with_context(|| "Failed to do cgroup mount")?,
+                    CgroupType::CgroupV2 => bail!("Cgroup V2 is not supported now"),
+                },
                 _ => self.do_one_mount(mount, label)?,
             }
         }
         Ok(())
+    }
+
+    fn do_cgroup_mount(&self, mount: &OciMount) -> Result<()> {
+        // If destination begins with "/", then ignore the first "/".
+        let binding = self.rootfs.join(&mount.destination[1..]);
+        let mut dest = Path::new(&binding);
+        nix::mount::mount(
+            Some("tmpfs"),
+            dest,
+            Some("tmpfs"),
+            MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+            None::<&str>,
+        )
+        .with_context(|| OzonecErr::Mount(String::from("tmpfs")))?;
+
+        let process = Process::myself().with_context(|| OzonecErr::AccessProcSelf)?;
+        let mnt_info: Vec<MountInfo> =
+            process.mountinfo().with_context(|| OzonecErr::GetMntInfo)?;
+
+        let proc_cgroups: HashMap<String, String> = process
+            .cgroups()
+            .with_context(|| "Failed to get cgroups belong to")?
+            .into_iter()
+            .map(|cgroup| (cgroup.controllers.join(","), cgroup.pathname))
+            .collect();
+        // Get all of available cgroup mount points.
+        let host_cgroups: Vec<PathBuf> = mnt_info
+            .into_iter()
+            .filter(|m| m.fs_type == "cgroup")
+            .map(|m| m.mount_point)
+            .collect();
+        for cg_path in host_cgroups {
+            let binding = self.rootfs.join(
+                cg_path
+                    .strip_prefix("/")
+                    .with_context(|| format!("Strip {} error", cg_path.display()))?,
+            );
+            dest = Path::new(&binding);
+            let cg = cg_path
+                .file_name()
+                .ok_or(anyhow!("Failed to get controller file"))?
+                .to_str()
+                .ok_or(anyhow!(
+                    "Convert {:?} to string error",
+                    cg_path.file_name().unwrap()
+                ))?;
+            let proc_cg_key = if cg == "systemd" {
+                String::from("systemd")
+            } else {
+                cg.to_string()
+            };
+
+            if let Some(src) = proc_cgroups.get(&proc_cg_key) {
+                let source = cg_path.join(&src[1..]);
+                if !dest.exists() {
+                    create_dir_all(dest).with_context(|| {
+                        OzonecErr::CreateDir(dest.to_string_lossy().to_string())
+                    })?;
+                }
+                nix::mount::mount(
+                    Some(&source),
+                    dest,
+                    Some("bind"),
+                    MsFlags::MS_BIND | MsFlags::MS_REC,
+                    None::<&str>,
+                )
+                .with_context(|| OzonecErr::Mount(source.to_string_lossy().to_string()))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn cgroup_type(&self) -> Result<CgroupType> {
+        let cgroup_path = Path::new("/sys/fs/cgroup");
+        if !cgroup_path.exists() {
+            bail!("/sys/fs/cgroup doesn't exist.");
+        }
+
+        let st = statfs(cgroup_path).with_context(|| "statfs /sys/fs/cgroup error")?;
+        if st.filesystem_type() == CGROUP2_SUPER_MAGIC {
+            return Ok(CgroupType::CgroupV2);
+        }
+        Ok(CgroupType::CgroupV1)
     }
 }
