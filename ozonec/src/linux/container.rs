@@ -72,10 +72,8 @@ impl LinuxContainer {
             *exist = true;
             bail!("Container {} already exists", id);
         }
-        create_dir_all(container_dir.as_str()).map_err(|e| {
-            error!("Failed to create container directory: {}", e);
-            anyhow!(e).context("Failed to create container directory")
-        })?;
+        create_dir_all(container_dir.as_str())
+            .with_context(|| OzonecErr::CreateDir(container_dir.clone()))?;
         chown(container_dir.as_str(), Some(geteuid()), Some(getegid()))
             .with_context(|| "Failed to chown container directory")?;
 
