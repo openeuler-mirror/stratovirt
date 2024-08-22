@@ -22,4 +22,10 @@ pub enum OzonecErr {
     OpenFile(String),
     #[error("Failed to create directory {0}")]
     CreateDir(String),
+    #[error("Failed to mount {0}")]
+    Mount(String),
+    #[error("Failed to access /proc/self")]
+    AccessProcSelf,
+    #[error("Failed to get mountinfo")]
+    GetMntInfo,
 }
