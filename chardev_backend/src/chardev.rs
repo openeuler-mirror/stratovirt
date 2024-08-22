@@ -317,7 +317,7 @@ impl Chardev {
 
 fn write_buffer_sync(writer: Arc<Mutex<dyn CommunicatOutInterface>>, buf: Vec<u8>) -> Result<()> {
     let len = buf.len();
-    let mut written = 0;
+    let mut written = 0_usize;
     let mut locked_writer = writer.lock().unwrap();
 
     while written < len {
@@ -339,7 +339,7 @@ fn write_buffer_async(
 ) -> Result<bool> {
     let len = buf.len();
     let mut locked_writer = writer.lock().unwrap();
-    let mut written = 0;
+    let mut written = 0_usize;
 
     while written < len {
         match locked_writer.write(&buf[written..len]) {
