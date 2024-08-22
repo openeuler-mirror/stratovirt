@@ -194,7 +194,7 @@ impl Tap {
         ret
     }
 
-    pub fn receive_packets(&self, iovecs: &[Iovec]) -> i32 {
+    pub fn receive_packets(&self, iovecs: &[Iovec]) -> isize {
         // SAFETY: the arguments of readv has been checked and is correct.
         let size = unsafe {
             libc::readv(
@@ -202,7 +202,7 @@ impl Tap {
                 iovecs.as_ptr() as *const libc::iovec,
                 iovecs.len() as libc::c_int,
             )
-        } as i32;
+        };
         if size < 0 {
             let e = std::io::Error::last_os_error();
             if e.kind() == std::io::ErrorKind::WouldBlock {

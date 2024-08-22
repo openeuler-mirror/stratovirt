@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::io::Error;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -19,6 +18,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use std::{fmt, i32};
 
 use anyhow::{anyhow, Context, Result};
 use libc::{c_void, read, EFD_CLOEXEC, EFD_NONBLOCK};
@@ -681,7 +681,7 @@ impl EventLoopContext {
         }
 
         let time_out_ms = match time_out {
-            Some(t) => t.as_millis() as i32,
+            Some(t) => i32::try_from(t.as_millis()).unwrap_or(i32::MAX),
             None => -1,
         };
         let ev_count = match self.epoll.wait(time_out_ms, &mut self.ready_events[..]) {

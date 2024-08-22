@@ -348,7 +348,7 @@ impl BpfRule {
         inner_append.push(constraint_filter);
         inner_append.push(bpf_stmt(BPF_RET + BPF_K, SECCOMP_RET_ALLOW));
 
-        if !self.append(&mut inner_append) {
+        if !self.append_to_inner(&mut inner_append) {
             self.start_new_session();
             self.add_constraint(cmp, args_idx, args_value)
         } else {
@@ -379,7 +379,8 @@ impl BpfRule {
     }
 
     /// Add bpf_filters to `inner_rules`.
-    fn append(&mut self, bpf_filters: &mut Vec<SockFilter>) -> bool {
+    fn append_to_inner(&mut self, bpf_filters: &mut Vec<SockFilter>) -> bool {
+        // bpf_filters len is less than u8::MAX.
         let offset = bpf_filters.len() as u8;
 
         if let Some(jf_added) = self.header_rule.jf.checked_add(offset) {
@@ -446,7 +447,7 @@ impl SyscallFilter {
         }
 
         let prog = SockFProg {
-            len: sock_bpf_vec.len() as u16,
+            len: u16::try_from(sock_bpf_vec.len())?,
             sock_filter: sock_bpf_vec.as_ptr(),
         };
         let bpf_prog_ptr = &prog as *const SockFProg;
