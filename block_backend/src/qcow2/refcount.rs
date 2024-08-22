@@ -151,7 +151,7 @@ impl RefCount {
         }
 
         let nb_clusters = bytes_to_clusters(size, self.cluster_size).unwrap();
-        let mut free_clusters = 0;
+        let mut free_clusters: u64 = 0;
         while free_clusters < nb_clusters {
             let offset = self.free_cluster_index << self.cluster_bits;
             self.free_cluster_index += 1;
@@ -327,7 +327,7 @@ impl RefCount {
         }
         let first_cluster = bytes_to_clusters(offset, self.cluster_size).unwrap();
         let mut rc_vec: Vec<(u64, u64, usize)> = Vec::with_capacity(clusters as usize);
-        let mut i = 0;
+        let mut i: u64 = 0;
         while i < clusters {
             let rt_idx = (first_cluster + i) >> self.refcount_blk_bits;
             if rt_idx >= self.refcount_table_size {
@@ -669,11 +669,11 @@ pub fn refcount_metadata_size(
 ) -> Result<(u64, u64)> {
     let reftable_entries = cluster_size / ENTRY_SIZE;
     let refblock_entries = cluster_size * 8 / (1 << refcount_order);
-    let mut table = 0;
-    let mut blocks = 0;
+    let mut table: u64 = 0;
+    let mut blocks: u64 = 0;
     let mut clusters = nb_clusters;
     let mut last_clusters;
-    let mut total_clusters = 0;
+    let mut total_clusters: u64 = 0;
 
     loop {
         last_clusters = total_clusters;
