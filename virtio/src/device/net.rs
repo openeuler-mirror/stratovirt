@@ -223,7 +223,7 @@ impl CtrlInfo {
         data_iovec: &mut Vec<ElemIovec>,
     ) -> Result<u8> {
         let ack = VIRTIO_NET_OK;
-        let mut mac_table_len = 0;
+        let mut mac_table_len: usize = 0;
         // Default for unicast.
         let mut overflow = &mut self.mac_info.uni_mac_of;
         let mut mac_table = &mut self.mac_info.uni_mac_table;
@@ -705,7 +705,7 @@ impl NetIoQueue {
         }
 
         let mut queue = self.rx.queue.lock().unwrap();
-        let mut rx_packets = 0;
+        let mut rx_packets: u16 = 0;
         loop {
             let elem = queue
                 .vring
@@ -804,7 +804,7 @@ impl NetIoQueue {
         trace::virtio_receive_request("Net".to_string(), "to tx".to_string());
         let mut queue = self.tx.queue.lock().unwrap();
 
-        let mut tx_packets = 0;
+        let mut tx_packets: u16 = 0;
         loop {
             let elem = queue
                 .vring

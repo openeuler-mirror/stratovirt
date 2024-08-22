@@ -867,7 +867,7 @@ fn gpa_hva_iovec_map(
     mem_space: &AddressSpace,
     cache: &Option<RegionCache>,
 ) -> Result<(u64, Vec<Iovec>)> {
-    let mut iov_size = 0;
+    let mut iov_size: u64 = 0;
     let mut hva_iovec = Vec::with_capacity(gpa_elemiovec.len());
 
     for elem in gpa_elemiovec.iter() {

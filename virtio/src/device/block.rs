@@ -600,9 +600,9 @@ impl BlockIoHandler {
 
         let mut merge_req_queue = Vec::<Request>::new();
         let mut last_req: Option<&mut Request> = None;
-        let mut merged_reqs = 0;
-        let mut merged_iovs = 0;
-        let mut merged_bytes = 0;
+        let mut merged_reqs: u16 = 0;
+        let mut merged_iovs: usize = 0;
+        let mut merged_bytes: u64 = 0;
 
         for req in req_queue {
             let req_iovs = req.iovec.len();
@@ -743,7 +743,7 @@ impl BlockIoHandler {
         trace::virtio_blk_process_queue_suppress_notify(len);
 
         let mut done = false;
-        let mut iteration = 0;
+        let mut iteration: u16 = 0;
 
         while self
             .queue

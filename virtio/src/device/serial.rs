@@ -193,7 +193,7 @@ impl Serial {
 }
 
 pub fn get_max_nr(ports: &Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>) -> u32 {
-    let mut max = 0;
+    let mut max: u32 = 0;
     for port in ports.lock().unwrap().iter() {
         let nr = port.lock().unwrap().nr;
         if nr > max {
