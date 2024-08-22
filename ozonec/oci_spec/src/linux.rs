@@ -16,9 +16,9 @@ use anyhow::{anyhow, Result};
 use nix::sched::CloneFlags;
 use serde::{Deserialize, Serialize};
 
+/// Available Linux namespaces.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Hash)]
 #[serde(rename_all = "snake_case")]
-/// Available Linux namespaces.
 pub enum NamespaceType {
     Cgroup = 0x0200_0000,
     Ipc = 0x0800_0000,
@@ -62,8 +62,8 @@ impl From<NamespaceType> for String {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
 /// Namespaces.
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Namespace {
     /// Namespace type.
     #[serde(rename = "type")]
@@ -73,9 +73,9 @@ pub struct Namespace {
     pub path: Option<PathBuf>,
 }
 
+/// UID/GID mapping.
 #[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
-/// User namespace mappings.
 pub struct IdMapping {
     /// Starting uid/gid in the container.
     pub containerID: u32,
@@ -85,14 +85,14 @@ pub struct IdMapping {
     pub size: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
 /// Offset for Time Namespace.
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TimeOffsets {
-    #[serde(skip_serializing_if = "Option::is_none")]
     /// Offset of clock (in seconds) in the container.
-    pub secs: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub secs: Option<i64>,
     /// Offset of clock (in nanoseconds) in the container.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nanosecs: Option<u32>,
 }
 

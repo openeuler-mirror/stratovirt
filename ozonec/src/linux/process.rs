@@ -12,14 +12,15 @@
 
 use std::{
     ffi::CString,
+    fs::read_to_string,
     io::{stderr, stdin, stdout},
     os::fd::{AsRawFd, RawFd},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clone3::Clone3;
 use libc::SIGCHLD;
-use nix::unistd::{self, Pid};
+use nix::unistd::{self, setresgid, setresuid, Gid, Pid, Uid};
 
 use oci_spec::process::Process as OciProcess;
 
@@ -49,6 +50,29 @@ impl Process {
             p.stderr = Some(stderr().as_raw_fd());
         }
         p
+    }
+
+    pub fn set_additional_gids(&self) -> Result<()> {
+        if let Some(additional_gids) = &self.oci.user.additionalGids {
+            let setgroups = read_to_string("proc/self/setgroups")
+                .with_context(|| "Failed to read setgroups")?;
+            if setgroups.trim() == "deny" {
+                bail!("Cannot set additional gids as setgroup is desabled");
+            }
+
+            let gids: Vec<Gid> = additional_gids
+                .iter()
+                .map(|gid| Gid::from_raw(*gid))
+                .collect();
+            unistd::setgroups(&gids).with_context(|| "Failed to set additional gids")?;
+        }
+        Ok(())
+    }
+
+    pub fn set_id(&self, gid: Gid, uid: Uid) -> Result<()> {
+        setresgid(gid, gid, gid).with_context(|| "Failed to setresgid")?;
+        setresuid(uid, uid, uid).with_context(|| "Failed to setresuid")?;
+        Ok(())
     }
 
     pub fn exec_program(&self) -> ! {

@@ -175,12 +175,36 @@ impl Channel<Message> {
             .with_context(|| "Failed to send created message to parent process")
     }
 
+    pub fn recv_id_mappings(&self) -> Result<()> {
+        let msg = self.receiver.recv()?;
+        match msg {
+            Message::IdMappingStart => Ok(()),
+            _ => bail!("Expect receiving IdMappingStart, but got {:?}", msg),
+        }
+    }
+
+    pub fn send_id_mappings(&self) -> Result<()> {
+        self.sender.send(Message::IdMappingStart)
+    }
+
     pub fn recv_init_pid(&self) -> Result<Pid> {
         let msg = self.receiver.recv()?;
         match msg {
             Message::InitReady(pid) => Ok(Pid::from_raw(pid)),
             _ => bail!("Expect receiving InitReady, but got {:?}", msg),
         }
+    }
+
+    pub fn recv_id_mappings_done(&self) -> Result<()> {
+        let msg = self.receiver.recv()?;
+        match msg {
+            Message::IdMappingDone => Ok(()),
+            _ => bail!("Expect receiving IdMappingDone, but got {:?}", msg),
+        }
+    }
+
+    pub fn send_id_mappings_done(&self) -> Result<()> {
+        self.sender.send(Message::IdMappingDone)
     }
 
     pub fn send_init_pid(&self, pid: Pid) -> Result<()> {
