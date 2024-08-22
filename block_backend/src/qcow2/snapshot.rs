@@ -85,7 +85,7 @@ impl InternalSnapshot {
     }
 
     pub fn find_new_snapshot_id(&self) -> u64 {
-        let mut id_max = 0;
+        let mut id_max: u64 = 0;
         for snap in &self.snapshots {
             if id_max < snap.id {
                 id_max = snap.id;
@@ -139,7 +139,7 @@ impl InternalSnapshot {
         for i in 0..nb_snapshots {
             let offset = addr + self.snapshot_size;
 
-            let mut pos = 0;
+            let mut pos: usize = 0;
             let header_size = size_of::<QcowSnapshotHeader>();
             let mut header_buf = vec![0_u8; header_size];
             self.sync_aio

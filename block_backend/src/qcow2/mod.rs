@@ -390,9 +390,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 expect_len
             );
         }
-        let mut host_start = 0;
+        let mut host_start: u64 = 0;
         let mut first_cluster_type = Qcow2ClusterType::Unallocated;
-        let mut cnt = 0;
+        let mut cnt: u64 = 0;
         while cnt < clusters {
             let offset = cnt * self.header.cluster_size();
             let l2_entry = self.get_l2_entry(begin + offset)?;
@@ -1690,7 +1690,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
 
         let mut left = iovec;
         let mut req_list: Vec<CombineRequest> = Vec::new();
-        let mut copied = 0;
+        let mut copied: u64 = 0;
         while copied < nbytes {
             let pos = offset as u64 + copied;
             match self.host_offset_for_read(pos, nbytes - copied) {
@@ -1727,7 +1727,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         trace::block_write_vectored(&self.driver.block_prop.id, offset, nbytes);
 
         let mut req_list: Vec<CombineRequest> = Vec::new();
-        let mut copied = 0;
+        let mut copied: u64 = 0;
         while copied < nbytes {
             let pos = offset as u64 + copied;
             let count = self.cluster_aligned_bytes(pos, nbytes - copied);

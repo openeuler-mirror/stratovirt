@@ -321,7 +321,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         if check.res.need_rebuild && check.fix & FIX_ERRORS != 0 {
             let old_res = check.res;
-            let mut fresh_leak = 0;
+            let mut fresh_leak: i32 = 0;
 
             output_msg!(check.quite, "Rebuilding refcount structure");
             self.rebuild_refcount_structure(check)?;
@@ -874,7 +874,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 }
             }
 
-            let mut num_repaired = 0;
+            let mut num_repaired: i32 = 0;
             let l2_buf = self.load_cluster(l2_offset)?;
             let l2_table = Rc::new(RefCell::new(CacheTable::new(
                 l2_offset,
