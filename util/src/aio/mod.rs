@@ -133,7 +133,7 @@ impl Iovec {
 }
 
 pub fn get_iov_size(iovecs: &[Iovec]) -> u64 {
-    let mut sum = 0;
+    let mut sum: u64 = 0;
     for iov in iovecs {
         sum += iov.iov_len;
     }

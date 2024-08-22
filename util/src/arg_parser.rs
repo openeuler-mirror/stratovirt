@@ -626,8 +626,8 @@ fn parse_cmdline(
     let mut arg_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut multi_vec: Vec<String> = Vec::new();
 
-    let mut i = (0, "");
-    let mut j = 1;
+    let mut i: (usize, &str) = (0, "");
+    let mut j: usize = 1;
     for cmd_arg in &cmd_args[1..] {
         if !allow_list.contains(cmd_arg)
             && cmd_arg.starts_with(PREFIX_CHARS_SHORT)

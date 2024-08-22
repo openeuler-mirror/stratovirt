@@ -171,7 +171,7 @@ fn do_fallocate(
     offset: u64,
     size: u64,
 ) -> i32 {
-    let mut ret = 0;
+    let mut ret: i32 = 0;
     loop {
         let mode = match &fallocate_mode {
             FallocateMode::PunchHole => FallocateMode::PunchHole,
