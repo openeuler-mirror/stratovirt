@@ -741,7 +741,7 @@ impl NetIoQueue {
                 -1
             };
             drop(locked_tap);
-            if size < (NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH) as i32 {
+            if size < (NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH) as isize {
                 queue.vring.push_back();
                 break;
             }
@@ -769,7 +769,7 @@ impl NetIoQueue {
 
             queue
                 .vring
-                .add_used(&self.mem_space, elem.index, size as u32)
+                .add_used(&self.mem_space, elem.index, u32::try_from(size)?)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring for net rx, index: {}, len: {}",

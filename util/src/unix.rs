@@ -301,9 +301,9 @@ impl UnixSock {
         // SAFETY: We checked the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We checked the out_fds lens before.
-        let cmsg_len = unsafe { CMSG_LEN((std::mem::size_of_val(out_fds)) as u32) };
+        let cmsg_len = unsafe { CMSG_LEN(u32::try_from(std::mem::size_of_val(out_fds))?) };
         // SAFETY: We checked the out_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(out_fds)) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE(u32::try_from(std::mem::size_of_val(out_fds))?) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
@@ -348,7 +348,7 @@ impl UnixSock {
         // SAFETY: msg parameters are valid.
         let write_count = unsafe { sendmsg(sock.as_raw_fd(), &msg, MSG_NOSIGNAL) };
 
-        if write_count == -1 {
+        if write_count < 0 {
             Err(anyhow!(
                 "Failed to send msg, err: {}",
                 std::io::Error::last_os_error()
@@ -372,7 +372,7 @@ impl UnixSock {
         // SAFETY: We check the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We check the in_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(in_fds)) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE(u32::try_from(std::mem::size_of_val(in_fds))?) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
@@ -399,7 +399,7 @@ impl UnixSock {
         // SAFETY: msg parameters are valid.
         let total_read = unsafe { recvmsg(sock.as_raw_fd(), &mut msg, MSG_WAITALL) };
 
-        if total_read == -1 {
+        if total_read < 0 {
             bail!(
                 "Failed to recv msg, err: {}",
                 std::io::Error::last_os_error()

@@ -199,6 +199,7 @@ pub extern "C" fn virtio_gpu_unref_resource_callback(
 fn pixman_format_reshift(val: u32, ofs: u32, num: u32) -> u32 {
     ((val >> (ofs)) & ((1 << (num)) - 1)) << ((val >> 22) & 3)
 }
+
 pub fn pixman_format_bpp(val: u32) -> u8 {
     pixman_format_reshift(val, 24, 8) as u8
 }
@@ -206,15 +207,19 @@ pub fn pixman_format_bpp(val: u32) -> u8 {
 pub fn pixman_format_a(val: u32) -> u8 {
     pixman_format_reshift(val, 12, 4) as u8
 }
+
 pub fn pixman_format_r(val: u32) -> u8 {
     pixman_format_reshift(val, 8, 4) as u8
 }
+
 pub fn pixman_format_g(val: u32) -> u8 {
     pixman_format_reshift(val, 4, 4) as u8
 }
+
 pub fn pixman_format_b(val: u32) -> u8 {
     pixman_format_reshift(val, 0, 4) as u8
 }
+
 pub fn pixman_format_depth(val: u32) -> u8 {
     pixman_format_a(val) + pixman_format_r(val) + pixman_format_g(val) + pixman_format_b(val)
 }
