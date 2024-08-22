@@ -255,7 +255,7 @@ impl<T: BitOps> Bitmap<T> {
                 self.size() as u64
             )));
         }
-        let mut num = 0;
+        let mut num: usize = 0;
         for i in 0..self.bit_index(offset) + 1 {
             if i == self.bit_index(offset) {
                 for j in i * T::len()..offset {

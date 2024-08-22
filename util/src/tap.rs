@@ -115,7 +115,7 @@ impl Tap {
             ));
         }
 
-        let mut features = 0;
+        let mut features: u16 = 0;
         // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
         let ret = unsafe { ioctl_with_mut_ref(&file, TUNGETFEATURES(), &mut features) };
         if ret < 0 {

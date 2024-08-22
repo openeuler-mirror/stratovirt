@@ -296,7 +296,7 @@ impl EventLoopContext {
 
     fn clear_gc(&mut self) {
         let max_cnt = self.gc.write().unwrap().len();
-        let mut pop_cnt = 0;
+        let mut pop_cnt: usize = 0;
 
         loop {
             // Loop to avoid hold lock for long time.
@@ -640,7 +640,7 @@ impl EventLoopContext {
     /// Call function of the timers which have already expired.
     pub fn run_timers(&mut self) {
         let now = get_current_time();
-        let mut expired_nr = 0;
+        let mut expired_nr: usize = 0;
 
         let mut timers = self.timers.lock().unwrap();
         for timer in timers.iter() {

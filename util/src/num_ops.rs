@@ -451,7 +451,7 @@ int_trait_impl!(Num for u8 u16 usize);
 /// assert!(value == 17);
 /// ```
 pub fn str_to_num<T: Num>(s: &str) -> Result<T> {
-    let mut base = 10;
+    let mut base: u32 = 10;
     if s.starts_with("0x") || s.starts_with("0X") {
         base = 16;
     }
