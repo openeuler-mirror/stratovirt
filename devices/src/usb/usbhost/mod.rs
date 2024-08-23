@@ -422,7 +422,7 @@ unsafe impl Send for UsbHost {}
 impl UsbHost {
     pub fn new(config: UsbHostConfig) -> Result<Self> {
         #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
-        let oh_dev = OhUsbDev::new()?;
+        let oh_dev = OhUsbDev::new(config.hostbus, config.hostaddr)?;
 
         let mut context = Context::new()?;
         context.set_log_level(rusb::LogLevel::None);
