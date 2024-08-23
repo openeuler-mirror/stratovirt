@@ -17,6 +17,7 @@ nix = "= 0.26.2"
 oci_spec = { path = "oci_spec" }
 prctl = "1.0.0"
 procfs = "0.14.0"
+rlimit = "0.5.3"
 serde = { version = "= 1.0.163", features = ["derive"] }
 serde_json = "= 1.0.96"
 thiserror = "= 1.0.40"
