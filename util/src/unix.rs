@@ -424,17 +424,20 @@ impl UnixSock {
                 // SAFETY: Input parameter is constant.
                 let fd_count = (cmsg.cmsg_len as u64 - u64::from(unsafe { CMSG_LEN(0) })) as usize
                     / size_of::<RawFd>();
+                let new_in_fds_count = in_fds_count
+                    .checked_add(fd_count)
+                    .with_context(|| "fds count overflow")?;
                 // SAFETY:
                 // 1. the pointer of cmsg_ptr was created in this function and can be guaranteed not be null.
                 // 2. the parameter of in_fds has been checked before.
                 unsafe {
                     copy_nonoverlapping(
                         self.cmsg_data(cmsg_ptr),
-                        in_fds[in_fds_count..(in_fds_count + fd_count)].as_mut_ptr(),
+                        in_fds[in_fds_count..new_in_fds_count].as_mut_ptr(),
                         fd_count,
                     );
                 }
-                in_fds_count += fd_count;
+                in_fds_count = new_in_fds_count;
             }
 
             cmsg_ptr = self.get_next_cmsg(&msg, &cmsg, cmsg_ptr);

@@ -221,7 +221,10 @@ pub fn pixman_format_b(val: u32) -> u8 {
 }
 
 pub fn pixman_format_depth(val: u32) -> u8 {
-    pixman_format_a(val) + pixman_format_r(val) + pixman_format_g(val) + pixman_format_b(val)
+    pixman_format_a(val)
+        .wrapping_add(pixman_format_r(val))
+        .wrapping_add(pixman_format_g(val))
+        .wrapping_add(pixman_format_b(val))
 }
 
 extern "C" {

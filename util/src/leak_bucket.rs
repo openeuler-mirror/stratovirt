@@ -15,7 +15,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -49,7 +49,9 @@ impl LeakBucket {
     /// * `units_ps` - units per second.
     pub fn new(units_ps: u64) -> Result<Self> {
         Ok(LeakBucket {
-            capacity: units_ps * ACCURACY_SCALE,
+            capacity: units_ps
+                .checked_mul(ACCURACY_SCALE)
+                .with_context(|| "capacity overflow")?,
             level: 0,
             prev_time: get_current_time(),
             timer_started: false,
@@ -63,7 +65,7 @@ impl LeakBucket {
     /// # Arguments
     ///
     /// * `loop_context` - used for delay function call.
-    pub fn throttled(&mut self, loop_context: &mut EventLoopContext, need_units: u64) -> bool {
+    pub fn throttled(&mut self, loop_context: &mut EventLoopContext, need_units: u32) -> bool {
         // capacity value is zero, indicating that there is no need to limit
         if self.capacity == 0 {
             return false;
@@ -75,10 +77,13 @@ impl LeakBucket {
         // update the water level
         let now = get_current_time();
         let nanos = (now - self.prev_time).as_nanos();
-        if nanos > u128::from(self.level * NANOSECONDS_PER_SECOND / self.capacity) {
+        let throttle_timeout =
+            u128::from(self.level) * u128::from(NANOSECONDS_PER_SECOND) / u128::from(self.capacity);
+        if nanos > throttle_timeout {
             self.level = 0;
         } else {
-            self.level -= nanos as u64 * self.capacity / NANOSECONDS_PER_SECOND;
+            self.level -=
+                (nanos * u128::from(self.capacity) / u128::from(NANOSECONDS_PER_SECOND)) as u64;
         }
 
         self.prev_time = now;
@@ -92,19 +97,17 @@ impl LeakBucket {
                     .unwrap_or_else(|e| error!("LeakBucket send event to device failed {:?}", e));
             });
 
-            loop_context.timer_add(
-                func,
-                Duration::from_nanos(
-                    (self.level - self.capacity) * NANOSECONDS_PER_SECOND / self.capacity,
-                ),
-            );
+            let timeout =
+                (self.level - self.capacity).saturating_mul(NANOSECONDS_PER_SECOND) / self.capacity;
+            loop_context.timer_add(func, Duration::from_nanos(timeout));
 
             self.timer_started = true;
 
             return true;
         }
 
-        self.level += need_units * ACCURACY_SCALE;
+        let scaled_need = u64::from(need_units) * ACCURACY_SCALE;
+        self.level = self.level.saturating_add(scaled_need);
 
         false
     }

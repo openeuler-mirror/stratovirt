@@ -35,7 +35,7 @@ use log::error;
 /// assert!(value == Some(1004));
 /// ```
 pub fn round_up(origin: u64, align: u64) -> Option<u64> {
-    match origin % align {
+    match origin.checked_rem(align)? {
         0 => Some(origin),
         diff => origin.checked_add(align - diff),
     }
@@ -58,7 +58,7 @@ pub fn round_up(origin: u64, align: u64) -> Option<u64> {
 /// assert!(value == Some(1000));
 /// ```
 pub fn round_down(origin: u64, align: u64) -> Option<u64> {
-    match origin % align {
+    match origin.checked_rem(align)? {
         0 => Some(origin),
         diff => origin.checked_sub(diff),
     }
@@ -81,14 +81,12 @@ pub fn round_down(origin: u64, align: u64) -> Option<u64> {
 /// assert!(value == Some(3));
 /// ```
 pub fn div_round_up(dividend: u64, divisor: u64) -> Option<u64> {
-    if let Some(res) = dividend.checked_div(divisor) {
-        if dividend % divisor == 0 {
-            return Some(res);
-        } else {
-            return Some(res + 1);
-        }
+    let res = dividend.checked_div(divisor)?;
+    if dividend.checked_rem(divisor)? == 0 {
+        Some(res)
+    } else {
+        Some(res + 1)
     }
-    None
 }
 
 /// Get the first half or second half of u64.
@@ -203,7 +201,7 @@ pub fn write_u64_high(origin: u64, value: u32) -> u64 {
 /// assert!(value == 0xfa);
 /// ```
 pub fn extract_u32(value: u32, start: u32, length: u32) -> Option<u32> {
-    if length > 32 - start {
+    if length > 32_u32.checked_sub(start)? {
         error!(
             "extract_u32: ( start {} length {} ) is out of range",
             start, length
@@ -235,7 +233,7 @@ pub fn extract_u32(value: u32, start: u32, length: u32) -> Option<u32> {
 /// assert!(value == 0xffff);
 /// ```
 pub fn extract_u64(value: u64, start: u32, length: u32) -> Option<u64> {
-    if length > 64 - start {
+    if length > 64_u32.checked_sub(start)? {
         error!(
             "extract_u64: ( start {} length {} ) is out of range",
             start, length
@@ -271,7 +269,7 @@ pub fn extract_u64(value: u64, start: u32, length: u32) -> Option<u64> {
 /// assert!(value == 0xffba);
 /// ```
 pub fn deposit_u32(value: u32, start: u32, length: u32, fieldval: u32) -> Option<u32> {
-    if length > 32 - start {
+    if length > 32_u32.checked_sub(start)? {
         error!(
             "deposit_u32: ( start {} length {} ) is out of range",
             start, length
