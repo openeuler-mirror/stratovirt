@@ -91,6 +91,8 @@ impl Element {
     pub fn iovec_size(iovec: &[ElemIovec]) -> u64 {
         let mut size: u64 = 0;
         for elem in iovec.iter() {
+            // Note: iovec is part of elem.in_iovec/out_iovec which has been checked
+            // in pop_avail(). The sum of iov_len is not greater than u32::MAX.
             size += u64::from(elem.len);
         }
         size
