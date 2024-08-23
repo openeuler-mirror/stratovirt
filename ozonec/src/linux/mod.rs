@@ -17,6 +17,7 @@ mod namespace;
 mod notify_socket;
 mod process;
 mod rootfs;
+mod terminal;
 
 pub use container::LinuxContainer;
 pub use notify_socket::NotifyListener;

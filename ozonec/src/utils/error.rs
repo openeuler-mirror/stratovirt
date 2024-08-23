@@ -28,4 +28,6 @@ pub enum OzonecErr {
     AccessProcSelf,
     #[error("Failed to get mountinfo")]
     GetMntInfo,
+    #[error("Dup2 {0} error")]
+    Dup2(String),
 }
