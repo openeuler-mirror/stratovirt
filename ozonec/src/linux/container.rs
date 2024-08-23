@@ -12,7 +12,7 @@
 
 use std::{
     collections::HashMap,
-    fs::{canonicalize, create_dir_all, OpenOptions},
+    fs::{self, canonicalize, create_dir_all, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     time::SystemTime,
@@ -23,11 +23,13 @@ use libc::{c_char, pid_t, setdomainname};
 use log::{debug, info};
 use nix::{
     errno::Errno,
+    mount::MsFlags,
     sys::{
         signal::Signal,
+        statfs::statfs,
         wait::{waitpid, WaitStatus},
     },
-    unistd::{chown, getegid, geteuid, sethostname, Gid, Pid, Uid},
+    unistd::{self, chown, getegid, geteuid, sethostname, Gid, Pid, Uid},
 };
 use prctl::set_dumpable;
 use procfs::process::ProcState;
@@ -38,10 +40,11 @@ use super::{
 };
 use crate::{
     container::Container,
+    linux::rootfs::Rootfs,
     utils::{Channel, Message, OzonecErr},
 };
 use oci_spec::{
-    linux::{IdMapping, NamespaceType},
+    linux::{Device as OciDevice, IdMapping, NamespaceType},
     runtime::RuntimeConfig,
     state::{ContainerStatus, State},
 };
@@ -142,9 +145,67 @@ impl LinuxContainer {
     ) -> Result<()> {
         debug!("Second stage process start");
 
-        self.set_rest_namespaces()?;
+        unistd::setsid().with_context(|| "Failed to setsid")?;
+        process
+            .set_io_priority()
+            .with_context(|| "Failed to set io priority")?;
+        process
+            .set_scheduler()
+            .with_context(|| "Failed to set scheduler")?;
 
+        self.set_rest_namespaces()?;
+        process.set_no_new_privileges()?;
+
+        if process.init {
+            let propagation = self
+                .config
+                .linux
+                .as_ref()
+                .unwrap()
+                .rootfsPropagation
+                .clone();
+            let mknod_device = !self.is_namespace_set(NamespaceType::User)?;
+            let mut devices: Vec<OciDevice> = Vec::new();
+            if let Some(devs) = self.config.linux.as_ref().unwrap().devices.as_ref() {
+                devices = devs.clone()
+            };
+            let rootfs = Rootfs::new(
+                self.config.root.path.clone().into(),
+                propagation,
+                self.config.mounts.clone(),
+                mknod_device,
+                devices,
+            )?;
+            rootfs.prepare_rootfs(&self.config)?;
+
+            // Entering into rootfs jail. If mount namespace is specified, use pivot_root.
+            // Otherwise use chroot.
+            if self.is_namespace_set(NamespaceType::Mount)? {
+                Rootfs::pivot_root(&rootfs.path).with_context(|| "Failed to pivot_root")?;
+            } else {
+                Rootfs::chroot(&rootfs.path).with_context(|| "Failed to chroot")?;
+            }
+
+            self.set_sysctl_parameters()?;
+        } else if !self.is_namespace_set(NamespaceType::Mount)? {
+            Rootfs::chroot(&PathBuf::from(self.config.root.path.clone()))
+                .with_context(|| "Failed to chroot")?;
+        }
+
+        if self.config.root.readonly {
+            LinuxContainer::mount_rootfs_readonly()?;
+        }
+        self.set_readonly_paths()?;
+        self.set_masked_paths()?;
+
+        let chdir_cwd_ret = process.chdir_cwd().is_err();
         process.set_additional_gids()?;
+        process.set_process_id()?;
+        if chdir_cwd_ret {
+            process.chdir_cwd()?;
+        }
+        process.clean_envs();
+        process.set_envs();
 
         // Tell the parent process that the init process has been cloned.
         parent_channel.send_container_created()?;
@@ -161,6 +222,25 @@ impl LinuxContainer {
                 .with_context(|| "Failed to close notify socket")?;
         }
         process.exec_program();
+    }
+
+    fn mount_rootfs_readonly() -> Result<()> {
+        let ms_flags = MsFlags::MS_RDONLY | MsFlags::MS_REMOUNT | MsFlags::MS_BIND;
+        let root_path = Path::new("/");
+        let fs_flags = statfs(root_path)
+            .with_context(|| "Statfs root directory error")?
+            .flags()
+            .bits();
+
+        nix::mount::mount(
+            None::<&str>,
+            root_path,
+            None::<&str>,
+            ms_flags | MsFlags::from_bits_truncate(fs_flags),
+            None::<&str>,
+        )
+        .with_context(|| "Failed to remount rootfs readonly")?;
+        Ok(())
     }
 
     fn container_status(&self) -> Result<ContainerStatus> {
@@ -253,6 +333,86 @@ impl LinuxContainer {
             ns_controller
                 .set_namespace(NamespaceType::Pid)
                 .with_context(|| "Failed to set pid namespace")?;
+        }
+        Ok(())
+    }
+
+    fn set_readonly_paths(&self) -> Result<()> {
+        if let Some(readonly_paths) = self.config.linux.as_ref().unwrap().readonlyPaths.clone() {
+            for p in readonly_paths {
+                let path = Path::new(&p);
+                if let Err(e) = nix::mount::mount(
+                    Some(path),
+                    path,
+                    None::<&str>,
+                    MsFlags::MS_BIND | MsFlags::MS_REC,
+                    None::<&str>,
+                ) {
+                    if matches!(e, Errno::ENOENT) {
+                        return Ok(());
+                    }
+                    bail!("Failed to make {} as recursive bind mount", path.display());
+                }
+
+                nix::mount::mount(
+                    Some(path),
+                    path,
+                    None::<&str>,
+                    MsFlags::MS_NOSUID
+                        | MsFlags::MS_NODEV
+                        | MsFlags::MS_NOEXEC
+                        | MsFlags::MS_BIND
+                        | MsFlags::MS_REMOUNT
+                        | MsFlags::MS_RDONLY,
+                    None::<&str>,
+                )
+                .with_context(|| format!("Failed to remount {} readonly", path.display()))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn set_masked_paths(&self) -> Result<()> {
+        let linux = self.config.linux.as_ref().unwrap();
+        if let Some(masked_paths) = linux.maskedPaths.clone() {
+            for p in masked_paths {
+                let path = Path::new(&p);
+                if let Err(e) = nix::mount::mount(
+                    Some(Path::new("/dev/null")),
+                    path,
+                    None::<&str>,
+                    MsFlags::MS_BIND,
+                    None::<&str>,
+                ) {
+                    match e {
+                        // Ignore if path doesn't exists.
+                        Errno::ENOENT => (),
+                        Errno::ENOTDIR => {
+                            let label = match linux.mountLabel.clone() {
+                                Some(l) => format!("context=\"{}\"", l),
+                                None => "".to_string(),
+                            };
+                            nix::mount::mount(
+                                Some(Path::new("tmpfs")),
+                                path,
+                                Some("tmpfs"),
+                                MsFlags::MS_RDONLY,
+                                Some(label.as_str()),
+                            )
+                            .with_context(|| {
+                                format!(
+                                    "Failed to make {} as masked mount by tmpfs",
+                                    path.display()
+                                )
+                            })?;
+                        }
+                        _ => bail!(
+                            "Failed to make {} as masked mount by /dev/null",
+                            path.display()
+                        ),
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -359,6 +519,18 @@ impl LinuxContainer {
             std::fs::write(&path, "allow")?
         } else {
             std::fs::write(&path, "deny")?
+        }
+        Ok(())
+    }
+
+    fn set_sysctl_parameters(&self) -> Result<()> {
+        if let Some(sysctl_params) = self.config.linux.as_ref().unwrap().sysctl.clone() {
+            let sys_path = PathBuf::from("/proc/sys");
+            for (param, value) in sysctl_params {
+                let path = sys_path.join(param.replace('.', "/"));
+                fs::write(&path, value.as_bytes())
+                    .with_context(|| format!("Failed to set {} to {}", path.display(), value))?;
+            }
         }
         Ok(())
     }
