@@ -230,7 +230,7 @@ impl<T: BitOps> Bitmap<T> {
     ///
     /// * `num` - the input number.
     pub fn contain(&self, num: usize) -> Result<bool> {
-        if num > self.vol() {
+        if num >= self.vol() {
             return Err(anyhow!(UtilError::OutOfBound(
                 num as u64,
                 self.size() as u64 * T::len() as u64,
