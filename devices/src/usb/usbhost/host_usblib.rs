@@ -132,7 +132,7 @@ pub fn set_pollfd_notifiers(
     notifiers: &mut Vec<EventNotifier>,
     handler: Rc<NotifierCallback>,
 ) {
-    let mut i = 0;
+    let mut i: isize = 0;
     // SAFETY: have checked whether the pointer is null before dereference it.
     unsafe {
         loop {
