@@ -213,10 +213,10 @@ impl SeccompData {
         offset_of!(SeccompData, arch) as u32
     }
 
-    fn args(num: u32) -> u32 {
+    fn args(num: u8) -> u32 {
         let offset_of_u64 =
             offset_of!(SeccompData, args) - offset_of!(SeccompData, instruction_pointer);
-        offset_of!(SeccompData, args) as u32 + num * offset_of_u64 as u32
+        offset_of!(SeccompData, args) as u32 + u32::from(num) * offset_of_u64 as u32
     }
 }
 
@@ -292,7 +292,7 @@ pub struct BpfRule {
     /// The first bpf_filter to compare syscall number.
     header_rule: SockFilter,
     /// The last args index.
-    args_idx_last: Option<u32>,
+    args_idx_last: Option<u8>,
     /// The inner rules to limit the arguments of syscall.
     inner_rules: Vec<SockFilter>,
     /// The last bpf_filter to allow syscall.
@@ -321,7 +321,7 @@ impl BpfRule {
     /// * `args_idx` - The index number of system call's arguments.
     /// * `args_value` - The value of args_num you want to limit. This value used with `cmp`
     ///   together.
-    pub fn add_constraint(mut self, cmp: SeccompCmpOpt, args_idx: u32, args_value: u32) -> BpfRule {
+    pub fn add_constraint(mut self, cmp: SeccompCmpOpt, args_idx: u8, args_value: u32) -> BpfRule {
         if self.inner_rules.is_empty() {
             self.tail_rule = bpf_stmt(BPF_LD + BPF_W + BPF_ABS, SeccompData::nr());
         }

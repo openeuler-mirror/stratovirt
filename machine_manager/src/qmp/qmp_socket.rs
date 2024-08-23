@@ -375,7 +375,7 @@ fn handle_qmp(
 
     // If flow over `LEAK_BUCKET_LIMIT` per seconds, discard the request and return
     // a `OperationThrottled` error.
-    if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), 1_u64) {
+    if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), 1_u32) {
         qmp_service.discard()?;
         let err_resp = qmp_schema::QmpErrorClass::OperationThrottled(LEAK_BUCKET_LIMIT);
         qmp_service

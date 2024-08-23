@@ -608,6 +608,9 @@ impl<'a> ArgMatches<'a> {
 
     fn split_arg(args: &[String]) -> (&[String], &[String]) {
         if let Some(index) = args.iter().position(|arg| arg == ARG_SEPARATOR) {
+            if index == args.len() - 1 {
+                return (&args[..index], &[]);
+            }
             return (&args[..index], &args[index + 1..]);
         }
         (args, &[])

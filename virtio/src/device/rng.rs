@@ -167,7 +167,7 @@ impl RngHandler {
                 get_req_data_size(&elem.in_iovec).with_context(|| "Failed to get request size")?;
 
             if let Some(leak_bucket) = self.leak_bucket.as_mut() {
-                if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), u64::from(size)) {
+                if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), size) {
                     queue_lock.vring.push_back();
                     break;
                 }
