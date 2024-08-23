@@ -1044,6 +1044,9 @@ impl EventNotifierHelper for UsbHost {
 
         set_pollfd_notifiers(poll, &mut notifiers, handler);
 
+        // SAFETY: pointer of pollfds acquired from libusb_get_pollfds is guaranteed to be valid.
+        unsafe { free_libusb_pollfds(poll) };
+
         notifiers
     }
 }
