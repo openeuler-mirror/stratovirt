@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use libc::{c_char, pid_t, setdomainname};
-use log::{debug, error, info};
+use log::{debug, info};
 use nix::{
     errno::Errno,
     sys::{
@@ -413,6 +413,12 @@ impl Container for LinuxContainer {
         } else {
             None
         };
+
+        // As /proc/self/oom_score_adj is not allowed to write unless privileged,
+        // set oom_score_adj before setting process undumpable.
+        process
+            .set_oom_score_adj()
+            .with_context(|| "Failed to set oom_score_adj")?;
 
         // Make the process undumpable to avoid various race conditions that could cause
         // processes in namespaces to join to access host resources (or execute code).

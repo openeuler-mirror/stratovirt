@@ -12,7 +12,7 @@
 
 use std::{
     ffi::CString,
-    fs::read_to_string,
+    fs::{self, read_to_string},
     io::{stderr, stdin, stdout},
     os::fd::{AsRawFd, RawFd},
 };
@@ -50,6 +50,13 @@ impl Process {
             p.stderr = Some(stderr().as_raw_fd());
         }
         p
+    }
+
+    pub fn set_oom_score_adj(&self) -> Result<()> {
+        if let Some(score) = self.oci.oomScoreAdj {
+            fs::write("/proc/self/oom_score_adj", score.to_string().as_bytes())?;
+        }
+        Ok(())
     }
 
     pub fn set_additional_gids(&self) -> Result<()> {
