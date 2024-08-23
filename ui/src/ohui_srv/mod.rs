@@ -85,6 +85,8 @@ impl GuestSurface {
 }
 
 const CURSOR_SIZE: u64 = 16 * 1024;
+const DEFAULT_CURSOR_WIDTH: u32 = 128;
+const DEFAULT_CURSOR_HEIGHT: u32 = 128;
 
 pub struct OhUiServer {
     // framebuffer passthru to the guest
@@ -282,6 +284,17 @@ impl OhUiServer {
             error!("Failed to initialize iothread of OHUI Server.");
         }
     }
+
+    fn clear_cursor_buffer(&self) {
+        if self.cursorbuffer == 0 {
+            error!("Cursor buffer is invalid.");
+            return;
+        }
+        //SAFETY: we make sure that buffer info is valid.
+        unsafe {
+            ptr::write_bytes(self.cursorbuffer as *mut u8, 0, CURSOR_SIZE as usize);
+        }
+    }
 }
 
 impl DisplayChangeListenerOperations for OhUiServer {
@@ -307,12 +320,20 @@ impl DisplayChangeListenerOperations for OhUiServer {
                 true,
             )
         };
+        self.clear_cursor_buffer();
 
         if !self.connected() {
             return Ok(());
         }
         self.msg_handler
             .send_windowinfo(locked_surface.width as u32, locked_surface.height as u32);
+        self.msg_handler.handle_cursor_define(
+            DEFAULT_CURSOR_WIDTH,
+            DEFAULT_CURSOR_HEIGHT,
+            0,
+            0,
+            bytes_per_pixel().try_into()?,
+        );
         Ok(())
     }
 
