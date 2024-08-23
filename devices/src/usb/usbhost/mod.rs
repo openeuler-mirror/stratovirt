@@ -844,7 +844,7 @@ impl UsbHost {
         drop(locked_requests);
 
         // Max counts of uncompleted request to be handled.
-        let mut limit = 100;
+        let mut limit: i32 = 100;
         loop {
             if self.requests.lock().unwrap().len == 0 {
                 return Ok(());
