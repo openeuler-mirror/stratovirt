@@ -671,7 +671,15 @@ impl UsbHost {
 
         self.ep_update();
 
-        self.base.speed = self.libdev.as_ref().unwrap().speed() as u32 - 1;
+        match self.libdev.as_ref().unwrap().speed() as u32 {
+            0 => {
+                return Err(anyhow!(
+                    "Failed to realize usb host device due to unknown device speed."
+                ))
+            }
+            speed => self.base.speed = speed - 1,
+        };
+
         trace::usb_host_open_success(self.config.hostbus, self.config.hostaddr);
 
         Ok(())
