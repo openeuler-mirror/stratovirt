@@ -427,6 +427,9 @@ impl UnixSock {
                 let new_in_fds_count = in_fds_count
                     .checked_add(fd_count)
                     .with_context(|| "fds count overflow")?;
+                if new_in_fds_count > in_fds.len() {
+                    bail!("in_fds is too small");
+                }
                 // SAFETY:
                 // 1. the pointer of cmsg_ptr was created in this function and can be guaranteed not be null.
                 // 2. the parameter of in_fds has been checked before.

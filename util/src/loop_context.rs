@@ -702,8 +702,7 @@ impl EventLoopContext {
             let mut notifiers = Vec::new();
             let status_locked = event.status.lock().unwrap();
             if *status_locked == EventStatus::Alive {
-                for j in 0..event.handlers.len() {
-                    let handler = &event.handlers[j];
+                for handler in event.handlers.iter() {
                     match handler(self.ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
