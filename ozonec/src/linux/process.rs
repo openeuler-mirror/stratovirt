@@ -15,6 +15,7 @@ use std::{
     fs::{self, read_to_string},
     io::{stderr, stdin, stdout},
     os::fd::{AsRawFd, RawFd},
+    str::FromStr,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -23,6 +24,7 @@ use libc::SIGCHLD;
 use nix::unistd::{self, setresgid, setresuid, Gid, Pid, Uid};
 
 use oci_spec::process::Process as OciProcess;
+use rlimit::{setrlimit, Resource, Rlim};
 
 pub struct Process {
     pub stdin: Option<RawFd>,
@@ -55,6 +57,20 @@ impl Process {
     pub fn set_oom_score_adj(&self) -> Result<()> {
         if let Some(score) = self.oci.oomScoreAdj {
             fs::write("/proc/self/oom_score_adj", score.to_string().as_bytes())?;
+        }
+        Ok(())
+    }
+
+    pub fn set_rlimits(&self) -> Result<()> {
+        if let Some(rlimits) = self.oci.rlimits.as_ref() {
+            for rlimit in rlimits {
+                setrlimit(
+                    Resource::from_str(&rlimit.rlimit_type)
+                        .with_context(|| "rlimit type is ill-formatted")?,
+                    Rlim::from_raw(rlimit.soft),
+                    Rlim::from_raw(rlimit.hard),
+                )?;
+            }
         }
         Ok(())
     }

@@ -114,6 +114,9 @@ impl LinuxContainer {
             .close()
             .with_context(|| "Failed to close receiver end of first stage channel")?;
 
+        process
+            .set_rlimits()
+            .with_context(|| "Failed to set rlimit")?;
         // New pid namespace goes intto effect in cloned child processes.
         self.set_pid_namespace()?;
 
