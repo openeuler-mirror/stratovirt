@@ -27,7 +27,8 @@ use libusb1_sys::{
         LIBUSB_TRANSFER_COMPLETED, LIBUSB_TRANSFER_ERROR, LIBUSB_TRANSFER_NO_DEVICE,
         LIBUSB_TRANSFER_STALL, LIBUSB_TRANSFER_TIMED_OUT, LIBUSB_TRANSFER_TYPE_ISOCHRONOUS,
     },
-    libusb_get_pollfds, libusb_iso_packet_descriptor, libusb_pollfd, libusb_transfer,
+    libusb_free_pollfds, libusb_get_pollfds, libusb_iso_packet_descriptor, libusb_pollfd,
+    libusb_transfer,
 };
 use log::error;
 use rusb::{Context, DeviceHandle, Error, Result, TransferType, UsbContext};
@@ -119,6 +120,11 @@ pub fn map_packet_status(status: i32) -> UsbPacketStatus {
 pub fn get_libusb_pollfds(usbhost: Arc<Mutex<UsbHost>>) -> *const *mut libusb_pollfd {
     // SAFETY: call C library of libusb to get pointer of poll fd.
     unsafe { libusb_get_pollfds(usbhost.lock().unwrap().context.as_raw()) }
+}
+
+pub unsafe fn free_libusb_pollfds(pollfds: *const *mut libusb_pollfd) {
+    // Pollfds should be guaranteed to be valid.
+    libusb_free_pollfds(pollfds)
 }
 
 pub fn set_pollfd_notifiers(
