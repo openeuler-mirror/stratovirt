@@ -29,6 +29,8 @@ use oci_spec::{linux::IoPriClass, process::Process as OciProcess};
 use prctl::set_no_new_privileges;
 use rlimit::{setrlimit, Resource, Rlim};
 
+use super::terminal::{connect_stdio, setup_console};
+
 pub struct Process {
     pub stdin: Option<RawFd>,
     pub stdout: Option<RawFd>,
@@ -55,6 +57,21 @@ impl Process {
             p.stderr = Some(stderr().as_raw_fd());
         }
         p
+    }
+
+    pub fn set_tty(&self, console_fd: Option<RawFd>) -> Result<()> {
+        if self.tty && console_fd.is_some() {
+            setup_console(&console_fd.unwrap()).with_context(|| "Failed to setup console")?;
+        } else {
+            connect_stdio(
+                self.stdin.as_ref().unwrap(),
+                self.stdout.as_ref().unwrap(),
+                self.stderr.as_ref().unwrap(),
+            )?;
+            // SAFETY: FFI call with valid arguments.
+            unsafe { libc::ioctl(0, libc::TIOCSCTTY) };
+        }
+        Ok(())
     }
 
     pub fn set_oom_score_adj(&self) -> Result<()> {

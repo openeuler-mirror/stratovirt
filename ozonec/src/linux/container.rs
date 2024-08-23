@@ -14,6 +14,7 @@ use std::{
     collections::HashMap,
     fs::{self, canonicalize, create_dir_all, OpenOptions},
     io::Write,
+    os::{fd::AsRawFd, unix::net::UnixStream},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -152,6 +153,14 @@ impl LinuxContainer {
         process
             .set_scheduler()
             .with_context(|| "Failed to set scheduler")?;
+
+        if let Some(console_socket) = &self.console_socket {
+            let stream = UnixStream::connect(console_socket)
+                .with_context(|| "Failed to connect console socket")?;
+            process
+                .set_tty(Some(stream.as_raw_fd()))
+                .with_context(|| "Failed to set tty")?;
+        }
 
         self.set_rest_namespaces()?;
         process.set_no_new_privileges()?;
