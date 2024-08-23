@@ -1038,7 +1038,6 @@ impl EventNotifierHelper for UsbHost {
         let cloned_usbhost = usbhost.clone();
         let mut notifiers = Vec::new();
 
-        let poll = get_libusb_pollfds(usbhost);
         let timeout = Some(Duration::new(0, 0));
         let handler: Rc<NotifierCallback> = Rc::new(move |_, _fd: RawFd| {
             cloned_usbhost
@@ -1049,11 +1048,10 @@ impl EventNotifierHelper for UsbHost {
                 .unwrap_or_else(|e| error!("Failed to handle event: {:?}", e));
             None
         });
-
-        set_pollfd_notifiers(poll, &mut notifiers, handler);
-
-        // SAFETY: pointer of pollfds acquired from libusb_get_pollfds is guaranteed to be valid.
-        unsafe { free_libusb_pollfds(poll) };
+        // SAFETY: The usbhost is guaranteed to be valid.
+        if let Ok(pollfds) = unsafe { PollFds::new(usbhost) } {
+            set_pollfd_notifiers(pollfds, &mut notifiers, handler);
+        }
 
         notifiers
     }
