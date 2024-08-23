@@ -67,8 +67,8 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
         return (1, 1);
     }
 
-    let mut req_align = 0;
-    let mut buf_align = 0;
+    let mut req_align: u32 = 0;
+    let mut buf_align: u32 = 0;
     // SAFETY: we allocate aligned memory and free it later.
     let aligned_buffer = unsafe {
         libc::memalign(

@@ -772,7 +772,7 @@ impl VirtioPciDevice {
         };
 
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
-            let mut value = 0;
+            let mut value: u32 = 0;
             if !read_data_u32(data, &mut value) {
                 return false;
             }

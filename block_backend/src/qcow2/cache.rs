@@ -190,7 +190,7 @@ impl Qcow2Cache {
     ) -> Option<Rc<RefCell<CacheTable>>> {
         let mut replaced_entry: Option<Rc<RefCell<CacheTable>>> = None;
         let mut lru_count = u64::MAX;
-        let mut target_idx = 0;
+        let mut target_idx: u64 = 0;
         self.check_refcount();
         entry.borrow_mut().lru_count = self.lru_count;
         self.lru_count += 1;
