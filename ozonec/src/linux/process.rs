@@ -22,14 +22,15 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use caps::{self, CapSet, Capability, CapsHashSet};
 use clone3::Clone3;
 use nix::unistd::{self, chdir, setresgid, setresuid, Gid, Pid, Uid};
-
-use oci_spec::{linux::IoPriClass, process::Process as OciProcess};
-use prctl::set_no_new_privileges;
+use prctl::{set_keep_capabilities, set_no_new_privileges};
 use rlimit::{setrlimit, Resource, Rlim};
 
 use super::terminal::{connect_stdio, setup_console};
+use crate::utils::OzonecErr;
+use oci_spec::{linux::IoPriClass, process::Process as OciProcess};
 
 pub struct Process {
     pub stdin: Option<RawFd>,
@@ -156,6 +157,45 @@ impl Process {
         Ok(())
     }
 
+    pub fn drop_capabilities(&self) -> Result<()> {
+        if let Some(caps) = self.oci.capabilities.as_ref() {
+            if let Some(bounding) = caps.bounding.as_ref() {
+                let all_caps = caps::read(None, CapSet::Bounding)
+                    .with_context(|| OzonecErr::GetAllCaps("Bounding".to_string()))?;
+                let caps_hash_set = to_cap_set(bounding)?;
+                for cap in all_caps.difference(&caps_hash_set) {
+                    caps::drop(None, CapSet::Bounding, *cap).with_context(|| {
+                        format!("Failed to drop {} from bonding set", cap.to_string())
+                    })?;
+                }
+            }
+            if let Some(effective) = caps.effective.as_ref() {
+                caps::set(None, CapSet::Effective, &to_cap_set(effective)?)
+                    .with_context(|| OzonecErr::SetCaps("Effective".to_string()))?;
+            }
+            if let Some(permitted) = caps.permitted.as_ref() {
+                caps::set(None, CapSet::Permitted, &to_cap_set(permitted)?)
+                    .with_context(|| OzonecErr::SetCaps("Permitted".to_string()))?;
+            }
+            if let Some(inheritable) = caps.inheritable.as_ref() {
+                caps::set(None, CapSet::Inheritable, &to_cap_set(inheritable)?)
+                    .with_context(|| OzonecErr::SetCaps("Inheritable".to_string()))?;
+            }
+            if let Some(ambient) = caps.ambient.as_ref() {
+                caps::set(None, CapSet::Ambient, &to_cap_set(ambient)?)
+                    .with_context(|| OzonecErr::SetCaps("Ambient".to_string()))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn reset_capabilities(&self) -> Result<()> {
+        let permitted = caps::read(None, CapSet::Permitted)
+            .with_context(|| OzonecErr::GetAllCaps("Permitted".to_string()))?;
+        caps::set(None, CapSet::Effective, &permitted)?;
+        Ok(())
+    }
+
     pub fn set_additional_gids(&self) -> Result<()> {
         if let Some(additional_gids) = &self.oci.user.additionalGids {
             let setgroups = read_to_string("proc/self/setgroups")
@@ -181,8 +221,17 @@ impl Process {
     }
 
     pub fn set_id(&self, gid: Gid, uid: Uid) -> Result<()> {
+        set_keep_capabilities(true)
+            .map_err(|e| anyhow!("Failed to enable keeping capabilities: {}", e))?;
         setresgid(gid, gid, gid).with_context(|| "Failed to setresgid")?;
         setresuid(uid, uid, uid).with_context(|| "Failed to setresuid")?;
+
+        let permitted = caps::read(None, CapSet::Permitted)
+            .with_context(|| OzonecErr::GetAllCaps("Permitted".to_string()))?;
+        caps::set(None, CapSet::Effective, &permitted)
+            .with_context(|| OzonecErr::SetCaps("Effective".to_string()))?;
+        set_keep_capabilities(false)
+            .map_err(|e| anyhow!("Failed to disable keeping capabilities: {}", e))?;
         Ok(())
     }
 
@@ -219,7 +268,7 @@ impl Process {
     }
 
     pub fn clean_envs(&self) {
-        env::vars().for_each(|(key, value)| env::remove_var(key));
+        env::vars().for_each(|(key, _value)| env::remove_var(key));
     }
 
     pub fn exec_program(&self) -> ! {
@@ -261,5 +310,65 @@ pub fn clone_process<F: FnOnce() -> Result<i32>>(child_name: &str, cb: F) -> Res
             std::process::exit(ret);
         }
         pid => Ok(Pid::from_raw(pid)),
+    }
+}
+
+fn to_cap_set(caps: &Vec<String>) -> Result<CapsHashSet> {
+    let mut caps_hash_set = CapsHashSet::new();
+
+    for c in caps {
+        let cap = to_cap(&c)?;
+        caps_hash_set.insert(cap);
+    }
+    Ok(caps_hash_set)
+}
+
+fn to_cap(value: &str) -> Result<Capability> {
+    let binding = value.to_uppercase();
+    let stripped = binding.strip_prefix("CAP_").unwrap_or(&binding);
+
+    match stripped {
+        "AUDIT_CONTROL" => Ok(Capability::CAP_AUDIT_CONTROL),
+        "AUDIT_READ" => Ok(Capability::CAP_AUDIT_READ),
+        "AUDIT_WRITE" => Ok(Capability::CAP_AUDIT_WRITE),
+        "BLOCK_SUSPEND" => Ok(Capability::CAP_BLOCK_SUSPEND),
+        "BPF" => Ok(Capability::CAP_BPF),
+        "CHECKPOINT_RESTORE" => Ok(Capability::CAP_CHECKPOINT_RESTORE),
+        "CHOWN" => Ok(Capability::CAP_CHOWN),
+        "DAC_OVERRIDE" => Ok(Capability::CAP_DAC_OVERRIDE),
+        "DAC_READ_SEARCH" => Ok(Capability::CAP_DAC_READ_SEARCH),
+        "FOWNER" => Ok(Capability::CAP_FOWNER),
+        "FSETID" => Ok(Capability::CAP_FSETID),
+        "IPC_LOCK" => Ok(Capability::CAP_IPC_LOCK),
+        "IPC_OWNER" => Ok(Capability::CAP_IPC_OWNER),
+        "KILL" => Ok(Capability::CAP_KILL),
+        "LEASE" => Ok(Capability::CAP_LEASE),
+        "LINUX_IMMUTABLE" => Ok(Capability::CAP_LINUX_IMMUTABLE),
+        "MAC_ADMIN" => Ok(Capability::CAP_MAC_ADMIN),
+        "MAC_OVERRIDE" => Ok(Capability::CAP_MAC_OVERRIDE),
+        "MKNOD" => Ok(Capability::CAP_MKNOD),
+        "NET_ADMIN" => Ok(Capability::CAP_NET_ADMIN),
+        "NET_BIND_SERVICE" => Ok(Capability::CAP_NET_BIND_SERVICE),
+        "NET_BROADCAST" => Ok(Capability::CAP_NET_BROADCAST),
+        "NET_RAW" => Ok(Capability::CAP_NET_RAW),
+        "PERFMON" => Ok(Capability::CAP_PERFMON),
+        "SETGID" => Ok(Capability::CAP_SETGID),
+        "SETFCAP" => Ok(Capability::CAP_SETFCAP),
+        "SETPCAP" => Ok(Capability::CAP_SETPCAP),
+        "SETUID" => Ok(Capability::CAP_SETUID),
+        "SYS_ADMIN" => Ok(Capability::CAP_SYS_ADMIN),
+        "SYS_BOOT" => Ok(Capability::CAP_SYS_BOOT),
+        "SYS_CHROOT" => Ok(Capability::CAP_SYS_CHROOT),
+        "SYS_MODULE" => Ok(Capability::CAP_SYS_MODULE),
+        "SYS_NICE" => Ok(Capability::CAP_SYS_NICE),
+        "SYS_PACCT" => Ok(Capability::CAP_SYS_PACCT),
+        "SYS_PTRACE" => Ok(Capability::CAP_SYS_PTRACE),
+        "SYS_RAWIO" => Ok(Capability::CAP_SYS_RAWIO),
+        "SYS_RESOURCE" => Ok(Capability::CAP_SYS_RESOURCE),
+        "SYS_TIME" => Ok(Capability::CAP_SYS_TIME),
+        "SYS_TTY_CONFIG" => Ok(Capability::CAP_SYS_TTY_CONFIG),
+        "SYSLOG" => Ok(Capability::CAP_SYSLOG),
+        "WAKE_ALARM" => Ok(Capability::CAP_WAKE_ALARM),
+        _ => bail!("Invalid capability: {}", value),
     }
 }

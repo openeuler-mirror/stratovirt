@@ -30,4 +30,8 @@ pub enum OzonecErr {
     GetMntInfo,
     #[error("Dup2 {0} error")]
     Dup2(String),
+    #[error("Failed to get all capabilities of {0} set")]
+    GetAllCaps(String),
+    #[error("Failed to set the capability set {0}")]
+    SetCaps(String),
 }
