@@ -407,8 +407,8 @@ impl UsbDescriptor {
         for i in 0..conf.iad_desc.len() {
             let ifaces = &conf.iad_desc[i].as_ref().itfs;
             for iface in ifaces {
-                if iface.interface_desc.bInterfaceNumber == nif as u8
-                    && iface.interface_desc.bAlternateSetting == alt as u8
+                if u32::from(iface.interface_desc.bInterfaceNumber) == nif
+                    && u32::from(iface.interface_desc.bAlternateSetting) == alt
                 {
                     return Some(iface.clone());
                 }
@@ -416,8 +416,8 @@ impl UsbDescriptor {
         }
         for i in 0..conf.interfaces.len() {
             let iface = conf.interfaces[i].as_ref();
-            if iface.interface_desc.bInterfaceNumber == nif as u8
-                && iface.interface_desc.bAlternateSetting == alt as u8
+            if u32::from(iface.interface_desc.bInterfaceNumber) == nif
+                && u32::from(iface.interface_desc.bAlternateSetting) == alt
             {
                 return Some(conf.interfaces[i].clone());
             }
