@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+// Note: This can be replaced with std::mem::offset_of! within higher rust version.
+
 /// Macro: Calculate offset of specified field in a type.
 #[macro_export]
 macro_rules! __offset_of {

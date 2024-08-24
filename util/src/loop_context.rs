@@ -726,17 +726,11 @@ impl EventLoopContext {
 pub fn read_fd(fd: RawFd) -> u64 {
     let mut value: u64 = 0;
 
-    // SAFETY: this is called by notifier handler and notifier handler
-    // is executed with fd is is valid. The value is defined above thus
-    // valid too.
-    let ret = unsafe {
-        read(
-            fd,
-            &mut value as *mut u64 as *mut c_void,
-            std::mem::size_of::<u64>(),
-        )
-    };
+    let buf = &mut value as *mut u64 as *mut c_void;
+    let count = std::mem::size_of::<u64>();
 
+    // SAFETY: The buf refers to local value and count equals to value size.
+    let ret = unsafe { read(fd, buf, count) };
     if ret == -1 {
         warn!("Failed to read fd");
     }
