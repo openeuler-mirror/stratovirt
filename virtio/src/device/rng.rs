@@ -174,12 +174,15 @@ impl RngHandler {
             }
 
             let mut buffer = vec![0_u8; size as usize];
-            let ret = raw_read(
-                self.random_file.as_raw_fd(),
-                buffer.as_mut_ptr() as u64,
-                size as usize,
-                0,
-            );
+            // SAFETY: buffer is valid and large enough.
+            let ret = unsafe {
+                raw_read(
+                    self.random_file.as_raw_fd(),
+                    buffer.as_mut_ptr() as u64,
+                    size as usize,
+                    0,
+                )
+            };
             if ret < 0 {
                 bail!("Failed to read random file, size: {}", size);
             }

@@ -19,8 +19,8 @@ use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
 use anyhow::{anyhow, bail, Context, Result};
 use libc::{
-    c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, CMSG_LEN, CMSG_SPACE, MSG_NOSIGNAL,
-    MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
+    c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, syscall, SYS_mbind, CMSG_LEN, CMSG_SPACE,
+    MSG_NOSIGNAL, MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
 };
 use log::error;
 use nix::unistd::{sysconf, SysconfVar};
@@ -140,6 +140,47 @@ unsafe fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
             std::io::Error::last_os_error()
         );
     }
+}
+
+/// This function set memory policy for host NUMA node memory range.
+///
+/// * Arguments
+///
+/// * `addr` - The memory range starting with addr.
+/// * `len` - Length of the memory range.
+/// * `mode` - Memory policy mode.
+/// * `node_mask` - node_mask specifies physical node ID.
+/// * `max_node` - The max node.
+/// * `flags` - Mode flags.
+///
+/// # Safety
+///
+/// Caller should has valid params.
+pub unsafe fn mbind(
+    addr: u64,
+    len: u64,
+    mode: u32,
+    node_mask: Vec<u64>,
+    max_node: u64,
+    flags: u32,
+) -> Result<()> {
+    let res = syscall(
+        SYS_mbind,
+        addr as *mut c_void,
+        len,
+        mode,
+        node_mask.as_ptr(),
+        max_node + 1,
+        flags,
+    );
+    if res < 0 {
+        bail!(
+            "Failed to apply host numa node policy, error is {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    Ok(())
 }
 
 /// Unix socket is a data communication endpoint for exchanging data

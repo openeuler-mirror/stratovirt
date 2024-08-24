@@ -34,7 +34,6 @@ pub mod ohos_binding;
 pub mod pixman;
 pub mod seccomp;
 pub mod socket;
-pub mod syscall;
 pub mod tap;
 pub mod test_helper;
 pub mod thread_pool;
