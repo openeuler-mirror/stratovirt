@@ -210,6 +210,12 @@ impl LinuxContainer {
         let chdir_cwd_ret = process.chdir_cwd().is_err();
         process.set_additional_gids()?;
         process.set_process_id()?;
+        process
+            .reset_capabilities()
+            .with_context(|| "Failed to reset capabilities")?;
+        process
+            .drop_capabilities()
+            .with_context(|| "Failed to drop capabilities")?;
         if chdir_cwd_ret {
             process.chdir_cwd()?;
         }
