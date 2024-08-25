@@ -139,6 +139,10 @@ impl Process {
         Ok(())
     }
 
+    pub fn no_new_privileges(&self) -> bool {
+        self.oci.noNewPrivileges.is_some()
+    }
+
     pub fn set_no_new_privileges(&self) -> Result<()> {
         if let Some(no_new_privileges) = self.oci.noNewPrivileges {
             if no_new_privileges {
