@@ -41,7 +41,7 @@ use super::{
 };
 use crate::{
     container::Container,
-    linux::rootfs::Rootfs,
+    linux::{rootfs::Rootfs, seccomp::set_seccomp},
     utils::{Channel, Message, OzonecErr},
 };
 use oci_spec::{
@@ -210,6 +210,13 @@ impl LinuxContainer {
         let chdir_cwd_ret = process.chdir_cwd().is_err();
         process.set_additional_gids()?;
         process.set_process_id()?;
+
+        // Without setting no new privileges, setting seccomp is a privileged operation.
+        if !process.no_new_privileges() {
+            if let Some(seccomp) = &self.config.linux.as_ref().unwrap().seccomp {
+                set_seccomp(seccomp).with_context(|| "Failed to set seccomp")?;
+            }
+        }
         process
             .reset_capabilities()
             .with_context(|| "Failed to reset capabilities")?;
@@ -221,6 +228,11 @@ impl LinuxContainer {
         }
         process.clean_envs();
         process.set_envs();
+        if process.no_new_privileges() {
+            if let Some(seccomp) = &self.config.linux.as_ref().unwrap().seccomp {
+                set_seccomp(seccomp).with_context(|| "Failed to set seccomp")?;
+            }
+        }
 
         // Tell the parent process that the init process has been cloned.
         parent_channel.send_container_created()?;

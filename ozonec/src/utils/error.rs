@@ -34,4 +34,6 @@ pub enum OzonecErr {
     GetAllCaps(String),
     #[error("Failed to set the capability set {0}")]
     SetCaps(String),
+    #[error("Failed to add architecture to seccomp filter")]
+    AddScmpArch,
 }
