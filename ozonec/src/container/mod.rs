@@ -41,5 +41,5 @@ pub trait Container {
 
     fn exec(&mut self, process: &mut Process) -> Result<()>;
 
-    fn kill(&mut self, sig: Signal) -> Result<()>;
+    fn kill(&self, sig: Signal) -> Result<()>;
 }
