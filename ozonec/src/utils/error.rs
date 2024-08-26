@@ -38,4 +38,8 @@ pub enum OzonecErr {
     AddScmpArch,
     #[error("Failed to get current directory")]
     GetCurDir,
+    #[error("Failed to load container state")]
+    LoadConState,
+    #[error("Failed to get oci state")]
+    GetOciState,
 }
