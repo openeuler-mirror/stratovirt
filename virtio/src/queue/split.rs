@@ -265,9 +265,12 @@ impl SplitVringDesc {
                     u64::from(index) * DESCRIPTOR_LEN,
                 )
             })?;
-        let desc = sys_mem
-            .read_object_direct::<SplitVringDesc>(desc_addr)
-            .with_context(|| VirtioError::ReadObjectErr("a descriptor", desc_addr))?;
+        // SAFETY: dest_addr has been checked in SplitVringDesc::is_valid() and is guaranteed to be within the ram range.
+        let desc = unsafe {
+            sys_mem
+                .read_object_direct::<SplitVringDesc>(desc_addr)
+                .with_context(|| VirtioError::ReadObjectErr("a descriptor", desc_addr))
+        }?;
 
         if desc.is_valid(sys_mem, queue_size, cache) {
             Ok(desc)
@@ -498,11 +501,14 @@ impl SplitVring {
 
     /// Get the flags and idx of the available ring from guest memory.
     fn get_avail_flags_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<SplitVringFlagsIdx> {
-        sys_mem
-            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
-            .with_context(|| {
-                VirtioError::ReadObjectErr("avail flags idx", self.avail_ring.raw_value())
-            })
+        // SAFETY: avail_ring_host is checked when addr_cache inited.
+        unsafe {
+            sys_mem
+                .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
+                .with_context(|| {
+                    VirtioError::ReadObjectErr("avail flags idx", self.avail_ring.raw_value())
+                })
+        }
     }
 
     /// Get the idx of the available ring from guest memory.
@@ -521,11 +527,14 @@ impl SplitVring {
     fn get_used_flags_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<SplitVringFlagsIdx> {
         // Make sure the idx read from sys_mem is new.
         fence(Ordering::SeqCst);
-        sys_mem
-            .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host)
-            .with_context(|| {
-                VirtioError::ReadObjectErr("used flags idx", self.used_ring.raw_value())
-            })
+        // SAFETY: used_ring_host has been checked in set_addr_cache() and is guaranteed to be within the ram range.
+        unsafe {
+            sys_mem
+                .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host)
+                .with_context(|| {
+                    VirtioError::ReadObjectErr("used flags idx", self.used_ring.raw_value())
+                })
+        }
     }
 
     /// Get the index of the used ring from guest memory.
@@ -543,14 +552,20 @@ impl SplitVring {
         } else {
             flags_idx.flags &= !VRING_USED_F_NO_NOTIFY;
         }
-        sys_mem
-            .write_object_direct::<SplitVringFlagsIdx>(&flags_idx, self.addr_cache.used_ring_host)
-            .with_context(|| {
-                format!(
-                    "Failed to set used flags, used_ring: 0x{:X}",
-                    self.used_ring.raw_value()
+        // SAFETY: used_ring_host has been checked when addr_cache inited.
+        unsafe {
+            sys_mem
+                .write_object_direct::<SplitVringFlagsIdx>(
+                    &flags_idx,
+                    self.addr_cache.used_ring_host,
                 )
-            })?;
+                .with_context(|| {
+                    format!(
+                        "Failed to set used flags, used_ring: 0x{:X}",
+                        self.used_ring.raw_value()
+                    )
+                })
+        }?;
         // Make sure the data has been set.
         fence(Ordering::SeqCst);
         Ok(())
@@ -561,19 +576,21 @@ impl SplitVring {
         trace::virtqueue_set_avail_event(self as *const _ as u64, event_idx);
         let avail_event_offset =
             VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
-
-        sys_mem
-            .write_object_direct(
-                &event_idx,
-                self.addr_cache.used_ring_host + avail_event_offset,
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to set avail event idx, used_ring: 0x{:X}, offset: {}",
-                    self.used_ring.raw_value(),
-                    avail_event_offset,
+        // SAFETY: used_ring_host has been checked in set_addr_cache().
+        unsafe {
+            sys_mem
+                .write_object_direct(
+                    &event_idx,
+                    self.addr_cache.used_ring_host + avail_event_offset,
                 )
-            })?;
+                .with_context(|| {
+                    format!(
+                        "Failed to set avail event idx, used_ring: 0x{:X}, offset: {}",
+                        self.used_ring.raw_value(),
+                        avail_event_offset,
+                    )
+                })
+        }?;
         // Make sure the data has been set.
         fence(Ordering::SeqCst);
         Ok(())
@@ -588,9 +605,12 @@ impl SplitVring {
         // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let used_event_addr = self.addr_cache.avail_ring_host + used_event_offset;
-        let used_event = sys_mem
-            .read_object_direct::<u16>(used_event_addr)
-            .with_context(|| VirtioError::ReadObjectErr("used event id", used_event_addr))?;
+        // SAFETY: used_event_addr is protected by virtio calculations and is guaranteed to be within the ram range.
+        let used_event = unsafe {
+            sys_mem
+                .read_object_direct::<u16>(used_event_addr)
+                .with_context(|| VirtioError::ReadObjectErr("used event id", used_event_addr))
+        }?;
 
         Ok(used_event)
     }
@@ -750,11 +770,14 @@ impl SplitVring {
         // The GPA of avail_ring_host with avail table length has been checked in
         // is_invalid_memory which must not be overflowed.
         let desc_index_addr = self.addr_cache.avail_ring_host + index_offset;
-        let desc_index = sys_mem
-            .read_object_direct::<u16>(desc_index_addr)
-            .with_context(|| {
-                VirtioError::ReadObjectErr("the index of descriptor", desc_index_addr)
-            })?;
+        // SAFETY: dest_index_addr is protected by virtio calculations and is guaranteed to be within the ram range.
+        let desc_index = unsafe {
+            sys_mem
+                .read_object_direct::<u16>(desc_index_addr)
+                .with_context(|| {
+                    VirtioError::ReadObjectErr("the index of descriptor", desc_index_addr)
+                })
+        }?;
 
         let desc = SplitVringDesc::new(
             sys_mem,
@@ -860,19 +883,25 @@ impl VringOps for SplitVring {
             id: u32::from(index),
             len,
         };
-        sys_mem
-            .write_object_direct::<UsedElem>(&used_elem, used_elem_addr)
-            .with_context(|| "Failed to write object for used element")?;
+        // SAFETY: used_elem_addr is guaranteed to be within ram range.
+        unsafe {
+            sys_mem
+                .write_object_direct::<UsedElem>(&used_elem, used_elem_addr)
+                .with_context(|| "Failed to write object for used element")
+        }?;
         // Make sure used element is filled before updating used idx.
         fence(Ordering::Release);
 
         self.next_used += Wrapping(1);
-        sys_mem
-            .write_object_direct(
-                &(self.next_used.0),
-                self.addr_cache.used_ring_host + VRING_IDX_POSITION,
-            )
-            .with_context(|| "Failed to write next used idx")?;
+        // SAFETY: used_ring_host has been checked when addr_cache inited.
+        unsafe {
+            sys_mem
+                .write_object_direct(
+                    &(self.next_used.0),
+                    self.addr_cache.used_ring_host + VRING_IDX_POSITION,
+                )
+                .with_context(|| "Failed to write next used idx")
+        }?;
         // Make sure used index is exposed before notifying guest.
         fence(Ordering::SeqCst);
 
