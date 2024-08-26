@@ -1457,7 +1457,7 @@ mod tests {
     use super::*;
     use crate::tests::address_space_init;
     use crate::*;
-    use address_space::GuestAddress;
+    use address_space::{AddressAttr, GuestAddress};
     use machine_manager::config::{
         str_slip_to_clap, IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
     };
@@ -1715,7 +1715,11 @@ mod tests {
             next: 1,
         };
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // write RequestOutHeader to first desc
@@ -1725,7 +1729,7 @@ mod tests {
             sector: 0,
         };
         mem_space
-            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100), AddressAttr::Ram)
             .unwrap();
 
         // making the second descriptor entry to receive data from device
@@ -1736,17 +1740,29 @@ mod tests {
             next: 2,
         };
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0 + 16_u64))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // write avail_ring id
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // imitating guest OS to send notification.
@@ -1764,7 +1780,10 @@ mod tests {
 
             // get used_ring data
             let idx = mem_space
-                .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2_u64))
+                .read_object::<u16>(
+                    GuestAddress(queue_config.used_ring.0 + 2_u64),
+                    AddressAttr::Ram,
+                )
                 .unwrap();
             if idx == 1 {
                 break;

@@ -1261,7 +1261,7 @@ mod tests {
     use super::*;
     use crate::tests::{address_space_init, MEMORY_SIZE};
     use crate::*;
-    use address_space::{AddressRange, HostMemMapping, Region};
+    use address_space::{AddressAttr, AddressRange, HostMemMapping, Region};
     use machine_manager::event_loop::EventLoop;
 
     const QUEUE_SIZE: u16 = 256;
@@ -1507,7 +1507,11 @@ mod tests {
 
         // Set desc table.
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_inf.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config_inf.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         let ele = GuestIovec {
@@ -1515,13 +1519,21 @@ mod tests {
             iov_len: std::mem::size_of::<GuestIovec>() as u64,
         };
         mem_space
-            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000), AddressAttr::Ram)
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config_inf.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_inf.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config_inf.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_INFLATE_EVENT).is_ok());
@@ -1537,17 +1549,29 @@ mod tests {
         };
 
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_def.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config_def.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         mem_space
-            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000), AddressAttr::Ram)
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config_def.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_def.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config_def.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_DEFLATE_EVENT).is_ok());
