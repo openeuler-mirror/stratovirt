@@ -36,7 +36,7 @@ use crate::{
     VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
-use address_space::{AddressSpace, GuestAddress, RegionCache};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, RegionCache};
 use block_backend::{
     create_block_backend, remove_block_backend, BlockDriverOps, BlockIoErrorCallback,
     BlockProperty, BlockStatus,
@@ -228,7 +228,10 @@ impl AioCompleteCb {
     }
 
     fn complete_one_request(&self, req: &Request, status: u8) -> Result<()> {
-        if let Err(ref e) = self.mem_space.write_object(&status, req.in_header) {
+        if let Err(ref e) = self
+            .mem_space
+            .write_object(&status, req.in_header, AddressAttr::Ram)
+        {
             bail!("Failed to write the status (blk io completion) {:?}", e);
         }
 

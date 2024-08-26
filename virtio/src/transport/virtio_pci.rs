@@ -35,7 +35,9 @@ use crate::{
 };
 #[cfg(feature = "virtio_gpu")]
 use address_space::HostMemMapping;
-use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use address_space::{
+    AddressAttr, AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps,
+};
 use devices::pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
     PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
@@ -939,6 +941,7 @@ impl VirtioPciDevice {
                 &mut data,
                 GuestAddress(bar_base + u64::from(off)),
                 u64::from(len),
+                AddressAttr::MMIO,
             )
         } else {
             let mut data = self.base.config.config[pci_cfg_data_offset..].as_mut();
@@ -946,6 +949,7 @@ impl VirtioPciDevice {
                 &mut data,
                 GuestAddress(bar_base + u64::from(off)),
                 u64::from(len),
+                AddressAttr::MMIO,
             )
         };
         if let Err(e) = result {

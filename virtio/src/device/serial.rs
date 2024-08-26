@@ -29,7 +29,7 @@ use crate::{
     Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
     VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
-use address_space::AddressSpace;
+use address_space::{AddressAttr, AddressSpace};
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
     config::{ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_VIRTQUEUE_SIZE},
@@ -591,7 +591,12 @@ impl SerialPortHandler {
 
                 // GPAChecked: the elem_iov has been checked in pop_avail().
                 self.mem_space
-                    .write(&mut source_slice, elem_iov.addr, len as u64)
+                    .write(
+                        &mut source_slice,
+                        elem_iov.addr,
+                        len as u64,
+                        AddressAttr::Ram,
+                    )
                     .with_context(|| {
                         format!(
                             "Failed to write slice for virtio serial port input: addr {:X} len {}",

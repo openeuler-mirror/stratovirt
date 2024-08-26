@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
 use util::num_ops::round_up;
@@ -163,7 +163,12 @@ pub fn load_elf_kernel(
 
         if ph.p_type == PT_LOAD {
             kernel_image.seek(SeekFrom::Start(ph.p_offset))?;
-            sys_mem.write(kernel_image, GuestAddress(ph.p_paddr), ph.p_filesz)?;
+            sys_mem.write(
+                kernel_image,
+                GuestAddress(ph.p_paddr),
+                ph.p_filesz,
+                AddressAttr::Ram,
+            )?;
 
             addr_low = std::cmp::min(addr_low, ph.p_paddr);
             addr_max = std::cmp::max(addr_max, ph.p_paddr);

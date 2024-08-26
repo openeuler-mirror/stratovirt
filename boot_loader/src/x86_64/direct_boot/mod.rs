@@ -29,7 +29,7 @@ use super::{
     INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
 };
 use crate::error::BootLoaderError;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 
 /// Load bzImage linux kernel to Guest Memory.
@@ -91,7 +91,12 @@ fn load_image(image: &mut File, start_addr: u64, sys_mem: &Arc<AddressSpace>) ->
     let len = image.seek(SeekFrom::End(0))?;
     image.seek(SeekFrom::Start(curr_loc))?;
 
-    sys_mem.write(image, GuestAddress(start_addr), len - curr_loc)?;
+    sys_mem.write(
+        image,
+        GuestAddress(start_addr),
+        len - curr_loc,
+        AddressAttr::Ram,
+    )?;
 
     Ok(())
 }
@@ -163,13 +168,13 @@ fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
     // Entry covering VA [0..512GB)
     let pdpte = boot_pdpte_addr | 0x03;
     sys_mem
-        .write_object(&pdpte, GuestAddress(boot_pml4_addr))
+        .write_object(&pdpte, GuestAddress(boot_pml4_addr), AddressAttr::Ram)
         .with_context(|| format!("Failed to load PD PTE to 0x{:x}", boot_pml4_addr))?;
 
     // Entry covering VA [0..1GB)
     let pde = boot_pde_addr | 0x03;
     sys_mem
-        .write_object(&pde, GuestAddress(boot_pdpte_addr))
+        .write_object(&pde, GuestAddress(boot_pdpte_addr), AddressAttr::Ram)
         .with_context(|| format!("Failed to load PDE to 0x{:x}", boot_pdpte_addr))?;
 
     // 512 2MB entries together covering VA [0..1GB). Note we are assuming
@@ -177,7 +182,7 @@ fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
     for i in 0..512u64 {
         let pde = (i << 21) + 0x83u64;
         sys_mem
-            .write_object(&pde, GuestAddress(boot_pde_addr + i * 8))
+            .write_object(&pde, GuestAddress(boot_pde_addr + i * 8), AddressAttr::Ram)
             .with_context(|| format!("Failed to load PDE to 0x{:x}", boot_pde_addr + i * 8))?;
     }
 
@@ -192,7 +197,11 @@ fn setup_boot_params(
     let mut boot_params = BootParams::new(*boot_hdr);
     boot_params.setup_e820_entries(config, sys_mem);
     sys_mem
-        .write_object(&boot_params, GuestAddress(ZERO_PAGE_START))
+        .write_object(
+            &boot_params,
+            GuestAddress(ZERO_PAGE_START),
+            AddressAttr::Ram,
+        )
         .with_context(|| format!("Failed to load zero page to 0x{:x}", ZERO_PAGE_START))?;
 
     Ok(())
@@ -210,6 +219,7 @@ fn setup_kernel_cmdline(
         &mut config.kernel_cmdline.as_bytes(),
         GuestAddress(CMDLINE_START),
         u64::from(cmdline_len),
+        AddressAttr::Ram,
     )?;
 
     Ok(())
@@ -305,18 +315,24 @@ mod test {
             .unwrap();
         assert_eq!(setup_page_table(&space).unwrap(), 0x0000_9000);
         assert_eq!(
-            space.read_object::<u64>(GuestAddress(0x0000_9000)).unwrap(),
+            space
+                .read_object::<u64>(GuestAddress(0x0000_9000), AddressAttr::Ram)
+                .unwrap(),
             0x0000_a003
         );
         assert_eq!(
-            space.read_object::<u64>(GuestAddress(0x0000_a000)).unwrap(),
+            space
+                .read_object::<u64>(GuestAddress(0x0000_a000), AddressAttr::Ram)
+                .unwrap(),
             0x0000_b003
         );
         let mut page_addr: u64 = 0x0000_b000;
         let mut tmp_value: u64 = 0x83;
         for _ in 0..512u64 {
             assert_eq!(
-                space.read_object::<u64>(GuestAddress(page_addr)).unwrap(),
+                space
+                    .read_object::<u64>(GuestAddress(page_addr), AddressAttr::Ram)
+                    .unwrap(),
                 tmp_value
             );
             page_addr += 8;
@@ -378,7 +394,11 @@ mod test {
         let mut arr: Vec<u64> = Vec::new();
         let mut boot_addr: u64 = 0x500;
         for _ in 0..BOOT_GDT_MAX {
-            arr.push(space.read_object(GuestAddress(boot_addr)).unwrap());
+            arr.push(
+                space
+                    .read_object(GuestAddress(boot_addr), AddressAttr::Ram)
+                    .unwrap(),
+            );
             boot_addr += 8;
         }
         assert_eq!(arr[0], 0);
@@ -395,6 +415,7 @@ mod test {
                 &mut read_buffer.as_mut(),
                 GuestAddress(0x0002_0000),
                 cmd_len,
+                AddressAttr::Ram,
             )
             .unwrap();
         let s = String::from_utf8(read_buffer.to_vec()).unwrap();

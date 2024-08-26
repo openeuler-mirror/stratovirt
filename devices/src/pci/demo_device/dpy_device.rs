@@ -28,7 +28,7 @@ use log::error;
 use once_cell::sync::Lazy;
 
 use super::DeviceTypeOperation;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use ui::{
     console::{
         register_display, DisplayChangeListener, DisplayChangeListenerOperations, DisplayMouse,
@@ -227,6 +227,7 @@ impl DeviceTypeOperation for DemoDisplay {
             &mut buf.as_slice(),
             address_space::GuestAddress(mem_addr),
             buf.len() as u64,
+            AddressAttr::Ram,
         );
     }
 

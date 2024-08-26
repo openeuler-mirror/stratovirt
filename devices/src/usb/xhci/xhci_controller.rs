@@ -31,7 +31,7 @@ use super::xhci_trb::{
 };
 use crate::usb::{config::*, TransferOps};
 use crate::usb::{UsbDevice, UsbDeviceRequest, UsbError, UsbPacket, UsbPacketStatus};
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
 
 const INVALID_SLOT_ID: u32 = 0;
@@ -2452,12 +2452,14 @@ pub fn dma_read_bytes(
     mut buf: &mut [u8],
 ) -> Result<()> {
     let len = buf.len() as u64;
-    addr_space.read(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to read dma memory at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .read(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to read dma memory at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
     Ok(())
 }
 
@@ -2467,12 +2469,14 @@ pub fn dma_write_bytes(
     mut buf: &[u8],
 ) -> Result<()> {
     let len = buf.len() as u64;
-    addr_space.write(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to write dma memory at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .write(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to write dma memory at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
     Ok(())
 }
 

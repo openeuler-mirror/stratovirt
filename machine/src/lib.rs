@@ -45,7 +45,9 @@ use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
-use address_space::{create_backend_mem, create_default_mem, AddressSpace, GuestAddress, Region};
+use address_space::{
+    create_backend_mem, create_default_mem, AddressAttr, AddressSpace, GuestAddress, Region,
+};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuTopology, CPU};
@@ -262,7 +264,7 @@ impl MachineBase {
 
         let length = data.len() as u64;
         self.sys_io
-            .read(&mut data, GuestAddress(addr), length)
+            .read(&mut data, GuestAddress(addr), length, AddressAttr::MMIO)
             .is_ok()
     }
 
@@ -277,21 +279,21 @@ impl MachineBase {
             }
         }
         self.sys_io
-            .write(&mut data, GuestAddress(addr), count)
+            .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
             .is_ok()
     }
 
     fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
         let length = data.len() as u64;
         self.sys_mem
-            .read(&mut data, GuestAddress(addr), length)
+            .read(&mut data, GuestAddress(addr), length, AddressAttr::MMIO)
             .is_ok()
     }
 
     fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
         let count = data.len() as u64;
         self.sys_mem
-            .write(&mut data, GuestAddress(addr), count)
+            .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
             .is_ok()
     }
 }

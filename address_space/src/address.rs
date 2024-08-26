@@ -15,6 +15,15 @@ use std::ops::{BitAnd, BitOr};
 
 use util::num_ops::{round_down, round_up};
 
+#[derive(PartialEq, Eq)]
+pub enum AddressAttr {
+    Ram,
+    MMIO,
+    RamDevice,
+    RomDevice,
+    RomDeviceForce,
+}
+
 /// Represent the address in given address space.
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct GuestAddress(pub u64);
