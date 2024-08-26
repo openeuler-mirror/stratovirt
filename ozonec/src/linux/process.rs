@@ -28,7 +28,10 @@ use nix::unistd::{self, chdir, setresgid, setresuid, Gid, Pid, Uid};
 use prctl::{set_keep_capabilities, set_no_new_privileges};
 use rlimit::{setrlimit, Resource, Rlim};
 
-use super::terminal::{connect_stdio, setup_console};
+use super::{
+    apparmor,
+    terminal::{connect_stdio, setup_console},
+};
 use crate::utils::OzonecErr;
 use oci_spec::{linux::IoPriClass, process::Process as OciProcess};
 
@@ -189,6 +192,16 @@ impl Process {
                 caps::set(None, CapSet::Ambient, &to_cap_set(ambient)?)
                     .with_context(|| OzonecErr::SetCaps("Ambient".to_string()))?;
             }
+        }
+        Ok(())
+    }
+
+    pub fn set_apparmor(&self) -> Result<()> {
+        if let Some(profile) = &self.oci.apparmorProfile {
+            if !apparmor::is_enabled()? {
+                bail!("Apparmor is disabled.");
+            }
+            apparmor::apply_profile(profile)?;
         }
         Ok(())
     }
