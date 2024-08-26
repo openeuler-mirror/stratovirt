@@ -221,6 +221,8 @@ impl LinuxContainer {
                 .with_context(|| "Failed to chroot")?;
         }
 
+        process.set_apparmor()?;
+
         if self.config.root.readonly {
             LinuxContainer::mount_rootfs_readonly()?;
         }
