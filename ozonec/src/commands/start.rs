@@ -19,6 +19,7 @@ use oci_spec::state::ContainerStatus;
 use crate::{
     container::{Action, Container, Launcher, State},
     linux::LinuxContainer,
+    utils::OzonecErr,
 };
 
 /// Start the user-specified code from process
@@ -29,12 +30,12 @@ pub struct Start {
 
 impl Start {
     fn launcher(&self, root: &Path) -> Result<Launcher> {
-        let container_state = State::load(root, &self.container_id)
-            .with_context(|| "Failed to load container state")?;
+        let container_state =
+            State::load(root, &self.container_id).with_context(|| OzonecErr::LoadConState)?;
         let container = LinuxContainer::load_from_state(&container_state, &None)?;
         let oci_status = container
             .get_oci_state()
-            .with_context(|| "Failed to get oci state")?
+            .with_context(|| OzonecErr::GetOciState)?
             .status;
 
         if oci_status != ContainerStatus::Created {

@@ -23,7 +23,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{crate_description, Args, Parser, Subcommand};
-use commands::Start;
+use commands::{Exec, Start};
 use log::info;
 use nix::unistd::geteuid;
 
@@ -55,7 +55,9 @@ enum StandardCmd {
 
 // Extended commands not documented in [OCI Command Line Interface].
 #[derive(Subcommand, Debug)]
-enum ExtendCmd {}
+enum ExtendCmd {
+    Exec(Exec),
+}
 
 #[derive(Subcommand, Debug)]
 enum Command {
@@ -79,7 +81,7 @@ fn cmd_run(command: Command, root: &Path) -> Result<()> {
     match command {
         Command::Standard(cmd) => match cmd {
             StandardCmd::Create(create) => {
-                info!("Exec command: {:?}", create);
+                info!("Run command: {:?}", create);
 
                 let mut root_exist = false;
                 create.run(root, &mut root_exist).inspect_err(|_| {
@@ -89,11 +91,16 @@ fn cmd_run(command: Command, root: &Path) -> Result<()> {
                 })?
             }
             StandardCmd::Start(start) => {
-                info!("Exec command: {:?}", start);
+                info!("Run command: {:?}", start);
                 start.run(root)?
             }
         },
-        Command::Extend(cmd) => (),
+        Command::Extend(cmd) => match cmd {
+            ExtendCmd::Exec(exec) => {
+                info!("Run command: {:?}", exec);
+                exec.run(root)?
+            }
+        },
     }
     Ok(())
 }

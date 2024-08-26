@@ -724,6 +724,8 @@ impl Container for LinuxContainer {
     }
 
     fn exec(&mut self, process: &mut Process) -> Result<()> {
+        // process.init is false.
+        self.create(process)?;
         Ok(())
     }
 
