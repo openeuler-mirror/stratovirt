@@ -23,7 +23,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{crate_description, Args, Parser, Subcommand};
-use commands::{Delete, Exec, Kill, Start};
+use commands::{Delete, Exec, Kill, Start, State};
 use log::info;
 use nix::unistd::geteuid;
 
@@ -51,6 +51,7 @@ struct GlobalOpts {
 enum StandardCmd {
     Create(Create),
     Start(Start),
+    State(State),
     Kill(Kill),
     Delete(Delete),
 }
@@ -103,6 +104,10 @@ fn cmd_run(command: Command, root: &Path) -> Result<()> {
             StandardCmd::Delete(delete) => {
                 info!("Run command: {:?}", delete);
                 delete.run(root)?
+            }
+            StandardCmd::State(state) => {
+                info!("Run command: {:?}", state);
+                state.run(root)?
             }
         },
         Command::Extend(cmd) => match cmd {
