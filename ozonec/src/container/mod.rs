@@ -14,6 +14,7 @@ mod launcher;
 mod state;
 
 pub use launcher::{Action, Launcher};
+pub use state::State;
 
 use std::time::SystemTime;
 

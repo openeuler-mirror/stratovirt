@@ -30,24 +30,26 @@ use nix::{
         statfs::statfs,
         wait::{waitpid, WaitStatus},
     },
-    unistd::{self, chown, getegid, geteuid, sethostname, Gid, Pid, Uid},
+    unistd::{self, chown, getegid, geteuid, sethostname, unlink, Gid, Pid, Uid},
 };
 use prctl::set_dumpable;
 use procfs::process::ProcState;
 
 use super::{
-    namespace::NsController, notify_socket::NOTIFY_SOCKET, process::clone_process, NotifyListener,
-    Process,
+    namespace::NsController,
+    notify_socket::{NotifySocket, NOTIFY_SOCKET},
+    process::clone_process,
+    NotifyListener, Process,
 };
 use crate::{
-    container::Container,
+    container::{Container, State},
     linux::{rootfs::Rootfs, seccomp::set_seccomp},
     utils::{Channel, Message, OzonecErr},
 };
 use oci_spec::{
     linux::{Device as OciDevice, IdMapping, NamespaceType},
     runtime::RuntimeConfig,
-    state::{ContainerStatus, State},
+    state::{ContainerStatus, State as OciState},
 };
 
 pub struct LinuxContainer {
@@ -88,6 +90,24 @@ impl LinuxContainer {
             pid: -1,
             start_time: 0,
             created_time: SystemTime::now(),
+            console_socket: console_socket.clone(),
+        })
+    }
+
+    pub fn load_from_state(state: &State, console_socket: &Option<PathBuf>) -> Result<Self> {
+        let root_path = format!("{}/{}", state.root.to_string_lossy().to_string(), &state.id);
+        let config = state
+            .config
+            .clone()
+            .ok_or(anyhow!("Can't find config in state"))?;
+
+        Ok(Self {
+            id: state.id.clone(),
+            root: root_path,
+            config,
+            pid: state.pid,
+            start_time: state.start_time,
+            created_time: state.created_time.into(),
             console_socket: console_socket.clone(),
         })
     }
@@ -576,7 +596,7 @@ impl Container for LinuxContainer {
         &self.created_time
     }
 
-    fn get_oci_state(&self) -> Result<State> {
+    fn get_oci_state(&self) -> Result<OciState> {
         let status = self.container_status()?;
         let pid = if status != ContainerStatus::Stopped {
             self.pid
@@ -598,7 +618,7 @@ impl Container for LinuxContainer {
         } else {
             HashMap::new()
         };
-        Ok(State {
+        Ok(OciState {
             ociVersion: self.config.ociVersion.clone(),
             id: self.id.clone(),
             status,
@@ -689,6 +709,15 @@ impl Container for LinuxContainer {
     }
 
     fn start(&mut self) -> Result<()> {
+        let path = PathBuf::from(&self.root).join(NOTIFY_SOCKET);
+        let mut notify_socket = NotifySocket::new(&path);
+
+        notify_socket.notify_container_start()?;
+        unlink(&path).with_context(|| "Failed to delete notify.sock")?;
+        self.start_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .with_context(|| "Failed to get start time")?
+            .as_secs();
         Ok(())
     }
 

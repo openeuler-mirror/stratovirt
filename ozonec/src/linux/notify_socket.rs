@@ -12,13 +12,18 @@
 
 use std::{
     env,
-    io::Read,
-    os::{fd::AsRawFd, unix::net::UnixListener},
-    path::{Path, PathBuf},
+    io::{Read, Write},
+    os::{
+        fd::AsRawFd,
+        unix::net::{UnixListener, UnixStream},
+    },
+    path::PathBuf,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use nix::unistd::{self, chdir};
+
+use crate::utils::OzonecErr;
 
 pub const NOTIFY_SOCKET: &str = "notify.sock";
 
@@ -30,8 +35,7 @@ impl NotifyListener {
     pub fn new(root: PathBuf) -> Result<Self> {
         // The length of path of Unix domain socket has the limit 108, which is smaller then
         // the maximum length of file on Linux (255).
-        let cwd =
-            env::current_dir().with_context(|| "Current working directory value is invalid")?;
+        let cwd = env::current_dir().with_context(|| OzonecErr::GetCurDir)?;
         chdir(&root).with_context(|| "Failed to chdir to root directory")?;
         let listener =
             UnixListener::bind(NOTIFY_SOCKET).with_context(|| "Failed to bind notify socket")?;
@@ -56,5 +60,31 @@ impl NotifyListener {
 
     pub fn close(&self) -> Result<()> {
         Ok(unistd::close(self.socket.as_raw_fd())?)
+    }
+}
+
+pub struct NotifySocket {
+    path: PathBuf,
+}
+
+impl NotifySocket {
+    pub fn new(path: &PathBuf) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn notify_container_start(&mut self) -> Result<()> {
+        let cwd = env::current_dir().with_context(|| OzonecErr::GetCurDir)?;
+        let root_path = self
+            .path
+            .parent()
+            .ok_or(anyhow!("Invalid notify socket path"))?;
+        chdir(root_path).with_context(|| "Failed to chdir to root directory")?;
+
+        let mut stream =
+            UnixStream::connect(NOTIFY_SOCKET).with_context(|| "Failed to connect notify.sock")?;
+        stream.write_all(b"start container")?;
+        chdir(&cwd).with_context(|| "Failed to chdir to previous working directory")?;
+
+        Ok(())
     }
 }

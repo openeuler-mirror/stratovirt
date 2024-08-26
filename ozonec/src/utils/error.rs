@@ -36,4 +36,6 @@ pub enum OzonecErr {
     SetCaps(String),
     #[error("Failed to add architecture to seccomp filter")]
     AddScmpArch,
+    #[error("Failed to get current directory")]
+    GetCurDir,
 }
