@@ -990,7 +990,7 @@ mod tests {
     use super::*;
     use crate::tests::address_space_init;
     use crate::{Queue, QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING};
-    use address_space::{AddressSpace, GuestAddress};
+    use address_space::{AddressAttr, AddressSpace, GuestAddress};
 
     trait VringOpsTest {
         fn set_desc(
@@ -1049,6 +1049,7 @@ mod tests {
             sys_mem.write_object::<SplitVringDesc>(
                 &desc,
                 GuestAddress(self.desc_table.0 + desc_addr_offset),
+                AddressAttr::Ram,
             )?;
 
             Ok(())
@@ -1056,15 +1057,21 @@ mod tests {
 
         fn set_avail_ring_idx(&self, sys_mem: &Arc<AddressSpace>, idx: u16) -> Result<()> {
             let avail_idx_offset = 2_u64;
-            sys_mem
-                .write_object::<u16>(&idx, GuestAddress(self.avail_ring.0 + avail_idx_offset))?;
+            sys_mem.write_object::<u16>(
+                &idx,
+                GuestAddress(self.avail_ring.0 + avail_idx_offset),
+                AddressAttr::Ram,
+            )?;
             Ok(())
         }
 
         fn set_avail_ring_flags(&self, sys_mem: &Arc<AddressSpace>, flags: u16) -> Result<()> {
             let avail_idx_offset = 0_u64;
-            sys_mem
-                .write_object::<u16>(&flags, GuestAddress(self.avail_ring.0 + avail_idx_offset))?;
+            sys_mem.write_object::<u16>(
+                &flags,
+                GuestAddress(self.avail_ring.0 + avail_idx_offset),
+                AddressAttr::Ram,
+            )?;
             Ok(())
         }
 
@@ -1078,6 +1085,7 @@ mod tests {
             sys_mem.write_object::<u16>(
                 &desc_index,
                 GuestAddress(self.avail_ring.0 + avail_idx_offset),
+                AddressAttr::Ram,
             )?;
             Ok(())
         }
@@ -1085,36 +1093,49 @@ mod tests {
         fn get_avail_event(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
             let avail_event_idx_offset =
                 VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
-            let event_idx = sys_mem
-                .read_object::<u16>(GuestAddress(self.used_ring.0 + avail_event_idx_offset))?;
+            let event_idx = sys_mem.read_object::<u16>(
+                GuestAddress(self.used_ring.0 + avail_event_idx_offset),
+                AddressAttr::Ram,
+            )?;
             Ok(event_idx)
         }
 
         fn get_used_elem(&self, sys_mem: &Arc<AddressSpace>, index: u16) -> Result<UsedElem> {
             let used_elem_offset = VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(index);
-            let used_elem = sys_mem
-                .read_object::<UsedElem>(GuestAddress(self.used_ring.0 + used_elem_offset))?;
+            let used_elem = sys_mem.read_object::<UsedElem>(
+                GuestAddress(self.used_ring.0 + used_elem_offset),
+                AddressAttr::Ram,
+            )?;
             Ok(used_elem)
         }
 
         fn get_used_ring_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
             let used_idx_offset = VRING_IDX_POSITION;
-            let idx =
-                sys_mem.read_object::<u16>(GuestAddress(self.used_ring.0 + used_idx_offset))?;
+            let idx = sys_mem.read_object::<u16>(
+                GuestAddress(self.used_ring.0 + used_idx_offset),
+                AddressAttr::Ram,
+            )?;
             Ok(idx)
         }
 
         fn set_used_ring_idx(&self, sys_mem: &Arc<AddressSpace>, idx: u16) -> Result<()> {
             let used_idx_offset = VRING_IDX_POSITION;
-            sys_mem.write_object::<u16>(&idx, GuestAddress(self.used_ring.0 + used_idx_offset))?;
+            sys_mem.write_object::<u16>(
+                &idx,
+                GuestAddress(self.used_ring.0 + used_idx_offset),
+                AddressAttr::Ram,
+            )?;
             Ok(())
         }
 
         fn set_used_event_idx(&self, sys_mem: &Arc<AddressSpace>, idx: u16) -> Result<()> {
             let event_idx_offset =
                 VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(self.actual_size());
-            sys_mem
-                .write_object::<u16>(&idx, GuestAddress(self.avail_ring.0 + event_idx_offset))?;
+            sys_mem.write_object::<u16>(
+                &idx,
+                GuestAddress(self.avail_ring.0 + event_idx_offset),
+                AddressAttr::Ram,
+            )?;
             Ok(())
         }
     }
@@ -1133,7 +1154,7 @@ mod tests {
             flags,
             next,
         };
-        sys_mem.write_object::<SplitVringDesc>(&desc, desc_addr)?;
+        sys_mem.write_object::<SplitVringDesc>(&desc, desc_addr, AddressAttr::Ram)?;
         Ok(())
     }
 

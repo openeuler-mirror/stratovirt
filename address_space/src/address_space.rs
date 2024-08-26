@@ -854,7 +854,7 @@ mod test {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::{HostMemMapping, RegionOps};
+    use crate::{AddressAttr, HostMemMapping, RegionOps};
 
     #[derive(Default, Clone)]
     struct TestListener {
@@ -1324,9 +1324,15 @@ mod test {
             .unwrap();
 
         let data: u64 = 10000;
-        assert!(space.write_object(&data, GuestAddress(992)).is_ok());
-        let data1: u64 = space.read_object(GuestAddress(992)).unwrap();
+        assert!(space
+            .write_object(&data, GuestAddress(992), AddressAttr::Ram)
+            .is_ok());
+        let data1: u64 = space
+            .read_object(GuestAddress(992), AddressAttr::Ram)
+            .unwrap();
         assert_eq!(data1, 10000);
-        assert!(space.write_object(&data, GuestAddress(993)).is_err());
+        assert!(space
+            .write_object(&data, GuestAddress(993), AddressAttr::Ram)
+            .is_err());
     }
 }
