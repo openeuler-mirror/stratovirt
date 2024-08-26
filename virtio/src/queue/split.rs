@@ -437,6 +437,10 @@ impl SplitVringDesc {
                 elem.out_iovec.push(iovec);
             }
             elem.desc_num += 1;
+            // Note: iovec.addr + iovec.len is located in RAM, and iovec.len is not greater than the
+            // VM RAM size. The number of iovec is not greater than 'queue_size * 2 - 1' which with
+            // a indirect table. Currently, the max value of queue_size is 1024. So, desc_total_len
+            // must not overflow.
             desc_total_len += u64::from(iovec.len);
 
             if desc.has_next() {

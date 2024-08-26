@@ -819,6 +819,8 @@ pub fn iov_to_buf(
     let mut start: usize = 0;
     let mut end: usize = 0;
 
+    // Note: iovec is part of elem.in_iovec/out_iovec which has been checked
+    // in pop_avail(). The sum of iov_len is not greater than u32::MAX.
     for iov in iovec {
         let mut addr_map = Vec::new();
         mem_space.get_address_map(cache, iov.addr, u64::from(iov.len), &mut addr_map)?;
@@ -870,6 +872,8 @@ fn gpa_hva_iovec_map(
     let mut iov_size: u64 = 0;
     let mut hva_iovec = Vec::with_capacity(gpa_elemiovec.len());
 
+    // Note: gpa_elemiovec is part of elem.in_iovec/out_iovec which has been checked
+    // in pop_avail(). The sum of iov_len is not greater than u32::MAX.
     for elem in gpa_elemiovec.iter() {
         mem_space.get_address_map(cache, elem.addr, u64::from(elem.len), &mut hva_iovec)?;
         iov_size += u64::from(elem.len);
