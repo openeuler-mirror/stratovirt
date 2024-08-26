@@ -22,7 +22,7 @@ use log::{debug, warn};
 
 use crate::HypervisorError;
 use address_space::{
-    AddressRange, AddressSpaceError, FlatRange, Listener, ListenerReqType, MemSlot,
+    AddressAttr, AddressRange, AddressSpaceError, FlatRange, Listener, ListenerReqType, MemSlot,
     RegionIoEventFd, RegionType,
 };
 use util::{num_ops::round_down, unix::host_page_size};
@@ -193,7 +193,8 @@ impl KvmMemoryListener {
         let align_adjust = aligned_addr.raw_value() - flat_range.addr_range.base.raw_value();
 
         // `unwrap()` won't fail because Ram-type Region definitely has hva
-        let aligned_hva = flat_range.owner.get_host_address().unwrap()
+        // SAFETY: size has been checked.
+        let aligned_hva = unsafe { flat_range.owner.get_host_address(attr).unwrap() }
             + flat_range.offset_in_region
             + align_adjust;
 

@@ -34,7 +34,8 @@ use super::super::QueueConfig;
 use super::VhostOps;
 use crate::VirtioError;
 use address_space::{
-    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+    AddressAttr, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+    RegionType,
 };
 use util::byte_code::ByteCode;
 
@@ -158,7 +159,9 @@ impl VhostMemInfo {
     fn add_mem_range(&self, fr: &FlatRange) {
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
-        let userspace_addr = fr.owner.get_host_address().unwrap() + fr.offset_in_region;
+        let userspace_addr =
+            // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+            unsafe { fr.owner.get_host_address(AddressAttr::Ram).unwrap() } + fr.offset_in_region;
 
         self.regions.lock().unwrap().push(VhostMemoryRegion {
             guest_phys_addr,
@@ -173,7 +176,9 @@ impl VhostMemInfo {
         let target = VhostMemoryRegion {
             guest_phys_addr: fr.addr_range.base.raw_value(),
             memory_size: fr.addr_range.size,
-            userspace_addr: fr.owner.get_host_address().unwrap() + fr.offset_in_region,
+            // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+            userspace_addr: unsafe { fr.owner.get_host_address(AddressAttr::Ram).unwrap() }
+                + fr.offset_in_region,
             flags_padding: 0_u64,
         };
         for (index, mr) in mem_regions.iter().enumerate() {

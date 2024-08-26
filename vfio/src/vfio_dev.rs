@@ -32,7 +32,9 @@ use vmm_sys_util::{ioctl_io_nr, ioctl_ioc_nr};
 
 use super::{CONTAINERS, GROUPS, KVM_DEVICE_FD};
 use crate::VfioError;
-use address_space::{AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd};
+use address_space::{
+    AddressAttr, AddressSpace, FlatRange, Listener, ListenerReqType, RegionIoEventFd,
+};
 
 /// Refer to VFIO in https://github.com/torvalds/linux/blob/master/include/uapi/linux/vfio.h
 const IOMMU_GROUP: &str = "iommu_group";
@@ -227,7 +229,8 @@ impl VfioContainer {
 
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
-        let hva = match fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        let hva = match unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             Some(addr) => addr,
             None => bail!("Failed to get host address"),
         };

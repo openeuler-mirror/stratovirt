@@ -21,8 +21,8 @@ use log::{debug, warn};
 
 use crate::address_space::FlatView;
 use crate::{
-    AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress, HostMemMapping,
-    RegionOps,
+    AddressAttr, AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress,
+    HostMemMapping, RegionOps,
 };
 use migration::{migration::Migratable, MigrationManager};
 
@@ -467,11 +467,21 @@ impl Region {
 
     /// Get the host address if this region is backed by host-memory,
     /// Return `None` if it is not a Ram-type region.
-    pub fn get_host_address(&self) -> Option<u64> {
-        if self.region_type != RegionType::Ram
-            && self.region_type != RegionType::RamDevice
-            && self.region_type != RegionType::RomDevice
-        {
+    ///
+    /// # Safety
+    ///
+    /// Need to make it clear that hva is always in the ram range of the virtual machine.
+    /// And if you want to operate [hva,hva+size], the range from hva to hva+size needs
+    /// to be in the ram range.
+    pub unsafe fn get_host_address(&self, attr: AddressAttr) -> Option<u64> {
+        let region_type = match attr {
+            AddressAttr::Ram => RegionType::Ram,
+            AddressAttr::MMIO => return None,
+            AddressAttr::RamDevice => RegionType::RamDevice,
+            AddressAttr::RomDevice | AddressAttr::RomDeviceForce => RegionType::RomDevice,
+        };
+
+        if self.region_type != region_type {
             return None;
         }
         self.mem_mapping.as_ref().map(|r| r.host_address())
@@ -1155,7 +1165,7 @@ mod test {
         assert_eq!(&data, &mut res_data);
 
         assert_eq!(
-            ram_region.get_host_address().unwrap(),
+            unsafe { ram_region.get_host_address(AddressAttr::Ram).unwrap() },
             mem_mapping.host_address()
         );
 
@@ -1235,7 +1245,7 @@ mod test {
             .is_ok());
         assert_eq!(data.to_vec(), data_res.to_vec());
 
-        assert!(io_region.get_host_address().is_none());
+        assert!(unsafe { io_region.get_host_address(AddressAttr::Ram).is_none() });
     }
 
     #[test]

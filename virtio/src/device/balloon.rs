@@ -491,7 +491,8 @@ impl BlnMemInfo {
     fn add_mem_range(&self, fr: &FlatRange) {
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
-        if let Some(host_addr) = fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        if let Some(host_addr) = unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             let userspace_addr = host_addr + fr.offset_in_region;
             let reg_page_size = fr.owner.get_region_page_size();
             self.regions.lock().unwrap().push(BlnMemoryRegion {
@@ -509,7 +510,8 @@ impl BlnMemInfo {
 
     fn delete_mem_range(&self, fr: &FlatRange) {
         let mut mem_regions = self.regions.lock().unwrap();
-        if let Some(host_addr) = fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        if let Some(host_addr) = unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             let reg_page_size = fr.owner.get_region_page_size();
             let target = BlnMemoryRegion {
                 guest_phys_addr: fr.addr_range.base.raw_value(),
@@ -1437,33 +1439,45 @@ mod tests {
 
         let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
         queue_config_inf.desc_table = GuestAddress(0x100);
-        queue_config_inf.addr_cache.desc_table_host = mem_space
-            .get_host_address(queue_config_inf.desc_table)
-            .unwrap();
+        queue_config_inf.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.avail_ring = GuestAddress(0x300);
-        queue_config_inf.addr_cache.avail_ring_host = mem_space
-            .get_host_address(queue_config_inf.avail_ring)
-            .unwrap();
+        queue_config_inf.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.used_ring = GuestAddress(0x600);
-        queue_config_inf.addr_cache.used_ring_host = mem_space
-            .get_host_address(queue_config_inf.used_ring)
-            .unwrap();
+        queue_config_inf.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.ready = true;
         queue_config_inf.size = QUEUE_SIZE;
 
         let mut queue_config_def = QueueConfig::new(QUEUE_SIZE);
         queue_config_def.desc_table = GuestAddress(0x1100);
-        queue_config_def.addr_cache.desc_table_host = mem_space
-            .get_host_address(queue_config_def.desc_table)
-            .unwrap();
+        queue_config_def.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.avail_ring = GuestAddress(0x1300);
-        queue_config_def.addr_cache.avail_ring_host = mem_space
-            .get_host_address(queue_config_def.avail_ring)
-            .unwrap();
+        queue_config_def.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.used_ring = GuestAddress(0x1600);
-        queue_config_def.addr_cache.used_ring_host = mem_space
-            .get_host_address(queue_config_def.used_ring)
-            .unwrap();
+        queue_config_def.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.ready = true;
         queue_config_def.size = QUEUE_SIZE;
 
