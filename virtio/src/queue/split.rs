@@ -27,7 +27,7 @@ use super::{
 use crate::{
     report_virtio_error, virtio_has_feature, VirtioError, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
 };
-use address_space::{AddressSpace, GuestAddress, RegionCache, RegionType};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, RegionCache, RegionType};
 use util::byte_code::ByteCode;
 
 /// When host consumes a buffer, don't interrupt the guest.
@@ -151,41 +151,44 @@ impl QueueConfig {
         features: u64,
         broken: &Arc<AtomicBool>,
     ) {
-        self.addr_cache.desc_table_host =
-            if let Some((addr, size)) = mem_space.addr_cache_init(self.desc_table) {
-                if size < self.get_desc_size() {
-                    report_virtio_error(interrupt_cb.clone(), features, broken);
-                    0_u64
-                } else {
-                    addr
-                }
-            } else {
+        self.addr_cache.desc_table_host = if let Some((addr, size)) =
+            mem_space.addr_cache_init(self.desc_table, AddressAttr::Ram)
+        {
+            if size < self.get_desc_size() {
+                report_virtio_error(interrupt_cb.clone(), features, broken);
                 0_u64
-            };
+            } else {
+                addr
+            }
+        } else {
+            0_u64
+        };
 
-        self.addr_cache.avail_ring_host =
-            if let Some((addr, size)) = mem_space.addr_cache_init(self.avail_ring) {
-                if size < self.get_avail_size(features) {
-                    report_virtio_error(interrupt_cb.clone(), features, broken);
-                    0_u64
-                } else {
-                    addr
-                }
-            } else {
+        self.addr_cache.avail_ring_host = if let Some((addr, size)) =
+            mem_space.addr_cache_init(self.avail_ring, AddressAttr::Ram)
+        {
+            if size < self.get_avail_size(features) {
+                report_virtio_error(interrupt_cb.clone(), features, broken);
                 0_u64
-            };
+            } else {
+                addr
+            }
+        } else {
+            0_u64
+        };
 
-        self.addr_cache.used_ring_host =
-            if let Some((addr, size)) = mem_space.addr_cache_init(self.used_ring) {
-                if size < self.get_used_size(features) {
-                    report_virtio_error(interrupt_cb.clone(), features, broken);
-                    0_u64
-                } else {
-                    addr
-                }
-            } else {
+        self.addr_cache.used_ring_host = if let Some((addr, size)) =
+            mem_space.addr_cache_init(self.used_ring, AddressAttr::Ram)
+        {
+            if size < self.get_used_size(features) {
+                report_virtio_error(interrupt_cb.clone(), features, broken);
                 0_u64
-            };
+            } else {
+                addr
+            }
+        } else {
+            0_u64
+        };
     }
 }
 
@@ -303,7 +306,7 @@ impl SplitVringDesc {
                 miss_cached = false;
             }
         } else {
-            let gotten_cache = sys_mem.get_region_cache(self.addr);
+            let gotten_cache = sys_mem.get_region_cache(self.addr, AddressAttr::Ram);
             if let Some(obtained_cache) = gotten_cache {
                 if obtained_cache.reg_type == RegionType::Ram {
                     *cache = gotten_cache;
@@ -1411,19 +1414,28 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            sys_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
-        queue_config.addr_cache.avail_ring_host =
-            sys_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
-        queue_config.addr_cache.used_ring_host =
-            sys_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1501,19 +1513,28 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            sys_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
-        queue_config.addr_cache.avail_ring_host =
-            sys_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
-        queue_config.addr_cache.used_ring_host =
-            sys_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1601,19 +1622,28 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            sys_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
-        queue_config.addr_cache.avail_ring_host =
-            sys_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
-        queue_config.addr_cache.used_ring_host =
-            sys_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1796,19 +1826,28 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            sys_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
-        queue_config.addr_cache.avail_ring_host =
-            sys_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
-        queue_config.addr_cache.used_ring_host =
-            sys_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -1960,19 +1999,28 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            sys_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
-        queue_config.addr_cache.avail_ring_host =
-            sys_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
-        queue_config.addr_cache.used_ring_host =
-            sys_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);
@@ -2001,19 +2049,28 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(QUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            sys_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN);
-        queue_config.addr_cache.avail_ring_host =
-            sys_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(align(
             u64::from(QUEUE_SIZE) * DESCRIPTOR_LEN
                 + VRING_AVAIL_LEN_EXCEPT_AVAILELEM
                 + AVAILELEM_LEN * u64::from(QUEUE_SIZE),
             4096,
         ));
-        queue_config.addr_cache.used_ring_host =
-            sys_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            sys_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.ready = true;
         queue_config.size = QUEUE_SIZE;
         let mut vring = SplitVring::new(queue_config);

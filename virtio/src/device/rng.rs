@@ -591,14 +591,23 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            mem_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.avail_ring_host =
-            mem_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.used_ring_host =
-            mem_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
@@ -686,14 +695,23 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            mem_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.avail_ring_host =
-            mem_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.used_ring_host =
-            mem_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 

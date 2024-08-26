@@ -24,7 +24,7 @@ use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use machine_manager::config::valid_id;
 use machine_manager::event_loop::EventLoop;
 use ui::console::{
@@ -125,7 +125,10 @@ impl RamfbState {
             stride = linesize;
         }
 
-        let fb_addr = match self.sys_mem.addr_cache_init(GuestAddress(addr)) {
+        let fb_addr = match self
+            .sys_mem
+            .addr_cache_init(GuestAddress(addr), AddressAttr::Ram)
+        {
             Some((hva, len)) => {
                 if len < u64::from(stride) {
                     error!("Insufficient contiguous memory length");

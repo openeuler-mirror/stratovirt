@@ -33,7 +33,8 @@ use crate::device::block::VirtioBlkConfig;
 use crate::VhostUser::message::VhostUserConfig;
 use crate::{virtio_has_feature, Queue, QueueConfig};
 use address_space::{
-    AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+    AddressAttr, AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType,
+    RegionIoEventFd,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use util::loop_context::{
@@ -234,7 +235,8 @@ impl VhostUserMemInfo {
 
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
-        let host_address = match fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        let host_address = match unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             Some(addr) => addr,
             None => bail!("Failed to get host address to add mem range for vhost user device"),
         };
@@ -287,7 +289,8 @@ impl VhostUserMemInfo {
             Some(fb) => fb,
         };
         let mut mem_regions = self.regions.lock().unwrap();
-        let host_address = match fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        let host_address = match unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             Some(addr) => addr,
             None => bail!("Failed to get host address to del mem range for vhost user device"),
         };

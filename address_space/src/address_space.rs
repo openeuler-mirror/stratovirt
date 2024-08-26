@@ -496,19 +496,27 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Return the host address according to the given `GuestAddress`.
+    /// Return the host address according to the given `GuestAddress`. It is dangerous to
+    /// read and write directly to hva. We strongly recommend that you use the read and
+    /// write interface provided by AddressSpace unless you know exactly what you need and
+    /// are sure it is safe.
     ///
     /// # Arguments
     ///
     /// * `addr` - Guest address.
-    pub fn get_host_address(&self, addr: GuestAddress) -> Option<u64> {
+    ///
+    /// # Safety
+    ///
+    /// Using this function, the caller needs to make it clear that hva is always in the ram
+    /// range of the virtual machine. And if you want to operate [hva,hva+size], the range
+    /// from hva to hva+size needs to be in the ram range.
+    pub unsafe fn get_host_address(&self, addr: GuestAddress, attr: AddressAttr) -> Option<u64> {
         let view = self.flat_view.load();
-
         view.find_flatrange(addr).and_then(|range| {
             let offset = addr.offset_from(range.addr_range.base);
             range
                 .owner
-                .get_host_address()
+                .get_host_address(attr)
                 .map(|host| host + range.offset_in_region + offset)
         })
     }
@@ -520,7 +528,7 @@ impl AddressSpace {
     /// * `addr` - Guest address.
     /// Return Error if the `addr` is not mapped.
     /// or return the HVA address and available mem length
-    pub fn addr_cache_init(&self, addr: GuestAddress) -> Option<(u64, u64)> {
+    pub fn addr_cache_init(&self, addr: GuestAddress, attr: AddressAttr) -> Option<(u64, u64)> {
         let view = self.flat_view.load();
 
         if let Some(flat_range) = view.find_flatrange(addr) {
@@ -530,12 +538,15 @@ impl AddressSpace {
             let region_remain = flat_range.owner.size() - region_offset;
             let fr_remain = flat_range.addr_range.size - fr_offset;
 
-            return flat_range.owner.get_host_address().map(|host| {
-                (
-                    host + region_offset,
-                    std::cmp::min(fr_remain, region_remain),
-                )
-            });
+            // SAFETY: addr and size is in ram region.
+            return unsafe {
+                flat_range.owner.get_host_address(attr).map(|host| {
+                    (
+                        host + region_offset,
+                        std::cmp::min(fr_remain, region_remain),
+                    )
+                })
+            };
         }
 
         None
@@ -589,7 +600,7 @@ impl AddressSpace {
         cache: &Option<RegionCache>,
     ) -> Option<(u64, u64)> {
         if cache.is_none() {
-            return self.addr_cache_init(addr);
+            return self.addr_cache_init(addr, AddressAttr::Ram);
         }
         let region_cache = cache.unwrap();
         if addr.0 >= region_cache.start && addr.0 < region_cache.end {
@@ -598,7 +609,7 @@ impl AddressSpace {
                 region_cache.end - addr.0,
             ))
         } else {
-            self.addr_cache_init(addr)
+            self.addr_cache_init(addr, AddressAttr::Ram)
         }
     }
 
@@ -616,13 +627,17 @@ impl AddressSpace {
         })
     }
 
-    pub fn get_region_cache(&self, addr: GuestAddress) -> Option<RegionCache> {
+    pub fn get_region_cache(&self, addr: GuestAddress, attr: AddressAttr) -> Option<RegionCache> {
         let view = &self.flat_view.load();
         if let Some(range) = view.find_flatrange(addr) {
             let reg_type = range.owner.region_type();
             let start = range.addr_range.base.0;
             let end = range.addr_range.end_addr().0;
-            let host_base = self.get_host_address(GuestAddress(start)).unwrap_or(0);
+            // SAFETY: the size is in region range, and the type will be checked in get_host_address.
+            let host_base = unsafe {
+                self.get_host_address(GuestAddress(start), attr)
+                    .unwrap_or(0)
+            };
             let cache = RegionCache {
                 reg_type,
                 host_base,
@@ -1271,11 +1286,11 @@ mod test {
         assert!(space.address_in_memory(GuestAddress(2900), 0));
 
         assert_eq!(
-            space.get_host_address(GuestAddress(500)),
+            unsafe { space.get_host_address(GuestAddress(500), AddressAttr::Ram) },
             Some(ram1.host_address() + 500)
         );
         assert_eq!(
-            space.get_host_address(GuestAddress(2500)),
+            unsafe { space.get_host_address(GuestAddress(2500), AddressAttr::Ram) },
             Some(ram2.host_address() + 500)
         );
 
@@ -1302,12 +1317,16 @@ mod test {
         assert!(space.address_in_memory(GuestAddress(2900), 0));
 
         assert_eq!(
-            space.get_host_address(GuestAddress(500)),
+            unsafe { space.get_host_address(GuestAddress(500), AddressAttr::Ram) },
             Some(ram1.host_address() + 500)
         );
-        assert!(space.get_host_address(GuestAddress(2400)).is_none());
+        assert!(unsafe {
+            space
+                .get_host_address(GuestAddress(2400), AddressAttr::Ram)
+                .is_none()
+        });
         assert_eq!(
-            space.get_host_address(GuestAddress(2500)),
+            unsafe { space.get_host_address(GuestAddress(2500), AddressAttr::Ram) },
             Some(ram2.host_address() + 500)
         );
     }
