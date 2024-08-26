@@ -17,7 +17,7 @@ use clap::Parser;
 use oci_spec::state::ContainerStatus;
 
 use crate::{
-    container::{Action, Container, Launcher, State},
+    container::{Action, Launcher, State},
     linux::LinuxContainer,
     utils::OzonecErr,
 };
@@ -33,10 +33,7 @@ impl Start {
         let container_state =
             State::load(root, &self.container_id).with_context(|| OzonecErr::LoadConState)?;
         let container = LinuxContainer::load_from_state(&container_state, &None)?;
-        let oci_status = container
-            .get_oci_state()
-            .with_context(|| OzonecErr::GetOciState)?
-            .status;
+        let oci_status = container.status()?;
 
         if oci_status != ContainerStatus::Created {
             bail!("Can't start a container with {:?} status", oci_status);

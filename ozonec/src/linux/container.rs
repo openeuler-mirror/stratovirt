@@ -16,7 +16,8 @@ use std::{
     io::Write,
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::{Path, PathBuf},
-    time::SystemTime,
+    thread::sleep,
+    time::{Duration, SystemTime},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -292,7 +293,7 @@ impl LinuxContainer {
         Ok(())
     }
 
-    fn container_status(&self) -> Result<ContainerStatus> {
+    fn get_container_status(&self) -> Result<ContainerStatus> {
         if self.pid == -1 {
             return Ok(ContainerStatus::Creating);
         }
@@ -321,6 +322,13 @@ impl LinuxContainer {
                 Ok(ContainerStatus::Running)
             }
         }
+    }
+
+    pub fn status(&self) -> Result<ContainerStatus> {
+        Ok(self
+            .get_oci_state()
+            .with_context(|| OzonecErr::GetOciState)?
+            .status)
     }
 
     fn ns_controller(&self) -> Result<NsController> {
@@ -599,7 +607,7 @@ impl Container for LinuxContainer {
     }
 
     fn get_oci_state(&self) -> Result<OciState> {
-        let status = self.container_status()?;
+        let status = self.get_container_status()?;
         let pid = if status != ContainerStatus::Stopped {
             self.pid
         } else {
@@ -730,6 +738,14 @@ impl Container for LinuxContainer {
     }
 
     fn kill(&self, sig: Signal) -> Result<()> {
+        let mut status = self.status()?;
+        if status == ContainerStatus::Stopped {
+            bail!("The container is already stopped");
+        }
+        if status == ContainerStatus::Creating {
+            bail!("The container has not been created");
+        }
+
         let pid = Pid::from_raw(self.pid);
         match kill(pid, None) {
             Err(errno) => {
@@ -738,6 +754,36 @@ impl Container for LinuxContainer {
                 }
             }
             Ok(_) => kill(pid, sig)?,
+        }
+
+        let mut _retry = 0;
+        status = self.status()?;
+        while status != ContainerStatus::Stopped {
+            sleep(Duration::from_millis(1));
+            if _retry > 3 {
+                bail!("The container is still not stopped.");
+            }
+            status = self.status()?;
+            _retry += 1;
+        }
+        Ok(())
+    }
+
+    fn delete(&self, state: &State, force: bool) -> Result<()> {
+        match self.status()? {
+            ContainerStatus::Stopped => state.remove_dir()?,
+            _ => {
+                if force {
+                    self.kill(Signal::SIGKILL)
+                        .with_context(|| "Failed to kill the container by force")?;
+                    state.remove_dir()?;
+                } else {
+                    bail!(
+                        "Failed to delete container {} which is not stopped",
+                        &state.id
+                    );
+                }
+            }
         }
         Ok(())
     }

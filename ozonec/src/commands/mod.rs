@@ -11,11 +11,13 @@
 // See the Mulan PSL v2 for more details.
 
 mod create;
+mod delete;
 mod exec;
 mod kill;
 mod start;
 
 pub use create::Create;
+pub use delete::Delete;
 pub use exec::Exec;
 pub use kill::Kill;
 pub use start::Start;
