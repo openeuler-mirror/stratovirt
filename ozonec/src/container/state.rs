@@ -11,13 +11,13 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
-    fs::{DirBuilder, OpenOptions},
+    fs::{DirBuilder, File, OpenOptions},
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     time::SystemTime,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use libc::pid_t;
 use nix::sys::stat::Mode;
@@ -63,10 +63,6 @@ impl State {
         }
     }
 
-    fn file_path(root: &Path, id: &str) -> PathBuf {
-        root.join(id).join("state.json")
-    }
-
     pub fn save(&self) -> Result<()> {
         if !&self.root.exists() {
             DirBuilder::new()
@@ -97,5 +93,21 @@ impl State {
                 }
             }
         }
+    }
+
+    pub fn load(root: &Path, id: &str) -> Result<Self> {
+        let path = Self::file_path(root, id);
+        if !path.exists() {
+            bail!("Container {} doesn't exist", id);
+        }
+
+        let state_file = File::open(&path)
+            .with_context(|| OzonecErr::OpenFile(path.to_string_lossy().to_string()))?;
+        let state = serde_json::from_reader(&state_file)?;
+        Ok(state)
+    }
+
+    fn file_path(root: &Path, id: &str) -> PathBuf {
+        root.join(id).join("state.json")
     }
 }
