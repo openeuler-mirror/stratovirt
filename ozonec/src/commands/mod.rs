@@ -12,8 +12,10 @@
 
 mod create;
 mod exec;
+mod kill;
 mod start;
 
 pub use create::Create;
 pub use exec::Exec;
+pub use kill::Kill;
 pub use start::Start;

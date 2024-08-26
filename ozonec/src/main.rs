@@ -23,7 +23,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{crate_description, Args, Parser, Subcommand};
-use commands::{Exec, Start};
+use commands::{Exec, Kill, Start};
 use log::info;
 use nix::unistd::geteuid;
 
@@ -51,6 +51,7 @@ struct GlobalOpts {
 enum StandardCmd {
     Create(Create),
     Start(Start),
+    Kill(Kill),
 }
 
 // Extended commands not documented in [OCI Command Line Interface].
@@ -93,6 +94,10 @@ fn cmd_run(command: Command, root: &Path) -> Result<()> {
             StandardCmd::Start(start) => {
                 info!("Run command: {:?}", start);
                 start.run(root)?
+            }
+            StandardCmd::Kill(kill) => {
+                info!("Run command: {:?}", kill);
+                kill.run(root)?
             }
         },
         Command::Extend(cmd) => match cmd {

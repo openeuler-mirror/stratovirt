@@ -26,7 +26,7 @@ use nix::{
     errno::Errno,
     mount::MsFlags,
     sys::{
-        signal::Signal,
+        signal::{kill, Signal},
         statfs::statfs,
         wait::{waitpid, WaitStatus},
     },
@@ -729,7 +729,16 @@ impl Container for LinuxContainer {
         Ok(())
     }
 
-    fn kill(&mut self, sig: Signal) -> Result<()> {
+    fn kill(&self, sig: Signal) -> Result<()> {
+        let pid = Pid::from_raw(self.pid);
+        match kill(pid, None) {
+            Err(errno) => {
+                if errno != Errno::ESRCH {
+                    bail!("Failed to kill process {}: {:?}", pid, errno);
+                }
+            }
+            Ok(_) => kill(pid, sig)?,
+        }
         Ok(())
     }
 }
