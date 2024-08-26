@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
-use crate::{AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
+use crate::{AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use migration::{
     error::MigrationError, DeviceStateDesc, FieldDesc, MemBlock, MigrationHook, StateTransfer,
 };
@@ -168,14 +168,14 @@ impl MigrationHook for AddressSpace {
     }
 
     fn send_memory(&self, fd: &mut dyn Write, range: MemBlock) -> Result<()> {
-        self.read(fd, GuestAddress(range.gpa), range.len)
+        self.read(fd, GuestAddress(range.gpa), range.len, AddressAttr::Ram)
             .map_err(|e| MigrationError::SendVmMemoryErr(e.to_string()))?;
 
         Ok(())
     }
 
     fn recv_memory(&self, fd: &mut dyn Read, range: MemBlock) -> Result<()> {
-        self.write(fd, GuestAddress(range.gpa), range.len)
+        self.write(fd, GuestAddress(range.gpa), range.len, AddressAttr::Ram)
             .map_err(|e| MigrationError::RecvVmMemoryErr(e.to_string()))?;
 
         Ok(())

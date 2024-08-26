@@ -26,7 +26,7 @@ use crate::{
     Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
     VIRTIO_F_ACCESS_PLATFORM, VIRTIO_TYPE_VSOCK,
 };
-use address_space::AddressSpace;
+use address_space::{AddressAttr, AddressSpace};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
@@ -168,6 +168,7 @@ impl Vsock {
                 .write_object(
                     &VIRTIO_VSOCK_EVENT_TRANSPORT_RESET,
                     element.in_iovec[0].addr,
+                    AddressAttr::Ram,
                 )
                 .with_context(|| "Failed to write buf for virtio vsock event")?;
             event_queue_locked

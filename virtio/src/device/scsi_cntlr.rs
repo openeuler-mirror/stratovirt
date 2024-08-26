@@ -27,7 +27,7 @@ use crate::{
     VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
 };
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use block_backend::BlockIoErrorCallback;
 use devices::ScsiBus::{
     ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, CHECK_CONDITION,
@@ -535,7 +535,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
 
     fn complete(&self) -> Result<()> {
         self.mem_space
-            .write_object(&self.resp, self.resp_addr)
+            .write_object(&self.resp, self.resp_addr, AddressAttr::Ram)
             .with_context(|| "Failed to write the scsi response")?;
 
         let mut queue_lock = self.queue.lock().unwrap();
@@ -621,7 +621,7 @@ impl ScsiCtrlQueueHandler {
                 .with_context(|| "Error request in ctrl queue. Empty dataout buf!")?;
             let ctrl_type = self
                 .mem_space
-                .read_object::<u32>(ctrl_desc.addr)
+                .read_object::<u32>(ctrl_desc.addr, AddressAttr::Ram)
                 .with_context(|| "Failed to get control queue descriptor")?;
 
             match ctrl_type {

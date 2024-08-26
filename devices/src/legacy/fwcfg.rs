@@ -28,7 +28,7 @@ use acpi::{
 use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::{gen_base_func, offset_of};
@@ -243,12 +243,14 @@ fn write_dma_memory(
     mut buf: &[u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.write(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .write(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
 
     Ok(())
 }
@@ -260,12 +262,14 @@ fn read_dma_memory(
     mut buf: &mut [u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.read(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .read(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
     Ok(())
 }
 

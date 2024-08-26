@@ -179,12 +179,12 @@ impl KvmMemoryListener {
             return Ok(());
         }
 
-        if flat_range.owner.region_type() != RegionType::Ram
-            && flat_range.owner.region_type() != RegionType::RomDevice
-            && flat_range.owner.region_type() != RegionType::RamDevice
-        {
-            return Ok(());
-        }
+        let attr = match flat_range.owner.region_type() {
+            address_space::RegionType::Ram => AddressAttr::Ram,
+            address_space::RegionType::RamDevice => AddressAttr::RamDevice,
+            address_space::RegionType::RomDevice => AddressAttr::RomDevice,
+            _ => return Ok(()),
+        };
 
         let (aligned_addr, aligned_size) =
             Self::align_mem_slot(flat_range.addr_range, host_page_size())

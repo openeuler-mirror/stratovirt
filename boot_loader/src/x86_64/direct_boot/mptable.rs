@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use crate::error::BootLoaderError;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 use util::checksum::obj_checksum;
 
@@ -267,7 +267,7 @@ impl LocalInterruptEntry {
 macro_rules! write_entry {
     ( $d:expr, $t:ty, $m:expr, $o:expr, $s:expr ) => {
         let entry = $d;
-        $m.write_object(&entry, GuestAddress($o))?;
+        $m.write_object(&entry, GuestAddress($o), AddressAttr::Ram)?;
         $o += std::mem::size_of::<$t>() as u64;
         $s = $s.wrapping_add(obj_checksum(&entry));
     };
@@ -294,6 +294,7 @@ pub fn setup_isa_mptable(
     sys_mem.write_object(
         &FloatingPointer::new(header as u32),
         GuestAddress(start_addr),
+        AddressAttr::Ram,
     )?;
 
     let mut offset = header + std::mem::size_of::<ConfigTableHeader>() as u64;
@@ -345,6 +346,7 @@ pub fn setup_isa_mptable(
     sys_mem.write_object(
         &ConfigTableHeader::new((offset - header) as u16, sum, lapic_addr),
         GuestAddress(header),
+        AddressAttr::Ram,
     )?;
 
     Ok(())

@@ -31,7 +31,8 @@ use crate::{
     VIRTIO_TYPE_BALLOON,
 };
 use address_space::{
-    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+    AddressAttr, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+    RegionType,
 };
 use machine_manager::{
     config::{get_pci_df, parse_bool, DEFAULT_VIRTQUEUE_SIZE},
@@ -161,7 +162,10 @@ fn iov_to_buf<T: ByteCode>(
     }
 
     // GPAChecked: the iov has been checked in pop_avail().
-    match address_space.read_object::<T>(GuestAddress(iov.iov_base.raw_value() + offset)) {
+    match address_space.read_object::<T>(
+        GuestAddress(iov.iov_base.raw_value() + offset),
+        AddressAttr::Ram,
+    ) {
         Ok(dat) => Some(dat),
         Err(ref e) => {
             error!("Read virtioqueue failed: {:?}", e);

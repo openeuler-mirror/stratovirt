@@ -43,7 +43,7 @@ use crate::{
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
     VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
 };
-use address_space::AddressSpace;
+use address_space::{AddressAttr, AddressSpace};
 use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use machine_manager::state_query::{
@@ -616,7 +616,8 @@ impl NetCtrlHandler {
                 .in_iovec
                 .first()
                 .with_context(|| "Failed to get device writable iovec")?;
-            self.mem_space.write_object::<u8>(&ack, status.addr)?;
+            self.mem_space
+                .write_object::<u8>(&ack, status.addr, AddressAttr::Ram)?;
 
             locked_queue
                 .vring

@@ -29,7 +29,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::info;
 
 use super::DeviceTypeOperation;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use ui::{
     console::{
         console_close, console_init, display_cursor_define, display_graphic_update,
@@ -196,8 +196,12 @@ impl DeviceTypeOperation for DemoGpu {
         let mem_addr = LittleEndian::read_u64(data);
         // Event Type.
         let mut buf: Vec<u8> = vec![];
-        self.sys_mem
-            .read(&mut buf, address_space::GuestAddress(mem_addr), 21)?;
+        self.sys_mem.read(
+            &mut buf,
+            address_space::GuestAddress(mem_addr),
+            21,
+            AddressAttr::Ram,
+        )?;
         let event_type = GpuEvent::from(buf[0]);
         let x = LittleEndian::read_u32(&buf[1..5]);
         let y = LittleEndian::read_u32(&buf[5..9]);

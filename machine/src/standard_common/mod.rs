@@ -46,7 +46,8 @@ use acpi::{
     ACPI_TABLE_LOADER_FILE, TABLE_CHECKSUM_OFFSET,
 };
 use address_space::{
-    AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
+    AddressAttr, AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd,
+    RegionOps,
 };
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 #[cfg(target_arch = "x86_64")]
@@ -2040,7 +2041,7 @@ impl DeviceInterface for StdMachine {
         match self
             .machine_base()
             .sys_mem
-            .read_object::<u32>(GuestAddress(gpa))
+            .read_object::<u32>(GuestAddress(gpa), AddressAttr::Ram)
         {
             Ok(val) => {
                 Response::create_response(serde_json::to_value(format!("{:X}", val)).unwrap(), None)
