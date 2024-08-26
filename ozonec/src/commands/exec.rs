@@ -18,7 +18,7 @@ use clap::{builder::NonEmptyStringValueParser, Parser};
 use oci_spec::state::ContainerStatus;
 
 use crate::{
-    container::{Action, Container, Launcher, State},
+    container::{Action, Launcher, State},
     linux::LinuxContainer,
     utils::OzonecErr,
 };
@@ -92,12 +92,9 @@ impl Exec {
         }
 
         let container = LinuxContainer::load_from_state(&container_state, &self.console_socket)?;
-        let oci_status = container
-            .get_oci_state()
-            .with_context(|| OzonecErr::GetOciState)?
-            .status;
-        if oci_status != ContainerStatus::Created && oci_status != ContainerStatus::Running {
-            bail!("Can't exec in container with {:?} state", oci_status);
+        let status = container.status()?;
+        if status != ContainerStatus::Created && status != ContainerStatus::Running {
+            bail!("Can't exec in container with {:?} state", status);
         }
 
         Ok(Launcher::new(

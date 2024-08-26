@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
-    fs::{DirBuilder, File, OpenOptions},
+    fs::{self, DirBuilder, File, OpenOptions},
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     time::SystemTime,
@@ -105,6 +105,12 @@ impl State {
             .with_context(|| OzonecErr::OpenFile(path.to_string_lossy().to_string()))?;
         let state = serde_json::from_reader(&state_file)?;
         Ok(state)
+    }
+
+    pub fn remove_dir(&self) -> Result<()> {
+        let state_dir = &self.root.join(&self.id);
+        fs::remove_dir_all(state_dir).with_context(|| "Failed to remove state directory")?;
+        Ok(())
     }
 
     fn file_path(root: &Path, id: &str) -> PathBuf {

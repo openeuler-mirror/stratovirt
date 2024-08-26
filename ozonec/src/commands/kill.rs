@@ -10,12 +10,11 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{path::Path, str::FromStr, thread::sleep, time::Duration};
+use std::{path::Path, str::FromStr};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{builder::NonEmptyStringValueParser, Parser};
 use nix::sys::signal::Signal;
-use oci_spec::state::ContainerStatus;
 
 use crate::{
     container::{Container, State},
@@ -37,24 +36,8 @@ impl Kill {
         let container_state = State::load(root, &self.container_id)?;
         let signal = parse_signal(&self.signal).with_context(|| "Invalid signal")?;
         let container = LinuxContainer::load_from_state(&container_state, &None)?;
-        let mut status = container.get_oci_state()?.status;
-
-        if status == ContainerStatus::Stopped {
-            bail!("The container is alread stopped");
-        }
 
         container.kill(signal)?;
-
-        let mut _retry = 0;
-        status = container.get_oci_state()?.status;
-        while status != ContainerStatus::Stopped {
-            sleep(Duration::from_millis(1));
-            if _retry > 3 {
-                bail!("The container is still not stopped.");
-            }
-            status = container.get_oci_state()?.status;
-            _retry += 1;
-        }
         Ok(())
     }
 }

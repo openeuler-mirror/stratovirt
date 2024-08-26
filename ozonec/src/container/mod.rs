@@ -42,4 +42,6 @@ pub trait Container {
     fn exec(&mut self, process: &mut Process) -> Result<()>;
 
     fn kill(&self, sig: Signal) -> Result<()>;
+
+    fn delete(&self, state: &State, force: bool) -> Result<()>;
 }

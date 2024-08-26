@@ -23,7 +23,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{crate_description, Args, Parser, Subcommand};
-use commands::{Exec, Kill, Start};
+use commands::{Delete, Exec, Kill, Start};
 use log::info;
 use nix::unistd::geteuid;
 
@@ -52,6 +52,7 @@ enum StandardCmd {
     Create(Create),
     Start(Start),
     Kill(Kill),
+    Delete(Delete),
 }
 
 // Extended commands not documented in [OCI Command Line Interface].
@@ -98,6 +99,10 @@ fn cmd_run(command: Command, root: &Path) -> Result<()> {
             StandardCmd::Kill(kill) => {
                 info!("Run command: {:?}", kill);
                 kill.run(root)?
+            }
+            StandardCmd::Delete(delete) => {
+                info!("Run command: {:?}", delete);
+                delete.run(root)?
             }
         },
         Command::Extend(cmd) => match cmd {
