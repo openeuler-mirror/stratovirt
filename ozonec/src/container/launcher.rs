@@ -10,13 +10,32 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+// Linux container create flow:
+//      ozonec create       |       State 1 process     |       Stage 2 process     |       ozonec start
+//                          |                           |                           |
+//      -> clone3 ->        |                           |                           |
+//  <- mapping request <-   |                           |                           |
+//  write uid/gid mappings  |                           |                           |
+//  -> send mapping done -> |                           |                           |
+//                          |       set uid/gid         |                           |
+//                          |       set pid namespace   |                           |
+//  <- send stage 2 pid     |                           |        -> clone3 ->       |
+//                          |           exit            |     set rest namespaces   |
+//                          |                           |      pivot_root/chroot    |
+//                          |                           |       set capabilities    |
+//                          |                           |       set seccomp         |
+//          <             send ready          <-        |                           |
+//                          |                           |   wait for start signal   |
+//      update pid file     |                           |                           |     ozonec start $id
+//          exit            |                           |                           |   <- send start signal
+//                          |                           |         execvp cmd        |           exit
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::{linux::Process, utils::OzonecErr};
-
 use super::{state::State, Container};
+use crate::{linux::Process, utils::OzonecErr};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
