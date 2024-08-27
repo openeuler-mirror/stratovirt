@@ -24,7 +24,7 @@ use std::sync::{
     Arc, Mutex, RwLock,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use log::{error, info};
 use once_cell::sync::OnceCell;
 use vmm_sys_util::epoll::EventSet;
@@ -213,7 +213,8 @@ impl OhUiServer {
         self.msg_handler.handle_msg(self.token_id.clone())
     }
 
-    fn raw_update_dirty_area(
+    // check dirty area data before call it.
+    unsafe fn raw_update_dirty_area(
         &self,
         surface_data: *mut u32,
         stride: i32,
@@ -224,7 +225,10 @@ impl OhUiServer {
         let (x, y) = pos;
         let (w, h) = size;
 
-        if self.framebuffer == 0 || (!force_copy && *self.passthru.get_or_init(|| false)) {
+        if self.framebuffer == 0
+            || surface_data.is_null()
+            || (!force_copy && *self.passthru.get_or_init(|| false))
+        {
             return;
         }
 
@@ -293,13 +297,16 @@ impl DisplayChangeListenerOperations for OhUiServer {
         locked_surface.height = surface.height();
         drop(locked_surface);
         let locked_surface = self.surface.read().unwrap();
-        self.raw_update_dirty_area(
-            get_image_data(locked_surface.guest_image),
-            locked_surface.stride,
-            (0, 0),
-            (locked_surface.width, locked_surface.height),
-            true,
-        );
+        // SAFETY: Dirty area does not exceed surface buffer.
+        unsafe {
+            self.raw_update_dirty_area(
+                get_image_data(locked_surface.guest_image),
+                locked_surface.stride,
+                (0, 0),
+                (locked_surface.width, locked_surface.height),
+                true,
+            )
+        };
 
         if !self.connected() {
             return Ok(());
@@ -325,13 +332,24 @@ impl DisplayChangeListenerOperations for OhUiServer {
             return Ok(());
         }
 
-        self.raw_update_dirty_area(
-            get_image_data(locked_surface.guest_image),
-            locked_surface.stride,
-            (x, y),
-            (w, h),
-            false,
-        );
+        if locked_surface.width < x
+            || locked_surface.height < y
+            || locked_surface.width < x.saturating_add(w)
+            || locked_surface.height < y.saturating_add(h)
+        {
+            bail!("dpy_image_update: invalid dirty area");
+        }
+
+        // SAFETY: We checked dirty area data before.
+        unsafe {
+            self.raw_update_dirty_area(
+                get_image_data(locked_surface.guest_image),
+                locked_surface.stride,
+                (x, y),
+                (w, h),
+                false,
+            )
+        };
 
         self.msg_handler
             .handle_dirty_area(x as u32, y as u32, w as u32, h as u32);
@@ -346,13 +364,13 @@ impl DisplayChangeListenerOperations for OhUiServer {
         }
 
         let len = cursor.width * cursor.height * size_of::<i32>() as u32;
-        if len > CURSOR_SIZE as u32 {
+        if len > CURSOR_SIZE as u32 || len > cursor.data.len().try_into()? {
             error!("Too large cursor length {}.", len);
             // No need to return Err for this situation is not fatal
             return Ok(());
         }
 
-        // SAFETY: len is checked before copying,it's safe to do this.
+        // SAFETY: len is checked before copying, it's safe to do this.
         unsafe {
             ptr::copy_nonoverlapping(
                 cursor.data.as_ptr(),

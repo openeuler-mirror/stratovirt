@@ -340,6 +340,10 @@ impl CameraBackend for OhCameraBackend {
             .with_context(|| "Invalid camid in callback table")?
             .get_buffer();
 
+        if src.is_none() || src.unwrap() == 0 {
+            bail!("Invalid frame src")
+        }
+
         if src_len == 0_u64 {
             bail!("Invalid frame src_len {}", src_len);
         }
