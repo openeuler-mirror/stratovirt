@@ -12,7 +12,7 @@
 
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "linux")]
@@ -87,9 +87,7 @@ impl RuntimeConfig {
     pub fn from_file(path: &String) -> Result<RuntimeConfig> {
         let file = File::open(Path::new(path)).with_context(|| "Failed to open config.json")?;
         let reader = BufReader::new(file);
-        let config =
-            serde_json::from_reader(reader).with_context(|| "Failed to load config.json")?;
-        Ok(config)
+        serde_json::from_reader(reader).map_err(|e| anyhow!("Failed to load config.json: {:?}", e))
     }
 }
 
