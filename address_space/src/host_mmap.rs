@@ -30,7 +30,7 @@ use util::{
     unix::{do_mmap, host_page_size},
 };
 
-const MAX_PREALLOC_THREAD: u8 = 16;
+const MAX_PREALLOC_THREAD: i64 = 16;
 /// Verify existing pages in the mapping.
 const MPOL_MF_STRICT: u32 = 1;
 /// Move pages owned by this process to conform to mapping.
@@ -171,7 +171,8 @@ fn max_nr_threads(nr_vcpus: u8) -> u8 {
         return 1;
     }
 
-    min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus)
+    // MAX_PREALLOC_THREAD's value(16) is less than 255.
+    min(min(nr_host_cpu, MAX_PREALLOC_THREAD) as u8, nr_vcpus)
 }
 
 /// Touch pages to pre-alloc memory for VM.
