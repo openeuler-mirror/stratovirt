@@ -10,12 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::fd::AsRawFd;
+use std::fs::File;
+use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::ptr;
 
 use anyhow::{bail, Context as anyhowContext, Result};
 use libusb1_sys::constants::LIBUSB_OPTION_NO_DEVICE_DISCOVERY;
-use log::{error, info};
+use log::info;
 use rusb::{Context, DeviceHandle, UsbContext};
 
 use super::host_usblib::set_option;
@@ -23,53 +24,48 @@ use super::{check_device_valid, UsbHostConfig};
 use util::ohos_binding::usb::*;
 
 pub struct OhUsbDev {
-    dev: OhusbDevice,
+    #[allow(dead_code)]
     lib: OhUsb,
-}
-
-impl Drop for OhUsbDev {
-    fn drop(&mut self) {
-        if let Err(e) = self.lib.close_device(ptr::addr_of_mut!(self.dev)) {
-            error!("Failed to close usb device with error {:?}", e)
-        }
-    }
+    dev_file: File,
 }
 
 impl OhUsbDev {
-    pub fn new() -> Result<Self> {
+    pub fn new(bus_num: u8, dev_addr: u8) -> Result<Self> {
         // In combination with libusb_wrap_sys_device(), in order to access a device directly without prior device scanning on ohos.
         set_option(LIBUSB_OPTION_NO_DEVICE_DISCOVERY)?;
 
-        Ok(Self {
-            dev: OhusbDevice {
-                busNum: u8::MAX,
-                devAddr: u8::MAX,
-                fd: -1,
-            },
-            lib: OhUsb::new()?,
-        })
-    }
+        let mut ohusb_dev = OhusbDevice {
+            busNum: bus_num,
+            devAddr: dev_addr,
+            fd: -1,
+        };
 
-    pub fn open(&mut self, cfg: UsbHostConfig, ctx: Context) -> Result<DeviceHandle<Context>> {
-        self.dev.busNum = cfg.hostbus;
-        self.dev.devAddr = cfg.hostaddr;
-
-        match self.lib.open_device(ptr::addr_of_mut!(self.dev))? {
+        let lib = OhUsb::new()?;
+        match lib.open_device(ptr::addr_of_mut!(ohusb_dev))? {
             0 => {
-                if self.dev.fd < 0 {
+                if ohusb_dev.fd < 0 {
                     bail!(
                         "Failed to open usb device due to invalid fd {}",
-                        self.dev.fd
+                        ohusb_dev.fd
                     );
                 }
             }
             _ => bail!("Failed to open usb device"),
         }
-        info!("OH USB: open_device: returned fd is {}", self.dev.fd);
+        info!("OH USB: open_device: returned fd is {}", ohusb_dev.fd);
 
-        // SAFETY: fd is valid.
+        Ok(Self {
+            lib,
+            // SAFETY: fd is passed from OH USB framework and we have checked the function return value.
+            // Now let's save it to rust File struct.
+            dev_file: unsafe { File::from_raw_fd(ohusb_dev.fd) },
+        })
+    }
+
+    pub fn open(&mut self, cfg: UsbHostConfig, ctx: Context) -> Result<DeviceHandle<Context>> {
+        // SAFETY: The validation of fd is guaranteed by new function.
         let handle = unsafe {
-            ctx.open_device_with_fd(self.dev.fd.as_raw_fd())
+            ctx.open_device_with_fd(self.dev_file.as_raw_fd())
                 .with_context(|| format!("os last error: {:?}", std::io::Error::last_os_error()))?
         };
 

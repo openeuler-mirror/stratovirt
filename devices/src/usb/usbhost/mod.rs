@@ -422,7 +422,7 @@ unsafe impl Send for UsbHost {}
 impl UsbHost {
     pub fn new(config: UsbHostConfig) -> Result<Self> {
         #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
-        let oh_dev = OhUsbDev::new()?;
+        let oh_dev = OhUsbDev::new(config.hostbus, config.hostaddr)?;
 
         let mut context = Context::new()?;
         context.set_log_level(rusb::LogLevel::None);
@@ -671,7 +671,15 @@ impl UsbHost {
 
         self.ep_update();
 
-        self.base.speed = self.libdev.as_ref().unwrap().speed() as u32 - 1;
+        match self.libdev.as_ref().unwrap().speed() as u32 {
+            0 => {
+                return Err(anyhow!(
+                    "Failed to realize usb host device due to unknown device speed."
+                ))
+            }
+            speed => self.base.speed = speed - 1,
+        };
+
         trace::usb_host_open_success(self.config.hostbus, self.config.hostaddr);
 
         Ok(())
@@ -844,7 +852,7 @@ impl UsbHost {
         drop(locked_requests);
 
         // Max counts of uncompleted request to be handled.
-        let mut limit = 100;
+        let mut limit: i32 = 100;
         loop {
             if self.requests.lock().unwrap().len == 0 {
                 return Ok(());
@@ -1030,7 +1038,6 @@ impl EventNotifierHelper for UsbHost {
         let cloned_usbhost = usbhost.clone();
         let mut notifiers = Vec::new();
 
-        let poll = get_libusb_pollfds(usbhost);
         let timeout = Some(Duration::new(0, 0));
         let handler: Rc<NotifierCallback> = Rc::new(move |_, _fd: RawFd| {
             cloned_usbhost
@@ -1041,8 +1048,10 @@ impl EventNotifierHelper for UsbHost {
                 .unwrap_or_else(|e| error!("Failed to handle event: {:?}", e));
             None
         });
-
-        set_pollfd_notifiers(poll, &mut notifiers, handler);
+        // SAFETY: The usbhost is guaranteed to be valid.
+        if let Ok(pollfds) = unsafe { PollFds::new(usbhost) } {
+            set_pollfd_notifiers(pollfds, &mut notifiers, handler);
+        }
 
         notifiers
     }

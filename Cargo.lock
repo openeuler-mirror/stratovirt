@@ -936,9 +936,9 @@ dependencies = [
 
 [[package]]
 name = "libusb1-sys"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9d0e2afce4245f2c9a418511e5af8718bcaf2fa408aefb259504d1a9cb25f27"
+checksum = "17f6bace2f39082e9787c851afce469e7b2fe0f1cc64bbc68ca96653b63d8f17"
 dependencies = [
  "cc",
  "libc",
