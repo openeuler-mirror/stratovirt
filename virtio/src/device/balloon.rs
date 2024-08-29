@@ -723,10 +723,9 @@ impl BalloonIoHandler {
                 let mut balloon_dev = dev.lock().unwrap();
                 for iov in req.iovec.iter() {
                     if let Some(stat) = iov_to_buf::<BalloonStat>(&self.mem_space, iov, 0) {
-                        let ram_size = (balloon_dev.mem_info.lock().unwrap().get_ram_size()
-                            >> VIRTIO_BALLOON_PFN_SHIFT)
-                            as u32;
-                        balloon_dev.set_num_pages(cmp::min(stat._val as u32, ram_size));
+                        let ram_size = balloon_dev.mem_info.lock().unwrap().get_ram_size()
+                            >> VIRTIO_BALLOON_PFN_SHIFT;
+                        balloon_dev.set_num_pages(cmp::min(stat._val, ram_size) as u32);
                     }
                 }
                 balloon_dev
@@ -1037,11 +1036,11 @@ impl Balloon {
         if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.lock().unwrap().has_huge_page() {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
         }
-        let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
+        let target = size >> VIRTIO_BALLOON_PFN_SHIFT;
         let address_space_ram_size =
-            (self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
+            self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT;
         let vm_target = cmp::min(target, address_space_ram_size);
-        self.num_pages = address_space_ram_size - vm_target;
+        self.num_pages = (address_space_ram_size - vm_target) as u32;
         self.signal_config_change().with_context(|| {
             "Failed to notify about configuration change after setting balloon memory"
         })?;
