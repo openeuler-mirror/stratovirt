@@ -41,8 +41,10 @@ pub struct Rlimits {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct User {
     /// User ID in the container namespace.
+    #[serde(default)]
     pub uid: u32,
     /// Group ID in the container namespace.
+    #[serde(default)]
     pub gid: u32,
     /// [umask][umask_2] of the user.
     #[serde(skip_serializing_if = "Option::is_none")]
