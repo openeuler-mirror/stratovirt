@@ -130,6 +130,7 @@ fn default_device_type() -> String {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CgroupDevice {
     /// Whether the entry is allowed or denied.
+    #[serde(default)]
     pub allow: bool,
     /// Type of device.
     #[serde(default = "default_device_type", rename = "type")]
@@ -429,8 +430,10 @@ pub enum SeccompOp {
 /// The specific syscall in seccomp.
 pub struct SeccompSyscallArg {
     /// Index for syscall arguments.
+    #[serde(default)]
     pub index: usize,
     /// Value for syscall arguments.
+    #[serde(default)]
     pub value: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Value for syscall arguments.
