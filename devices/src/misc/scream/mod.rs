@@ -449,7 +449,15 @@ impl StreamData {
             match recv_chunks_cnt.cmp(&0) {
                 std::cmp::Ordering::Less => thread::sleep(time::Duration::from_millis(100)),
                 std::cmp::Ordering::Greater => {
-                    self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
+                    self.chunk_idx = match (self.chunk_idx + recv_chunks_cnt as u16)
+                        .checked_rem(capt.max_chunks)
+                    {
+                        Some(idx) => idx,
+                        None => {
+                            warn!("Scream: capture header might be cleared by driver");
+                            return;
+                        }
+                    };
                     // Make sure chunk_idx write does not bypass audio chunk write.
                     fence(Ordering::SeqCst);
                     capt.chunk_idx = self.chunk_idx;
