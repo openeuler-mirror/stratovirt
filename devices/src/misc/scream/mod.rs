@@ -435,6 +435,10 @@ impl StreamData {
         while capt.is_started != 0 {
             cond.wait_if_paused(interface.clone());
 
+            if capt.fmt.fmt_generation != self.fmt.fmt_generation {
+                return;
+            }
+
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
                 return;
             }
@@ -449,7 +453,15 @@ impl StreamData {
             match recv_chunks_cnt.cmp(&0) {
                 std::cmp::Ordering::Less => thread::sleep(time::Duration::from_millis(100)),
                 std::cmp::Ordering::Greater => {
-                    self.chunk_idx = (self.chunk_idx + recv_chunks_cnt as u16) % capt.max_chunks;
+                    self.chunk_idx = match (self.chunk_idx + recv_chunks_cnt as u16)
+                        .checked_rem(capt.max_chunks)
+                    {
+                        Some(idx) => idx,
+                        None => {
+                            warn!("Scream: capture header might be cleared by driver");
+                            return;
+                        }
+                    };
                     // Make sure chunk_idx write does not bypass audio chunk write.
                     fence(Ordering::SeqCst);
                     capt.chunk_idx = self.chunk_idx;
@@ -696,6 +708,15 @@ impl Scream {
         play_cond: Arc<ScreamCond>,
         capt_cond: Arc<ScreamCond>,
     ) {
+        let cloned_play_cond = play_cond.clone();
+        let cloned_capt_cond = capt_cond.clone();
+        let cb = Box::new(move || {
+            info!("Scream: device is reset.");
+            cloned_play_cond.set_stream_pause(true);
+            cloned_capt_cond.set_stream_pause(true);
+        });
+        ivshmem.lock().unwrap().register_reset_callback(cb);
+
         let interface = self.create_audio_extension(ivshmem.clone());
         let interface2 = interface.clone();
         let bar0_write = Arc::new(move |data: &[u8], offset: u64| {
