@@ -57,6 +57,7 @@ pub struct Ivshmem {
     ram_mem_region: Region,
     vector_nr: u32,
     bar0_ops: Arc<RwLock<Bar0Ops>>,
+    reset_cb: Option<Box<dyn Fn() + Sync + Send>>,
 }
 
 impl Ivshmem {
@@ -77,6 +78,7 @@ impl Ivshmem {
             ram_mem_region,
             vector_nr,
             bar0_ops: Arc::new(RwLock::new(Bar0Ops::default())),
+            reset_cb: None,
         }
     }
 
@@ -168,6 +170,10 @@ impl Ivshmem {
         self.bar0_ops.write().unwrap().write = Some(bar0_ops.0);
         self.bar0_ops.write().unwrap().read = Some(bar0_ops.1);
     }
+
+    pub fn register_reset_callback(&mut self, cb: Box<dyn Fn() + Sync + Send>) {
+        self.reset_cb = Some(cb);
+    }
 }
 
 impl Device for Ivshmem {
@@ -204,6 +210,13 @@ impl Device for Ivshmem {
         let dev = Arc::new(Mutex::new(self));
         locked_bus.attach_child(u64::from(dev.lock().unwrap().base.devfn), dev.clone())?;
         Ok(dev)
+    }
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        if let Some(cb) = &self.reset_cb {
+            cb();
+        }
+        Ok(())
     }
 }
 
