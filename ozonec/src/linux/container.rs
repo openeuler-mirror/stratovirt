@@ -14,7 +14,7 @@ use std::{
     collections::HashMap,
     fs::{self, canonicalize, create_dir_all, OpenOptions},
     io::Write,
-    os::{fd::AsRawFd, unix::net::UnixStream},
+    os::unix::{io::AsRawFd, net::UnixStream},
     path::{Path, PathBuf},
     thread::sleep,
     time::{Duration, SystemTime},
@@ -33,7 +33,6 @@ use nix::{
     },
     unistd::{self, chown, getegid, geteuid, sethostname, unlink, Gid, Pid, Uid},
 };
-use prctl::set_dumpable;
 use procfs::process::ProcState;
 
 use super::{
@@ -45,7 +44,7 @@ use super::{
 use crate::{
     container::{Container, State},
     linux::{rootfs::Rootfs, seccomp::set_seccomp},
-    utils::{Channel, Message, OzonecErr},
+    utils::{prctl, Channel, Message, OzonecErr},
 };
 use oci_spec::{
     linux::{Device as OciDevice, IdMapping, NamespaceType},
@@ -358,14 +357,15 @@ impl LinuxContainer {
             if ns.path.is_none() {
                 // Child process needs to be dumpable, otherwise the parent process is not
                 // allowed to write the uid/gid mappings.
-                set_dumpable(true).map_err(|e| anyhow!("Failed to set process dumpable: {e}"))?;
+                prctl::set_dumpable(true)
+                    .map_err(|e| anyhow!("Failed to set process dumpable: {e}"))?;
                 parent_channel
                     .send_id_mappings()
                     .with_context(|| "Failed to send id mappings")?;
                 fst_stage_channel
                     .recv_id_mappings_done()
                     .with_context(|| "Failed to receive id mappings done")?;
-                set_dumpable(false)
+                prctl::set_dumpable(false)
                     .map_err(|e| anyhow!("Failed to set process undumpable: {e}"))?;
             }
 
@@ -656,7 +656,7 @@ impl Container for LinuxContainer {
         // processes in namespaces to join to access host resources (or execute code).
         if !self.config.linux.as_ref().unwrap().namespaces.is_empty() {
             prctl::set_dumpable(false)
-                .map_err(|e| anyhow!("Failed to set process undumpable: {}", e))?;
+                .map_err(|e| anyhow!("Failed to set process undumpable: errno {}", e))?;
         }
 
         // Create channels to communicate with child processes.

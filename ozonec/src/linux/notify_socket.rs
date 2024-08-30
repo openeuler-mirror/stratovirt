@@ -13,9 +13,9 @@
 use std::{
     env,
     io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::net::{UnixListener, UnixStream},
+    os::unix::{
+        io::AsRawFd,
+        net::{UnixListener, UnixStream},
     },
     path::PathBuf,
 };

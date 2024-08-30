@@ -16,23 +16,21 @@ use std::{
     fs::{self, read_to_string},
     io::{stderr, stdin, stdout},
     mem,
-    os::fd::{AsRawFd, RawFd},
+    os::unix::io::{AsRawFd, RawFd},
     path::PathBuf,
     str::FromStr,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
 use caps::{self, CapSet, Capability, CapsHashSet};
-use clone3::Clone3;
 use nix::unistd::{self, chdir, setresgid, setresuid, Gid, Pid, Uid};
-use prctl::{set_keep_capabilities, set_no_new_privileges};
 use rlimit::{setrlimit, Resource, Rlim};
 
 use super::{
     apparmor,
     terminal::{connect_stdio, setup_console},
 };
-use crate::utils::OzonecErr;
+use crate::utils::{prctl, Clone3, OzonecErr};
 use oci_spec::{linux::IoPriClass, process::Process as OciProcess};
 
 pub struct Process {
@@ -149,7 +147,7 @@ impl Process {
     pub fn set_no_new_privileges(&self) -> Result<()> {
         if let Some(no_new_privileges) = self.oci.noNewPrivileges {
             if no_new_privileges {
-                set_no_new_privileges(true)
+                prctl::set_no_new_privileges(true)
                     .map_err(|e| anyhow!("Failed to set no new privileges: {}", e))?;
             }
         }
@@ -238,7 +236,7 @@ impl Process {
     }
 
     pub fn set_id(&self, gid: Gid, uid: Uid) -> Result<()> {
-        set_keep_capabilities(true)
+        prctl::set_keep_capabilities(true)
             .map_err(|e| anyhow!("Failed to enable keeping capabilities: {}", e))?;
         setresgid(gid, gid, gid).with_context(|| "Failed to setresgid")?;
         setresuid(uid, uid, uid).with_context(|| "Failed to setresuid")?;
@@ -247,7 +245,7 @@ impl Process {
             .with_context(|| OzonecErr::GetAllCaps("Permitted".to_string()))?;
         caps::set(None, CapSet::Effective, &permitted)
             .with_context(|| OzonecErr::SetCaps("Effective".to_string()))?;
-        set_keep_capabilities(false)
+        prctl::set_keep_capabilities(false)
             .map_err(|e| anyhow!("Failed to disable keeping capabilities: {}", e))?;
         Ok(())
     }
@@ -312,8 +310,10 @@ pub fn clone_process<F: FnOnce() -> Result<i32>>(child_name: &str, cb: F) -> Res
     let mut clone3 = Clone3::default();
     clone3.exit_signal(libc::SIGCHLD as u64);
 
-    // SAFETY: FFI call with valid arguments.
-    match unsafe { clone3.call().with_context(|| "Clone3() error")? } {
+    match clone3
+        .call()
+        .map_err(|e| anyhow!("Clone3() error: {}", e))?
+    {
         0 => {
             prctl::set_name(child_name)
                 .map_err(|e| anyhow!("Failed to set process name: errno {}", e))?;

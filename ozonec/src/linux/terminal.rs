@@ -13,7 +13,7 @@
 use std::{
     io::IoSlice,
     mem::ManuallyDrop,
-    os::fd::{AsRawFd, RawFd},
+    os::unix::io::{AsRawFd, RawFd},
 };
 
 use anyhow::{Context, Result};
