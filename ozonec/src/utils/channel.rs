@@ -15,7 +15,7 @@ use std::{
     io::{IoSlice, IoSliceMut},
     marker::PhantomData,
     mem,
-    os::fd::RawFd,
+    os::unix::io::RawFd,
     slice,
 };
 
