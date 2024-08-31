@@ -26,7 +26,10 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use caps::{self, CapSet, Capability, CapsHashSet};
-use nix::unistd::{self, chdir, setresgid, setresuid, Gid, Pid, Uid};
+use nix::{
+    errno::Errno,
+    unistd::{self, chdir, setresgid, setresuid, Gid, Pid, Uid},
+};
 use rlimit::{setrlimit, Resource, Rlim};
 
 use super::{
@@ -309,6 +312,14 @@ impl Process {
         });
 
         unreachable!()
+    }
+
+    pub fn getcwd() -> Result<()> {
+        unistd::getcwd().map_err(|e| match e {
+            Errno::ENOENT => anyhow!("Current working directory is out of container rootfs"),
+            _ => anyhow!("Failed to getcwd"),
+        })?;
+        Ok(())
     }
 }
 
