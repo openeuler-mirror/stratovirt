@@ -300,6 +300,10 @@ impl AudioContext {
             cbs,
             self.userdata
         ))?;
+        call_capi!(OH_AudioStreamBuilder_SetCapturerInfo(
+            self.builder,
+            capi::OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATION
+        ))?;
         call_capi!(OH_AudioStreamBuilder_GenerateCapturer(
             self.builder,
             &mut self.capturer
@@ -349,7 +353,9 @@ impl AudioContext {
         self.set_fmt(size, rate, channels)?;
         self.set_sample_rate()?;
         self.set_sample_format()?;
-        self.set_latency_mode()?;
+        if let capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_RERNDERER = self.stream_type.into() {
+            self.set_latency_mode()?;
+        }
         self.create_processor(cb)
     }
 

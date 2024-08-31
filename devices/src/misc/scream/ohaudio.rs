@@ -25,6 +25,7 @@ use crate::misc::scream::{
     AudioExtension, AudioInterface, AudioStatus, ScreamDirection, StreamData,
     IVSHMEM_VOLUME_SYNC_VECTOR,
 };
+use machine_manager::event_loop::EventLoop;
 use util::ohos_binding::audio::*;
 
 const STREAM_DATA_VEC_CAPACITY: usize = 15;
@@ -32,6 +33,7 @@ const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
 const SCREAM_MAX_VOLUME: u32 = 110;
 const CAPTURE_WAIT_TIMEOUT: u64 = 500;
+const MS_PER_SECOND: u64 = 1000;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
@@ -355,6 +357,8 @@ struct OhAudioCapture {
     ctx: Option<AudioContext>,
     status: AudioStatus,
     stream: CaptureStream,
+    timer_start: bool,
+    data_size_per_second: u64,
 }
 
 impl OhAudioCapture {
@@ -387,6 +391,9 @@ impl OhAudioProcess for OhAudioCapture {
                 return false;
             }
         }
+        self.data_size_per_second = (stream.fmt.size as u64 >> 3)
+            * stream.fmt.get_rate() as u64
+            * stream.fmt.channels as u64;
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
                 info!("Capturer start");
@@ -414,7 +421,9 @@ impl OhAudioProcess for OhAudioCapture {
 
         trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
 
-        if self.status == AudioStatus::Error || self.status == AudioStatus::Intr {
+        // We expect capture stream can be resumed when another stream stops interrupting it,
+        // but OHOS does not resume it. We resume it manually.
+        if self.status == AudioStatus::Error || self.status == AudioStatus::IntrResume {
             self.destroy();
         }
 
@@ -429,7 +438,16 @@ impl OhAudioProcess for OhAudioCapture {
                 recv_data.audio_size as usize,
             )
         };
-        if !self.stream.wait_for_data(buf) {
+        if self.status == AudioStatus::Intr {
+            // When capture stream is interrupted, we need to send mute data to front end. Without this,
+            // some applications may pop-up error window for no data received.
+            if !self.timer_start {
+                let period: u64 = MS_PER_SECOND * buf.len() as u64 / self.data_size_per_second;
+                mute_capture_data_gen(ptr::addr_of_mut!(*self), period, buf.len());
+                return 0;
+            }
+        }
+        if !self.stream.wait_for_data(buf) && self.status != AudioStatus::Intr {
             warn!("timed out to wait for capture audio data");
             self.status = AudioStatus::Error;
             return 0;
@@ -439,6 +457,28 @@ impl OhAudioProcess for OhAudioCapture {
 
     fn get_status(&self) -> AudioStatus {
         self.status
+    }
+}
+
+fn mute_capture_data_gen(capture: *mut OhAudioCapture, period: u64, len: usize) {
+    let buffer: Vec<u8> = vec![0; len];
+    let buf = buffer.as_slice();
+
+    //SAFETY: we make sure that capture we passed is valid.
+    let capt = unsafe { capture.as_mut().unwrap_unchecked() };
+    capt.stream.append_data(buf);
+
+    let mute_capture_cb = Box::new(move || {
+        mute_capture_data_gen(capture, period, len);
+    });
+
+    if capt.status == AudioStatus::Intr {
+        EventLoop::get_ctx(None)
+            .unwrap()
+            .timer_add(mute_capture_cb, Duration::from_millis(period));
+        capt.timer_start = true;
+    } else {
+        capt.timer_start = false;
     }
 }
 
@@ -483,6 +523,8 @@ extern "C" fn capture_on_interrupt_cb(
     };
     if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
         capture.status = AudioStatus::Intr;
+    } else if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_RESUME {
+        capture.status = AudioStatus::IntrResume;
     }
     0
 }
