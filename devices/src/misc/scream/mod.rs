@@ -83,6 +83,8 @@ pub enum AudioStatus {
     Error,
     // OH audio stream is interrupted.
     Intr,
+    // OH audio stream interruption ends.
+    IntrResume,
 }
 
 type AuthorityNotify = dyn Fn() + Send + Sync;
