@@ -21,7 +21,7 @@ use nix::{
     fcntl::{open, OFlag},
     mount::{umount2, MntFlags, MsFlags},
     sys::stat::{umask, Mode},
-    unistd::{chroot, fchdir, pivot_root},
+    unistd::{chroot, close, fchdir, pivot_root},
     NixPath,
 };
 use procfs::process::Process;
@@ -226,6 +226,9 @@ impl Rootfs {
         umount2(".", MntFlags::MNT_DETACH)
             .with_context(|| "Failed to umount old root directory")?;
         fchdir(new_root).with_context(|| "Failed to chdir to new root directory")?;
+
+        close(old_root).with_context(|| "Failed to close old_root")?;
+        close(new_root).with_context(|| "Failed to close new_root")?;
         Ok(())
     }
 }
