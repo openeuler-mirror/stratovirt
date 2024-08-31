@@ -28,7 +28,7 @@ use acpi::{
 use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::{gen_base_func, offset_of};
@@ -243,12 +243,14 @@ fn write_dma_memory(
     mut buf: &[u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.write(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .write(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
 
     Ok(())
 }
@@ -260,12 +262,14 @@ fn read_dma_memory(
     mut buf: &mut [u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.read(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .read(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
     Ok(())
 }
 
@@ -1432,7 +1436,12 @@ mod test {
         let addr = GuestAddress(0x0000);
         fwcfg_common
             .mem_space
-            .write(&mut dma_request.as_ref(), addr, dma_request.len() as u64)
+            .write(
+                &mut dma_request.as_ref(),
+                addr,
+                dma_request.len() as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // [2]set dma addr.
@@ -1442,7 +1451,13 @@ mod test {
         assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
 
         // [4]check dma response.
-        assert_eq!(fwcfg_common.mem_space.read_object::<u32>(addr).unwrap(), 0);
+        assert_eq!(
+            fwcfg_common
+                .mem_space
+                .read_object::<u32>(addr, AddressAttr::Ram)
+                .unwrap(),
+            0
+        );
 
         // [5]check dma write result.
         let mut read_dma_buf = Vec::new();
@@ -1450,7 +1465,12 @@ mod test {
         let len = sig_entry_data.len();
         fwcfg_common
             .mem_space
-            .read(&mut read_dma_buf, GuestAddress(0xffff), len as u64)
+            .read(
+                &mut read_dma_buf,
+                GuestAddress(0xffff),
+                len as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
         assert_eq!(read_dma_buf, sig_entry_data);
 
@@ -1463,7 +1483,12 @@ mod test {
         let addr = GuestAddress(0x0000);
         fwcfg_common
             .mem_space
-            .write(&mut dma_request.as_ref(), addr, dma_request.len() as u64)
+            .write(
+                &mut dma_request.as_ref(),
+                addr,
+                dma_request.len() as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         fwcfg_common.dma_addr = addr;
@@ -1471,14 +1496,25 @@ mod test {
         assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
 
         // Result should be all zero.
-        assert_eq!(fwcfg_common.mem_space.read_object::<u32>(addr).unwrap(), 0);
+        assert_eq!(
+            fwcfg_common
+                .mem_space
+                .read_object::<u32>(addr, AddressAttr::Ram)
+                .unwrap(),
+            0
+        );
 
         let mut read_dma_buf = Vec::new();
         let all_zero = vec![0x0_u8; 4];
         let len = all_zero.len();
         fwcfg_common
             .mem_space
-            .read(&mut read_dma_buf, GuestAddress(0xffff), len as u64)
+            .read(
+                &mut read_dma_buf,
+                GuestAddress(0xffff),
+                len as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
         assert_eq!(read_dma_buf, all_zero);
     }

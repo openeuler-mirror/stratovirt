@@ -19,7 +19,7 @@ use anyhow::{anyhow, Context, Result};
 use log::info;
 
 use crate::error::BootLoaderError;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use devices::legacy::{error::LegacyError as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
 
@@ -85,7 +85,12 @@ fn load_kernel(
             )));
         }
         sys_mem
-            .write(&mut kernel_image, GuestAddress(kernel_start), kernel_size)
+            .write(
+                &mut kernel_image,
+                GuestAddress(kernel_start),
+                kernel_size,
+                AddressAttr::Ram,
+            )
             .with_context(|| "Fail to write kernel to guest memory")?;
     }
     Ok(kernel_end)
@@ -129,7 +134,12 @@ fn load_initrd(
             .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdData".to_string()))?;
     } else {
         sys_mem
-            .write(&mut initrd_image, GuestAddress(initrd_start), initrd_size)
+            .write(
+                &mut initrd_image,
+                GuestAddress(initrd_start),
+                initrd_size,
+                AddressAttr::Ram,
+            )
             .with_context(|| "Fail to write initrd to guest memory")?;
     }
 

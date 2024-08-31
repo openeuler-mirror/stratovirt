@@ -36,7 +36,7 @@ use crate::{
     VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_BLOCK,
 };
-use address_space::{AddressSpace, GuestAddress, RegionCache};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, RegionCache};
 use block_backend::{
     create_block_backend, remove_block_backend, BlockDriverOps, BlockIoErrorCallback,
     BlockProperty, BlockStatus,
@@ -228,7 +228,10 @@ impl AioCompleteCb {
     }
 
     fn complete_one_request(&self, req: &Request, status: u8) -> Result<()> {
-        if let Err(ref e) = self.mem_space.write_object(&status, req.in_header) {
+        if let Err(ref e) = self
+            .mem_space
+            .write_object(&status, req.in_header, AddressAttr::Ram)
+        {
             bail!("Failed to write the status (blk io completion) {:?}", e);
         }
 
@@ -1454,7 +1457,7 @@ mod tests {
     use super::*;
     use crate::tests::address_space_init;
     use crate::*;
-    use address_space::GuestAddress;
+    use address_space::{AddressAttr, GuestAddress};
     use machine_manager::config::{
         str_slip_to_clap, IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
     };
@@ -1685,14 +1688,23 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            mem_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.avail_ring_host =
-            mem_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.used_ring_host =
-            mem_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
@@ -1712,7 +1724,11 @@ mod tests {
             next: 1,
         };
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // write RequestOutHeader to first desc
@@ -1722,7 +1738,7 @@ mod tests {
             sector: 0,
         };
         mem_space
-            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100))
+            .write_object::<RequestOutHeader>(&req_head, GuestAddress(0x100), AddressAttr::Ram)
             .unwrap();
 
         // making the second descriptor entry to receive data from device
@@ -1733,17 +1749,29 @@ mod tests {
             next: 2,
         };
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config.desc_table.0 + 16_u64))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config.desc_table.0 + 16_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // write avail_ring id
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // imitating guest OS to send notification.
@@ -1761,7 +1789,10 @@ mod tests {
 
             // get used_ring data
             let idx = mem_space
-                .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2_u64))
+                .read_object::<u16>(
+                    GuestAddress(queue_config.used_ring.0 + 2_u64),
+                    AddressAttr::Ram,
+                )
                 .unwrap();
             if idx == 1 {
                 break;

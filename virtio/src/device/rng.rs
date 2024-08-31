@@ -29,7 +29,7 @@ use crate::{
     ElemIovec, Queue, VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_RNG,
 };
-use address_space::AddressSpace;
+use address_space::{AddressAttr, AddressSpace};
 use machine_manager::{
     config::{get_pci_df, valid_id, ConfigError, RngObjConfig, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
@@ -140,6 +140,7 @@ impl RngHandler {
                     &mut buffer[offset..].as_ref(),
                     iov.addr,
                     u64::from(min(size - offset as u32, iov.len)),
+                    AddressAttr::Ram,
                 )
                 .with_context(|| "Failed to write request data for virtio rng")?;
 
@@ -416,6 +417,7 @@ mod tests {
     use super::*;
     use crate::tests::address_space_init;
     use crate::*;
+    use address_space::AddressAttr;
     use address_space::GuestAddress;
     use machine_manager::config::{str_slip_to_clap, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
 
@@ -589,14 +591,23 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            mem_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.avail_ring_host =
-            mem_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.used_ring_host =
-            mem_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
@@ -620,15 +631,23 @@ mod tests {
         };
         // write table descriptor for queue
         mem_space
-            .write_object(&desc, queue_config.desc_table)
+            .write_object(&desc, queue_config.desc_table, AddressAttr::Ram)
             .unwrap();
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         let buffer = vec![1_u8; data_len as usize];
@@ -639,13 +658,17 @@ mod tests {
             .read(
                 &mut read_buffer.as_mut_slice(),
                 GuestAddress(0x40000),
-                u64::from(data_len)
+                u64::from(data_len),
+                AddressAttr::Ram
             )
             .is_ok());
         assert_eq!(read_buffer, buffer);
 
         let idx = mem_space
-            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2_u64))
+            .read_object::<u16>(
+                GuestAddress(queue_config.used_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         assert_eq!(idx, 1);
         assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);
@@ -672,14 +695,23 @@ mod tests {
 
         let mut queue_config = QueueConfig::new(DEFAULT_VIRTQUEUE_SIZE);
         queue_config.desc_table = GuestAddress(0);
-        queue_config.addr_cache.desc_table_host =
-            mem_space.get_host_address(queue_config.desc_table).unwrap();
+        queue_config.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.avail_ring = GuestAddress(16 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.avail_ring_host =
-            mem_space.get_host_address(queue_config.avail_ring).unwrap();
+        queue_config.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.used_ring = GuestAddress(32 * u64::from(DEFAULT_VIRTQUEUE_SIZE));
-        queue_config.addr_cache.used_ring_host =
-            mem_space.get_host_address(queue_config.used_ring).unwrap();
+        queue_config.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config.size = DEFAULT_VIRTQUEUE_SIZE;
         queue_config.ready = true;
 
@@ -703,7 +735,7 @@ mod tests {
         };
         // write table descriptor for queue
         mem_space
-            .write_object(&desc, queue_config.desc_table)
+            .write_object(&desc, queue_config.desc_table, AddressAttr::Ram)
             .unwrap();
 
         let desc = SplitVringDesc {
@@ -717,16 +749,25 @@ mod tests {
             .write_object(
                 &desc,
                 GuestAddress(queue_config.desc_table.0 + size_of::<SplitVringDesc>() as u64),
+                AddressAttr::Ram,
             )
             .unwrap();
 
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         // write avail_ring idx
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         let mut buffer1 = vec![1_u8; data_len as usize];
@@ -742,7 +783,8 @@ mod tests {
             .read(
                 &mut read_buffer.as_mut_slice(),
                 GuestAddress(0x40000),
-                u64::from(data_len)
+                u64::from(data_len),
+                AddressAttr::Ram
             )
             .is_ok());
         assert_eq!(read_buffer, buffer1_check);
@@ -750,13 +792,17 @@ mod tests {
             .read(
                 &mut read_buffer.as_mut_slice(),
                 GuestAddress(0x50000),
-                u64::from(data_len)
+                u64::from(data_len),
+                AddressAttr::Ram
             )
             .is_ok());
         assert_eq!(read_buffer, buffer2_check);
 
         let idx = mem_space
-            .read_object::<u16>(GuestAddress(queue_config.used_ring.0 + 2_u64))
+            .read_object::<u16>(
+                GuestAddress(queue_config.used_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         assert_eq!(idx, 1);
         assert_eq!(cloned_interrupt_evt.read().unwrap(), 1);

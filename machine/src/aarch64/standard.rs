@@ -39,7 +39,7 @@ use acpi::{
 };
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
-use address_space::{AddressSpace, GuestAddress, Region};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
@@ -201,6 +201,7 @@ impl StdMachine {
                 &mut locked_vm.dtb_vec.as_slice(),
                 GuestAddress(fdt_addr),
                 locked_vm.dtb_vec.len() as u64,
+                AddressAttr::Ram,
             )
             .with_context(|| "Fail to write dtb into sysmem")?;
 
@@ -594,6 +595,7 @@ impl MachineOps for StdMachine {
                 &mut fdt_vec.as_slice(),
                 GuestAddress(boot_config.fdt_addr),
                 fdt_vec.len() as u64,
+                AddressAttr::Ram,
             )
             .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
 

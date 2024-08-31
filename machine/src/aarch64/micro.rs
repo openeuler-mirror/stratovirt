@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::{micro_common::syscall::syscall_whitelist, MachineBase, MachineError};
 use crate::{register_shutdown_event, LightMachine, MachineOps};
-use address_space::{AddressSpace, GuestAddress, Region};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
 use devices::legacy::{PL011, PL031};
 use devices::{Device, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
@@ -191,6 +191,7 @@ impl MachineOps for LightMachine {
                 &mut fdt_vec.as_slice(),
                 GuestAddress(boot_config.fdt_addr),
                 fdt_vec.len() as u64,
+                AddressAttr::Ram,
             )
             .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
         register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())

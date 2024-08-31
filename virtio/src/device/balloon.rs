@@ -31,7 +31,8 @@ use crate::{
     VIRTIO_TYPE_BALLOON,
 };
 use address_space::{
-    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+    AddressAttr, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+    RegionType,
 };
 use machine_manager::{
     config::{get_pci_df, parse_bool, DEFAULT_VIRTQUEUE_SIZE},
@@ -161,7 +162,10 @@ fn iov_to_buf<T: ByteCode>(
     }
 
     // GPAChecked: the iov has been checked in pop_avail().
-    match address_space.read_object::<T>(GuestAddress(iov.iov_base.raw_value() + offset)) {
+    match address_space.read_object::<T>(
+        GuestAddress(iov.iov_base.raw_value() + offset),
+        AddressAttr::Ram,
+    ) {
         Ok(dat) => Some(dat),
         Err(ref e) => {
             error!("Read virtioqueue failed: {:?}", e);
@@ -487,7 +491,8 @@ impl BlnMemInfo {
     fn add_mem_range(&self, fr: &FlatRange) {
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
-        if let Some(host_addr) = fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        if let Some(host_addr) = unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             let userspace_addr = host_addr + fr.offset_in_region;
             let reg_page_size = fr.owner.get_region_page_size();
             self.regions.lock().unwrap().push(BlnMemoryRegion {
@@ -505,7 +510,8 @@ impl BlnMemInfo {
 
     fn delete_mem_range(&self, fr: &FlatRange) {
         let mut mem_regions = self.regions.lock().unwrap();
-        if let Some(host_addr) = fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        if let Some(host_addr) = unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             let reg_page_size = fr.owner.get_region_page_size();
             let target = BlnMemoryRegion {
                 guest_phys_addr: fr.addr_range.base.raw_value(),
@@ -1257,7 +1263,7 @@ mod tests {
     use super::*;
     use crate::tests::{address_space_init, MEMORY_SIZE};
     use crate::*;
-    use address_space::{AddressRange, HostMemMapping, Region};
+    use address_space::{AddressAttr, AddressRange, HostMemMapping, Region};
     use machine_manager::event_loop::EventLoop;
 
     const QUEUE_SIZE: u16 = 256;
@@ -1433,33 +1439,45 @@ mod tests {
 
         let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
         queue_config_inf.desc_table = GuestAddress(0x100);
-        queue_config_inf.addr_cache.desc_table_host = mem_space
-            .get_host_address(queue_config_inf.desc_table)
-            .unwrap();
+        queue_config_inf.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.avail_ring = GuestAddress(0x300);
-        queue_config_inf.addr_cache.avail_ring_host = mem_space
-            .get_host_address(queue_config_inf.avail_ring)
-            .unwrap();
+        queue_config_inf.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.used_ring = GuestAddress(0x600);
-        queue_config_inf.addr_cache.used_ring_host = mem_space
-            .get_host_address(queue_config_inf.used_ring)
-            .unwrap();
+        queue_config_inf.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.ready = true;
         queue_config_inf.size = QUEUE_SIZE;
 
         let mut queue_config_def = QueueConfig::new(QUEUE_SIZE);
         queue_config_def.desc_table = GuestAddress(0x1100);
-        queue_config_def.addr_cache.desc_table_host = mem_space
-            .get_host_address(queue_config_def.desc_table)
-            .unwrap();
+        queue_config_def.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.avail_ring = GuestAddress(0x1300);
-        queue_config_def.addr_cache.avail_ring_host = mem_space
-            .get_host_address(queue_config_def.avail_ring)
-            .unwrap();
+        queue_config_def.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.used_ring = GuestAddress(0x1600);
-        queue_config_def.addr_cache.used_ring_host = mem_space
-            .get_host_address(queue_config_def.used_ring)
-            .unwrap();
+        queue_config_def.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.ready = true;
         queue_config_def.size = QUEUE_SIZE;
 
@@ -1503,7 +1521,11 @@ mod tests {
 
         // Set desc table.
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_inf.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config_inf.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         let ele = GuestIovec {
@@ -1511,13 +1533,21 @@ mod tests {
             iov_len: std::mem::size_of::<GuestIovec>() as u64,
         };
         mem_space
-            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000), AddressAttr::Ram)
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config_inf.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_inf.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config_inf.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_INFLATE_EVENT).is_ok());
@@ -1533,17 +1563,29 @@ mod tests {
         };
 
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_def.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config_def.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         mem_space
-            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000), AddressAttr::Ram)
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4_u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config_def.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_def.avail_ring.0 + 2_u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config_def.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_DEFLATE_EVENT).is_ok());

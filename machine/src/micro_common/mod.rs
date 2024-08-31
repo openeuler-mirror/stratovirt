@@ -597,12 +597,13 @@ impl MachineAddressInterface for LightMachine {
 
     #[cfg(target_arch = "x86_64")]
     fn pio_out(&self, addr: u64, mut data: &[u8]) -> bool {
+        use address_space::AddressAttr;
         use address_space::GuestAddress;
 
         let count = data.len() as u64;
         self.base
             .sys_io
-            .write(&mut data, GuestAddress(addr), count)
+            .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
             .is_ok()
     }
 
