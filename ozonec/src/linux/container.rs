@@ -249,6 +249,9 @@ impl LinuxContainer {
         if chdir_cwd_ret {
             process.chdir_cwd()?;
         }
+        // Ensure that the current working directory is inside the mount namespace root
+        // of the current container process.
+        Process::getcwd()?;
         process.clean_envs();
         process.set_envs();
         if process.no_new_privileges() {
