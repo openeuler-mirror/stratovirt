@@ -55,6 +55,10 @@ pub const DISPLAY_UPDATE_INTERVAL_INC: u64 = 50;
 /// Maximum refresh interval in ms.
 pub const DISPLAY_UPDATE_INTERVAL_MAX: u64 = 3_000;
 
+pub const DEFAULT_CURSOR_WIDTH: usize = 32;
+pub const DEFAULT_CURSOR_HEIGHT: usize = 32;
+pub const DEFAULT_CURSOR_BPP: usize = 4;
+
 pub enum ConsoleType {
     Graphic,
     Text,

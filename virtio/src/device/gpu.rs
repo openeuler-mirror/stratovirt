@@ -44,6 +44,7 @@ use ui::console::{
     console_close, console_init, display_cursor_define, display_graphic_update,
     display_replace_surface, display_set_major_screen, get_run_stage, set_run_stage, ConsoleType,
     DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
+    DEFAULT_CURSOR_BPP, DEFAULT_CURSOR_HEIGHT, DEFAULT_CURSOR_WIDTH,
 };
 use ui::pixman::{
     create_pixman_image, get_image_data, get_image_format, get_image_height, get_image_stride,
@@ -793,6 +794,17 @@ impl GpuIoHandler {
         let scanout = &mut self.scanouts[scanout_id];
         display_replace_surface(&scanout.con, None)
             .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+
+        let mouse = DisplayMouse {
+            height: DEFAULT_CURSOR_WIDTH as u32,
+            width: DEFAULT_CURSOR_HEIGHT as u32,
+            hot_x: 0,
+            hot_y: 0,
+            data: vec![0_u8; DEFAULT_CURSOR_WIDTH * DEFAULT_CURSOR_HEIGHT * DEFAULT_CURSOR_BPP],
+        };
+        display_cursor_define(&scanout.con, &mouse)
+            .unwrap_or_else(|e| error!("Error occurs during display_cursor_define: {:?}", e));
+
         scanout.clear();
     }
 
