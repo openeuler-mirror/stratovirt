@@ -14,7 +14,6 @@ pub mod channel;
 pub mod msg;
 pub mod msg_handle;
 
-use std::mem::size_of;
 use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::ptr;
@@ -24,7 +23,7 @@ use std::sync::{
     Arc, Mutex, RwLock,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
 use once_cell::sync::OnceCell;
 use vmm_sys_util::epoll::EventSet;
@@ -384,7 +383,12 @@ impl DisplayChangeListenerOperations for OhUiServer {
             return Ok(());
         }
 
-        let len = cursor.width * cursor.height * size_of::<i32>() as u32;
+        let len = cursor
+            .width
+            .checked_mul(cursor.height)
+            .with_context(|| "Invalid cursor width * height")?
+            .checked_mul(bytes_per_pixel() as u32)
+            .with_context(|| "Invalid cursor size")?;
         if len > CURSOR_SIZE as u32 || len > cursor.data.len().try_into()? {
             error!("Too large cursor length {}.", len);
             // No need to return Err for this situation is not fatal
@@ -405,7 +409,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
             cursor.height,
             cursor.hot_x,
             cursor.hot_y,
-            size_of::<i32>() as u32,
+            bytes_per_pixel() as u32,
         );
         Ok(())
     }
