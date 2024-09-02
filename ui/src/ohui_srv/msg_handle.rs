@@ -53,10 +53,20 @@ fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
     )
 }
 
+#[derive(Clone, Default)]
+struct CursorState {
+    w: u32,
+    h: u32,
+    hot_x: u32,
+    hot_y: u32,
+    size_per_pixel: u32,
+}
+
 #[derive(Default)]
 struct WindowState {
     width: u32,
     height: u32,
+    cursor: CursorState,
 }
 
 impl WindowState {
@@ -188,6 +198,14 @@ impl OhUiMsgHandler {
                 let body = GreetEvent::from_bytes(&body_bytes[..]).unwrap();
                 trace::oh_event_greet(body.token_id);
                 *token_id.write().unwrap() = body.token_id;
+                let cursor = self.state.lock().unwrap().cursor.clone();
+                self.handle_cursor_define(
+                    cursor.w,
+                    cursor.h,
+                    cursor.hot_x,
+                    cursor.hot_y,
+                    cursor.size_per_pixel,
+                );
                 Ok(())
             }
             _ => {
@@ -231,6 +249,14 @@ impl OhUiMsgHandler {
         hot_y: u32,
         size_per_pixel: u32,
     ) {
+        self.state.lock().unwrap().cursor = CursorState {
+            w,
+            h,
+            hot_x,
+            hot_y,
+            size_per_pixel,
+        };
+
         if let Some(writer) = self.writer.lock().unwrap().as_mut() {
             let body = HWCursorEvent::new(w, h, hot_x, hot_y, size_per_pixel);
             if let Err(e) = writer.send_message(EventType::CursorDefine, &body) {
