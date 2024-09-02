@@ -260,7 +260,10 @@ impl CameraBackend for OhCameraBackend {
                     fmt_list.push(CameraFormatList {
                         format: cam_fmt_from_oh(fmt)?,
                         frame: vec![frame],
-                        fmt_index: (idx) + 1,
+                        fmt_index: idx.checked_add(1).unwrap_or_else(|| {
+                            error!("list_format: too much profile ID");
+                            u8::MAX
+                        }),
                     });
                 }
                 Err(e) => error!("{:?}", e),
@@ -352,10 +355,6 @@ impl CameraBackend for OhCameraBackend {
 
         if src_len == 0_u64 {
             bail!("Invalid frame src_len {}", src_len);
-        }
-
-        if frame_offset + len > src_len as usize {
-            bail!("Invalid frame offset {} or len {}", frame_offset, len);
         }
 
         trace::trace_scope_start!(ohcam_get_frame, args = (frame_offset, len));
