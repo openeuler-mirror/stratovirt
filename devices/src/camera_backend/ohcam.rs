@@ -277,6 +277,11 @@ impl CameraBackend for OhCameraBackend {
         if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&self.camid) {
             cb.clear_buffer();
         }
+        if self.stream_on {
+            self.video_stream_off().unwrap_or_else(|e| {
+                error!("OHCAM: stream off failed: {:?}", e);
+            });
+        }
         if let Err(e) = self.ctx.reset_camera(self.camid.clone()) {
             error!("OHCAM: reset failed, err: {e}");
         }
