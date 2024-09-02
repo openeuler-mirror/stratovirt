@@ -34,7 +34,7 @@ ioctl_ior_nr!(
     ::std::os::raw::c_ulonglong
 );
 
-pub fn set_firstcaller_tokenid(id: u64) -> Result<()> {
+fn set_firstcaller_tokenid(id: u64) -> Result<()> {
     let fd = OpenOptions::new()
         .read(true)
         .write(true)
@@ -56,7 +56,7 @@ pub fn set_firstcaller_tokenid(id: u64) -> Result<()> {
     Ok(())
 }
 
-pub fn get_firstcaller_tokenid() -> Result<u64> {
+fn get_firstcaller_tokenid() -> Result<u64> {
     let fd = OpenOptions::new()
         .read(true)
         .write(true)
@@ -77,4 +77,13 @@ pub fn get_firstcaller_tokenid() -> Result<u64> {
         );
     }
     Ok(id)
+}
+
+pub fn bound_tokenid(token_id: u64) -> Result<()> {
+    if token_id == 0 {
+        bail!("UI token ID not passed.");
+    } else if token_id != get_firstcaller_tokenid()? {
+        set_firstcaller_tokenid(token_id)?;
+    }
+    Ok(())
 }
