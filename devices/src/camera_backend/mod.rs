@@ -193,6 +193,7 @@ pub trait CameraBackend: Send + Sync {
 pub fn create_cam_backend(
     config: UsbCameraConfig,
     cameradev: CameraDevConfig,
+    _tokenid: u64,
 ) -> Result<Arc<Mutex<dyn CameraBackend>>> {
     let cam: Arc<Mutex<dyn CameraBackend>> = match cameradev.backend {
         #[cfg(feature = "usb_camera_v4l2")]
@@ -205,6 +206,7 @@ pub fn create_cam_backend(
         CamBackendType::OhCamera => Arc::new(Mutex::new(OhCameraBackend::new(
             cameradev.id,
             cameradev.path,
+            _tokenid,
         )?)),
         CamBackendType::Demo => Arc::new(Mutex::new(DemoCameraBackend::new(
             config.id,

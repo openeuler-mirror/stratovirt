@@ -502,8 +502,8 @@ impl VideoStreamingControl {
 }
 
 impl UsbCamera {
-    pub fn new(config: UsbCameraConfig, cameradev: CameraDevConfig) -> Result<Self> {
-        let camera = create_cam_backend(config.clone(), cameradev)?;
+    pub fn new(config: UsbCameraConfig, cameradev: CameraDevConfig, tokenid: u64) -> Result<Self> {
+        let camera = create_cam_backend(config.clone(), cameradev, tokenid)?;
         Ok(Self {
             base: UsbDeviceBase::new(config.id, USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
