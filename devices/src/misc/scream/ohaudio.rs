@@ -454,6 +454,10 @@ extern "C" fn on_read_data_cb(
             break;
         }
     }
+    if capture.align == 0 {
+        error!("on_read_data_cb, capture.align is 0");
+        return 0;
+    }
     let old_pos =
         capture.cur_pos - ((capture.cur_pos - capture.shm_addr) % u64::from(capture.align));
     let buf_end = capture.shm_addr + capture.shm_len;

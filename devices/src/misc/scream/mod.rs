@@ -155,11 +155,12 @@ impl ShmemStreamHeader {
 
         if self.chunk_idx > self.max_chunks {
             error!(
-                "The chunk index of stream {} exceeds the maximum number of chunks {}",
-                self.chunk_idx, self.max_chunks
+                "Invalid max_chunks: {} or chunk_idx: {}",
+                self.max_chunks, self.chunk_idx
             );
             return false;
         }
+
         if self.fmt.channels == 0 || self.fmt.channel_map == 0 {
             error!(
                 "The fmt channels {} or channel_map {} is invalid",
@@ -274,7 +275,12 @@ impl ScreamCond {
 #[derive(Debug, Default)]
 pub struct StreamData {
     pub fmt: ShmemStreamFmt,
+    max_chunks: u16,
     chunk_idx: u16,
+    /// Start address of header implies.
+    start_addr: u64,
+    /// Length of total data which header implies.
+    data_shm_len: u64,
     /// Size of the data to be played or recorded.
     pub audio_size: u32,
     /// Location of the played or recorded audio data in the shared memory.
@@ -284,10 +290,14 @@ pub struct StreamData {
 }
 
 impl StreamData {
-    fn init(&mut self, header: &ShmemStreamHeader) {
+    fn init(&mut self, header: &ShmemStreamHeader, hva: u64) {
         fence(Ordering::Acquire);
         self.fmt = header.fmt;
         self.chunk_idx = header.chunk_idx;
+        self.max_chunks = header.max_chunks;
+        self.data_shm_len = u64::from(header.chunk_size) * u64::from(self.max_chunks);
+        self.start_addr = hva + u64::from(header.offset);
+        self.audio_size = header.chunk_size;
     }
 
     fn register_pause_notifier(&mut self, cond: Arc<ScreamCond>) {
@@ -328,7 +338,7 @@ impl StreamData {
             header =
                 // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
                 &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
-            self.init(stream_header);
+            self.init(stream_header, hva);
 
             let mut last_end = 0_u64;
             // The recording buffer is behind the playback buffer. Thereforce, the end position of
@@ -355,18 +365,14 @@ impl StreamData {
         shmem_size: u64,
         stream_header: &ShmemStreamHeader,
     ) -> bool {
-        self.audio_size = stream_header.chunk_size;
-        self.audio_base = hva
-            + u64::from(stream_header.offset)
-            + u64::from(stream_header.chunk_size) * u64::from(self.chunk_idx);
-
-        if (self.audio_base + u64::from(self.audio_size)) > (hva + shmem_size) {
+        self.audio_base = self
+            .start_addr
+            .saturating_add(u64::from(self.audio_size) * u64::from(self.chunk_idx));
+        let buf_end = hva + shmem_size;
+        if self.audio_base.saturating_add(u64::from(self.audio_size)) > buf_end {
             error!(
                 "Scream: wrong header: offset {} chunk_idx {} chunk_size {} max_chunks {}",
-                stream_header.offset,
-                stream_header.chunk_idx,
-                stream_header.chunk_size,
-                stream_header.max_chunks,
+                stream_header.offset, stream_header.chunk_idx, self.audio_size, self.max_chunks,
             );
             return false;
         }
@@ -400,15 +406,15 @@ impl StreamData {
             // slow and the backward data is skipped.
             if play
                 .chunk_idx
-                .wrapping_add(play.max_chunks)
+                .wrapping_add(self.max_chunks)
                 .wrapping_sub(self.chunk_idx)
-                % play.max_chunks
+                % self.max_chunks
                 > 4
             {
                 self.chunk_idx =
-                    play.chunk_idx.wrapping_add(play.max_chunks).wrapping_sub(1) % play.max_chunks;
+                    play.chunk_idx.wrapping_add(self.max_chunks).wrapping_sub(1) % self.max_chunks;
             } else {
-                self.chunk_idx = (self.chunk_idx + 1) % play.max_chunks;
+                self.chunk_idx = (self.chunk_idx + 1) % self.max_chunks;
             }
 
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, play) {
@@ -429,9 +435,8 @@ impl StreamData {
         // of the address range during the header check.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
-        let addr = hva + u64::from(capt.offset);
 
-        interface.lock().unwrap().pre_receive(addr, capt);
+        interface.lock().unwrap().pre_receive(self.start_addr, capt);
         while capt.is_started != 0 {
             cond.wait_if_paused(interface.clone());
 
