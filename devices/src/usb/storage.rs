@@ -468,6 +468,7 @@ impl UsbStorage {
         self.state.check_cdb_exist(true)?;
         self.state.check_iovec_empty(true)?;
 
+        // Safety: iovecs are set in `setup_usb_packet` and iovec_len is no more than TRB_TR_LEN_MASK.
         let iovec_len = packet.get_iovecs_size() as u32;
         if iovec_len < self.state.cbw.data_len {
             bail!(
@@ -504,7 +505,7 @@ impl UsbStorage {
         )
         .with_context(|| "Error in creating scsirequest.")?;
 
-        if sreq.cmd.xfer > sreq.datalen && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
+        if sreq.cmd.xfer > u64::from(sreq.datalen) && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
             // Wrong USB packet which doesn't provide enough datain/dataout buffer.
             bail!(
                 "command {:x} requested data's length({}), provided buffer length({})",

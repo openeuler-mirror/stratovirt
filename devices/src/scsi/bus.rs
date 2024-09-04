@@ -260,13 +260,13 @@ pub const MODE_PAGE_TO_PROTECT: u8 = 0x1d;
 pub const MODE_PAGE_CAPABILITIES: u8 = 0x2a;
 pub const MODE_PAGE_ALLS: u8 = 0x3f;
 
-pub const SCSI_MAX_INQUIRY_LEN: u32 = 256;
+pub const SCSI_MAX_INQUIRY_LEN: u64 = 256;
 pub const SCSI_INQUIRY_PRODUCT_MAX_LEN: usize = 16;
 pub const SCSI_INQUIRY_VENDOR_MAX_LEN: usize = 8;
 pub const SCSI_INQUIRY_VERSION_MAX_LEN: usize = 4;
 pub const SCSI_INQUIRY_VPD_SERIAL_NUMBER_MAX_LEN: usize = 32;
 
-const SCSI_TARGET_INQUIRY_LEN: u32 = 36;
+const SCSI_TARGET_INQUIRY_LEN: u64 = 36;
 
 /// |     bit7 - bit 5     |     bit 4 - bit 0      |
 /// | Peripheral Qualifier | Peripheral Device Type |
@@ -446,15 +446,15 @@ fn scsi_bus_parse_req_cdb(
 
     // When CDB's Group Code is vendor specific or reserved, len/xfer/lba will be negative.
     // So, don't need to check again after checking in cdb length.
-    let xfer = scsi_cdb_xfer(&cdb, dev);
-    let lba = scsi_cdb_lba(&cdb);
+    let xfer = scsi_cdb_xfer(&cdb, dev) as u64;
+    let lba = scsi_cdb_lba(&cdb) as u64;
 
     Some(ScsiCommand {
         buf: cdb,
         op,
         len: len as u32,
-        xfer: xfer as u32,
-        lba: lba as u64,
+        xfer,
+        lba,
         mode: scsi_cdb_xfer_mode(&cdb),
     })
 }
@@ -468,7 +468,7 @@ pub struct ScsiCommand {
     /// Length of CDB.
     pub len: u32,
     /// Transfer length.
-    pub xfer: u32,
+    pub xfer: u64,
     /// Logical Block Address.
     pub lba: u64,
     /// Transfer direction.
@@ -790,22 +790,22 @@ fn scsi_cdb_length(cdb: &[u8; SCSI_CMD_BUF_SIZE]) -> i32 {
     }
 }
 
-pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<dyn Device>>) -> i32 {
+pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<dyn Device>>) -> i64 {
     SCSI_DEVICE!(dev, locked_dev, scsi_dev);
-    let block_size = scsi_dev.block_size as i32;
+    let block_size = scsi_dev.block_size as i64;
     drop(locked_dev);
 
-    let mut xfer = match cdb[0] >> 5 {
+    let mut xfer: i64 = match cdb[0] >> 5 {
         // Group Code  |  Transfer length. |
         // 000b        |  Byte[4].         |
         // 001b        |  Bytes[7-8].      |
         // 010b        |  Bytes[7-8].      |
         // 100b        |  Bytes[10-13].    |
         // 101b        |  Bytes[6-9].      |
-        0 => i32::from(cdb[4]),
-        1 | 2 => i32::from(BigEndian::read_u16(&cdb[7..])),
-        4 => BigEndian::read_u32(&cdb[10..]) as i32,
-        5 => BigEndian::read_u32(&cdb[6..]) as i32,
+        0 => i64::from(cdb[4]),
+        1 | 2 => i64::from(BigEndian::read_u16(&cdb[7..])),
+        4 => i64::from(BigEndian::read_u32(&cdb[10..])),
+        5 => i64::from(BigEndian::read_u32(&cdb[6..])),
         _ => -1,
     };
 
@@ -819,14 +819,16 @@ pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<dyn Device>>)
         WRITE_6 | READ_6 => {
             // length 0 means 256 blocks.
             if xfer == 0 {
+                // Safety: block_size is 2048 or 512.
                 xfer = 256 * block_size;
             }
         }
         WRITE_10 | WRITE_12 | WRITE_16 | READ_10 | READ_12 | READ_16 => {
+            // Safety: xfer is less than u32::max now.
             xfer *= block_size;
         }
         INQUIRY => {
-            xfer = i32::from(cdb[4]) | i32::from(cdb[3]) << 8;
+            xfer = i64::from(cdb[4]) | i64::from(cdb[3]) << 8;
         }
         _ => {}
     }
