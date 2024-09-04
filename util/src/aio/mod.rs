@@ -613,8 +613,11 @@ impl<T: Clone + 'static> Aio<T> {
                     evt.res
                 } else {
                     error!(
-                        "Async IO request failed, status {} res {}",
-                        evt.status, evt.res
+                        "Async IO request failed, opcode {:?} status {} res {} expect {}",
+                        (*node).value.opcode,
+                        evt.status,
+                        evt.res,
+                        (*node).value.nbytes
                     );
                     -1
                 };
