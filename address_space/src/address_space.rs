@@ -778,17 +778,18 @@ impl AddressSpace {
     /// * `data` - The object that will be written to the memory.
     /// * `host_addr` - The start host address where the object will be written to.
     ///
+    /// # Safety
+    ///
+    /// Make true that host_addr and std::mem::size_of::<T>() are in the range of ram.
+    ///
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
+    pub unsafe fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
         trace::address_space_write_direct(host_addr, std::mem::size_of::<T>());
         // Mark vmm dirty page manually if live migration is active.
         MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
-
-        // SAFETY: The host addr is managed by memory space, it has been verified.
-        let mut dst = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
-        };
+        let mut dst =
+            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>());
         dst.write_all(data.as_bytes())
             .with_context(|| "Failed to write object via host address")
     }
@@ -819,16 +820,17 @@ impl AddressSpace {
     ///
     /// * `hoat_addr` - The start host address where the data will be read from.
     ///
+    /// # Safety
+    ///
+    /// Make true that host_addr and std::mem::size_of::<T>() are in the range of ram.
+    ///
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub fn read_object_direct<T: ByteCode>(&self, host_addr: u64) -> Result<T> {
+    pub unsafe fn read_object_direct<T: ByteCode>(&self, host_addr: u64) -> Result<T> {
         trace::address_space_read_direct(host_addr, std::mem::size_of::<T>());
         let mut obj = T::default();
         let mut dst = obj.as_mut_bytes();
-        // SAFETY: host_addr is managed by address_space, it has been verified for legality.
-        let src = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
-        };
+        let src = std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>());
         dst.write_all(src)
             .with_context(|| "Failed to read object via host address")?;
 
