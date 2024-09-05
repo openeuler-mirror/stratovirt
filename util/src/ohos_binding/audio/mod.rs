@@ -397,6 +397,16 @@ impl OhVolume {
         unsafe { (self.capi.get_volume)() as u32 }
     }
 
+    fn get_max_volume(&self) -> u32 {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_max_volume)() as u32 }
+    }
+
+    fn get_min_volume(&self) -> u32 {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_min_volume)() as u32 }
+    }
+
     fn set_ohos_volume(&self, volume: i32) {
         // SAFETY: We call related API sequentially for specified ctx.
         unsafe { (self.capi.set_volume)(volume) };
@@ -426,6 +436,14 @@ pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) {
         .write()
         .unwrap()
         .register_guest_notifier(notifier);
+}
+
+pub fn get_ohos_volume_max() -> u32 {
+    OH_VOLUME_ADAPTER.read().unwrap().get_max_volume()
+}
+
+pub fn get_ohos_volume_min() -> u32 {
+    OH_VOLUME_ADAPTER.read().unwrap().get_min_volume()
 }
 
 pub fn get_ohos_volume() -> u32 {
