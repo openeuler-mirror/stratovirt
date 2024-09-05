@@ -1833,6 +1833,10 @@ pub trait MachineOps: MachineLifecycle {
             }
             #[cfg(feature = "usb_camera")]
             "usb-camera" => {
+                let token_id = match self.get_token_id() {
+                    Some(id) => *id.read().unwrap(),
+                    None => 0,
+                };
                 let config =
                     UsbCameraConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
                 let cameradev = get_cameradev_by_id(vm_config, config.cameradev.clone())
@@ -1843,7 +1847,7 @@ pub trait MachineOps: MachineLifecycle {
                         )
                     })?;
 
-                let camera = UsbCamera::new(config, cameradev)?;
+                let camera = UsbCamera::new(config, cameradev, token_id)?;
                 camera
                     .realize()
                     .with_context(|| "Failed to realize usb camera device")?

@@ -30,6 +30,7 @@ use crate::camera_backend::{
 use trace::trace_scope::Scope;
 use util::aio::Iovec;
 use util::ohos_binding::camera::*;
+use util::ohos_binding::misc::bound_tokenid;
 
 type OhCamCB = RwLock<HashMap<String, OhCamCallBack>>;
 static OHCAM_CALLBACKS: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(HashMap::new()));
@@ -132,6 +133,7 @@ pub struct OhCameraBackend {
         all(target_env = "ohos", feature = "trace_to_hitrace")
     ))]
     async_scope: Box<OhCameraAsyncScope>,
+    tokenid: u64,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type.
@@ -159,7 +161,7 @@ impl Drop for OhCameraBackend {
 }
 
 impl OhCameraBackend {
-    pub fn new(id: String, cam_name: String) -> Result<Self> {
+    pub fn new(id: String, cam_name: String, tokenid: u64) -> Result<Self> {
         let (ctx, profile_cnt) = OhCamera::new(cam_name.clone())?;
 
         Ok(OhCameraBackend {
@@ -177,6 +179,7 @@ impl OhCameraBackend {
                 all(target_env = "ohos", feature = "trace_to_hitrace")
             ))]
             async_scope: Box::new(OhCameraAsyncScope::default()),
+            tokenid,
         })
     }
 }
@@ -212,6 +215,9 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn video_stream_on(&mut self) -> Result<()> {
+        if self.tokenid != 0 {
+            bound_tokenid(self.tokenid)?;
+        }
         self.ctx.start_stream(on_buffer_available, on_broken)?;
         self.stream_on = true;
         Ok(())

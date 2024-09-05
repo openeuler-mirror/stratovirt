@@ -44,7 +44,7 @@ use ohaudio::{OhAudio, OhAudioVolume};
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-use util::ohos_binding::misc::{get_firstcaller_tokenid, set_firstcaller_tokenid};
+use util::ohos_binding::misc::bound_tokenid;
 
 pub const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
@@ -470,16 +470,6 @@ impl StreamData {
             }
         }
     }
-}
-
-#[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-fn bound_tokenid(token_id: u64) -> Result<()> {
-    if token_id == 0 {
-        bail!("UI token ID not passed.");
-    } else if token_id != get_firstcaller_tokenid()? {
-        set_firstcaller_tokenid(token_id)?;
-    }
-    Ok(())
 }
 
 #[derive(Clone, Debug)]
