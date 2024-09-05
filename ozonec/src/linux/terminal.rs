@@ -11,15 +11,23 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
+    fs::File,
     io::IoSlice,
     mem::ManuallyDrop,
     os::unix::io::{AsRawFd, RawFd},
+    path::PathBuf,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use nix::{
-    pty::openpty,
-    sys::socket::{sendmsg, ControlMessage, MsgFlags, UnixAddr},
+    errno::errno,
+    fcntl::{open, OFlag},
+    mount::MsFlags,
+    pty::{posix_openpt, ptsname, unlockpt},
+    sys::{
+        socket::{sendmsg, ControlMessage, MsgFlags, UnixAddr},
+        stat::{fchmod, Mode},
+    },
     unistd::{close, dup2},
 };
 
@@ -31,14 +39,12 @@ pub enum Stdio {
     Stderr = 2,
 }
 
-pub fn setup_console(console_fd: &RawFd) -> Result<()> {
-    let ret = openpty(None, None).with_context(|| "openpty error")?;
+pub fn setup_console(console_fd: &RawFd, mount: bool) -> Result<()> {
+    let master_fd = posix_openpt(OFlag::O_RDWR).with_context(|| "openpt error")?;
     let pty_name: &[u8] = b"/dev/ptmx";
     let iov = [IoSlice::new(pty_name)];
-
     // Use ManuallyDrop to keep fds open.
-    let master = ManuallyDrop::new(ret.master);
-    let slave = ManuallyDrop::new(ret.slave);
+    let master = ManuallyDrop::new(master_fd.as_raw_fd());
     let fds = [master.as_raw_fd()];
     let cmsg = ControlMessage::ScmRights(&fds);
     sendmsg::<UnixAddr>(
@@ -51,8 +57,30 @@ pub fn setup_console(console_fd: &RawFd) -> Result<()> {
     .with_context(|| "sendmsg error")?;
 
     // SAFETY: FFI call with valid arguments.
-    let slave_fd = slave.as_raw_fd();
-    unsafe { libc::ioctl(slave_fd, libc::TIOCSCTTY) };
+    let slave_name = unsafe { ptsname(&master_fd).with_context(|| "ptsname error")? };
+    unlockpt(&master_fd).with_context(|| "unlockpt error")?;
+    let slave_path = PathBuf::from(&slave_name);
+    if mount {
+        let file = File::create("/dev/console").with_context(|| "Failed to create /dev/console")?;
+        fchmod(file.as_raw_fd(), Mode::from_bits_truncate(0o666u32))
+            .with_context(|| "chmod error")?;
+        nix::mount::mount(
+            Some(&slave_path),
+            "/dev/console",
+            Some("bind"),
+            MsFlags::MS_BIND,
+            None::<&str>,
+        )
+        .with_context(|| OzonecErr::Mount(slave_name.clone()))?;
+    }
+
+    let slave_fd = open(&slave_path, OFlag::O_RDWR, Mode::empty())
+        .with_context(|| OzonecErr::OpenFile(slave_name.clone()))?;
+    let slave = ManuallyDrop::new(slave_fd);
+    // SAFETY: FFI call with valid arguments.
+    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSCTTY) } != 0 {
+        bail!("TIOCSCTTY error: {}", errno());
+    }
     connect_stdio(&slave_fd, &slave_fd, &slave_fd)?;
     close(console_fd.as_raw_fd()).with_context(|| "Failed to close console socket")?;
     Ok(())

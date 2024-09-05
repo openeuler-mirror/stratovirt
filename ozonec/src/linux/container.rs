@@ -14,7 +14,7 @@ use std::{
     collections::HashMap,
     fs::{self, canonicalize, create_dir_all, OpenOptions},
     io::Write,
-    os::unix::{io::AsRawFd, net::UnixStream},
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     thread::sleep,
     time::{Duration, SystemTime},
@@ -174,14 +174,12 @@ impl LinuxContainer {
             .set_scheduler()
             .with_context(|| "Failed to set scheduler")?;
 
-        if let Some(console_socket) = &self.console_socket {
-            let stream = UnixStream::connect(console_socket)
-                .with_context(|| "Failed to connect console socket")?;
-            process
-                .set_tty(Some(stream.as_raw_fd()))
-                .with_context(|| "Failed to set tty")?;
-        }
-
+        let console_stream = match &self.console_socket {
+            Some(cs) => {
+                Some(UnixStream::connect(cs).with_context(|| "Failed to connect console socket")?)
+            }
+            None => None,
+        };
         self.set_rest_namespaces()?;
         process.set_no_new_privileges()?;
 
@@ -221,8 +219,10 @@ impl LinuxContainer {
                 .with_context(|| "Failed to chroot")?;
         }
 
+        process
+            .set_tty(console_stream, process.init)
+            .with_context(|| "Failed to set tty")?;
         process.set_apparmor()?;
-
         if self.config.root.readonly {
             LinuxContainer::mount_rootfs_readonly()?;
         }
