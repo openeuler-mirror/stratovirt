@@ -16,7 +16,10 @@ use std::{
     fs::{self, read_to_string},
     io::{stderr, stdin, stdout},
     mem,
-    os::unix::io::{AsRawFd, RawFd},
+    os::unix::{
+        io::{AsRawFd, RawFd},
+        net::UnixStream,
+    },
     path::PathBuf,
     str::FromStr,
 };
@@ -61,9 +64,13 @@ impl Process {
         p
     }
 
-    pub fn set_tty(&self, console_fd: Option<RawFd>) -> Result<()> {
-        if self.tty && console_fd.is_some() {
-            setup_console(&console_fd.unwrap()).with_context(|| "Failed to setup console")?;
+    pub fn set_tty(&self, console_fd: Option<UnixStream>, mount: bool) -> Result<()> {
+        if self.tty {
+            if console_fd.is_none() {
+                bail!("Terminal is specified, but no console socket set");
+            }
+            setup_console(&console_fd.unwrap().as_raw_fd(), mount)
+                .with_context(|| "Failed to setup console")?;
         } else {
             connect_stdio(
                 self.stdin.as_ref().unwrap(),
