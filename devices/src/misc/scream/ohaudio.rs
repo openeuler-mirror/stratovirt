@@ -30,6 +30,7 @@ use util::ohos_binding::audio::*;
 const STREAM_DATA_VEC_CAPACITY: usize = 15;
 const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
+const SCREAM_MAX_VOLUME: u32 = 110;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
@@ -532,16 +533,18 @@ impl AudioInterface for OhAudio {
 pub struct OhAudioVolume {
     shm_dev: Arc<Mutex<Ivshmem>>,
     ohos_vol: RwLock<u32>,
+    ohos_vol_max: u32,
+    ohos_vol_min: u32,
 }
 
-// SAFETY: all fields are protected by lock
+// SAFETY: all unsafe fields are protected by lock
 unsafe impl Send for OhAudioVolume {}
-// SAFETY: all fields are protected by lock
+// SAFETY: all unsafe fields are protected by lock
 unsafe impl Sync for OhAudioVolume {}
 
 impl GuestVolumeNotifier for OhAudioVolume {
     fn notify(&self, vol: u32) {
-        *self.ohos_vol.write().unwrap() = vol;
+        *self.ohos_vol.write().unwrap() = self.to_guest_vol(vol);
         self.shm_dev
             .lock()
             .unwrap()
@@ -555,7 +558,7 @@ impl AudioExtension for OhAudioVolume {
     }
 
     fn set_host_volume(&self, vol: u32) {
-        set_ohos_volume(vol);
+        set_ohos_volume(self.to_host_vol(vol));
     }
 }
 
@@ -563,10 +566,31 @@ impl OhAudioVolume {
     pub fn new(shm_dev: Arc<Mutex<Ivshmem>>) -> Arc<Self> {
         let vol = Arc::new(Self {
             shm_dev,
-            ohos_vol: RwLock::new(get_ohos_volume()),
+            ohos_vol: RwLock::new(0),
+            ohos_vol_max: get_ohos_volume_max(),
+            ohos_vol_min: get_ohos_volume_min(),
         });
+        *vol.ohos_vol.write().unwrap() = vol.to_guest_vol(get_ohos_volume());
         register_guest_volume_notifier(vol.clone());
         vol
+    }
+
+    fn to_guest_vol(&self, h_vol: u32) -> u32 {
+        if self.ohos_vol_max > self.ohos_vol_min {
+            return SCREAM_MAX_VOLUME * h_vol / (self.ohos_vol_max - self.ohos_vol_min);
+        }
+        0
+    }
+
+    fn to_host_vol(&self, v_vol: u32) -> u32 {
+        if v_vol == 0 || self.ohos_vol_max <= self.ohos_vol_min {
+            return 0;
+        }
+        let res = (self.ohos_vol_max - self.ohos_vol_min) * v_vol / SCREAM_MAX_VOLUME + 1;
+        if res > self.ohos_vol_max {
+            return self.ohos_vol_max;
+        }
+        res
     }
 }
 
