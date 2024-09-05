@@ -178,7 +178,7 @@ impl OhCameraBackend {
                 feature = "trace_to_ftrace",
                 all(target_env = "ohos", feature = "trace_to_hitrace")
             ))]
-            async_scope: Box::new(OhCameraAsyncScope::default()),
+            async_scope: Box::<OhCameraAsyncScope>::default(),
             tokenid,
         })
     }
