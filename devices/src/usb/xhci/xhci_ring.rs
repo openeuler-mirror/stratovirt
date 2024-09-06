@@ -10,10 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{fence, AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::debug;
 
@@ -54,7 +54,7 @@ impl XhciTRB {
 #[derive(Clone)]
 pub struct XhciCommandRing {
     mem: Arc<AddressSpace>,
-    pub dequeue: u64,
+    pub dequeue: GuestAddress,
     /// Consumer Cycle State
     pub ccs: bool,
 }
@@ -63,13 +63,13 @@ impl XhciCommandRing {
     pub fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
             mem: mem.clone(),
-            dequeue: 0,
+            dequeue: GuestAddress(0),
             ccs: true,
         }
     }
 
     pub fn init(&mut self, addr: u64) {
-        self.dequeue = addr;
+        self.dequeue = GuestAddress(addr);
         self.ccs = true;
     }
 
@@ -87,7 +87,7 @@ impl XhciCommandRing {
             }
             fence(Ordering::Acquire);
             let mut trb = read_trb(&self.mem, self.dequeue)?;
-            trb.addr = self.dequeue;
+            trb.addr = self.dequeue.raw_value();
             trb.ccs = self.ccs;
             let trb_type = trb.get_type();
             debug!("Fetch TRB: type {:?} trb {:?}", trb_type, trb);
@@ -96,7 +96,7 @@ impl XhciCommandRing {
                 if link_cnt > TRB_LINK_LIMIT {
                     bail!("TRB reach link limit");
                 }
-                self.dequeue = trb.parameter;
+                self.dequeue = GuestAddress(trb.parameter);
                 if trb.control & TRB_LK_TC == TRB_LK_TC {
                     self.ccs = !self.ccs;
                 }
@@ -105,7 +105,10 @@ impl XhciCommandRing {
                     .dequeue
                     .checked_add(u64::from(TRB_SIZE))
                     .ok_or_else(|| {
-                        UsbError::MemoryAccessOverflow(self.dequeue, u64::from(TRB_SIZE))
+                        UsbError::MemoryAccessOverflow(
+                            self.dequeue.raw_value(),
+                            u64::from(TRB_SIZE),
+                        )
                     })?;
                 return Ok(Some(trb));
             }
@@ -116,7 +119,7 @@ impl XhciCommandRing {
 /// XHCI Transfer Ring
 pub struct XhciTransferRing {
     pub mem: Arc<AddressSpace>,
-    pub dequeue: AtomicU64,
+    pub dequeue: Mutex<GuestAddress>,
     /// Consumer Cycle State
     pub ccs: AtomicBool,
 }
@@ -125,22 +128,22 @@ impl XhciTransferRing {
     pub fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
             mem: mem.clone(),
-            dequeue: AtomicU64::new(0),
+            dequeue: Mutex::new(GuestAddress(0)),
             ccs: AtomicBool::new(true),
         }
     }
 
     pub fn init(&self, addr: u64) {
-        self.set_dequeue_ptr(addr);
+        self.set_dequeue_ptr(GuestAddress(addr));
         self.set_cycle_bit(true);
     }
 
-    pub fn get_dequeue_ptr(&self) -> u64 {
-        self.dequeue.load(Ordering::Acquire)
+    pub fn get_dequeue_ptr(&self) -> GuestAddress {
+        *self.dequeue.lock().unwrap()
     }
 
-    pub fn set_dequeue_ptr(&self, addr: u64) {
-        self.dequeue.store(addr, Ordering::SeqCst);
+    pub fn set_dequeue_ptr(&self, addr: GuestAddress) {
+        *self.dequeue.lock().unwrap() = addr
     }
 
     pub fn get_cycle_bit(&self) -> bool {
@@ -168,7 +171,7 @@ impl XhciTransferRing {
             }
             fence(Ordering::Acquire);
             let mut trb = read_trb(&self.mem, dequeue)?;
-            trb.addr = dequeue;
+            trb.addr = dequeue.raw_value();
             trb.ccs = ccs;
             trace::usb_xhci_fetch_trb(&dequeue, &trb.parameter, &trb.status, &trb.control);
             let trb_type = trb.get_type();
@@ -177,15 +180,15 @@ impl XhciTransferRing {
                 if link_cnt > TRB_LINK_LIMIT {
                     bail!("TRB link over limit");
                 }
-                dequeue = trb.parameter;
+                dequeue = GuestAddress(trb.parameter);
                 if trb.control & TRB_LK_TC == TRB_LK_TC {
                     ccs = !ccs;
                 }
             } else {
                 td.push(trb);
-                dequeue = dequeue
-                    .checked_add(u64::from(TRB_SIZE))
-                    .ok_or_else(|| UsbError::MemoryAccessOverflow(dequeue, u64::from(TRB_SIZE)))?;
+                dequeue = dequeue.checked_add(u64::from(TRB_SIZE)).ok_or_else(|| {
+                    UsbError::MemoryAccessOverflow(dequeue.raw_value(), u64::from(TRB_SIZE))
+                })?;
                 if trb_type == TRBType::TrSetup {
                     ctrl_td = true;
                 } else if trb_type == TRBType::TrStatus {
@@ -216,15 +219,15 @@ impl XhciTransferRing {
     }
 
     pub fn update_dequeue_to_ctx(&self, ctx: &mut [u32]) {
-        let dequeue = self.get_dequeue_ptr();
+        let dequeue = self.get_dequeue_ptr().raw_value();
         ctx[0] = dequeue as u32 | u32::from(self.get_cycle_bit());
         ctx[1] = (dequeue >> 32) as u32;
     }
 }
 
-fn read_trb(mem: &Arc<AddressSpace>, addr: u64) -> Result<XhciTRB> {
+fn read_trb(mem: &Arc<AddressSpace>, addr: GuestAddress) -> Result<XhciTRB> {
     let mut buf = [0; TRB_SIZE as usize];
-    dma_read_bytes(mem, GuestAddress(addr), &mut buf)?;
+    dma_read_bytes(mem, addr, &mut buf)?;
     let trb = XhciTRB {
         parameter: LittleEndian::read_u64(&buf),
         status: LittleEndian::read_u32(&buf[8..]),
@@ -235,12 +238,12 @@ fn read_trb(mem: &Arc<AddressSpace>, addr: u64) -> Result<XhciTRB> {
     Ok(trb)
 }
 
-fn read_cycle_bit(mem: &Arc<AddressSpace>, addr: u64) -> Result<bool> {
+fn read_cycle_bit(mem: &Arc<AddressSpace>, addr: GuestAddress) -> Result<bool> {
     let addr = addr
         .checked_add(12)
-        .with_context(|| format!("Ring address overflow, {:x}", addr))?;
+        .ok_or_else(|| UsbError::MemoryAccessOverflow(addr.raw_value(), 12))?;
     let mut buf = [0];
-    dma_read_u32(mem, GuestAddress(addr), &mut buf)?;
+    dma_read_u32(mem, addr, &mut buf)?;
     Ok(buf[0] & TRB_C == TRB_C)
 }
 
@@ -265,9 +268,9 @@ impl XhciEventRingSeg {
     }
 
     /// Fetch the event ring segment.
-    pub fn fetch_event_ring_seg(&mut self, addr: u64) -> Result<()> {
+    pub fn fetch_event_ring_seg(&mut self, addr: GuestAddress) -> Result<()> {
         let mut buf = [0_u8; TRB_SIZE as usize];
-        dma_read_bytes(&self.mem, GuestAddress(addr), &mut buf)?;
+        dma_read_bytes(&self.mem, addr, &mut buf)?;
         self.addr_lo = LittleEndian::read_u32(&buf);
         self.addr_hi = LittleEndian::read_u32(&buf[4..]);
         self.size = LittleEndian::read_u32(&buf[8..]);
