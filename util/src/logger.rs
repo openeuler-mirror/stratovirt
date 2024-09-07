@@ -34,7 +34,7 @@ fn format_now() -> String {
         println!("{:?}", e);
         (0, 0)
     });
-    let format_time = get_format_time(i64::from(sec));
+    let format_time = get_format_time(sec);
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}",
@@ -63,7 +63,7 @@ impl FileRotate {
 
         self.current_size += Wrapping(size_inc);
         let sec = gettime()?.0;
-        let today = get_format_time(i64::from(sec))[2];
+        let today = get_format_time(sec)[2];
         if self.current_size < Wrapping(LOG_ROTATE_SIZE_MAX) && self.create_day == today {
             return Ok(());
         }
