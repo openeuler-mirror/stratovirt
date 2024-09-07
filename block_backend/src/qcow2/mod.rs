@@ -1013,6 +1013,17 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Alloc new snapshot table.
         let (date_sec, date_nsec) = gettime()?;
+        // Note: The `Snapshots` chapter in Qcow2 spec states:
+        // Snapshot table entry:
+        // Byte 16 - 19: Time at which the snapshot was taken in seconds since the
+        //               Epoch
+        // Byte 20 - 23: Subsecond part of the time at which the snapshot was taken
+        //               in nanoseconds
+        //
+        // 32 bits of seconds can represent a range of approximately 136 years since 1970.
+        // It's enough for current use. If an incorrect host time is used to inject error,
+        // there may be an issue of inaccurate creation time in the snapshot description.
+        // Considering compatibility, this issue of inaccurate time is acceptable.
         let snap = QcowSnapshot {
             l1_table_offset: new_l1_table_offset,
             l1_size: self.header.l1_size,
@@ -1020,8 +1031,8 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             name,
             disk_size: self.virtual_disk_size(),
             vm_state_size: 0,
-            date_sec,
-            date_nsec,
+            date_sec: date_sec as u32,
+            date_nsec: date_nsec as u32,
             vm_clock_nsec,
             icount: u64::MAX,
             extra_data_size: size_of::<QcowSnapshotExtraData>() as u32,
