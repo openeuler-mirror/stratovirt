@@ -2519,7 +2519,7 @@ pub fn dma_write_u32(
 }
 
 fn addr64_from_u32(low: u32, high: u32) -> u64 {
-    (u64::from(high << 16) << 16) | u64::from(low)
+    (u64::from(high) << 32) | u64::from(low)
 }
 
 // | ep id | < = > | ep direction | ep number |
