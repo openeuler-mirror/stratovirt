@@ -166,11 +166,14 @@ impl Device {
         let default_devs = self.default_devices();
         for dev in default_devs {
             if mknod {
-                self.mknod_device(&dev)
-                    .with_context(|| format!("Failed to mknod device: {}", dev.path.display()))?;
+                if self.mknod_device(&dev).is_err() {
+                    self.bind_device(&dev).with_context(|| {
+                        OzonecErr::BindDev(dev.path.to_string_lossy().to_string())
+                    })?;
+                }
             } else {
                 self.bind_device(&dev)
-                    .with_context(|| format!("Failed to bind device: {}", dev.path.display()))?;
+                    .with_context(|| OzonecErr::BindDev(dev.path.to_string_lossy().to_string()))?;
             }
         }
         Ok(())
@@ -211,9 +214,14 @@ impl Device {
         };
 
         if mknod {
-            self.mknod_device(&dev_info)?;
+            if self.mknod_device(&dev_info).is_err() {
+                self.bind_device(&dev_info).with_context(|| {
+                    OzonecErr::BindDev(dev_info.path.to_string_lossy().to_string())
+                })?;
+            }
         } else {
-            self.bind_device(&dev_info)?;
+            self.bind_device(&dev_info)
+                .with_context(|| OzonecErr::BindDev(dev_info.path.to_string_lossy().to_string()))?;
         }
         Ok(())
     }
