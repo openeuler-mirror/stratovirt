@@ -42,4 +42,6 @@ pub enum OzonecErr {
     LoadConState,
     #[error("Failed to get oci state")]
     GetOciState,
+    #[error("Failed to bind device: {0}")]
+    BindDev(String),
 }

@@ -191,6 +191,7 @@ impl LinuxContainer {
                 .unwrap()
                 .rootfsPropagation
                 .clone();
+            // Container running in a user namespace is not allowed to do mknod.
             let mknod_device = !self.is_namespace_set(NamespaceType::User)?;
             let mut devices: Vec<OciDevice> = Vec::new();
             if let Some(devs) = self.config.linux.as_ref().unwrap().devices.as_ref() {
