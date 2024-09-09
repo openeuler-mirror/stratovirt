@@ -22,7 +22,10 @@ use std::{
 
 use core::time;
 
-use devices::misc::scream::{ShmemHeader, ShmemStreamFmt, ShmemStreamHeader, SCREAM_MAGIC};
+use devices::misc::scream::{
+    ShmemHeader, ShmemStreamFmt, ShmemStreamHeader, IVSHMEM_BAR0_STATUS, SCREAM_MAGIC,
+    STATUS_PLAY_BIT, STATUS_START_BIT,
+};
 use mod_test::{
     libdriver::{ivshmem::TestIvshmemDev, machine::TestStdMachine},
     libtest::{test_init, TestState, MACHINE_TYPE_ARG},
@@ -235,6 +238,9 @@ fn scream_playback_basic_test() {
     thread::sleep(time::Duration::from_millis(1000));
 
     play_header_init(&mut ivshmem.borrow_mut());
+    ivshmem
+        .borrow_mut
+        .writel_reg(IVSHMEM_BAR0_STATUS, STATUS_PLAY_BIT | STATUS_START_BIT);
 
     thread::sleep(time::Duration::from_millis(POLL_DELAY_MS));
 
@@ -342,6 +348,9 @@ fn scream_record_basic_test() {
     ivshmem.borrow_mut().init(pci_slot);
 
     record_header_init(&mut ivshmem.borrow_mut());
+    ivshmem
+        .borrow_mut
+        .writel_reg(IVSHMEM_BAR0_STATUS, STATUS_START_BIT);
 
     let mut cnt = 0;
     let mut chunk_idx = 0;

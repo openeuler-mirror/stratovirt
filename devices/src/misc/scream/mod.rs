@@ -58,10 +58,10 @@ const IVSHMEM_VOLUME_SYNC_VECTOR: u16 = 0;
 const IVSHMEM_STATUS_CHANGE_VECTOR: u16 = 1;
 const IVSHMEM_VECTORS_NR: u32 = 2;
 const IVSHMEM_BAR0_VOLUME: u64 = 240;
-const IVSHMEM_BAR0_STATUS: u64 = 244;
+pub const IVSHMEM_BAR0_STATUS: u64 = 244;
 
-const STATUS_PLAY_BIT: u32 = 0x1;
-const STATUS_START_BIT: u32 = 0x2;
+pub const STATUS_PLAY_BIT: u32 = 0x1;
+pub const STATUS_START_BIT: u32 = 0x2;
 const STATUS_MIC_AVAIL_BIT: u32 = 0x4;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
