@@ -184,21 +184,24 @@ pub enum pixman_op_t {
     PIXMAN_OP_HSL_LUMINOSITY = 62,
 }
 
-pub type pixman_image_destroy_func_t = ::std::option::Option<
-    unsafe extern "C" fn(image: *mut pixman_image_t, data: *mut libc::c_void),
->;
+pub type pixman_image_destroy_func_t =
+    Option<unsafe extern "C" fn(image: *mut pixman_image_t, data: *mut libc::c_void)>;
 
-pub extern "C" fn virtio_gpu_unref_resource_callback(
+/// # Safety
+///
+/// Caller should has valid image and data.
+pub unsafe extern "C" fn virtio_gpu_unref_resource_callback(
     _image: *mut pixman_image_t,
     data: *mut libc::c_void,
 ) {
-    // SAFETY: The safety of this function is guaranteed by caller.
-    unsafe { pixman_image_unref(data.cast()) };
+    // The safety of this function is guaranteed by caller.
+    pixman_image_unref(data.cast());
 }
 
 fn pixman_format_reshift(val: u32, ofs: u32, num: u32) -> u32 {
     ((val >> (ofs)) & ((1 << (num)) - 1)) << ((val >> 22) & 3)
 }
+
 pub fn pixman_format_bpp(val: u32) -> u8 {
     pixman_format_reshift(val, 24, 8) as u8
 }
@@ -206,17 +209,24 @@ pub fn pixman_format_bpp(val: u32) -> u8 {
 pub fn pixman_format_a(val: u32) -> u8 {
     pixman_format_reshift(val, 12, 4) as u8
 }
+
 pub fn pixman_format_r(val: u32) -> u8 {
     pixman_format_reshift(val, 8, 4) as u8
 }
+
 pub fn pixman_format_g(val: u32) -> u8 {
     pixman_format_reshift(val, 4, 4) as u8
 }
+
 pub fn pixman_format_b(val: u32) -> u8 {
     pixman_format_reshift(val, 0, 4) as u8
 }
+
 pub fn pixman_format_depth(val: u32) -> u8 {
-    pixman_format_a(val) + pixman_format_r(val) + pixman_format_g(val) + pixman_format_b(val)
+    pixman_format_a(val)
+        .wrapping_add(pixman_format_r(val))
+        .wrapping_add(pixman_format_g(val))
+        .wrapping_add(pixman_format_b(val))
 }
 
 extern "C" {

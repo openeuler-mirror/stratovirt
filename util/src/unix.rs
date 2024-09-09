@@ -19,8 +19,8 @@ use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
 use anyhow::{anyhow, bail, Context, Result};
 use libc::{
-    c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, CMSG_LEN, CMSG_SPACE, MSG_NOSIGNAL,
-    MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
+    c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, syscall, SYS_mbind, CMSG_LEN, CMSG_SPACE,
+    MSG_NOSIGNAL, MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
 };
 use log::error;
 use nix::unistd::{sysconf, SysconfVar};
@@ -140,6 +140,47 @@ unsafe fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
             std::io::Error::last_os_error()
         );
     }
+}
+
+/// This function set memory policy for host NUMA node memory range.
+///
+/// * Arguments
+///
+/// * `addr` - The memory range starting with addr.
+/// * `len` - Length of the memory range.
+/// * `mode` - Memory policy mode.
+/// * `node_mask` - node_mask specifies physical node ID.
+/// * `max_node` - The max node.
+/// * `flags` - Mode flags.
+///
+/// # Safety
+///
+/// Caller should has valid params.
+pub unsafe fn mbind(
+    addr: u64,
+    len: u64,
+    mode: u32,
+    node_mask: Vec<u64>,
+    max_node: u64,
+    flags: u32,
+) -> Result<()> {
+    let res = syscall(
+        SYS_mbind,
+        addr as *mut c_void,
+        len,
+        mode,
+        node_mask.as_ptr(),
+        max_node + 1,
+        flags,
+    );
+    if res < 0 {
+        bail!(
+            "Failed to apply host numa node policy, error is {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    Ok(())
 }
 
 /// Unix socket is a data communication endpoint for exchanging data
@@ -301,9 +342,9 @@ impl UnixSock {
         // SAFETY: We checked the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We checked the out_fds lens before.
-        let cmsg_len = unsafe { CMSG_LEN((std::mem::size_of_val(out_fds)) as u32) };
+        let cmsg_len = unsafe { CMSG_LEN(u32::try_from(std::mem::size_of_val(out_fds))?) };
         // SAFETY: We checked the out_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(out_fds)) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE(u32::try_from(std::mem::size_of_val(out_fds))?) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
@@ -348,7 +389,7 @@ impl UnixSock {
         // SAFETY: msg parameters are valid.
         let write_count = unsafe { sendmsg(sock.as_raw_fd(), &msg, MSG_NOSIGNAL) };
 
-        if write_count == -1 {
+        if write_count < 0 {
             Err(anyhow!(
                 "Failed to send msg, err: {}",
                 std::io::Error::last_os_error()
@@ -372,7 +413,7 @@ impl UnixSock {
         // SAFETY: We check the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We check the in_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(in_fds)) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE(u32::try_from(std::mem::size_of_val(in_fds))?) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
@@ -399,7 +440,7 @@ impl UnixSock {
         // SAFETY: msg parameters are valid.
         let total_read = unsafe { recvmsg(sock.as_raw_fd(), &mut msg, MSG_WAITALL) };
 
-        if total_read == -1 {
+        if total_read < 0 {
             bail!(
                 "Failed to recv msg, err: {}",
                 std::io::Error::last_os_error()
@@ -424,17 +465,23 @@ impl UnixSock {
                 // SAFETY: Input parameter is constant.
                 let fd_count = (cmsg.cmsg_len as u64 - u64::from(unsafe { CMSG_LEN(0) })) as usize
                     / size_of::<RawFd>();
+                let new_in_fds_count = in_fds_count
+                    .checked_add(fd_count)
+                    .with_context(|| "fds count overflow")?;
+                if new_in_fds_count > in_fds.len() {
+                    bail!("in_fds is too small");
+                }
                 // SAFETY:
                 // 1. the pointer of cmsg_ptr was created in this function and can be guaranteed not be null.
                 // 2. the parameter of in_fds has been checked before.
                 unsafe {
                     copy_nonoverlapping(
                         self.cmsg_data(cmsg_ptr),
-                        in_fds[in_fds_count..(in_fds_count + fd_count)].as_mut_ptr(),
+                        in_fds[in_fds_count..new_in_fds_count].as_mut_ptr(),
                         fd_count,
                     );
                 }
-                in_fds_count += fd_count;
+                in_fds_count = new_in_fds_count;
             }
 
             cmsg_ptr = self.get_next_cmsg(&msg, &cmsg, cmsg_ptr);

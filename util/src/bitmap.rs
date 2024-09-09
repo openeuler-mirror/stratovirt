@@ -230,7 +230,7 @@ impl<T: BitOps> Bitmap<T> {
     ///
     /// * `num` - the input number.
     pub fn contain(&self, num: usize) -> Result<bool> {
-        if num > self.vol() {
+        if num >= self.vol() {
             return Err(anyhow!(UtilError::OutOfBound(
                 num as u64,
                 self.size() as u64 * T::len() as u64,
@@ -515,7 +515,7 @@ mod tests {
         assert!(bitmap.clear(64).is_ok());
         assert!(bitmap.clear(128).is_ok());
 
-        let mut offset = 0;
+        let mut offset = 0_usize;
         offset = bitmap.find_next_zero(offset).unwrap();
         assert_eq!(offset, 0);
         offset = bitmap.find_next_zero(offset + 1).unwrap();
@@ -537,7 +537,7 @@ mod tests {
         assert!(bitmap.set(64).is_ok());
         assert!(bitmap.set(128).is_ok());
 
-        let mut offset = 0;
+        let mut offset = 0_usize;
         offset = bitmap.find_next_bit(offset).unwrap();
         assert_eq!(offset, 0);
         offset = bitmap.find_next_bit(offset + 1).unwrap();

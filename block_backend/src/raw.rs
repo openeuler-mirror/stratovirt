@@ -68,12 +68,15 @@ impl<T: Clone + 'static> RawDriver<T> {
             bail!("Failed to alloc memory for write.");
         }
 
-        let ret = raw_write(
-            self.driver.file.as_raw_fd(),
-            align_buf as u64,
-            write_size as usize,
-            0,
-        );
+        // SAFETY: align_buf is valid and large enough.
+        let ret = unsafe {
+            raw_write(
+                self.driver.file.as_raw_fd(),
+                align_buf as u64,
+                write_size as usize,
+                0,
+            )
+        };
         // SAFETY: the memory is allocated in this function.
         unsafe { libc::free(align_buf) };
 

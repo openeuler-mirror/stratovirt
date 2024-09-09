@@ -25,10 +25,7 @@ use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
 use crate::{AddressRange, GuestAddress, Region};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
-use util::{
-    syscall::mbind,
-    unix::{do_mmap, host_page_size},
-};
+use util::unix::{do_mmap, host_page_size, mbind};
 
 const MAX_PREALLOC_THREAD: i64 = 16;
 /// Verify existing pages in the mapping.
@@ -370,15 +367,20 @@ fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConf
         nmask = vec![0_u64; max_node];
     }
 
-    mbind(
-        host_addr_start,
-        zone.size,
-        policy as u32,
-        nmask,
-        max_node as u64,
-        MPOL_MF_STRICT | MPOL_MF_MOVE,
-    )
-    .with_context(|| "Failed to call mbind")?;
+    // SAFETY:
+    // 1. addr is managed by memory mapping, it can be guaranteed legal.
+    // 2. node_mask was created in this function.
+    // 3. Upper limit of max_node is MAX_NODES.
+    unsafe {
+        mbind(
+            host_addr_start,
+            zone.size,
+            policy as u32,
+            nmask,
+            max_node as u64,
+            MPOL_MF_STRICT | MPOL_MF_MOVE,
+        )?;
+    }
 
     Ok(())
 }

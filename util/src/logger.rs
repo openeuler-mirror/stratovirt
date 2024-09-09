@@ -159,7 +159,7 @@ fn init_vm_logger(
         current_size = Wrapping(metadata.len() as usize);
         let mod_time = metadata.modified()?;
         let sec = mod_time.duration_since(UNIX_EPOCH)?.as_secs();
-        create_day = get_format_time(sec as i64)[2];
+        create_day = get_format_time(i64::try_from(sec)?)[2];
     };
     let rotate = Mutex::new(FileRotate {
         handler: logfile,

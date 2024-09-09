@@ -76,6 +76,10 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
             (MAX_FILE_ALIGN * 2) as libc::size_t,
         )
     };
+    if aligned_buffer.is_null() {
+        log::warn!("OOM occurs when get file alignment, assume max alignment");
+        return (MAX_FILE_ALIGN, MAX_FILE_ALIGN);
+    }
 
     // Guess alignment requirement of request.
     let mut align = MIN_FILE_ALIGN;

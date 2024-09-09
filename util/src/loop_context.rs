@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::io::Error;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -19,6 +18,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use std::{fmt, i32};
 
 use anyhow::{anyhow, Context, Result};
 use libc::{c_void, read, EFD_CLOEXEC, EFD_NONBLOCK};
@@ -681,7 +681,7 @@ impl EventLoopContext {
         }
 
         let time_out_ms = match time_out {
-            Some(t) => t.as_millis() as i32,
+            Some(t) => i32::try_from(t.as_millis()).unwrap_or(i32::MAX),
             None => -1,
         };
         let ev_count = match self.epoll.wait(time_out_ms, &mut self.ready_events[..]) {
@@ -702,8 +702,7 @@ impl EventLoopContext {
             let mut notifiers = Vec::new();
             let status_locked = event.status.lock().unwrap();
             if *status_locked == EventStatus::Alive {
-                for j in 0..event.handlers.len() {
-                    let handler = &event.handlers[j];
+                for handler in event.handlers.iter() {
                     match handler(self.ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
@@ -727,17 +726,11 @@ impl EventLoopContext {
 pub fn read_fd(fd: RawFd) -> u64 {
     let mut value: u64 = 0;
 
-    // SAFETY: this is called by notifier handler and notifier handler
-    // is executed with fd is is valid. The value is defined above thus
-    // valid too.
-    let ret = unsafe {
-        read(
-            fd,
-            &mut value as *mut u64 as *mut c_void,
-            std::mem::size_of::<u64>(),
-        )
-    };
+    let buf = &mut value as *mut u64 as *mut c_void;
+    let count = std::mem::size_of::<u64>();
 
+    // SAFETY: The buf refers to local value and count equals to value size.
+    let ret = unsafe { read(fd, buf, count) };
     if ret == -1 {
         warn!("Failed to read fd");
     }

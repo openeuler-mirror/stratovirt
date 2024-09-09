@@ -50,8 +50,8 @@ pub fn get_format_time(sec: i64) -> [i32; 6] {
     }
 
     [
-        ti.tm_year + 1900,
-        ti.tm_mon + 1,
+        ti.tm_year.saturating_add(1900),
+        ti.tm_mon.saturating_add(1),
         ti.tm_mday,
         ti.tm_hour,
         ti.tm_min,
