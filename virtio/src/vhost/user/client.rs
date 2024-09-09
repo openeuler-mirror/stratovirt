@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::super::VhostOps;
@@ -243,7 +243,7 @@ impl VhostUserMemInfo {
         let file_back = match fr.owner.get_file_backend() {
             Some(file_back_) => file_back_,
             _ => {
-                info!("It is not share memory for vhost user device");
+                debug!("It is not share memory for vhost user device");
                 return Ok(());
             }
         };
@@ -283,7 +283,7 @@ impl VhostUserMemInfo {
 
         let file_back = match fr.owner.get_file_backend() {
             None => {
-                info!("fr {:?} backend is not file, ignored", fr);
+                debug!("fr {:?} backend is not file, ignored", fr);
                 return Ok(());
             }
             Some(fb) => fb,
