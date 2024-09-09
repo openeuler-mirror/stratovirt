@@ -20,6 +20,7 @@ use super::{
 pub struct TestIvshmemDev {
     pub pci_dev: TestPciDev,
     bar0_addr: PCIBarAddr,
+    bar1_addr: PCIBarAddr,
     pub bar2_addr: PCIBarAddr,
 }
 
@@ -28,6 +29,7 @@ impl TestIvshmemDev {
         Self {
             pci_dev: TestPciDev::new(pci_bus),
             bar0_addr: 0,
+            bar1_addr: 0,
             bar2_addr: 0,
         }
     }
@@ -38,6 +40,7 @@ impl TestIvshmemDev {
 
         self.pci_dev.enable();
         self.bar0_addr = self.pci_dev.io_map(0);
+        self.bar1_addr = self.pci_dev.io_map(1);
         self.bar2_addr = self.pci_dev.io_map(2);
     }
 
@@ -67,5 +70,9 @@ impl TestIvshmemDev {
 
     pub fn writel_reg(&self, offset: u64, value: u32) {
         self.pci_dev.io_writel(self.bar0_addr, offset, value);
+    }
+
+    pub fn readl_reg(&self, offset: u64) -> u32 {
+        self.pci_dev.io_readl(self.bar0_addr, offset)
     }
 }
