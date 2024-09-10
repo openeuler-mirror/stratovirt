@@ -21,11 +21,15 @@ use crate::get_libfn;
 pub type VolumeChangedCallBack = unsafe extern "C" fn(c_int);
 
 type OhSysAudioGetVolumeFn = unsafe extern "C" fn() -> c_int;
+type OhSysAudioGetMaxVolumeFn = unsafe extern "C" fn() -> c_int;
+type OhSysAudioGetMinVolumeFn = unsafe extern "C" fn() -> c_int;
 type OhSysAudioSetVolumeFn = unsafe extern "C" fn(c_int);
 type OhSysAudioRegisterVolumeChangeFn = unsafe extern "C" fn(VolumeChangedCallBack) -> c_int;
 
 pub struct VolumeFuncTable {
     pub get_volume: RawSymbol<OhSysAudioGetVolumeFn>,
+    pub get_max_volume: RawSymbol<OhSysAudioGetMaxVolumeFn>,
+    pub get_min_volume: RawSymbol<OhSysAudioGetMinVolumeFn>,
     pub set_volume: RawSymbol<OhSysAudioSetVolumeFn>,
     pub register_volume_change: RawSymbol<OhSysAudioRegisterVolumeChangeFn>,
 }
@@ -34,6 +38,8 @@ impl VolumeFuncTable {
     pub unsafe fn new(library: &Library) -> Result<VolumeFuncTable> {
         Ok(Self {
             get_volume: get_libfn!(library, OhSysAudioGetVolumeFn, OhSysAudioGetVolume),
+            get_max_volume: get_libfn!(library, OhSysAudioGetMaxVolumeFn, OhSysAudioGetMaxVolume),
+            get_min_volume: get_libfn!(library, OhSysAudioGetMinVolumeFn, OhSysAudioGetMinVolume),
             set_volume: get_libfn!(library, OhSysAudioSetVolumeFn, OhSysAudioSetVolume),
             register_volume_change: get_libfn!(
                 library,
