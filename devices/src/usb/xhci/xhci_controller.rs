@@ -434,14 +434,10 @@ impl XhciEpContext {
             let locked_stream = stream.lock().unwrap();
             let output_addr = locked_stream.dequeue;
             let ring = locked_stream.ring.as_ref();
-            dma_read_u32(
-                &self.mem,
-                GuestAddress(output_addr),
-                stream_ctx.as_mut_dwords(),
-            )?;
+            dma_read_u32(&self.mem, output_addr, stream_ctx.as_mut_dwords())?;
             ring.update_dequeue_to_ctx(stream_ctx.as_mut_dwords());
             ring.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
-            dma_write_u32(&self.mem, GuestAddress(output_addr), stream_ctx.as_dwords())?;
+            dma_write_u32(&self.mem, output_addr, stream_ctx.as_dwords())?;
         }
 
         dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
@@ -866,7 +862,7 @@ pub struct XhciStreamContext {
     /// Memory address space.
     mem: Arc<AddressSpace>,
     /// Dequeue pointer.
-    dequeue: u64,
+    dequeue: GuestAddress,
     /// Transfer Ring (no Secondary Streams for now).
     ring: Arc<XhciTransferRing>,
     /// Whether the context is up to date after reset.
@@ -877,14 +873,14 @@ impl XhciStreamContext {
     fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
             mem: Arc::clone(mem),
-            dequeue: 0,
+            dequeue: GuestAddress(0),
             ring: Arc::new(XhciTransferRing::new(mem)),
             needs_refresh: true,
         }
     }
 
     fn init(&mut self, addr: u64) -> Result<()> {
-        self.dequeue = addr;
+        self.dequeue = GuestAddress(addr);
         self.refresh()?;
         Ok(())
     }
@@ -899,11 +895,7 @@ impl XhciStreamContext {
 
     fn refresh(&mut self) -> Result<()> {
         let mut stream_ctx = XhciStreamCtx::default();
-        dma_read_u32(
-            &self.mem,
-            GuestAddress(self.dequeue),
-            stream_ctx.as_mut_dwords(),
-        )?;
+        dma_read_u32(&self.mem, self.dequeue, stream_ctx.as_mut_dwords())?;
         let dequeue = addr64_from_u32(stream_ctx.deq_lo & !0xf, stream_ctx.deq_hi);
         self.ring.init(dequeue);
         self.needs_refresh = false;
