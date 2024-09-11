@@ -555,7 +555,7 @@ impl From<u32> for EpType {
 pub struct XhciSlot {
     pub enabled: bool,
     pub addressed: bool,
-    pub slot_ctx_addr: u64,
+    pub slot_ctx_addr: GuestAddress,
     pub usb_port: Option<Arc<Mutex<UsbPort>>>,
     pub endpoints: Vec<XhciEpContext>,
 }
@@ -570,7 +570,7 @@ impl XhciSlot {
         XhciSlot {
             enabled: false,
             addressed: false,
-            slot_ctx_addr: 0,
+            slot_ctx_addr: GuestAddress(0),
             usb_port: None,
             endpoints: eps,
         }
@@ -579,18 +579,14 @@ impl XhciSlot {
     /// Get the slot context from the memory.
     fn get_slot_ctx(&self, mem: &Arc<AddressSpace>) -> Result<XhciSlotCtx> {
         let mut slot_ctx = XhciSlotCtx::default();
-        dma_read_u32(
-            mem,
-            GuestAddress(self.slot_ctx_addr),
-            slot_ctx.as_mut_dwords(),
-        )?;
+        dma_read_u32(mem, self.slot_ctx_addr, slot_ctx.as_mut_dwords())?;
         Ok(slot_ctx)
     }
 
     /// Get the slot state in slot context.
     fn get_slot_state_in_context(&self, mem: &Arc<AddressSpace>) -> Result<u32> {
         // Table 4-1: Device Slot State Code Definitions.
-        if self.slot_ctx_addr == 0 {
+        if self.slot_ctx_addr == GuestAddress(0) {
             return Ok(SLOT_DISABLED_ENABLED);
         }
         let slot_ctx = self.get_slot_ctx(mem)?;
@@ -1315,7 +1311,7 @@ impl XhciDevice {
         self.slots[(slot_id - 1) as usize].enabled = false;
         self.slots[(slot_id - 1) as usize].addressed = false;
         self.slots[(slot_id - 1) as usize].usb_port = None;
-        self.slots[(slot_id - 1) as usize].slot_ctx_addr = 0;
+        self.slots[(slot_id - 1) as usize].slot_ctx_addr = GuestAddress(0);
         Ok(TRBCCode::Success)
     }
 
@@ -1382,7 +1378,7 @@ impl XhciDevice {
         let mut locked_port = usb_port.lock().unwrap();
         locked_port.slot_id = slot_id;
         self.slots[(slot_id - 1) as usize].usb_port = Some(usb_port.clone());
-        self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
+        self.slots[(slot_id - 1) as usize].slot_ctx_addr = GuestAddress(octx);
         let dev = locked_port.dev.as_ref().unwrap();
         dev.lock().unwrap().reset();
         if bsr {
@@ -1484,7 +1480,7 @@ impl XhciDevice {
         slot_ctx.set_slot_state(SLOT_ADDRESSED);
         dma_write_u32(
             &self.mem_space,
-            GuestAddress(self.slots[(slot_id - 1) as usize].slot_ctx_addr),
+            self.slots[(slot_id - 1) as usize].slot_ctx_addr,
             slot_ctx.as_dwords(),
         )?;
         Ok(TRBCCode::Success)
@@ -1514,7 +1510,7 @@ impl XhciDevice {
             }
             if ictl_ctx.add_flags & (1 << i) == 1 << i {
                 self.disable_endpoint(slot_id, i)?;
-                self.enable_endpoint(slot_id, i, ictx, octx)?;
+                self.enable_endpoint(slot_id, i, ictx, octx.raw_value())?;
             }
         }
         // From section 4.6.6 Configure Endpoint of the spec:
@@ -1539,7 +1535,7 @@ impl XhciDevice {
             slot_ctx.set_slot_state(SLOT_CONFIGURED);
             slot_ctx.set_context_entry(enabled_ep_idx);
         }
-        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        dma_write_u32(&self.mem_space, octx, slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
     }
 
@@ -1578,14 +1574,10 @@ impl XhciDevice {
                 islot_ctx.as_mut_dwords(),
             )?;
             let mut slot_ctx = XhciSlotCtx::default();
-            dma_read_u32(
-                &self.mem_space,
-                GuestAddress(octx),
-                slot_ctx.as_mut_dwords(),
-            )?;
+            dma_read_u32(&self.mem_space, octx, slot_ctx.as_mut_dwords())?;
             slot_ctx.set_max_exit_latency(islot_ctx.get_max_exit_latency());
             slot_ctx.set_interrupter_target(islot_ctx.get_interrupter_target());
-            dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+            dma_write_u32(&self.mem_space, octx, slot_ctx.as_dwords())?;
         }
         if ictl_ctx.add_flags & 0x2 == 0x2 {
             // Default control endpoint context.
@@ -1599,21 +1591,16 @@ impl XhciDevice {
                 iep_ctx.as_mut_dwords(),
             )?;
             let mut ep_ctx = XhciEpCtx::default();
-            dma_read_u32(
-                &self.mem_space,
-                GuestAddress(
-                    // It is safe to use plus here because we previously verify the address.
-                    octx + EP_CTX_OFFSET,
-                ),
-                ep_ctx.as_mut_dwords(),
-            )?;
+            let ep_ctx_addr = octx.checked_add(EP_CTX_OFFSET).with_context(|| {
+                format!(
+                    "Endpoint Context access overflow, addr {:x} size {:x}",
+                    octx.raw_value(),
+                    EP_CTX_OFFSET
+                )
+            })?;
+            dma_read_u32(&self.mem_space, ep_ctx_addr, ep_ctx.as_mut_dwords())?;
             ep_ctx.set_max_packet_size(iep_ctx.get_max_packet_size());
-            dma_write_u32(
-                &self.mem_space,
-                // It is safe to use plus here because we previously verify the address.
-                GuestAddress(octx + EP_CTX_OFFSET),
-                ep_ctx.as_dwords(),
-            )?;
+            dma_write_u32(&self.mem_space, ep_ctx_addr, ep_ctx.as_dwords())?;
         }
         Ok(TRBCCode::Success)
     }
@@ -1622,11 +1609,7 @@ impl XhciDevice {
         trace::usb_xhci_reset_device(&slot_id);
         let mut slot_ctx = XhciSlotCtx::default();
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
-        dma_read_u32(
-            &self.mem_space,
-            GuestAddress(octx),
-            slot_ctx.as_mut_dwords(),
-        )?;
+        dma_read_u32(&self.mem_space, octx, slot_ctx.as_mut_dwords())?;
         let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
         if slot_state != SLOT_ADDRESSED
             && slot_state != SLOT_CONFIGURED
@@ -1641,7 +1624,7 @@ impl XhciDevice {
         slot_ctx.set_slot_state(SLOT_DEFAULT);
         slot_ctx.set_context_entry(1);
         slot_ctx.set_usb_device_address(0);
-        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        dma_write_u32(&self.mem_space, octx, slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
     }
 
