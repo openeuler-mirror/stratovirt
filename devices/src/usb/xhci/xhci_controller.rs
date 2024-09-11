@@ -13,7 +13,7 @@
 use std::collections::LinkedList;
 use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -191,7 +191,7 @@ impl XhciTransfer {
                     self.epid, self.slotid, self.streamid
                 )
             })?;
-            ring.refresh_dequeue_ptr(self.ep_context.output_ctx_addr.load(Ordering::Acquire))?;
+            ring.refresh_dequeue_ptr(*self.ep_context.output_ctx_addr.lock().unwrap())?;
             return Ok(());
         }
 
@@ -320,7 +320,7 @@ pub struct XhciEpContext {
     enabled: bool,
     ring: Option<Arc<XhciTransferRing>>,
     ep_type: EpType,
-    output_ctx_addr: Arc<AtomicU64>,
+    output_ctx_addr: Arc<Mutex<GuestAddress>>,
     state: Arc<AtomicU32>,
     interval: u32,
     mfindex_last: u64,
@@ -339,7 +339,7 @@ impl XhciEpContext {
             enabled: false,
             ring: None,
             ep_type: EpType::Invalid,
-            output_ctx_addr: Arc::new(AtomicU64::new(0)),
+            output_ctx_addr: Arc::new(Mutex::new(GuestAddress(0))),
             state: Arc::new(AtomicU32::new(0)),
             interval: 0,
             mfindex_last: 0,
@@ -356,7 +356,7 @@ impl XhciEpContext {
     fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) -> Result<()> {
         let dequeue: DmaAddr = addr64_from_u32(ctx.deq_lo & !0xf, ctx.deq_hi);
         self.ep_type = ((ctx.ep_info2 >> EP_TYPE_SHIFT) & EP_TYPE_MASK).into();
-        self.output_ctx_addr.store(output_ctx, Ordering::SeqCst);
+        *self.output_ctx_addr.lock().unwrap() = GuestAddress(output_ctx);
         self.max_pstreams = (ctx.ep_info >> EP_CTX_MAX_PSTREAMS_SHIFT) & EP_CTX_MAX_PSTREAMS_MASK;
         self.lsa = ((ctx.ep_info >> EP_CTX_LSA_SHIFT) & EP_CTX_LSA_MASK) != 0;
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
@@ -388,11 +388,12 @@ impl XhciEpContext {
     /// Update the endpoint state and write the state to memory.
     fn set_state(&self, state: u32, stream_id: Option<u32>) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
-        dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+        let output_addr = self.output_ctx_addr.lock().unwrap();
+        dma_read_u32(&self.mem, *output_addr, ep_ctx.as_mut_dwords())?;
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= state;
-        dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        dma_write_u32(&self.mem, *output_addr, ep_ctx.as_dwords())?;
+        drop(output_addr);
         self.flush_dequeue_to_memory(stream_id)?;
         self.set_ep_state(state);
         trace::usb_xhci_set_state(self.epid, state);
@@ -422,8 +423,8 @@ impl XhciEpContext {
     /// Stream Endpoints flush ring dequeue to both Endpoint and Stream context.
     fn flush_dequeue_to_memory(&self, stream_id: Option<u32>) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
-        dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+        let output_addr = self.output_ctx_addr.lock().unwrap();
+        dma_read_u32(&self.mem, *output_addr, ep_ctx.as_mut_dwords())?;
 
         if self.max_pstreams == 0 {
             let ring = self.get_ring(0)?;
@@ -440,7 +441,7 @@ impl XhciEpContext {
             dma_write_u32(&self.mem, output_addr, stream_ctx.as_dwords())?;
         }
 
-        dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        dma_write_u32(&self.mem, *output_addr, ep_ctx.as_dwords())?;
         Ok(())
     }
 
