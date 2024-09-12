@@ -238,7 +238,7 @@ impl AioCompleteCb {
         let mut queue_lock = self.queue.lock().unwrap();
         queue_lock
             .vring
-            .add_used(&self.mem_space, req.desc_index, req.in_len)
+            .add_used(req.desc_index, req.in_len)
             .with_context(|| {
                 format!(
                     "Failed to add used ring(blk io completion), index {}, len {}",
@@ -247,10 +247,7 @@ impl AioCompleteCb {
             })?;
         trace::virtio_blk_complete_one_request(req.desc_index, req.in_len);
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger("blk io completion", VirtioInterruptType::Vring)
@@ -732,12 +729,7 @@ impl BlockIoHandler {
         // Do not unlock or drop the locked_status in this function.
         let status;
         let mut locked_status;
-        let len = self
-            .queue
-            .lock()
-            .unwrap()
-            .vring
-            .avail_ring_len(&self.mem_space)?;
+        let len = self.queue.lock().unwrap().vring.avail_ring_len()?;
         if len > 0 {
             if let Some(block_backend) = self.block_backend.as_ref() {
                 status = block_backend.lock().unwrap().get_status();
@@ -750,14 +742,7 @@ impl BlockIoHandler {
         let mut done = false;
         let mut iteration: u16 = 0;
 
-        while self
-            .queue
-            .lock()
-            .unwrap()
-            .vring
-            .avail_ring_len(&self.mem_space)?
-            != 0
-        {
+        while self.queue.lock().unwrap().vring.avail_ring_len()? != 0 {
             // Do not stuck IO thread.
             iteration += 1;
             if iteration > MAX_ITERATION_PROCESS_QUEUE {
@@ -766,19 +751,19 @@ impl BlockIoHandler {
                 break;
             }
 
-            self.queue.lock().unwrap().vring.suppress_queue_notify(
-                &self.mem_space,
-                self.driver_features,
-                true,
-            )?;
+            self.queue
+                .lock()
+                .unwrap()
+                .vring
+                .suppress_queue_notify(self.driver_features, true)?;
 
             done = self.process_queue_internal()?;
 
-            self.queue.lock().unwrap().vring.suppress_queue_notify(
-                &self.mem_space,
-                self.driver_features,
-                false,
-            )?;
+            self.queue
+                .lock()
+                .unwrap()
+                .vring
+                .suppress_queue_notify(self.driver_features, false)?;
 
             // See whether we have been throttled.
             if let Some(lb) = self.leak_bucket.as_mut() {

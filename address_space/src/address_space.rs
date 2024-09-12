@@ -12,7 +12,6 @@
 
 use std::fmt;
 use std::fmt::Debug;
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -24,7 +23,6 @@ use crate::{
     AddressAttr, AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener,
     ListenerReqType, Region, RegionIoEventFd, RegionType,
 };
-use migration::{migration::Migratable, MigrationManager};
 use util::aio::Iovec;
 use util::byte_code::ByteCode;
 
@@ -768,29 +766,6 @@ impl AddressSpace {
         .with_context(|| "Failed to write object")
     }
 
-    /// Write an object to memory via host address.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The object that will be written to the memory.
-    /// * `host_addr` - The start host address where the object will be written to.
-    ///
-    /// # Safety
-    ///
-    /// Make true that host_addr and std::mem::size_of::<T>() are in the range of ram.
-    ///
-    /// # Note
-    /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub unsafe fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
-        trace::address_space_write_direct(host_addr, std::mem::size_of::<T>());
-        // Mark vmm dirty page manually if live migration is active.
-        MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
-        let mut dst =
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>());
-        dst.write_all(data.as_bytes())
-            .with_context(|| "Failed to write object via host address")
-    }
-
     /// Read some data from memory to form an object.
     ///
     /// # Arguments
@@ -808,29 +783,6 @@ impl AddressSpace {
             attr,
         )
         .with_context(|| "Failed to read object")?;
-        Ok(obj)
-    }
-
-    /// Read some data from memory to form an object via host address.
-    ///
-    /// # Arguments
-    ///
-    /// * `hoat_addr` - The start host address where the data will be read from.
-    ///
-    /// # Safety
-    ///
-    /// Make true that host_addr and std::mem::size_of::<T>() are in the range of ram.
-    ///
-    /// # Note
-    /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub unsafe fn read_object_direct<T: ByteCode>(&self, host_addr: u64) -> Result<T> {
-        trace::address_space_read_direct(host_addr, std::mem::size_of::<T>());
-        let mut obj = T::default();
-        let mut dst = obj.as_mut_bytes();
-        let src = std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>());
-        dst.write_all(src)
-            .with_context(|| "Failed to read object via host address")?;
-
         Ok(obj)
     }
 

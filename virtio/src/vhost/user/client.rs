@@ -405,7 +405,6 @@ pub struct VhostUserClient {
     client: Arc<Mutex<ClientInternal>>,
     mem_info: VhostUserMemInfo,
     delete_evts: Vec<RawFd>,
-    mem_space: Arc<AddressSpace>,
     queues: Vec<Arc<Mutex<Queue>>>,
     queue_evts: Vec<Arc<EventFd>>,
     call_events: Vec<Arc<EventFd>>,
@@ -441,7 +440,6 @@ impl VhostUserClient {
             client,
             mem_info,
             delete_evts: Vec::new(),
-            mem_space: mem_space.clone(),
             queues: Vec::new(),
             queue_evts: Vec::new(),
             call_events: Vec::new(),
@@ -571,7 +569,7 @@ impl VhostUserClient {
                 })?;
             // When spdk/ovs has been killed, stratovirt can not get the last avail
             // index in spdk/ovs, it can only use used index as last avail index.
-            let last_avail_idx = queue.vring.get_used_idx(&self.mem_space)?;
+            let last_avail_idx = queue.vring.get_used_idx()?;
             self.set_vring_base(queue_index, last_avail_idx)
                 .with_context(|| {
                     format!(

@@ -10,18 +10,6 @@ args = "addr: &dyn fmt::Debug, count: u64"
 message = "Memory: flatview_write addr {:?}, count {}"
 enabled = true
 
-[[events]]
-name = "address_space_read_direct"
-args = "host_addr: u64, count: usize"
-message = "Memory: address_space_read_direct host_addr {}, count {}"
-enabled = true
-
-[[events]]
-name = "address_space_write_direct"
-args = "host_addr: u64, count: usize"
-message = "Memory: address_space_write_direct host_addr {}, count {}"
-enabled = true
-
 [[scopes]]
 name = "address_update_topology"
 args = ""

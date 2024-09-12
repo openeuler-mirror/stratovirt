@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp::min;
+use std::io::Write;
 use std::mem::size_of;
 use std::num::Wrapping;
 use std::ops::{Deref, DerefMut};
@@ -28,6 +29,7 @@ use crate::{
     report_virtio_error, virtio_has_feature, VirtioError, VirtioInterrupt, VIRTIO_F_RING_EVENT_IDX,
 };
 use address_space::{AddressAttr, AddressSpace, GuestAddress, RegionCache, RegionType};
+use migration::{migration::Migratable, MigrationManager};
 use util::byte_code::ByteCode;
 
 /// When host consumes a buffer, don't interrupt the guest.
@@ -51,6 +53,51 @@ const VRING_FLAGS_AND_IDX_LEN: u64 = size_of::<SplitVringFlagsIdx>() as u64;
 const VRING_IDX_POSITION: u64 = size_of::<u16>() as u64;
 /// The length of virtio descriptor.
 const DESCRIPTOR_LEN: u64 = size_of::<SplitVringDesc>() as u64;
+
+/// Read some data from memory to form an object via host address.
+///
+/// # Arguments
+///
+/// * `hoat_addr` - The start host address where the data will be read from.
+///
+/// # Safety
+///
+/// Make true that host_addr and std::mem::size_of::<T>() are in the range of ram.
+///
+/// # Note
+/// To use this method, it is necessary to implement `ByteCode` trait for your object.
+unsafe fn read_object_direct<T: ByteCode>(host_addr: u64) -> Result<T> {
+    trace::virtio_read_object_direct(host_addr, std::mem::size_of::<T>());
+    let mut obj = T::default();
+    let mut dst = obj.as_mut_bytes();
+    let src = std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>());
+    dst.write_all(src)
+        .with_context(|| "Failed to read object via host address")?;
+
+    Ok(obj)
+}
+
+/// Write an object to memory via host address.
+///
+/// # Arguments
+///
+/// * `data` - The object that will be written to the memory.
+/// * `host_addr` - The start host address where the object will be written to.
+///
+/// # Safety
+///
+/// Make true that host_addr and std::mem::size_of::<T>() are in the range of ram.
+///
+/// # Note
+/// To use this method, it is necessary to implement `ByteCode` trait for your object.
+unsafe fn write_object_direct<T: ByteCode>(data: &T, host_addr: u64) -> Result<()> {
+    trace::virtio_write_object_direct(host_addr, std::mem::size_of::<T>());
+    // Mark vmm dirty page manually if live migration is active.
+    MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
+    let mut dst = std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>());
+    dst.write_all(data.as_bytes())
+        .with_context(|| "Failed to write object via host address")
+}
 
 #[derive(Default, Clone, Copy)]
 pub struct VirtioAddrCache {
@@ -270,8 +317,7 @@ impl SplitVringDesc {
             })?;
         // SAFETY: dest_addr has been checked in SplitVringDesc::is_valid() and is guaranteed to be within the ram range.
         let desc = unsafe {
-            sys_mem
-                .read_object_direct::<SplitVringDesc>(desc_addr)
+            read_object_direct::<SplitVringDesc>(desc_addr)
                 .with_context(|| VirtioError::ReadObjectErr("a descriptor", desc_addr))
         }?;
 
@@ -507,52 +553,48 @@ impl SplitVring {
     }
 
     /// Get the flags and idx of the available ring from guest memory.
-    fn get_avail_flags_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<SplitVringFlagsIdx> {
+    fn get_avail_flags_idx(&self) -> Result<SplitVringFlagsIdx> {
         // SAFETY: avail_ring_host is checked when addr_cache inited.
         unsafe {
-            sys_mem
-                .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host)
-                .with_context(|| {
-                    VirtioError::ReadObjectErr("avail flags idx", self.avail_ring.raw_value())
-                })
+            read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.avail_ring_host).with_context(
+                || VirtioError::ReadObjectErr("avail flags idx", self.avail_ring.raw_value()),
+            )
         }
     }
 
     /// Get the idx of the available ring from guest memory.
-    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let flags_idx = self.get_avail_flags_idx(sys_mem)?;
+    fn get_avail_idx(&self) -> Result<u16> {
+        let flags_idx = self.get_avail_flags_idx()?;
         Ok(flags_idx.idx)
     }
 
     /// Get the flags of the available ring from guest memory.
-    fn get_avail_flags(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let flags_idx = self.get_avail_flags_idx(sys_mem)?;
+    fn get_avail_flags(&self) -> Result<u16> {
+        let flags_idx = self.get_avail_flags_idx()?;
         Ok(flags_idx.flags)
     }
 
     /// Get the flags and idx of the used ring from guest memory.
-    fn get_used_flags_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<SplitVringFlagsIdx> {
+    fn get_used_flags_idx(&self) -> Result<SplitVringFlagsIdx> {
         // Make sure the idx read from sys_mem is new.
         fence(Ordering::SeqCst);
         // SAFETY: used_ring_host has been checked in set_addr_cache() and is guaranteed to be within the ram range.
         unsafe {
-            sys_mem
-                .read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host)
-                .with_context(|| {
-                    VirtioError::ReadObjectErr("used flags idx", self.used_ring.raw_value())
-                })
+            read_object_direct::<SplitVringFlagsIdx>(self.addr_cache.used_ring_host).with_context(
+                || VirtioError::ReadObjectErr("used flags idx", self.used_ring.raw_value()),
+            )
         }
     }
 
     /// Get the index of the used ring from guest memory.
-    fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let flag_idx = self.get_used_flags_idx(sys_mem)?;
+    fn get_used_idx(&self) -> Result<u16> {
+        let flag_idx = self.get_used_flags_idx()?;
         Ok(flag_idx.idx)
     }
 
     /// Set the used flags to suppress virtqueue notification or not
-    fn set_used_flags(&self, sys_mem: &Arc<AddressSpace>, suppress: bool) -> Result<()> {
-        let mut flags_idx = self.get_used_flags_idx(sys_mem)?;
+    fn set_used_flags(&self, suppress: bool) -> Result<()> {
+        let mut flags_idx = self.get_used_flags_idx()?;
 
         if suppress {
             flags_idx.flags |= VRING_USED_F_NO_NOTIFY;
@@ -561,11 +603,7 @@ impl SplitVring {
         }
         // SAFETY: used_ring_host has been checked when addr_cache inited.
         unsafe {
-            sys_mem
-                .write_object_direct::<SplitVringFlagsIdx>(
-                    &flags_idx,
-                    self.addr_cache.used_ring_host,
-                )
+            write_object_direct::<SplitVringFlagsIdx>(&flags_idx, self.addr_cache.used_ring_host)
                 .with_context(|| {
                     format!(
                         "Failed to set used flags, used_ring: 0x{:X}",
@@ -579,24 +617,23 @@ impl SplitVring {
     }
 
     /// Set the avail idx to the field of the event index for the available ring.
-    fn set_avail_event(&self, sys_mem: &Arc<AddressSpace>, event_idx: u16) -> Result<()> {
+    fn set_avail_event(&self, event_idx: u16) -> Result<()> {
         trace::virtqueue_set_avail_event(self as *const _ as u64, event_idx);
         let avail_event_offset =
             VRING_FLAGS_AND_IDX_LEN + USEDELEM_LEN * u64::from(self.actual_size());
         // SAFETY: used_ring_host has been checked in set_addr_cache().
         unsafe {
-            sys_mem
-                .write_object_direct(
-                    &event_idx,
-                    self.addr_cache.used_ring_host + avail_event_offset,
+            write_object_direct(
+                &event_idx,
+                self.addr_cache.used_ring_host + avail_event_offset,
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to set avail event idx, used_ring: 0x{:X}, offset: {}",
+                    self.used_ring.raw_value(),
+                    avail_event_offset,
                 )
-                .with_context(|| {
-                    format!(
-                        "Failed to set avail event idx, used_ring: 0x{:X}, offset: {}",
-                        self.used_ring.raw_value(),
-                        avail_event_offset,
-                    )
-                })
+            })
         }?;
         // Make sure the data has been set.
         fence(Ordering::SeqCst);
@@ -604,7 +641,7 @@ impl SplitVring {
     }
 
     /// Get the event index of the used ring from guest memory.
-    fn get_used_event(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
+    fn get_used_event(&self) -> Result<u16> {
         let used_event_offset =
             VRING_FLAGS_AND_IDX_LEN + AVAILELEM_LEN * u64::from(self.actual_size());
         // Make sure the event idx read from sys_mem is new.
@@ -614,8 +651,7 @@ impl SplitVring {
         let used_event_addr = self.addr_cache.avail_ring_host + used_event_offset;
         // SAFETY: used_event_addr is protected by virtio calculations and is guaranteed to be within the ram range.
         let used_event = unsafe {
-            sys_mem
-                .read_object_direct::<u16>(used_event_addr)
+            read_object_direct::<u16>(used_event_addr)
                 .with_context(|| VirtioError::ReadObjectErr("used event id", used_event_addr))
         }?;
 
@@ -623,8 +659,8 @@ impl SplitVring {
     }
 
     /// Return true if VRING_AVAIL_F_NO_INTERRUPT is set.
-    fn is_avail_ring_no_interrupt(&self, sys_mem: &Arc<AddressSpace>) -> bool {
-        match self.get_avail_flags(sys_mem) {
+    fn is_avail_ring_no_interrupt(&self) -> bool {
+        match self.get_avail_flags() {
             Ok(avail_flags) => (avail_flags & VRING_AVAIL_F_NO_INTERRUPT) != 0,
             Err(ref e) => {
                 warn!(
@@ -637,9 +673,9 @@ impl SplitVring {
     }
 
     /// Return true if it's required to trigger interrupt for the used vring.
-    fn used_ring_need_event(&mut self, sys_mem: &Arc<AddressSpace>) -> bool {
+    fn used_ring_need_event(&mut self) -> bool {
         let old = self.last_signal_used;
-        let new = match self.get_used_idx(sys_mem) {
+        let new = match self.get_used_idx() {
             Ok(used_idx) => Wrapping(used_idx),
             Err(ref e) => {
                 error!("Failed to get the status for notifying used vring: {:?}", e);
@@ -647,7 +683,7 @@ impl SplitVring {
             }
         };
 
-        let used_event_idx = match self.get_used_event(sys_mem) {
+        let used_event_idx = match self.get_used_event() {
             Ok(idx) => Wrapping(idx),
             Err(ref e) => {
                 error!("Failed to get the status for notifying used vring: {:?}", e);
@@ -779,11 +815,9 @@ impl SplitVring {
         let desc_index_addr = self.addr_cache.avail_ring_host + index_offset;
         // SAFETY: dest_index_addr is protected by virtio calculations and is guaranteed to be within the ram range.
         let desc_index = unsafe {
-            sys_mem
-                .read_object_direct::<u16>(desc_index_addr)
-                .with_context(|| {
-                    VirtioError::ReadObjectErr("the index of descriptor", desc_index_addr)
-                })
+            read_object_direct::<u16>(desc_index_addr).with_context(|| {
+                VirtioError::ReadObjectErr("the index of descriptor", desc_index_addr)
+            })
         }?;
 
         let desc = SplitVringDesc::new(
@@ -796,7 +830,7 @@ impl SplitVring {
 
         // Suppress queue notification related to current processing desc chain.
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.set_avail_event(sys_mem, (next_avail + Wrapping(1)).0)
+            self.set_avail_event((next_avail + Wrapping(1)).0)
                 .with_context(|| "Failed to set avail event for popping avail ring")?;
         }
 
@@ -854,7 +888,7 @@ impl VringOps for SplitVring {
 
     fn pop_avail(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element> {
         let mut element = Element::new(0);
-        if !self.is_enabled() || self.avail_ring_len(sys_mem)? == 0 {
+        if !self.is_enabled() || self.avail_ring_len()? == 0 {
             return Ok(element);
         }
 
@@ -877,7 +911,7 @@ impl VringOps for SplitVring {
         self.next_avail -= Wrapping(1);
     }
 
-    fn add_used(&mut self, sys_mem: &Arc<AddressSpace>, index: u16, len: u32) -> Result<()> {
+    fn add_used(&mut self, index: u16, len: u32) -> Result<()> {
         if index >= self.size {
             return Err(anyhow!(VirtioError::QueueIndex(index, self.size)));
         }
@@ -892,8 +926,7 @@ impl VringOps for SplitVring {
         };
         // SAFETY: used_elem_addr is guaranteed to be within ram range.
         unsafe {
-            sys_mem
-                .write_object_direct::<UsedElem>(&used_elem, used_elem_addr)
+            write_object_direct::<UsedElem>(&used_elem, used_elem_addr)
                 .with_context(|| "Failed to write object for used element")
         }?;
         // Make sure used element is filled before updating used idx.
@@ -902,12 +935,11 @@ impl VringOps for SplitVring {
         self.next_used += Wrapping(1);
         // SAFETY: used_ring_host has been checked when addr_cache inited.
         unsafe {
-            sys_mem
-                .write_object_direct(
-                    &(self.next_used.0),
-                    self.addr_cache.used_ring_host + VRING_IDX_POSITION,
-                )
-                .with_context(|| "Failed to write next used idx")
+            write_object_direct(
+                &(self.next_used.0),
+                self.addr_cache.used_ring_host + VRING_IDX_POSITION,
+            )
+            .with_context(|| "Failed to write next used idx")
         }?;
         // Make sure used index is exposed before notifying guest.
         fence(Ordering::SeqCst);
@@ -919,28 +951,23 @@ impl VringOps for SplitVring {
         Ok(())
     }
 
-    fn should_notify(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> bool {
+    fn should_notify(&mut self, features: u64) -> bool {
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.used_ring_need_event(sys_mem)
+            self.used_ring_need_event()
         } else {
-            !self.is_avail_ring_no_interrupt(sys_mem)
+            !self.is_avail_ring_no_interrupt()
         }
     }
 
-    fn suppress_queue_notify(
-        &mut self,
-        sys_mem: &Arc<AddressSpace>,
-        features: u64,
-        suppress: bool,
-    ) -> Result<()> {
+    fn suppress_queue_notify(&mut self, features: u64, suppress: bool) -> Result<()> {
         if !self.is_enabled() {
             bail!("queue is not ready");
         }
 
         if virtio_has_feature(features, VIRTIO_F_RING_EVENT_IDX) {
-            self.set_avail_event(sys_mem, self.get_avail_idx(sys_mem)?)?;
+            self.set_avail_event(self.get_avail_idx()?)?;
         } else {
-            self.set_used_flags(sys_mem, suppress)?;
+            self.set_used_flags(suppress)?;
         }
         Ok(())
     }
@@ -956,18 +983,18 @@ impl VringOps for SplitVring {
     }
 
     /// The number of descriptor chains in the available ring.
-    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        let avail_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
+    fn avail_ring_len(&mut self) -> Result<u16> {
+        let avail_idx = self.get_avail_idx().map(Wrapping)?;
 
         Ok((avail_idx - self.next_avail).0)
     }
 
-    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        SplitVring::get_avail_idx(self, sys_mem)
+    fn get_avail_idx(&self) -> Result<u16> {
+        SplitVring::get_avail_idx(self)
     }
 
-    fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16> {
-        SplitVring::get_used_idx(self, sys_mem)
+    fn get_used_idx(&self) -> Result<u16> {
+        SplitVring::get_used_idx(self)
     }
 
     fn get_cache(&self) -> &Option<RegionCache> {
@@ -987,7 +1014,7 @@ impl VringOps for SplitVring {
 
         let mut avail_bytes = 0_usize;
         let mut avail_idx = self.next_avail;
-        let end_idx = self.get_avail_idx(sys_mem).map(Wrapping)?;
+        let end_idx = self.get_avail_idx().map(Wrapping)?;
         while (end_idx - avail_idx).0 > 0 {
             let desc_info = self.get_desc_info(sys_mem, avail_idx, 0)?;
 
@@ -1532,7 +1559,7 @@ mod tests {
         // the event idx of avail ring is equal to get_avail_event
         let event_idx = vring.get_avail_event(&sys_space).unwrap();
         assert_eq!(event_idx, 1);
-        let avail_idx = vring.get_avail_idx(&sys_space).unwrap();
+        let avail_idx = vring.get_avail_idx().unwrap();
         assert_eq!(avail_idx, 1);
     }
 
@@ -2018,7 +2045,7 @@ mod tests {
         // The event idx of avail ring is equal to get_avail_event.
         let event_idx = vring.get_avail_event(&sys_space).unwrap();
         assert_eq!(event_idx, 1);
-        let avail_idx = vring.get_avail_idx(&sys_space).unwrap();
+        let avail_idx = vring.get_avail_idx().unwrap();
         assert_eq!(avail_idx, 1);
     }
 
@@ -2056,7 +2083,7 @@ mod tests {
         assert!(vring.is_valid(&sys_space));
 
         // it is false when the index is more than the size of queue
-        if let Err(err) = vring.add_used(&sys_space, QUEUE_SIZE, 100) {
+        if let Err(err) = vring.add_used(QUEUE_SIZE, 100) {
             if let Some(e) = err.downcast_ref::<VirtioError>() {
                 if let VirtioError::QueueIndex(offset, size) = e {
                     assert_eq!(*offset, 256);
@@ -2065,7 +2092,7 @@ mod tests {
             }
         }
 
-        assert!(vring.add_used(&sys_space, 10, 100).is_ok());
+        assert!(vring.add_used(10, 100).is_ok());
         let elem = vring.get_used_elem(&sys_space, 0).unwrap();
         assert_eq!(elem.id, 10);
         assert_eq!(elem.len, 100);
@@ -2108,7 +2135,7 @@ mod tests {
         // it's true when the feature of event idx and no interrupt for the avail ring is closed
         let features = 0_u64;
         assert!(vring.set_avail_ring_flags(&sys_space, 0).is_ok());
-        assert!(vring.should_notify(&sys_space, features));
+        assert!(vring.should_notify(features));
 
         // it's false when the feature of event idx is closed and the feature of no interrupt for
         // the avail ring is open
@@ -2116,7 +2143,7 @@ mod tests {
         assert!(vring
             .set_avail_ring_flags(&sys_space, VRING_AVAIL_F_NO_INTERRUPT)
             .is_ok());
-        assert!(!vring.should_notify(&sys_space, features));
+        assert!(!vring.should_notify(features));
 
         // it's true when the feature of event idx is open and
         // (new - event_idx - Wrapping(1) < new -old)
@@ -2124,20 +2151,20 @@ mod tests {
         vring.last_signal_used = Wrapping(5); // old
         assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
         assert!(vring.set_used_event_idx(&sys_space, 6).is_ok()); // event_idx
-        assert!(vring.should_notify(&sys_space, features));
+        assert!(vring.should_notify(features));
 
         // it's false when the feature of event idx is open and
         // (new - event_idx - Wrapping(1) > new - old)
         vring.last_signal_used = Wrapping(5); // old
         assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
         assert!(vring.set_used_event_idx(&sys_space, 1).is_ok()); // event_idx
-        assert!(!vring.should_notify(&sys_space, features));
+        assert!(!vring.should_notify(features));
 
         // it's false when the feature of event idx is open and
         // (new - event_idx - Wrapping(1) = new -old)
         vring.last_signal_used = Wrapping(5); // old
         assert!(vring.set_used_ring_idx(&sys_space, 10).is_ok()); // new
         assert!(vring.set_used_event_idx(&sys_space, 4).is_ok()); // event_idx
-        assert!(!vring.should_notify(&sys_space, features));
+        assert!(!vring.should_notify(features));
     }
 }

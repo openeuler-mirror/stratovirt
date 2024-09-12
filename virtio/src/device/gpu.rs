@@ -727,20 +727,14 @@ impl GpuIoHandler {
     fn complete_one_request(&mut self, index: u16, len: u32) -> Result<()> {
         let mut queue_lock = self.ctrl_queue.lock().unwrap();
 
-        queue_lock
-            .vring
-            .add_used(&self.mem_space, index, len)
-            .with_context(|| {
-                format!(
-                    "Failed to add used ring(gpu ctrl), index {}, len {}",
-                    index, len,
-                )
-            })?;
+        queue_lock.vring.add_used(index, len).with_context(|| {
+            format!(
+                "Failed to add used ring(gpu ctrl), index {}, len {}",
+                index, len,
+            )
+        })?;
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| "Failed to trigger interrupt(gpu ctrl)")?;
             trace::virtqueue_send_interrupt("Gpu", &*queue_lock as *const _ as u64);
@@ -1603,17 +1597,11 @@ impl GpuIoHandler {
                 }
             };
 
-            queue
-                .vring
-                .add_used(&self.mem_space, elem.index, 0)
-                .with_context(|| {
-                    format!("Failed to add used ring(cursor), index {}", elem.index)
-                })?;
+            queue.vring.add_used(elem.index, 0).with_context(|| {
+                format!("Failed to add used ring(cursor), index {}", elem.index)
+            })?;
 
-            if queue
-                .vring
-                .should_notify(&self.mem_space, self.driver_features)
-            {
+            if queue.vring.should_notify(self.driver_features) {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
                         VirtioError::InterruptTrigger("gpu cursor", VirtioInterruptType::Vring)

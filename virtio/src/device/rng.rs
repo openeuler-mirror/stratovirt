@@ -192,7 +192,7 @@ impl RngHandler {
 
             queue_lock
                 .vring
-                .add_used(&self.mem_space, elem.index, size)
+                .add_used(elem.index, size)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring, index: {}, size: {}",
