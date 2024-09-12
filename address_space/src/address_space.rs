@@ -634,10 +634,7 @@ impl AddressSpace {
             let start = range.addr_range.base.0;
             let end = range.addr_range.end_addr().0;
             // SAFETY: the size is in region range, and the type will be checked in get_host_address.
-            let host_base = unsafe {
-                self.get_host_address(GuestAddress(start), attr)
-                    .unwrap_or(0)
-            };
+            let host_base = unsafe { self.get_host_address(GuestAddress(start), attr) }?;
             let cache = RegionCache {
                 reg_type,
                 host_base,
