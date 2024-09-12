@@ -493,21 +493,15 @@ impl SerialPortHandler {
                 trace::virtio_serial_output_data(iovec_size, size);
             }
 
-            queue_lock
-                .vring
-                .add_used(&self.mem_space, elem.index, 0)
-                .with_context(|| {
-                    format!(
-                        "Failed to add used ring for virtio serial port output, index: {} len: {}",
-                        elem.index, 0,
-                    )
-                })?;
+            queue_lock.vring.add_used(elem.index, 0).with_context(|| {
+                format!(
+                    "Failed to add used ring for virtio serial port output, index: {} len: {}",
+                    elem.index, 0,
+                )
+            })?;
         }
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(
@@ -555,10 +549,9 @@ impl SerialPortHandler {
         }
 
         let mut queue_lock = self.input_queue.lock().unwrap();
-        let _ =
-            queue_lock
-                .vring
-                .suppress_queue_notify(&self.mem_space, self.driver_features, !enable);
+        let _ = queue_lock
+            .vring
+            .suppress_queue_notify(self.driver_features, !enable);
     }
 
     fn input_handle_internal(&mut self, buffer: &[u8]) -> Result<()> {
@@ -614,7 +607,7 @@ impl SerialPortHandler {
 
             queue_lock
                 .vring
-                .add_used(&self.mem_space, elem.index, once_count as u32)
+                .add_used(elem.index, once_count as u32)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring for virtio serial port input: index {} len {}",
@@ -622,10 +615,7 @@ impl SerialPortHandler {
                     )
                 })?;
 
-            if queue_lock
-                .vring
-                .should_notify(&self.mem_space, self.driver_features)
-            {
+            if queue_lock.vring.should_notify(self.driver_features) {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                     .with_context(|| {
                         VirtioError::InterruptTrigger(
@@ -761,21 +751,15 @@ impl SerialControlHandler {
             );
             self.handle_control_message(&mut req);
 
-            queue_lock
-                .vring
-                .add_used(&self.mem_space, elem.index, 0)
-                .with_context(|| {
-                    format!(
-                        "Failed to add used ring for control port, index: {} len: {}.",
-                        elem.index, 0
-                    )
-                })?;
+            queue_lock.vring.add_used(elem.index, 0).with_context(|| {
+                format!(
+                    "Failed to add used ring for control port, index: {} len: {}.",
+                    elem.index, 0
+                )
+            })?;
         }
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(
@@ -922,7 +906,7 @@ impl SerialControlHandler {
 
         queue_lock
             .vring
-            .add_used(&self.mem_space, elem.index, len as u32)
+            .add_used(elem.index, len as u32)
             .with_context(|| {
                 format!(
                     "Failed to add used ring(serial input control queue), index {}, len {}",
@@ -930,10 +914,7 @@ impl SerialControlHandler {
                 )
             })?;
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(

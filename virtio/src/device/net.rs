@@ -621,13 +621,10 @@ impl NetCtrlHandler {
 
             locked_queue
                 .vring
-                .add_used(&self.mem_space, elem.index, mem::size_of_val(&ack) as u32)
+                .add_used(elem.index, mem::size_of_val(&ack) as u32)
                 .with_context(|| format!("Failed to add used ring {}", elem.index))?;
 
-            if locked_queue
-                .vring
-                .should_notify(&self.mem_space, self.driver_features)
-            {
+            if locked_queue.vring.should_notify(self.driver_features) {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                     .with_context(|| {
                         VirtioError::InterruptTrigger("ctrl", VirtioInterruptType::Vring)
@@ -715,7 +712,7 @@ impl NetIoQueue {
             if elem.desc_num == 0 {
                 queue
                     .vring
-                    .suppress_queue_notify(&self.mem_space, self.driver_features, false)
+                    .suppress_queue_notify(self.driver_features, false)
                     .with_context(|| "Failed to enable rx queue notify")?;
                 self.listen_state.lock().unwrap().set_queue_avail(false);
                 break;
@@ -769,7 +766,7 @@ impl NetIoQueue {
 
             queue
                 .vring
-                .add_used(&self.mem_space, elem.index, u32::try_from(size)?)
+                .add_used(elem.index, u32::try_from(size)?)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring for net rx, index: {}, len: {}",
@@ -777,10 +774,7 @@ impl NetIoQueue {
                     )
                 })?;
 
-            if queue
-                .vring
-                .should_notify(&self.mem_space, self.driver_features)
-            {
+            if queue.vring.should_notify(self.driver_features) {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
@@ -824,7 +818,7 @@ impl NetIoQueue {
                 queue.vring.push_back();
                 queue
                     .vring
-                    .suppress_queue_notify(&self.mem_space, self.driver_features, true)
+                    .suppress_queue_notify(self.driver_features, true)
                     .with_context(|| "Failed to suppress tx queue notify")?;
                 self.listen_state.lock().unwrap().set_tap_full(true);
                 break;
@@ -833,13 +827,10 @@ impl NetIoQueue {
 
             queue
                 .vring
-                .add_used(&self.mem_space, elem.index, 0)
+                .add_used(elem.index, 0)
                 .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
 
-            if queue
-                .vring
-                .should_notify(&self.mem_space, self.driver_features)
-            {
+            if queue.vring.should_notify(self.driver_features) {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
                         VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
@@ -1057,11 +1048,10 @@ impl NetIoHandler {
             net_queue.listen_state.lock().unwrap().set_queue_avail(true);
             let mut locked_queue = net_queue.rx.queue.lock().unwrap();
 
-            if let Err(ref err) = locked_queue.vring.suppress_queue_notify(
-                &net_queue.mem_space,
-                net_queue.driver_features,
-                true,
-            ) {
+            if let Err(ref err) = locked_queue
+                .vring
+                .suppress_queue_notify(net_queue.driver_features, true)
+            {
                 error!("Failed to suppress rx queue notify: {:?}", err);
                 report_virtio_error(
                     net_queue.interrupt_cb.clone(),

@@ -544,11 +544,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
         // DESC_CHAIN_MAX_TOTAL_LEN(1 << 32). So, it will not overflow here.
         queue_lock
             .vring
-            .add_used(
-                &self.mem_space,
-                self.desc_index,
-                self.data_len + (size_of::<U>() as u32),
-            )
+            .add_used(self.desc_index, self.data_len + (size_of::<U>() as u32))
             .with_context(|| {
                 format!(
                     "Failed to add used ring(scsi completion), index {}, len {}",
@@ -556,10 +552,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
                 )
             })?;
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(
