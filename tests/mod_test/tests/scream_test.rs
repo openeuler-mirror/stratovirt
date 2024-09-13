@@ -22,7 +22,10 @@ use std::{
 
 use core::time;
 
-use devices::misc::scream::{ShmemHeader, ShmemStreamFmt, ShmemStreamHeader, SCREAM_MAGIC};
+use devices::misc::scream::{
+    audio_demo::INITIAL_VOLUME_VAL, ShmemHeader, ShmemStreamFmt, ShmemStreamHeader,
+    IVSHMEM_BAR0_STATUS, IVSHMEM_BAR0_VOLUME, SCREAM_MAGIC, STATUS_PLAY_BIT, STATUS_START_BIT,
+};
 use mod_test::{
     libdriver::{ivshmem::TestIvshmemDev, machine::TestStdMachine},
     libtest::{test_init, TestState, MACHINE_TYPE_ARG},
@@ -235,6 +238,9 @@ fn scream_playback_basic_test() {
     thread::sleep(time::Duration::from_millis(1000));
 
     play_header_init(&mut ivshmem.borrow_mut());
+    ivshmem
+        .borrow_mut()
+        .writel_reg(IVSHMEM_BAR0_STATUS, STATUS_PLAY_BIT | STATUS_START_BIT);
 
     thread::sleep(time::Duration::from_millis(POLL_DELAY_MS));
 
@@ -320,6 +326,38 @@ fn scream_playback_basic_test() {
     scream_tmp_clear(playback_path, record_path);
 }
 
+/// scream device volume synchronization.
+/// TestStep:
+///   1. Init scream device.
+///   2. Check volume's initial value.
+///   3. Set volume and read back to check.
+///   4. Stop VM.
+/// Expect:
+///   1/2/3/4: success.
+#[test]
+fn scream_volume_sync_test() {
+    let pci_slot = 0x1;
+    let (playback_path, record_path) = get_audio_file_name();
+    audio_data_init(playback_path.clone(), record_path.clone());
+    let (ivshmem, test_state) = set_up(
+        IVSHMEM_DEFAULT_SIZE,
+        pci_slot,
+        playback_path.clone(),
+        record_path.clone(),
+    );
+    ivshmem.borrow_mut().init(pci_slot);
+
+    let init_val = ivshmem.borrow_mut().readl_reg(IVSHMEM_BAR0_VOLUME);
+    assert_eq!(init_val, INITIAL_VOLUME_VAL);
+
+    ivshmem.borrow_mut().writel_reg(IVSHMEM_BAR0_VOLUME, 0xff);
+    let second_val = ivshmem.borrow_mut().readl_reg(IVSHMEM_BAR0_VOLUME);
+    assert_eq!(second_val, 0xff);
+
+    test_state.borrow_mut().stop();
+    scream_tmp_clear(playback_path, record_path);
+}
+
 /// scream device record audio.
 /// TestStep:
 ///   1. Init scream device and start recording.
@@ -342,6 +380,9 @@ fn scream_record_basic_test() {
     ivshmem.borrow_mut().init(pci_slot);
 
     record_header_init(&mut ivshmem.borrow_mut());
+    ivshmem
+        .borrow_mut()
+        .writel_reg(IVSHMEM_BAR0_STATUS, STATUS_START_BIT);
 
     let mut cnt = 0;
     let mut chunk_idx = 0;

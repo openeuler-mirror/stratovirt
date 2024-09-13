@@ -12,7 +12,7 @@
 
 #[cfg(feature = "scream_alsa")]
 mod alsa;
-mod audio_demo;
+pub mod audio_demo;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 mod ohaudio;
 #[cfg(feature = "scream_pulseaudio")]
@@ -31,7 +31,7 @@ use once_cell::sync::Lazy;
 
 #[cfg(feature = "scream_alsa")]
 use self::alsa::AlsaStreamData;
-use self::audio_demo::AudioDemo;
+use self::audio_demo::{AudioDemo, DemoAudioVolume};
 use super::ivshmem::Ivshmem;
 use crate::pci::{le_read_u32, le_write_u32};
 use crate::{Bus, Device};
@@ -57,11 +57,11 @@ pub const TARGET_LATENCY_MS: u32 = 50;
 const IVSHMEM_VOLUME_SYNC_VECTOR: u16 = 0;
 const IVSHMEM_STATUS_CHANGE_VECTOR: u16 = 1;
 const IVSHMEM_VECTORS_NR: u32 = 2;
-const IVSHMEM_BAR0_VOLUME: u64 = 240;
-const IVSHMEM_BAR0_STATUS: u64 = 244;
+pub const IVSHMEM_BAR0_VOLUME: u64 = 240;
+pub const IVSHMEM_BAR0_STATUS: u64 = 244;
 
-const STATUS_PLAY_BIT: u32 = 0x1;
-const STATUS_START_BIT: u32 = 0x2;
+pub const STATUS_PLAY_BIT: u32 = 0x1;
+pub const STATUS_START_BIT: u32 = 0x2;
 const STATUS_MIC_AVAIL_BIT: u32 = 0x4;
 
 // A frame of back-end audio data is 50ms, and the next frame of audio data needs
@@ -752,6 +752,8 @@ impl Scream {
         match self.config.interface {
             #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
             ScreamInterface::OhAudio => OhAudioVolume::new(_ivshmem),
+            ScreamInterface::Demo => DemoAudioVolume::new(_ivshmem),
+            #[allow(unreachable_patterns)]
             _ => Arc::new(AudioExtensionDummy {}),
         }
     }

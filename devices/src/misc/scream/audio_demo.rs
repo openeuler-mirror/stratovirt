@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::sync::{Arc, Mutex, RwLock};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
@@ -19,7 +20,50 @@ use std::{
 use core::time;
 use log::error;
 
-use super::{AudioInterface, AudioStatus, ScreamDirection, StreamData};
+use super::{AudioExtension, AudioInterface, AudioStatus, ScreamDirection, StreamData};
+use crate::misc::ivshmem::Ivshmem;
+
+pub const INITIAL_VOLUME_VAL: u32 = 0xaa;
+const IVSHMEM_VOLUME_SYNC_VECTOR: u16 = 0;
+
+pub struct DemoAudioVolume {
+    shm_dev: Arc<Mutex<Ivshmem>>,
+    vol: RwLock<u32>,
+}
+
+// SAFETY: all fields are protected by lock
+unsafe impl Send for DemoAudioVolume {}
+// SAFETY: all fields are protected by lock
+unsafe impl Sync for DemoAudioVolume {}
+
+impl AudioExtension for DemoAudioVolume {
+    fn get_host_volume(&self) -> u32 {
+        *self.vol.read().unwrap()
+    }
+
+    fn set_host_volume(&self, vol: u32) {
+        *self.vol.write().unwrap() = vol;
+    }
+}
+
+impl DemoAudioVolume {
+    pub fn new(shm_dev: Arc<Mutex<Ivshmem>>) -> Arc<Self> {
+        let vol = Arc::new(Self {
+            shm_dev,
+            vol: RwLock::new(0),
+        });
+        vol.notify(INITIAL_VOLUME_VAL);
+        vol
+    }
+
+    fn notify(&self, vol: u32) {
+        *self.vol.write().unwrap() = vol;
+        self.shm_dev
+            .lock()
+            .unwrap()
+            .trigger_msix(IVSHMEM_VOLUME_SYNC_VECTOR);
+    }
+}
 
 pub struct AudioDemo {
     file: File,

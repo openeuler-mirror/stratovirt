@@ -19,16 +19,18 @@ use super::{
 
 pub struct TestIvshmemDev {
     pub pci_dev: TestPciDev,
-    pub bar_addr: PCIBarAddr,
-    bar_idx: u8,
+    bar0_addr: PCIBarAddr,
+    bar1_addr: PCIBarAddr,
+    pub bar2_addr: PCIBarAddr,
 }
 
 impl TestIvshmemDev {
     pub fn new(pci_bus: Rc<RefCell<TestPciBus>>) -> Self {
         Self {
             pci_dev: TestPciDev::new(pci_bus),
-            bar_addr: 0,
-            bar_idx: 2,
+            bar0_addr: 0,
+            bar1_addr: 0,
+            bar2_addr: 0,
         }
     }
 
@@ -37,30 +39,40 @@ impl TestIvshmemDev {
         assert!(self.pci_dev.find_pci_device(devfn));
 
         self.pci_dev.enable();
-        self.bar_addr = self.pci_dev.io_map(self.bar_idx);
+        self.bar0_addr = self.pci_dev.io_map(0);
+        self.bar1_addr = self.pci_dev.io_map(1);
+        self.bar2_addr = self.pci_dev.io_map(2);
     }
 
     pub fn writeb(&mut self, offset: u64, value: u8) {
-        self.pci_dev.io_writeb(self.bar_addr, offset, value);
+        self.pci_dev.io_writeb(self.bar2_addr, offset, value);
     }
 
     pub fn writew(&mut self, offset: u64, value: u16) {
-        self.pci_dev.io_writew(self.bar_addr, offset, value);
+        self.pci_dev.io_writew(self.bar2_addr, offset, value);
     }
 
     pub fn writel(&mut self, offset: u64, value: u32) {
-        self.pci_dev.io_writel(self.bar_addr, offset, value);
+        self.pci_dev.io_writel(self.bar2_addr, offset, value);
     }
 
     pub fn writeq(&mut self, offset: u64, value: u64) {
-        self.pci_dev.io_writeq(self.bar_addr, offset, value);
+        self.pci_dev.io_writeq(self.bar2_addr, offset, value);
     }
 
     pub fn readw(&self, offset: u64) -> u16 {
-        self.pci_dev.io_readw(self.bar_addr, offset)
+        self.pci_dev.io_readw(self.bar2_addr, offset)
     }
 
     pub fn readl(&self, offset: u64) -> u32 {
-        self.pci_dev.io_readl(self.bar_addr, offset)
+        self.pci_dev.io_readl(self.bar2_addr, offset)
+    }
+
+    pub fn writel_reg(&self, offset: u64, value: u32) {
+        self.pci_dev.io_writel(self.bar0_addr, offset, value);
+    }
+
+    pub fn readl_reg(&self, offset: u64) -> u32 {
+        self.pci_dev.io_readl(self.bar0_addr, offset)
     }
 }
