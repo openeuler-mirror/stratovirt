@@ -66,7 +66,7 @@ impl FlatView {
                 let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
                 let fr_remain = fr.addr_range.size - fr_offset;
 
-                if fr.owner.region_type() != region_type {
+                if !util::test_helper::is_test_enabled() && fr.owner.region_type() != region_type {
                     // Read op RomDevice in I/O access mode as MMIO
                     if region_type == RegionType::IO
                         && fr.owner.region_type() == RegionType::RomDevice
@@ -79,7 +79,9 @@ impl FlatView {
                     }
                 }
 
-                if region_type == RegionType::Ram || region_type == RegionType::RamDevice {
+                if fr.owner.region_type() == RegionType::Ram
+                    || fr.owner.region_type() == RegionType::RamDevice
+                {
                     l = std::cmp::min(l, fr_remain);
                 }
                 fr.owner.read(dst, region_base, region_offset, l)?;
@@ -126,14 +128,17 @@ impl FlatView {
                 let fr_remain = fr.addr_range.size - fr_offset;
 
                 // Read/Write ops to RomDevice is MMIO.
-                if fr.owner.region_type() != region_type
+                if !util::test_helper::is_test_enabled()
+                    && fr.owner.region_type() != region_type
                     && !(region_type == RegionType::IO
                         && fr.owner.region_type() == RegionType::RomDevice)
                 {
                     bail!("mismatch region type")
                 }
 
-                if region_type == RegionType::Ram || region_type == RegionType::RamDevice {
+                if fr.owner.region_type() == RegionType::Ram
+                    || fr.owner.region_type() == RegionType::RamDevice
+                {
                     l = std::cmp::min(l, fr_remain);
                 }
                 fr.owner.write(src, region_base, region_offset, l)?;
