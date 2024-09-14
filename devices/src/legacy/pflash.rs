@@ -337,15 +337,9 @@ impl PFlash {
             )));
         }
 
-        let attr = match mr.region_type() {
-            address_space::RegionType::Ram => AddressAttr::Ram,
-            address_space::RegionType::RomDevice => AddressAttr::RomDevice,
-            _ => bail!("Unexpected region type."),
-        };
-
         // SAFETY: size has been checked.
         let addr: u64 = unsafe {
-            mr.get_host_address(attr)
+            mr.get_host_address(AddressAttr::RomDevice)
                 .with_context(|| "Failed to get host address.")
         }?;
         let ret =
@@ -374,13 +368,8 @@ impl PFlash {
                 data.len() as u64
             )));
         }
-        let attr = match mr.region_type() {
-            address_space::RegionType::Ram => AddressAttr::Ram,
-            address_space::RegionType::RomDevice => AddressAttr::RomDevice,
-            _ => bail!("Unexpected region type."),
-        };
         // SAFETY: size has been checked.
-        let host_addr = unsafe { mr.get_host_address(attr).unwrap() };
+        let host_addr = unsafe { mr.get_host_address(AddressAttr::RomDevice).unwrap() };
         let src =
             // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
@@ -408,13 +397,8 @@ impl PFlash {
                 data.len() as u64
             )));
         }
-        let attr = match mr.region_type() {
-            address_space::RegionType::Ram => AddressAttr::Ram,
-            address_space::RegionType::RomDevice => AddressAttr::RomDevice,
-            _ => bail!("Unexpected region type."),
-        };
         // SAFETY: size has been checked.
-        let host_addr = unsafe { mr.get_host_address(attr).unwrap() };
+        let host_addr = unsafe { mr.get_host_address(AddressAttr::RomDevice).unwrap() };
         let mut dst =
             // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
