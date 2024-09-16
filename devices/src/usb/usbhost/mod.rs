@@ -283,18 +283,18 @@ unsafe impl Send for IsoTransfer {}
 pub struct IsoQueue {
     hostbus: u8,
     hostaddr: u8,
-    ep_number: u8,
+    ep: UsbEndpoint,
     unused: LinkedList<Arc<Mutex<IsoTransfer>>>,
     inflight: LinkedList<Arc<Mutex<IsoTransfer>>>,
     copy: LinkedList<Arc<Mutex<IsoTransfer>>>,
 }
 
 impl IsoQueue {
-    pub fn new(hostbus: u8, hostaddr: u8, ep_number: u8) -> Self {
+    pub fn new(hostbus: u8, hostaddr: u8, ep: UsbEndpoint) -> Self {
         Self {
             hostbus,
             hostaddr,
-            ep_number,
+            ep,
             unused: LinkedList::new(),
             inflight: LinkedList::new(),
             copy: LinkedList::new(),
@@ -866,7 +866,7 @@ impl UsbHost {
         let iso_queue = Arc::new(Mutex::new(IsoQueue::new(
             self.config.hostbus,
             self.config.hostaddr,
-            ep.ep_number,
+            *ep,
         )));
         let cloned_iso_queue = iso_queue.clone();
         let id = self.device_id().to_string();
@@ -885,7 +885,7 @@ impl UsbHost {
         Ok(iso_queue)
     }
 
-    pub fn handle_iso_data_in(&mut self, packet: Arc<Mutex<UsbPacket>>) {
+    fn handle_iso_data_in(&mut self, packet: Arc<Mutex<UsbPacket>>) {
         let cloned_packet = packet.clone();
         let locked_packet = packet.lock().unwrap();
         let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
@@ -960,9 +960,100 @@ impl UsbHost {
         }
     }
 
-    pub fn handle_iso_data_out(&mut self, _packet: Arc<Mutex<UsbPacket>>) {
-        // TODO
-        error!("USBHost device Unsupported Isochronous Transfer from guest to device.");
+    fn handle_iso_data_out(&mut self, packet: Arc<Mutex<UsbPacket>>) {
+        let cloned_packet = packet.clone();
+        let locked_packet = packet.lock().unwrap();
+        let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
+        let ep = *self
+            .base
+            .get_endpoint(in_direction, locked_packet.ep_number);
+        drop(locked_packet);
+
+        let iso_queue = if let Some(queue) = self.find_iso_queue(&ep) {
+            queue
+        } else {
+            match self.create_iso_queue(&ep) {
+                Ok(queue) => queue,
+                Err(e) => {
+                    warn!("Failed to create iso queue: {:?}", e);
+                    return;
+                }
+            }
+        };
+
+        let mut filled = 0;
+        let mut iso_transfer = None;
+        let mut locked_iso_queue = iso_queue.lock().unwrap();
+
+        for xfer in locked_iso_queue.copy.iter() {
+            if xfer.lock().unwrap().copy_completed {
+                filled += 1;
+            } else {
+                iso_transfer = Some(xfer.clone());
+                break;
+            }
+        }
+
+        if iso_transfer.is_none() {
+            match locked_iso_queue.unused.pop_front() {
+                Some(xfer) => {
+                    xfer.lock().unwrap().reset(ep.max_packet_size);
+                    iso_transfer = Some(xfer.clone());
+                    locked_iso_queue.copy.push_back(xfer);
+                }
+                None => return,
+            }
+        }
+
+        iso_transfer
+            .unwrap()
+            .lock()
+            .unwrap()
+            .copy_data(cloned_packet, ep.max_packet_size);
+
+        if locked_iso_queue.inflight.is_empty() && filled * 2 < self.iso_urb_count {
+            return;
+        }
+
+        loop {
+            if locked_iso_queue.copy.is_empty()
+                || !locked_iso_queue
+                    .copy
+                    .front()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .copy_completed
+            {
+                break;
+            }
+
+            let iso_transfer = locked_iso_queue.copy.pop_front().unwrap();
+            let host_transfer = iso_transfer.lock().unwrap().host_transfer;
+
+            match submit_host_transfer(host_transfer) {
+                Ok(()) => {
+                    if locked_iso_queue.inflight.is_empty() {
+                        trace::usb_host_iso_start(
+                            self.config.hostbus,
+                            self.config.hostaddr,
+                            ep.ep_number,
+                        );
+                    }
+                    locked_iso_queue.inflight.push_back(iso_transfer.clone());
+                }
+                Err(e) => {
+                    locked_iso_queue.unused.push_back(iso_transfer);
+                    if e == Error::NoDevice || e == Error::Io {
+                        // When the USB device reports the preceding error, XHCI notifies the guest
+                        // of the error through packet status. The guest initializes the device
+                        // again.
+                        packet.lock().unwrap().status = UsbPacketStatus::Stall;
+                    };
+                    break;
+                }
+            };
+        }
     }
 
     fn submit_host_transfer(
