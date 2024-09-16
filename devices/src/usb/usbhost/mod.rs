@@ -859,58 +859,57 @@ impl UsbHost {
         }
     }
 
-    pub fn find_iso_queue(&self, ep_number: u8) -> Option<Arc<Mutex<IsoQueue>>> {
+    fn find_iso_queue(&self, ep: &UsbEndpoint) -> Option<Arc<Mutex<IsoQueue>>> {
         for queue in self.iso_queues.lock().unwrap().iter() {
-            if (*queue).lock().unwrap().ep_number == ep_number {
+            if (*queue).lock().unwrap().ep_number == ep.ep_number {
                 return Some(queue.clone());
             }
         }
         None
     }
 
+    fn create_iso_queue(&mut self, ep: &UsbEndpoint) -> Result<Arc<Mutex<IsoQueue>>> {
+        let iso_queue = Arc::new(Mutex::new(IsoQueue::new(
+            self.config.hostbus,
+            self.config.hostaddr,
+            ep.ep_number,
+        )));
+        let cloned_iso_queue = iso_queue.clone();
+        let id = self.device_id().to_string();
+        iso_queue.lock().unwrap().realize(
+            &id,
+            self.handle.as_mut().unwrap(),
+            self.iso_urb_count,
+            self.iso_urb_frames,
+            ep,
+            cloned_iso_queue,
+        )?;
+        self.iso_queues.lock().unwrap().push_back(iso_queue.clone());
+        Ok(iso_queue)
+    }
+
     pub fn handle_iso_data_in(&mut self, packet: Arc<Mutex<UsbPacket>>) {
         let cloned_packet = packet.clone();
         let locked_packet = packet.lock().unwrap();
         let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
-        let iso_queue = if self.find_iso_queue(locked_packet.ep_number).is_some() {
-            self.find_iso_queue(locked_packet.ep_number).unwrap()
-        } else {
-            let iso_queue = Arc::new(Mutex::new(IsoQueue::new(
-                self.config.hostbus,
-                self.config.hostaddr,
-                locked_packet.ep_number,
-            )));
-            let cloned_iso_queue = iso_queue.clone();
-            let ep = self
-                .base
-                .get_endpoint(in_direction, locked_packet.ep_number);
-            let id = self.device_id().to_string();
-            match iso_queue.lock().unwrap().realize(
-                &id,
-                self.handle.as_mut().unwrap(),
-                self.iso_urb_count,
-                self.iso_urb_frames,
-                ep,
-                cloned_iso_queue,
-            ) {
-                Ok(()) => {
-                    self.iso_queues.lock().unwrap().push_back(iso_queue.clone());
-                }
-                Err(_e) => {
-                    return;
-                }
-            };
-            iso_queue
-        };
-
-        let mut locked_iso_queue = iso_queue.lock().unwrap();
-
-        let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
-        let ep = self
+        let ep = *self
             .base
             .get_endpoint(in_direction, locked_packet.ep_number);
         drop(locked_packet);
 
+        let iso_queue = if let Some(queue) = self.find_iso_queue(&ep) {
+            queue
+        } else {
+            match self.create_iso_queue(&ep) {
+                Ok(queue) => queue,
+                Err(e) => {
+                    warn!("Failed to create iso queue: {:?}", e);
+                    return;
+                }
+            }
+        };
+
+        let mut locked_iso_queue = iso_queue.lock().unwrap();
         let iso_transfer = locked_iso_queue.copy.front_mut();
         if iso_transfer.is_some()
             && iso_transfer
