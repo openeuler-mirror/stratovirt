@@ -255,14 +255,33 @@ trait CompileFDTHelper {
 
 impl CompileFDTHelper for LightMachine {
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
-        let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        let mem_size = self.base.sys_mem.memory_end_address().raw_value()
-            - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        let node = "memory";
-        let memory_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("device_type", "memory")?;
-        fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
-        fdt.end_node(memory_node_dep)
+        if self.base.numa_nodes.is_none() {
+            let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+            let mem_size = self.base.sys_mem.memory_end_address().raw_value()
+                - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+            let node = "memory";
+            let memory_node_dep = fdt.begin_node(node)?;
+            fdt.set_property_string("device_type", "memory")?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
+            fdt.end_node(memory_node_dep)?;
+
+            return Ok(());
+        }
+
+        // Set NUMA node information.
+        let mut mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        for (id, node) in self.base.numa_nodes.as_ref().unwrap().iter().enumerate() {
+            let mem_size = node.1.size;
+            let node = format!("memory@{:x}", mem_base);
+            let memory_node_dep = fdt.begin_node(&node)?;
+            fdt.set_property_string("device_type", "memory")?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
+            fdt.set_property_u32("numa-node-id", id as u32)?;
+            fdt.end_node(memory_node_dep)?;
+            mem_base += mem_size;
+        }
+
+        Ok(())
     }
 
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
