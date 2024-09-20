@@ -44,4 +44,6 @@ pub enum OzonecErr {
     GetOciState,
     #[error("Failed to bind device: {0}")]
     BindDev(String),
+    #[error("Close fd error")]
+    CloseFd,
 }
