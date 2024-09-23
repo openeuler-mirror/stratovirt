@@ -309,3 +309,15 @@ name = "reporting_evt_handler"
 args = ""
 message = "Balloon: handle fpr message"
 enabled = true
+
+[[events]]
+name = "virtio_read_object_direct"
+args = "host_addr: u64, count: usize"
+message = "Memory: virtio_read_object_direct host_addr {}, count {}"
+enabled = true
+
+[[events]]
+name = "virtio_write_object_direct"
+args = "host_addr: u64, count: usize"
+message = "Memory: virtio_write_object_direct host_addr {}, count {}"
+enabled = true

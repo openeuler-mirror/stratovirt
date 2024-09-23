@@ -126,32 +126,24 @@ pub trait VringOps {
     ///
     /// # Arguments
     ///
-    /// * `sys_mem` - Address space to which the vring belongs.
     /// * `index` - Index of descriptor in the virqueue descriptor table.
     /// * `len` - Total length of the descriptor chain which was used (written to).
-    fn add_used(&mut self, sys_mem: &Arc<AddressSpace>, index: u16, len: u32) -> Result<()>;
+    fn add_used(&mut self, index: u16, len: u32) -> Result<()>;
 
     /// Return true if guest needed to be notified.
     ///
     /// # Arguments
     ///
-    /// * `sys_mem` - Address space to which the vring belongs.
     /// * `features` - Bit mask of features negotiated by the backend and the frontend.
-    fn should_notify(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> bool;
+    fn should_notify(&mut self, features: u64) -> bool;
 
     /// Give guest a hint to suppress virtqueue notification.
     ///
     /// # Arguments
     ///
-    /// * `sys_mem` - Address space to which the vring belongs.
     /// * `features` - Bit mask of features negotiated by the backend and the frontend.
     /// * `suppress` - Suppress virtqueue notification or not.
-    fn suppress_queue_notify(
-        &mut self,
-        sys_mem: &Arc<AddressSpace>,
-        features: u64,
-        suppress: bool,
-    ) -> Result<()>;
+    fn suppress_queue_notify(&mut self, features: u64, suppress: bool) -> Result<()>;
 
     /// Get the actual size of the vring.
     fn actual_size(&self) -> u16;
@@ -160,13 +152,13 @@ pub trait VringOps {
     fn get_queue_config(&self) -> QueueConfig;
 
     /// The number of descriptor chains in the available ring.
-    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+    fn avail_ring_len(&mut self) -> Result<u16>;
 
     /// Get the avail index of the vring.
-    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+    fn get_avail_idx(&self) -> Result<u16>;
 
     /// Get the used index of the vring.
-    fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+    fn get_used_idx(&self) -> Result<u16>;
 
     /// Get the region cache information of the SplitVring.
     fn get_cache(&self) -> &Option<RegionCache>;

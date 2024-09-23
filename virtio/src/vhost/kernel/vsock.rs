@@ -174,7 +174,6 @@ impl Vsock {
             event_queue_locked
                 .vring
                 .add_used(
-                    &self.mem_space,
                     element.index,
                     VIRTIO_VSOCK_EVENT_TRANSPORT_RESET.as_bytes().len() as u32,
                 )
