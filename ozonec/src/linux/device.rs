@@ -236,3 +236,201 @@ struct DeviceInfo {
     uid: Option<u32>,
     gid: Option<u32>,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    };
+
+    use nix::mount::umount;
+
+    use super::*;
+
+    #[test]
+    fn test_mknod_dev() {
+        let rootfs = PathBuf::from("/tmp/ozonec/mknod_dev");
+        create_dir_all(&rootfs).unwrap();
+        let dev = Device::new(rootfs.clone());
+        let path = rootfs.join("mknod_dev");
+        if path.exists() {
+            remove_file(&path).unwrap();
+        }
+        let dev_info = DeviceInfo {
+            path: path.clone(),
+            dev_type: "c".to_string(),
+            major: 1,
+            minor: 3,
+            file_mode: Some(0o644u32),
+            uid: Some(1000u32),
+            gid: Some(1000u32),
+        };
+
+        assert!(dev.mknod_device(&dev_info).is_ok());
+        assert!(path.exists());
+
+        let metadata = fs::metadata(&path).unwrap();
+        assert!(metadata.file_type().is_char_device());
+        let major = (metadata.rdev() >> 8) as u32;
+        let minor = (metadata.rdev() & 0xff) as u32;
+        assert_eq!(major, 1);
+        assert_eq!(minor, 3);
+        let file_mode = metadata.permissions().mode();
+        assert_eq!(file_mode & 0o777, 0o644u32);
+        assert_eq!(metadata.uid(), 1000);
+        assert_eq!(metadata.gid(), 1000);
+
+        fs::remove_dir_all("/tmp/ozonec").unwrap();
+    }
+
+    #[test]
+    #[ignore = "mount may not be permitted"]
+    fn test_bind_dev() {
+        let rootfs = PathBuf::from("/tmp/ozonec/bind_dev");
+        create_dir_all(&rootfs).unwrap();
+        let dev_path = PathBuf::from("/mknod_dev");
+        if dev_path.exists() {
+            remove_file(&dev_path).unwrap();
+        }
+        let dev = makedev(1, 3);
+        mknod(
+            &dev_path,
+            SFlag::S_IFCHR,
+            Mode::from_bits_truncate(0o644u32),
+            dev,
+        )
+        .unwrap();
+        let dev_to_bind = Device::new(rootfs.clone());
+        let binded_path = rootfs.join("mknod_dev");
+        if binded_path.exists() {
+            umount(&binded_path).unwrap();
+            remove_file(&binded_path).unwrap();
+        }
+        let dev_info = DeviceInfo {
+            path: binded_path.clone(),
+            dev_type: "c".to_string(),
+            major: 1,
+            minor: 3,
+            file_mode: Some(0o644u32),
+            uid: Some(1000u32),
+            gid: Some(1000u32),
+        };
+
+        assert!(dev_to_bind.bind_device(&dev_info).is_ok());
+
+        let metadata = fs::metadata(&dev_path).unwrap();
+        let binded_metadata = fs::metadata(&binded_path).unwrap();
+        assert_eq!(binded_metadata.file_type(), metadata.file_type());
+        assert_eq!(binded_metadata.rdev(), metadata.rdev());
+        assert_eq!(binded_metadata.permissions(), metadata.permissions());
+        assert_eq!(binded_metadata.uid(), metadata.uid());
+        assert_eq!(binded_metadata.gid(), metadata.gid());
+
+        umount(&binded_path).unwrap();
+        fs::remove_dir_all("/tmp/ozonec").unwrap();
+        fs::remove_file(dev_path).unwrap();
+    }
+
+    #[test]
+    fn test_create_device() {
+        let oci_dev = OciDevice {
+            dev_type: "c".to_string(),
+            path: "/mknod_dev".to_string(),
+            major: Some(1),
+            minor: Some(3),
+            fileMode: Some(0o644u32),
+            uid: Some(1000),
+            gid: Some(1000),
+        };
+        let rootfs = PathBuf::from("/tmp/ozonec/create_device");
+        create_dir_all(&rootfs).unwrap();
+        let path = rootfs.join("mknod_dev");
+        if path.exists() {
+            remove_file(&path).unwrap();
+        }
+        let dev = Device::new(rootfs.clone());
+
+        assert!(dev.create_device(&oci_dev, true).is_ok());
+        assert!(path.exists());
+
+        let metadata = fs::metadata(&path).unwrap();
+        assert!(metadata.file_type().is_char_device());
+        let major = (metadata.rdev() >> 8) as u32;
+        let minor = (metadata.rdev() & 0xff) as u32;
+        assert_eq!(major, 1);
+        assert_eq!(minor, 3);
+        let file_mode = metadata.permissions().mode();
+        assert_eq!(file_mode & 0o777, 0o644u32);
+        assert_eq!(metadata.uid(), 1000);
+        assert_eq!(metadata.gid(), 1000);
+
+        fs::remove_dir_all("/tmp/ozonec").unwrap();
+    }
+
+    #[test]
+    fn test_delete_device() {
+        let oci_dev = OciDevice {
+            dev_type: "c".to_string(),
+            path: "/mknod_dev".to_string(),
+            major: Some(1),
+            minor: Some(3),
+            fileMode: Some(0o644u32),
+            uid: Some(1000),
+            gid: Some(1000),
+        };
+        let rootfs = PathBuf::from("/tmp/ozonec/delete_device");
+        create_dir_all(&rootfs).unwrap();
+        let path = rootfs.join("mknod_dev");
+        if path.exists() {
+            remove_file(&path).unwrap();
+        }
+        let dev = Device::new(rootfs.clone());
+        dev.create_device(&oci_dev, true).unwrap();
+
+        assert!(dev.delete_device(&oci_dev).is_ok());
+        assert!(!path.exists());
+
+        fs::remove_dir_all("/tmp/ozonec").unwrap();
+    }
+
+    #[test]
+    fn test_default_device() {
+        let rootfs = PathBuf::from("/tmp/ozonec/default_device");
+        let dev = Device::new(rootfs.clone());
+
+        let mut oci_dev = OciDevice {
+            dev_type: "c".to_string(),
+            path: "mknod_dev".to_string(),
+            major: Some(1),
+            minor: Some(3),
+            fileMode: Some(0o644u32),
+            uid: Some(1000),
+            gid: Some(1000),
+        };
+        assert!(!dev.is_default_device(&oci_dev));
+        oci_dev.path = "/dev/null".to_string();
+        assert!(dev.is_default_device(&oci_dev));
+        oci_dev.path = "/dev/zero".to_string();
+        assert!(dev.is_default_device(&oci_dev));
+        oci_dev.path = "/dev/full".to_string();
+        assert!(dev.is_default_device(&oci_dev));
+        oci_dev.path = "/dev/random".to_string();
+        assert!(dev.is_default_device(&oci_dev));
+        oci_dev.path = "/dev/urandom".to_string();
+        assert!(dev.is_default_device(&oci_dev));
+        oci_dev.path = "/dev/tty".to_string();
+        assert!(dev.is_default_device(&oci_dev));
+    }
+
+    #[test]
+    fn test_get_sflag() {
+        let rootfs = PathBuf::from("/tmp/ozonec/test_get_sflag");
+        let dev = Device::new(rootfs.clone());
+
+        assert_eq!(dev.get_sflag("c").unwrap(), SFlag::S_IFCHR);
+        assert_eq!(dev.get_sflag("b").unwrap(), SFlag::S_IFBLK);
+        assert_eq!(dev.get_sflag("p").unwrap(), SFlag::S_IFIFO);
+        assert_eq!(dev.get_sflag("u").unwrap(), SFlag::S_IFCHR);
+    }
+}
