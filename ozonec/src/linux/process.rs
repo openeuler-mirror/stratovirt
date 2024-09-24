@@ -429,3 +429,143 @@ fn to_cap(value: &str) -> Result<Capability> {
         _ => bail!("Invalid capability: {}", value),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use nix::sys::resource::{getrlimit, Resource};
+    use rusty_fork::rusty_fork_test;
+
+    use oci_spec::{
+        linux::{IoPriority, SchedPolicy, Scheduler},
+        posix::{Rlimits, User},
+    };
+
+    use super::*;
+
+    fn init_oci_process() -> OciProcess {
+        let user = User {
+            uid: 0,
+            gid: 0,
+            umask: None,
+            additionalGids: None,
+        };
+        OciProcess {
+            cwd: String::from("/"),
+            args: Some(vec![String::from("bash")]),
+            env: None,
+            terminal: false,
+            consoleSize: None,
+            rlimits: None,
+            apparmorProfile: None,
+            capabilities: None,
+            noNewPrivileges: None,
+            oomScoreAdj: None,
+            scheduler: None,
+            selinuxLabel: None,
+            ioPriority: None,
+            execCPUAffinity: None,
+            user,
+        }
+    }
+
+    #[test]
+    fn test_process_new() {
+        let mut oci_process = init_oci_process();
+
+        let process = Process::new(&oci_process, false);
+        assert_eq!(process.stdin.unwrap(), stdin().as_raw_fd());
+        assert_eq!(process.stdout.unwrap(), stdout().as_raw_fd());
+        assert_eq!(process.stderr.unwrap(), stderr().as_raw_fd());
+
+        oci_process.terminal = true;
+        let process = Process::new(&oci_process, false);
+        assert!(process.stdin.is_none());
+        assert!(process.stdout.is_none());
+        assert!(process.stderr.is_none());
+    }
+
+    #[test]
+    fn test_set_tty() {
+        let mut oci_process = init_oci_process();
+
+        let process = Process::new(&oci_process, false);
+        assert!(process.set_tty(None, false).is_ok());
+
+        oci_process.terminal = true;
+        let process = Process::new(&oci_process, false);
+        assert!(process.set_tty(None, false).is_err());
+    }
+
+    rusty_fork_test! {
+        #[test]
+        #[ignore = "oom_score_adj may not be permitted to set"]
+        fn test_set_oom_score_adj() {
+            let mut oci_process = init_oci_process();
+            oci_process.oomScoreAdj = Some(100);
+            let process = Process::new(&oci_process, false);
+
+            assert!(process.set_oom_score_adj().is_ok());
+            assert_eq!(
+                read_to_string(Path::new("/proc/self/oom_score_adj")).unwrap(),
+                String::from("100\n")
+            );
+        }
+
+        #[test]
+        #[ignore = "setrlimit may not be permitted"]
+        fn test_set_rlimits() {
+            let mut oci_process = init_oci_process();
+            let rlimits = Rlimits {
+                rlimit_type: String::from("RLIMIT_CORE"),
+                soft: 10,
+                hard: 20,
+            };
+            oci_process.rlimits = Some(vec![rlimits]);
+            let process = Process::new(&oci_process, false);
+
+            assert!(process.set_rlimits().is_ok());
+            assert_eq!(getrlimit(Resource::RLIMIT_CORE).unwrap().0, 10);
+            assert_eq!(getrlimit(Resource::RLIMIT_CORE).unwrap().1, 20);
+        }
+
+        #[test]
+        fn test_set_io_priority() {
+            let mut oci_process = init_oci_process();
+            let io_pri = IoPriority {
+                class: IoPriClass::IoprioClassBe,
+                priority: 7,
+            };
+            oci_process.ioPriority = Some(io_pri.clone());
+            let process = Process::new(&oci_process, false);
+
+            assert!(process.set_io_priority().is_ok());
+
+            let io_prio_who_process: libc::c_int = 1;
+            let io_prio_who_pid = 0;
+            let ioprio = unsafe {
+                libc::syscall(libc::SYS_ioprio_get, io_prio_who_process, io_prio_who_pid)
+            };
+            assert_eq!(ioprio, (2 as i64) << 13 | io_pri.priority);
+        }
+
+        #[test]
+        fn test_set_scheduler() {
+            let mut oci_process = init_oci_process();
+            let scheduler = Scheduler {
+                policy: SchedPolicy::SchedOther,
+                nice: None,
+                priority: None,
+                flags: None,
+                runtime: None,
+                deadline: None,
+                period: None,
+            };
+            oci_process.scheduler = Some(scheduler);
+            let process = Process::new(&oci_process, false);
+
+            assert!(process.set_scheduler().is_ok());
+        }
+    }
+}
