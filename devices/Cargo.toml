@@ -54,3 +54,6 @@ usb_camera_v4l2 = ["usb_camera", "dep:v4l2-sys-mit", "machine_manager/usb_camera
 usb_camera_oh = ["usb_camera", "machine_manager/usb_camera_oh", "util/usb_camera_oh"]
 ramfb = ["ui/console", "util/pixman"]
 usb_uas = []
+trace_to_logger = []
+trace_to_ftrace = []
+trace_to_hitrace = []
