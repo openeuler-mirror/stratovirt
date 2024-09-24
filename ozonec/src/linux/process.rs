@@ -436,9 +436,10 @@ mod tests {
 
     use nix::sys::resource::{getrlimit, Resource};
     use rusty_fork::rusty_fork_test;
+    use unistd::getcwd;
 
     use oci_spec::{
-        linux::{IoPriority, SchedPolicy, Scheduler},
+        linux::{Capbilities, IoPriority, SchedPolicy, Scheduler},
         posix::{Rlimits, User},
     };
 
@@ -496,6 +497,39 @@ mod tests {
         oci_process.terminal = true;
         let process = Process::new(&oci_process, false);
         assert!(process.set_tty(None, false).is_err());
+    }
+
+    #[test]
+    fn test_chdir_cwd() {
+        let oci_process = init_oci_process();
+        let process = Process::new(&oci_process, false);
+
+        assert!(process.chdir_cwd().is_ok());
+        assert_eq!(getcwd().unwrap().to_str().unwrap(), "/");
+    }
+
+    #[test]
+    fn test_set_envs() {
+        let mut oci_process = init_oci_process();
+        oci_process.env = Some(vec![
+            String::from("OZONEC_ENV_1=1"),
+            String::from("=OZONEC_ENV_2"),
+            String::from("OZONEC_ENV"),
+        ]);
+        let process = Process::new(&oci_process, false);
+
+        process.set_envs();
+        for (key, value) in env::vars() {
+            if key == "OZONEC_ENV_1" {
+                assert_eq!(value, "1");
+                continue;
+            }
+            assert_ne!(value, "OZONEC_ENV_2");
+            assert_ne!(key, "OZONEC_ENV");
+            assert_ne!(value, "OZONEC_ENV");
+        }
+
+        env::remove_var("OZONEC_ENV_1");
     }
 
     rusty_fork_test! {
@@ -566,6 +600,82 @@ mod tests {
             let process = Process::new(&oci_process, false);
 
             assert!(process.set_scheduler().is_ok());
+        }
+
+        #[test]
+        fn test_set_no_new_privileges() {
+            let mut oci_process = init_oci_process();
+            oci_process.noNewPrivileges = Some(true);
+            let process = Process::new(&oci_process, false);
+
+            assert!(process.set_no_new_privileges().is_ok());
+        }
+
+        #[test]
+        #[ignore = "capset may not be permitted"]
+        fn test_drop_capabilities() {
+            let mut oci_process = init_oci_process();
+            let caps = Capbilities {
+                effective: Some(vec![
+                    String::from("CAP_DAC_OVERRIDE"),
+                    String::from("CAP_DAC_READ_SEARCH"),
+                    String::from("CAP_SETFCAP"),
+                ]),
+                bounding: Some(vec![
+                    String::from("CAP_DAC_OVERRIDE"),
+                    String::from("CAP_DAC_READ_SEARCH"),
+                ]),
+                inheritable: Some(vec![String::from("CAP_DAC_READ_SEARCH")]),
+                permitted: Some(vec![
+                    String::from("CAP_DAC_OVERRIDE"),
+                    String::from("CAP_DAC_READ_SEARCH"),
+                    String::from("CAP_SETFCAP"),
+                ]),
+                ambient: Some(vec![String::from("CAP_DAC_READ_SEARCH")]),
+            };
+            oci_process.capabilities = Some(caps);
+            let process = Process::new(&oci_process, false);
+
+            assert!(process.drop_capabilities().is_ok());
+            let mut caps = caps::read(None, CapSet::Bounding).unwrap();
+            assert_eq!(caps.len(), 2);
+            assert!(caps.get(&Capability::CAP_DAC_OVERRIDE).is_some());
+            assert!(caps.get(&Capability::CAP_DAC_READ_SEARCH).is_some());
+            caps = caps::read(None, CapSet::Effective).unwrap();
+            assert_eq!(caps.len(), 3);
+            assert!(caps.get(&Capability::CAP_DAC_OVERRIDE).is_some());
+            assert!(caps.get(&Capability::CAP_DAC_READ_SEARCH).is_some());
+            assert!(caps.get(&Capability::CAP_SETFCAP).is_some());
+            caps = caps::read(None, CapSet::Inheritable).unwrap();
+            assert_eq!(caps.len(), 1);
+            assert!(caps.get(&Capability::CAP_DAC_READ_SEARCH).is_some());
+            caps = caps::read(None, CapSet::Permitted).unwrap();
+            assert_eq!(caps.len(), 3);
+            assert!(caps.get(&Capability::CAP_DAC_OVERRIDE).is_some());
+            assert!(caps.get(&Capability::CAP_DAC_READ_SEARCH).is_some());
+            assert!(caps.get(&Capability::CAP_SETFCAP).is_some());
+            caps = caps::read(None, CapSet::Ambient).unwrap();
+            assert_eq!(caps.len(), 1);
+            assert!(caps.get(&Capability::CAP_DAC_READ_SEARCH).is_some());
+        }
+
+        #[test]
+        fn test_reset_capabilities() {
+            let oci_process = init_oci_process();
+            let process = Process::new(&oci_process, false);
+
+            assert!(process.reset_capabilities().is_ok());
+            let permit_caps = caps::read(None, CapSet::Permitted).unwrap();
+            let eff_caps = caps::read(None, CapSet::Effective).unwrap();
+            assert_eq!(permit_caps, eff_caps);
+        }
+
+        #[test]
+        fn test_clean_envs() {
+            let oci_process = init_oci_process();
+            let process = Process::new(&oci_process, false);
+            process.clean_envs();
+            assert_eq!(env::vars().count(), 0);
         }
     }
 }
