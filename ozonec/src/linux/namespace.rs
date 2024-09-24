@@ -64,3 +64,20 @@ impl NsController {
         Ok(self.namespaces.get(&clone_flags))
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    pub fn set_namespace(ns_type: NamespaceType) {
+        let mut ns_ctrl = NsController {
+            namespaces: HashMap::new(),
+        };
+        let ns = Namespace {
+            ns_type,
+            path: None,
+        };
+        ns_ctrl.namespaces.insert(ns_type.try_into().unwrap(), ns);
+        ns_ctrl.set_namespace(ns_type).unwrap();
+    }
+}
