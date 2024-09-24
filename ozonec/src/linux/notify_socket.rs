@@ -88,3 +88,42 @@ impl NotifySocket {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::fs::{create_dir_all, remove_dir_all};
+
+    use nix::sys::wait::{waitpid, WaitStatus};
+
+    use crate::linux::process::clone_process;
+
+    use super::*;
+
+    #[test]
+    fn test_notify_socket() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let root = PathBuf::from("/tmp/ozonec/notify_socket");
+        create_dir_all(&root).unwrap();
+
+        let socket_path = root.join(NOTIFY_SOCKET);
+        let mut socket = NotifySocket::new(&socket_path);
+        let listener = NotifyListener::new(root.clone()).unwrap();
+        let child = clone_process("notify_socket", || {
+            listener.wait_for_start_container().unwrap();
+            Ok(1)
+        })
+        .unwrap();
+        socket.notify_container_start().unwrap();
+
+        match waitpid(child, None) {
+            Ok(WaitStatus::Exited(_, s)) => {
+                assert_eq!(s, 1);
+            }
+            Ok(_) => (),
+            Err(e) => {
+                panic!("Failed to waitpid for child process: {e}");
+            }
+        }
+    }
+}
