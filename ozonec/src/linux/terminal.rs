@@ -95,3 +95,17 @@ pub fn connect_stdio(stdin: &RawFd, stdout: &RawFd, stderr: &RawFd) -> Result<()
         .with_context(|| OzonecErr::Dup2("stderr".to_string()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connect_stdio() {
+        let stdin: RawFd = 0;
+        let stdout: RawFd = 0;
+        let stderr: RawFd = 0;
+
+        assert!(connect_stdio(&stdin, &stdout, &stderr).is_ok());
+    }
+}
