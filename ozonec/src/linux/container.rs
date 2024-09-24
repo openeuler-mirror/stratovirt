@@ -792,3 +792,201 @@ impl Container for LinuxContainer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::DateTime;
+    use fs::{remove_dir_all, File};
+    use nix::sys::stat::stat;
+    use unistd::getpid;
+
+    use oci_spec::{
+        linux::LinuxPlatform,
+        posix::{Root, User},
+        process::Process as OciProcess,
+    };
+
+    use super::*;
+
+    fn init_config() -> RuntimeConfig {
+        let root = Root {
+            path: String::from("/tmp/ozonec/bundle/rootfs"),
+            readonly: true,
+        };
+        let user = User {
+            uid: 0,
+            gid: 0,
+            umask: None,
+            additionalGids: None,
+        };
+        let process = OciProcess {
+            cwd: String::from("/"),
+            args: Some(vec![String::from("bash")]),
+            env: None,
+            terminal: false,
+            consoleSize: None,
+            rlimits: None,
+            apparmorProfile: None,
+            capabilities: None,
+            noNewPrivileges: None,
+            oomScoreAdj: None,
+            scheduler: None,
+            selinuxLabel: None,
+            ioPriority: None,
+            execCPUAffinity: None,
+            user,
+        };
+        let linux = LinuxPlatform {
+            namespaces: Vec::new(),
+            uidMappings: None,
+            gidMappings: None,
+            timeOffsets: None,
+            devices: None,
+            cgroupsPath: None,
+            rootfsPropagation: None,
+            maskedPaths: None,
+            readonlyPaths: None,
+            mountLabel: None,
+            personality: None,
+            resources: None,
+            rdma: None,
+            unified: None,
+            sysctl: None,
+            seccomp: None,
+            #[cfg(target_arch = "x86_64")]
+            intelRdt: None,
+        };
+        RuntimeConfig {
+            ociVersion: String::from("1.2"),
+            root,
+            mounts: Vec::new(),
+            process,
+            hostname: None,
+            domainname: None,
+            linux: Some(linux),
+            vm: None,
+            hooks: None,
+            annotations: None,
+        }
+    }
+
+    #[test]
+    fn test_linux_container_new() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let config = init_config();
+        let mut exist: bool = false;
+        let container = LinuxContainer::new(
+            &String::from("LinuxContainer_new"),
+            &String::from("/tmp/ozonec"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .unwrap();
+
+        let root = Path::new(&container.root);
+        assert!(root.exists());
+        let root_stat = stat(root).unwrap();
+        assert_eq!(root_stat.st_uid, geteuid().as_raw());
+        assert_eq!(root_stat.st_gid, getegid().as_raw());
+
+        assert!(LinuxContainer::new(
+            &String::from("LinuxContainer_new"),
+            &String::from("/tmp/ozonec"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .is_err());
+        assert_eq!(exist, true);
+    }
+
+    #[test]
+    fn test_validate_config() {
+        let mut config = init_config();
+        config.linux = None;
+        assert!(LinuxContainer::validate_config(&config).is_err());
+
+        let linux = LinuxPlatform {
+            namespaces: Vec::new(),
+            uidMappings: None,
+            gidMappings: None,
+            timeOffsets: None,
+            devices: None,
+            cgroupsPath: None,
+            rootfsPropagation: None,
+            maskedPaths: None,
+            readonlyPaths: None,
+            mountLabel: None,
+            personality: None,
+            resources: None,
+            rdma: None,
+            unified: None,
+            sysctl: None,
+            seccomp: None,
+            #[cfg(target_arch = "x86_64")]
+            intelRdt: None,
+        };
+        config.process.args = None;
+        config.linux = Some(linux);
+        assert!(LinuxContainer::validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn test_load_from_state() {
+        let mut state = State {
+            oci_version: String::from("1.2"),
+            id: String::from("load_from_state"),
+            pid: 0,
+            root: PathBuf::from("/tmp/ozonec/root"),
+            bundle: PathBuf::from("/tmp/ozonec/bundle"),
+            rootfs: String::from("/tmp/ozonec/bundle/rootfs"),
+            start_time: 0,
+            created_time: DateTime::from(SystemTime::now()),
+            config: None,
+        };
+        assert!(LinuxContainer::load_from_state(&state, &None).is_err());
+
+        let config = init_config();
+        state.config = Some(config);
+        assert!(LinuxContainer::load_from_state(&state, &None).is_ok());
+    }
+
+    #[test]
+    fn test_status() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let config = init_config();
+        create_dir_all(&config.root.path).unwrap();
+        let mut exist: bool = false;
+        let mut container = LinuxContainer::new(
+            &String::from("get_container_status"),
+            &String::from("/tmp/ozonec"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .unwrap();
+        container.pid = -1;
+
+        assert_eq!(container.status().unwrap(), ContainerStatus::Creating);
+
+        container.pid = 0;
+        assert_eq!(container.status().unwrap(), ContainerStatus::Stopped);
+
+        container.pid = getpid().as_raw();
+        assert_eq!(container.status().unwrap(), ContainerStatus::Stopped);
+
+        let proc_stat = procfs::process::Process::new(container.pid)
+            .unwrap()
+            .stat()
+            .unwrap();
+        container.start_time = proc_stat.starttime;
+        assert_eq!(container.status().unwrap(), ContainerStatus::Running);
+
+        let notify_socket = PathBuf::from(&container.root).join(NOTIFY_SOCKET);
+        File::create(&notify_socket).unwrap();
+        assert_eq!(container.status().unwrap(), ContainerStatus::Created);
+    }
+}
