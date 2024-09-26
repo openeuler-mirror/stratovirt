@@ -13,7 +13,7 @@
 use std::collections::LinkedList;
 use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -191,7 +191,7 @@ impl XhciTransfer {
                     self.epid, self.slotid, self.streamid
                 )
             })?;
-            ring.refresh_dequeue_ptr(self.ep_context.output_ctx_addr.load(Ordering::Acquire))?;
+            ring.refresh_dequeue_ptr(*self.ep_context.output_ctx_addr.lock().unwrap())?;
             return Ok(());
         }
 
@@ -320,7 +320,7 @@ pub struct XhciEpContext {
     enabled: bool,
     ring: Option<Arc<XhciTransferRing>>,
     ep_type: EpType,
-    output_ctx_addr: Arc<AtomicU64>,
+    output_ctx_addr: Arc<Mutex<GuestAddress>>,
     state: Arc<AtomicU32>,
     interval: u32,
     mfindex_last: u64,
@@ -339,7 +339,7 @@ impl XhciEpContext {
             enabled: false,
             ring: None,
             ep_type: EpType::Invalid,
-            output_ctx_addr: Arc::new(AtomicU64::new(0)),
+            output_ctx_addr: Arc::new(Mutex::new(GuestAddress(0))),
             state: Arc::new(AtomicU32::new(0)),
             interval: 0,
             mfindex_last: 0,
@@ -356,7 +356,7 @@ impl XhciEpContext {
     fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) -> Result<()> {
         let dequeue: DmaAddr = addr64_from_u32(ctx.deq_lo & !0xf, ctx.deq_hi);
         self.ep_type = ((ctx.ep_info2 >> EP_TYPE_SHIFT) & EP_TYPE_MASK).into();
-        self.output_ctx_addr.store(output_ctx, Ordering::SeqCst);
+        *self.output_ctx_addr.lock().unwrap() = GuestAddress(output_ctx);
         self.max_pstreams = (ctx.ep_info >> EP_CTX_MAX_PSTREAMS_SHIFT) & EP_CTX_MAX_PSTREAMS_MASK;
         self.lsa = ((ctx.ep_info >> EP_CTX_LSA_SHIFT) & EP_CTX_LSA_MASK) != 0;
         self.interval = 1 << ((ctx.ep_info >> EP_CTX_INTERVAL_SHIFT) & EP_CTX_INTERVAL_MASK);
@@ -388,11 +388,12 @@ impl XhciEpContext {
     /// Update the endpoint state and write the state to memory.
     fn set_state(&self, state: u32, stream_id: Option<u32>) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
-        dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+        let output_addr = self.output_ctx_addr.lock().unwrap();
+        dma_read_u32(&self.mem, *output_addr, ep_ctx.as_mut_dwords())?;
         ep_ctx.ep_info &= !EP_STATE_MASK;
         ep_ctx.ep_info |= state;
-        dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        dma_write_u32(&self.mem, *output_addr, ep_ctx.as_dwords())?;
+        drop(output_addr);
         self.flush_dequeue_to_memory(stream_id)?;
         self.set_ep_state(state);
         trace::usb_xhci_set_state(self.epid, state);
@@ -422,8 +423,8 @@ impl XhciEpContext {
     /// Stream Endpoints flush ring dequeue to both Endpoint and Stream context.
     fn flush_dequeue_to_memory(&self, stream_id: Option<u32>) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        let output_addr = self.output_ctx_addr.load(Ordering::Acquire);
-        dma_read_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_mut_dwords())?;
+        let output_addr = self.output_ctx_addr.lock().unwrap();
+        dma_read_u32(&self.mem, *output_addr, ep_ctx.as_mut_dwords())?;
 
         if self.max_pstreams == 0 {
             let ring = self.get_ring(0)?;
@@ -434,17 +435,13 @@ impl XhciEpContext {
             let locked_stream = stream.lock().unwrap();
             let output_addr = locked_stream.dequeue;
             let ring = locked_stream.ring.as_ref();
-            dma_read_u32(
-                &self.mem,
-                GuestAddress(output_addr),
-                stream_ctx.as_mut_dwords(),
-            )?;
+            dma_read_u32(&self.mem, output_addr, stream_ctx.as_mut_dwords())?;
             ring.update_dequeue_to_ctx(stream_ctx.as_mut_dwords());
             ring.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
-            dma_write_u32(&self.mem, GuestAddress(output_addr), stream_ctx.as_dwords())?;
+            dma_write_u32(&self.mem, output_addr, stream_ctx.as_dwords())?;
         }
 
-        dma_write_u32(&self.mem, GuestAddress(output_addr), ep_ctx.as_dwords())?;
+        dma_write_u32(&self.mem, *output_addr, ep_ctx.as_dwords())?;
         Ok(())
     }
 
@@ -559,7 +556,7 @@ impl From<u32> for EpType {
 pub struct XhciSlot {
     pub enabled: bool,
     pub addressed: bool,
-    pub slot_ctx_addr: u64,
+    pub slot_ctx_addr: GuestAddress,
     pub usb_port: Option<Arc<Mutex<UsbPort>>>,
     pub endpoints: Vec<XhciEpContext>,
 }
@@ -574,7 +571,7 @@ impl XhciSlot {
         XhciSlot {
             enabled: false,
             addressed: false,
-            slot_ctx_addr: 0,
+            slot_ctx_addr: GuestAddress(0),
             usb_port: None,
             endpoints: eps,
         }
@@ -583,18 +580,14 @@ impl XhciSlot {
     /// Get the slot context from the memory.
     fn get_slot_ctx(&self, mem: &Arc<AddressSpace>) -> Result<XhciSlotCtx> {
         let mut slot_ctx = XhciSlotCtx::default();
-        dma_read_u32(
-            mem,
-            GuestAddress(self.slot_ctx_addr),
-            slot_ctx.as_mut_dwords(),
-        )?;
+        dma_read_u32(mem, self.slot_ctx_addr, slot_ctx.as_mut_dwords())?;
         Ok(slot_ctx)
     }
 
     /// Get the slot state in slot context.
     fn get_slot_state_in_context(&self, mem: &Arc<AddressSpace>) -> Result<u32> {
         // Table 4-1: Device Slot State Code Definitions.
-        if self.slot_ctx_addr == 0 {
+        if self.slot_ctx_addr == GuestAddress(0) {
             return Ok(SLOT_DISABLED_ENABLED);
         }
         let slot_ctx = self.get_slot_ctx(mem)?;
@@ -866,7 +859,7 @@ pub struct XhciStreamContext {
     /// Memory address space.
     mem: Arc<AddressSpace>,
     /// Dequeue pointer.
-    dequeue: u64,
+    dequeue: GuestAddress,
     /// Transfer Ring (no Secondary Streams for now).
     ring: Arc<XhciTransferRing>,
     /// Whether the context is up to date after reset.
@@ -877,14 +870,14 @@ impl XhciStreamContext {
     fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
             mem: Arc::clone(mem),
-            dequeue: 0,
+            dequeue: GuestAddress(0),
             ring: Arc::new(XhciTransferRing::new(mem)),
             needs_refresh: true,
         }
     }
 
     fn init(&mut self, addr: u64) -> Result<()> {
-        self.dequeue = addr;
+        self.dequeue = GuestAddress(addr);
         self.refresh()?;
         Ok(())
     }
@@ -899,11 +892,7 @@ impl XhciStreamContext {
 
     fn refresh(&mut self) -> Result<()> {
         let mut stream_ctx = XhciStreamCtx::default();
-        dma_read_u32(
-            &self.mem,
-            GuestAddress(self.dequeue),
-            stream_ctx.as_mut_dwords(),
-        )?;
+        dma_read_u32(&self.mem, self.dequeue, stream_ctx.as_mut_dwords())?;
         let dequeue = addr64_from_u32(stream_ctx.deq_lo & !0xf, stream_ctx.deq_hi);
         self.ring.init(dequeue);
         self.needs_refresh = false;
@@ -1323,7 +1312,7 @@ impl XhciDevice {
         self.slots[(slot_id - 1) as usize].enabled = false;
         self.slots[(slot_id - 1) as usize].addressed = false;
         self.slots[(slot_id - 1) as usize].usb_port = None;
-        self.slots[(slot_id - 1) as usize].slot_ctx_addr = 0;
+        self.slots[(slot_id - 1) as usize].slot_ctx_addr = GuestAddress(0);
         Ok(TRBCCode::Success)
     }
 
@@ -1390,7 +1379,7 @@ impl XhciDevice {
         let mut locked_port = usb_port.lock().unwrap();
         locked_port.slot_id = slot_id;
         self.slots[(slot_id - 1) as usize].usb_port = Some(usb_port.clone());
-        self.slots[(slot_id - 1) as usize].slot_ctx_addr = octx;
+        self.slots[(slot_id - 1) as usize].slot_ctx_addr = GuestAddress(octx);
         let dev = locked_port.dev.as_ref().unwrap();
         dev.lock().unwrap().reset();
         if bsr {
@@ -1492,7 +1481,7 @@ impl XhciDevice {
         slot_ctx.set_slot_state(SLOT_ADDRESSED);
         dma_write_u32(
             &self.mem_space,
-            GuestAddress(self.slots[(slot_id - 1) as usize].slot_ctx_addr),
+            self.slots[(slot_id - 1) as usize].slot_ctx_addr,
             slot_ctx.as_dwords(),
         )?;
         Ok(TRBCCode::Success)
@@ -1522,7 +1511,7 @@ impl XhciDevice {
             }
             if ictl_ctx.add_flags & (1 << i) == 1 << i {
                 self.disable_endpoint(slot_id, i)?;
-                self.enable_endpoint(slot_id, i, ictx, octx)?;
+                self.enable_endpoint(slot_id, i, ictx, octx.raw_value())?;
             }
         }
         // From section 4.6.6 Configure Endpoint of the spec:
@@ -1547,7 +1536,7 @@ impl XhciDevice {
             slot_ctx.set_slot_state(SLOT_CONFIGURED);
             slot_ctx.set_context_entry(enabled_ep_idx);
         }
-        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        dma_write_u32(&self.mem_space, octx, slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
     }
 
@@ -1586,14 +1575,10 @@ impl XhciDevice {
                 islot_ctx.as_mut_dwords(),
             )?;
             let mut slot_ctx = XhciSlotCtx::default();
-            dma_read_u32(
-                &self.mem_space,
-                GuestAddress(octx),
-                slot_ctx.as_mut_dwords(),
-            )?;
+            dma_read_u32(&self.mem_space, octx, slot_ctx.as_mut_dwords())?;
             slot_ctx.set_max_exit_latency(islot_ctx.get_max_exit_latency());
             slot_ctx.set_interrupter_target(islot_ctx.get_interrupter_target());
-            dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+            dma_write_u32(&self.mem_space, octx, slot_ctx.as_dwords())?;
         }
         if ictl_ctx.add_flags & 0x2 == 0x2 {
             // Default control endpoint context.
@@ -1607,21 +1592,16 @@ impl XhciDevice {
                 iep_ctx.as_mut_dwords(),
             )?;
             let mut ep_ctx = XhciEpCtx::default();
-            dma_read_u32(
-                &self.mem_space,
-                GuestAddress(
-                    // It is safe to use plus here because we previously verify the address.
-                    octx + EP_CTX_OFFSET,
-                ),
-                ep_ctx.as_mut_dwords(),
-            )?;
+            let ep_ctx_addr = octx.checked_add(EP_CTX_OFFSET).with_context(|| {
+                format!(
+                    "Endpoint Context access overflow, addr {:x} size {:x}",
+                    octx.raw_value(),
+                    EP_CTX_OFFSET
+                )
+            })?;
+            dma_read_u32(&self.mem_space, ep_ctx_addr, ep_ctx.as_mut_dwords())?;
             ep_ctx.set_max_packet_size(iep_ctx.get_max_packet_size());
-            dma_write_u32(
-                &self.mem_space,
-                // It is safe to use plus here because we previously verify the address.
-                GuestAddress(octx + EP_CTX_OFFSET),
-                ep_ctx.as_dwords(),
-            )?;
+            dma_write_u32(&self.mem_space, ep_ctx_addr, ep_ctx.as_dwords())?;
         }
         Ok(TRBCCode::Success)
     }
@@ -1630,11 +1610,7 @@ impl XhciDevice {
         trace::usb_xhci_reset_device(&slot_id);
         let mut slot_ctx = XhciSlotCtx::default();
         let octx = self.slots[(slot_id - 1) as usize].slot_ctx_addr;
-        dma_read_u32(
-            &self.mem_space,
-            GuestAddress(octx),
-            slot_ctx.as_mut_dwords(),
-        )?;
+        dma_read_u32(&self.mem_space, octx, slot_ctx.as_mut_dwords())?;
         let slot_state = (slot_ctx.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK;
         if slot_state != SLOT_ADDRESSED
             && slot_state != SLOT_CONFIGURED
@@ -1649,7 +1625,7 @@ impl XhciDevice {
         slot_ctx.set_slot_state(SLOT_DEFAULT);
         slot_ctx.set_context_entry(1);
         slot_ctx.set_usb_device_address(0);
-        dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
+        dma_write_u32(&self.mem_space, octx, slot_ctx.as_dwords())?;
         Ok(TRBCCode::Success)
     }
 
@@ -2519,7 +2495,7 @@ pub fn dma_write_u32(
 }
 
 fn addr64_from_u32(low: u32, high: u32) -> u64 {
-    (u64::from(high << 16) << 16) | u64::from(low)
+    (u64::from(high) << 32) | u64::from(low)
 }
 
 // | ep id | < = > | ep direction | ep number |

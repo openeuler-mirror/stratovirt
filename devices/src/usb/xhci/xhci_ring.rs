@@ -206,15 +206,11 @@ impl XhciTransferRing {
     }
 
     /// Refresh dequeue pointer to output context.
-    pub fn refresh_dequeue_ptr(&self, output_ctx_addr: u64) -> Result<()> {
+    pub fn refresh_dequeue_ptr(&self, output_ctx_addr: GuestAddress) -> Result<()> {
         let mut ep_ctx = XhciEpCtx::default();
-        dma_read_u32(
-            &self.mem,
-            GuestAddress(output_ctx_addr),
-            ep_ctx.as_mut_dwords(),
-        )?;
+        dma_read_u32(&self.mem, output_ctx_addr, ep_ctx.as_mut_dwords())?;
         self.update_dequeue_to_ctx(&mut ep_ctx.as_mut_dwords()[2..]);
-        dma_write_u32(&self.mem, GuestAddress(output_ctx_addr), ep_ctx.as_dwords())?;
+        dma_write_u32(&self.mem, output_ctx_addr, ep_ctx.as_dwords())?;
         Ok(())
     }
 
