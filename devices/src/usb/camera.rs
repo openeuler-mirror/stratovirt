@@ -886,7 +886,12 @@ impl UvcPayload {
         let mut frame_data_size = iov_size;
         let header_len = self.header.len();
         // Within the scope of the frame.
-        if self.frame_offset + frame_data_size as usize >= current_frame_size {
+        if self
+            .frame_offset
+            .checked_add(frame_data_size as usize)
+            .with_context(|| "get_frame_data_size: invalid frame data")?
+            >= current_frame_size
+        {
             if self.frame_offset > current_frame_size {
                 bail!(
                     "Invalid frame offset {} {}",
@@ -897,7 +902,12 @@ impl UvcPayload {
             frame_data_size = (current_frame_size - self.frame_offset) as u64;
         }
         // Within the scope of the payload.
-        if self.payload_offset + frame_data_size as usize >= MAX_PAYLOAD as usize {
+        if self
+            .payload_offset
+            .checked_add(frame_data_size as usize)
+            .with_context(|| "get_frame_data_size: invalid payload data")?
+            >= MAX_PAYLOAD as usize
+        {
             if self.payload_offset > MAX_PAYLOAD as usize {
                 bail!(
                     "Invalid payload offset {} {}",
@@ -908,7 +918,12 @@ impl UvcPayload {
             frame_data_size = u64::from(MAX_PAYLOAD) - self.payload_offset as u64;
         }
         // payload start, reserve the header.
-        if self.payload_offset == 0 && frame_data_size + header_len as u64 > iov_size {
+        if self.payload_offset == 0
+            && frame_data_size
+                .checked_add(header_len as u64)
+                .with_context(|| "get_frame_data_size: invalid header_len")?
+                > iov_size
+        {
             if iov_size <= header_len as u64 {
                 bail!("Invalid iov size {}", iov_size);
             }
@@ -1092,7 +1107,10 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
 
 fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
     VsDescInputHeader {
-        bLength: 0xd + fmt_num,
+        bLength: 0xd_u8.checked_add(fmt_num).unwrap_or_else(|| {
+            error!("gen_intface_header_desc: too large fmt num");
+            u8::MAX
+        }),
         bDescriptorType: CS_INTERFACE,
         bDescriptorSubtype: VS_INPUT_HEADER,
         bNumFormats: fmt_num,

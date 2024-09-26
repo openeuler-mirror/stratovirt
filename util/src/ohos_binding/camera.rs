@@ -69,6 +69,9 @@ impl OhCamera {
                 bail!("OH Camera: failed to init profiles");
             }
         }
+        if fmt_cnt > i32::from(u8::MAX) {
+            bail!("Invalid format counts: {fmt_cnt}");
+        }
         Ok((Self { ctx, capi }, fmt_cnt))
     }
 
