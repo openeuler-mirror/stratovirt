@@ -13,16 +13,16 @@
 use std::collections::VecDeque;
 use std::os::raw::c_void;
 use std::sync::{
-    atomic::{fence, AtomicBool, AtomicI32, Ordering},
-    Arc, Mutex, RwLock,
+    atomic::{fence, AtomicBool, Ordering},
+    Arc, Condvar, Mutex, RwLock,
 };
 use std::{cmp, io::Read, ptr, thread, time::Duration};
 
-use log::error;
+use log::{error, warn};
 
 use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{
-    AudioExtension, AudioInterface, AudioStatus, ScreamDirection, ShmemStreamHeader, StreamData,
+    AudioExtension, AudioInterface, AudioStatus, ScreamDirection, StreamData,
     IVSHMEM_VOLUME_SYNC_VECTOR,
 };
 use util::ohos_binding::audio::*;
@@ -31,11 +31,11 @@ const STREAM_DATA_VEC_CAPACITY: usize = 15;
 const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
 const SCREAM_MAX_VOLUME: u32 = 110;
+const CAPTURE_WAIT_TIMEOUT: u64 = 200;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
     fn destroy(&mut self);
-    fn preprocess(&mut self, _start_addr: u64, _sh_header: &ShmemStreamHeader) {}
     fn process(&mut self, recv_data: &StreamData) -> i32;
     fn get_status(&self) -> AudioStatus;
 }
@@ -293,15 +293,63 @@ impl OhAudioProcess for OhAudioRender {
     }
 }
 
+struct CaptureStream {
+    cond: Condvar,
+    data: Mutex<Vec<u8>>,
+    expected: usize,
+}
+
+impl Default for CaptureStream {
+    fn default() -> Self {
+        Self {
+            cond: Condvar::new(),
+            data: Mutex::new(Vec::with_capacity(1 << 20)),
+            expected: 0,
+        }
+    }
+}
+
+impl CaptureStream {
+    fn wait_for_data(&mut self, buf: &mut [u8]) -> bool {
+        let mut locked_data = self.data.lock().unwrap();
+        self.expected = buf.len();
+        while locked_data.len() < self.expected {
+            let ret = self
+                .cond
+                .wait_timeout(locked_data, Duration::from_millis(CAPTURE_WAIT_TIMEOUT))
+                .unwrap();
+            if ret.1.timed_out() {
+                return false;
+            }
+            locked_data = ret.0;
+        }
+        buf.copy_from_slice(&locked_data[..self.expected]);
+        *locked_data = locked_data[self.expected..].to_vec();
+        self.expected = 0;
+        true
+    }
+
+    fn append_data(&mut self, buf: &[u8]) {
+        let mut locked_data = self.data.lock().unwrap();
+        locked_data.extend_from_slice(buf);
+        if locked_data.len() > self.expected {
+            self.cond.notify_all();
+        }
+    }
+
+    fn reset(&mut self) {
+        let mut locked_data = self.data.lock().unwrap();
+        locked_data.clear();
+        self.expected = 0;
+        self.cond.notify_all();
+    }
+}
+
 #[derive(Default)]
 struct OhAudioCapture {
     ctx: Option<AudioContext>,
-    align: u32,
-    new_chunks: AtomicI32,
-    shm_addr: u64,
-    shm_len: u64,
-    cur_pos: u64,
     status: AudioStatus,
+    stream: CaptureStream,
 }
 
 impl OhAudioCapture {
@@ -350,16 +398,8 @@ impl OhAudioProcess for OhAudioCapture {
     fn destroy(&mut self) {
         self.status = AudioStatus::Ready;
         self.ctx = None;
+        self.stream.reset();
         trace::oh_scream_capture_destroy();
-    }
-
-    fn preprocess(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {
-        self.align = sh_header.chunk_size;
-        self.new_chunks.store(0, Ordering::Release);
-        self.shm_addr = start_addr;
-        self.shm_len = u64::from(sh_header.max_chunks) * u64::from(sh_header.chunk_size);
-        self.cur_pos =
-            start_addr + u64::from(sh_header.chunk_idx) * u64::from(sh_header.chunk_size);
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
@@ -375,15 +415,19 @@ impl OhAudioProcess for OhAudioCapture {
             self.destroy();
             return -1;
         }
-        self.new_chunks.store(0, Ordering::Release);
-        while self.new_chunks.load(Ordering::Acquire) == 0 {
-            if self.status == AudioStatus::Error {
-                return -1;
-            }
-            thread::sleep(Duration::from_millis(10));
+        // SAFETY: the buffer is from ivshmem and the caller ensures its validation.
+        let buf = unsafe {
+            std::slice::from_raw_parts_mut(
+                recv_data.audio_base as *mut u8,
+                recv_data.audio_size as usize,
+            )
+        };
+        if !self.stream.wait_for_data(buf) {
+            warn!("timed out to wait for capture audio data");
+            self.status = AudioStatus::Error;
+            return 0;
         }
-
-        self.new_chunks.load(Ordering::Acquire)
+        1
     }
 
     fn get_status(&self) -> AudioStatus {
@@ -446,49 +490,13 @@ extern "C" fn on_read_data_cb(
 
     trace::trace_scope_start!(ohaudio_read_cb, args = (length));
 
-    loop {
-        if capture.status != AudioStatus::Started {
-            return 0;
-        }
-        if capture.new_chunks.load(Ordering::Acquire) == 0 {
-            break;
-        }
-    }
-    if capture.align == 0 {
-        error!("on_read_data_cb, capture.align is 0");
+    if capture.status != AudioStatus::Started {
         return 0;
     }
-    let old_pos =
-        capture.cur_pos - ((capture.cur_pos - capture.shm_addr) % u64::from(capture.align));
-    let buf_end = capture.shm_addr + capture.shm_len;
-    let mut src_addr = buffer as u64;
-    let mut left = length as u64;
-    while left > 0 {
-        let len = cmp::min(left, buf_end - capture.cur_pos);
-        // SAFETY: we checked len.
-        unsafe {
-            ptr::copy_nonoverlapping(
-                src_addr as *const u8,
-                capture.cur_pos as *mut u8,
-                len as usize,
-            )
-        };
-        trace::oh_scream_on_read_data_cb(len as usize);
-        left -= len;
-        src_addr += len;
-        capture.cur_pos += len;
-        if capture.cur_pos == buf_end {
-            capture.cur_pos = capture.shm_addr;
-        }
-    }
 
-    let new_chunks = match capture.cur_pos <= old_pos {
-        true => (capture.shm_len - (old_pos - capture.cur_pos)) / u64::from(capture.align),
-        false => (capture.cur_pos - old_pos) / u64::from(capture.align),
-    };
-    capture
-        .new_chunks
-        .store(new_chunks as i32, Ordering::Release);
+    // SAFETY: the buffer is checked above.
+    let buf = unsafe { std::slice::from_raw_parts(buffer as *mut u8, length as usize) };
+    capture.stream.append_data(buf);
     0
 }
 
@@ -515,10 +523,6 @@ impl OhAudio {
 impl AudioInterface for OhAudio {
     fn send(&mut self, recv_data: &StreamData) {
         self.processor.process(recv_data);
-    }
-
-    fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {
-        self.processor.preprocess(start_addr, sh_header);
     }
 
     fn receive(&mut self, recv_data: &StreamData) -> i32 {

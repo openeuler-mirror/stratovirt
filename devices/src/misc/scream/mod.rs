@@ -436,7 +436,6 @@ impl StreamData {
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
 
-        interface.lock().unwrap().pre_receive(self.start_addr, capt);
         while capt.is_started != 0 {
             cond.wait_if_paused(interface.clone());
 
@@ -766,9 +765,6 @@ impl Scream {
 
 pub trait AudioInterface: Send {
     fn send(&mut self, recv_data: &StreamData);
-    // For OHOS's audio task. It confirms shmem info.
-    #[allow(unused_variables)]
-    fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {}
     fn receive(&mut self, recv_data: &StreamData) -> i32;
     fn destroy(&mut self);
     fn get_status(&self) -> AudioStatus;
