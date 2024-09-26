@@ -2364,7 +2364,7 @@ impl XhciDevice {
         let mut locked_xfer = xfer.lock().unwrap();
         if locked_xfer.timed_xfer {
             let mfindex = self.mfindex();
-            self.check_intr_iso_kick(&mut locked_xfer, mfindex);
+            self.check_iso_kick(&mut locked_xfer, mfindex);
             if locked_xfer.running_retry {
                 return Ok(false);
             }
@@ -2476,7 +2476,7 @@ impl XhciDevice {
         }
     }
 
-    fn check_intr_iso_kick(&mut self, xfer: &mut XhciTransfer, mfindex: u64) {
+    fn check_iso_kick(&mut self, xfer: &mut XhciTransfer, mfindex: u64) {
         let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
         if xfer.mfindex_kick > mfindex {
             let weak_xhci = self.usb_ports[0].lock().unwrap().xhci.clone();
@@ -2541,7 +2541,7 @@ impl XhciDevice {
                 xfer.timed_xfer = true;
                 let mfindex = self.mfindex();
                 self.calc_iso_kick(xfer, mfindex);
-                self.check_intr_iso_kick(xfer, mfindex);
+                self.check_iso_kick(xfer, mfindex);
                 if xfer.running_retry {
                     return Ok(());
                 }
