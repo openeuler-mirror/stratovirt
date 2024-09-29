@@ -34,7 +34,7 @@ impl Device {
         Self { rootfs }
     }
 
-    fn default_devices(&self) -> Vec<DeviceInfo> {
+    pub fn default_devices(&self) -> Vec<DeviceInfo> {
         vec![
             DeviceInfo {
                 path: self.rootfs.join("dev/null"),
@@ -227,8 +227,8 @@ impl Device {
     }
 }
 
-struct DeviceInfo {
-    path: PathBuf,
+pub struct DeviceInfo {
+    pub path: PathBuf,
     dev_type: String,
     major: i64,
     minor: i64,
