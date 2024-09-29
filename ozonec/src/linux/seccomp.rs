@@ -119,3 +119,75 @@ pub fn set_seccomp(seccomp: &Seccomp) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use rusty_fork::rusty_fork_test;
+
+    use oci_spec::linux::{SeccompSyscall, SeccompSyscallArg};
+
+    use super::*;
+
+    #[test]
+    fn test_check_seccomp() {
+        let mut seccomp = Seccomp {
+            defaultAction: OciSeccompAction::ScmpActNotify,
+            defaultErrnoRet: None,
+            architectures: None,
+            flags: None,
+            listennerPath: None,
+            seccompFd: None,
+            listenerMetadata: None,
+            syscalls: None,
+        };
+        assert!(check_seccomp(&seccomp).is_err());
+
+        seccomp.defaultAction = OciSeccompAction::ScmpActAllow;
+        let syscall = SeccompSyscall {
+            names: vec![String::from("write")],
+            action: OciSeccompAction::ScmpActNotify,
+            errnoRet: None,
+            args: None,
+        };
+        seccomp.syscalls = Some(vec![syscall]);
+        assert!(check_seccomp(&seccomp).is_err());
+    }
+
+    rusty_fork_test! {
+        #[test]
+        fn test_set_seccomp() {
+            let mut seccomp = Seccomp {
+                defaultAction: OciSeccompAction::ScmpActAllow,
+                defaultErrnoRet: None,
+                architectures: None,
+                flags: None,
+                listennerPath: None,
+                seccompFd: None,
+                listenerMetadata: None,
+                syscalls: None,
+            };
+            let syscall = SeccompSyscall {
+                names: vec![String::from("write")],
+                action: OciSeccompAction::ScmpActKill,
+                errnoRet: None,
+                args: Some(vec![
+                    SeccompSyscallArg {
+                        index: 0,
+                        value: 0,
+                        valueTwo: Some(0),
+                        op: SeccompOp::ScmpCmpEq,
+                    },
+                    SeccompSyscallArg {
+                        index: 2,
+                        value: 0,
+                        valueTwo: Some(0),
+                        op: SeccompOp::ScmpCmpMaskedEq,
+                    },
+                ]),
+            };
+            seccomp.syscalls = Some(vec![syscall]);
+
+            assert!(set_seccomp(&seccomp).is_ok());
+        }
+    }
+}
