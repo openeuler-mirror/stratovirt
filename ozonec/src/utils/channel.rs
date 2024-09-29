@@ -213,3 +213,49 @@ impl Channel<Message> {
             .with_context(|| "Failed to send container process pid")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use nix::sys::wait::{waitpid, WaitStatus};
+    use unistd::getpid;
+
+    use crate::linux::clone_process;
+
+    use super::*;
+
+    #[test]
+    fn test_channel() {
+        let channel = Channel::<Message>::new().unwrap();
+        let child = clone_process("test_channel", || {
+            channel.receiver.close().unwrap();
+
+            channel.send_container_created().unwrap();
+            channel.send_init_pid(getpid()).unwrap();
+            channel.send_id_mappings().unwrap();
+            channel.send_id_mappings_done().unwrap();
+
+            channel.sender.close().unwrap();
+            Ok(0)
+        })
+        .unwrap();
+
+        channel.sender.close().unwrap();
+
+        channel.recv_container_created().unwrap();
+        channel.recv_init_pid().unwrap();
+        channel.recv_id_mappings().unwrap();
+        channel.recv_id_mappings_done().unwrap();
+
+        channel.receiver.close().unwrap();
+
+        match waitpid(child, None) {
+            Ok(WaitStatus::Exited(_, s)) => {
+                assert_eq!(s, 0);
+            }
+            Ok(_) => (),
+            Err(e) => {
+                panic!("Failed to waitpid for child process: {e}");
+            }
+        }
+    }
+}
