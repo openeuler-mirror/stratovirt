@@ -794,7 +794,7 @@ impl Container for LinuxContainer {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use chrono::DateTime;
     use fs::{remove_dir_all, File};
     use nix::sys::stat::stat;
@@ -808,7 +808,7 @@ mod tests {
 
     use super::*;
 
-    fn init_config() -> RuntimeConfig {
+    pub fn init_config() -> RuntimeConfig {
         let root = Root {
             path: String::from("/tmp/ozonec/bundle/rootfs"),
             readonly: true,
