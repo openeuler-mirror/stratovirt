@@ -23,4 +23,6 @@ mod terminal;
 
 pub use container::LinuxContainer;
 pub use notify_socket::NotifyListener;
+#[allow(unused_imports)]
+pub use process::clone_process;
 pub use process::Process;
