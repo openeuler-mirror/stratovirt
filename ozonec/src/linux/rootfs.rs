@@ -235,7 +235,10 @@ impl Rootfs {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, create_dir_all, read_link, remove_dir_all};
+    use std::{
+        fs::{self, create_dir_all, read_link, remove_dir_all},
+        os::unix::fs::FileTypeExt,
+    };
 
     use nix::unistd::chdir;
     use rusty_fork::rusty_fork_test;
@@ -382,6 +385,124 @@ mod tests {
             metadata = fs::symlink_metadata(&path).unwrap();
             assert!(metadata.is_symlink());
             assert_eq!(read_link(&path).unwrap(), PathBuf::from("/proc/self/fd/2"));
+        }
+
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_link_ptmx() {
+            remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+            set_namespace(NamespaceType::Mount);
+            let mounts = vec![OciMount {
+                destination: String::from("/dev"),
+                source: Some(String::from("tmpfs")),
+                options: Some(vec![
+                    String::from("nosuid"),
+                    String::from("strictatime"),
+                    String::from("mode=755"),
+                    String::from("size=65536k"),
+                ]),
+                fs_type: Some(String::from("tmpfs")),
+                uidMappings: None,
+                gidMappings: None,
+            }];
+            let rootfs = init_rootfs(
+                "/tmp/ozonec/test_link_ptmx",
+                Some(String::from("shared")),
+                mounts,
+            );
+            let mut config = init_config();
+            config.root.path = rootfs.path.to_string_lossy().to_string();
+            rootfs.do_mounts(&config).unwrap();
+
+            assert!(rootfs.link_ptmx().is_ok());
+
+            chdir(&rootfs.path).unwrap();
+            let path = PathBuf::from("dev/ptmx");
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            assert!(metadata.is_symlink());
+            assert_eq!(read_link(&path).unwrap(), PathBuf::from("pts/ptmx"));
+        }
+
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_create_default_devices() {
+            remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+            set_namespace(NamespaceType::Mount);
+            let mounts = vec![OciMount {
+                destination: String::from("/dev"),
+                source: Some(String::from("tmpfs")),
+                options: Some(vec![
+                    String::from("nosuid"),
+                    String::from("strictatime"),
+                    String::from("mode=755"),
+                    String::from("size=65536k"),
+                ]),
+                fs_type: Some(String::from("tmpfs")),
+                uidMappings: None,
+                gidMappings: None,
+            }];
+            let rootfs = init_rootfs(
+                "/tmp/ozonec/test_create_default_devices",
+                Some(String::from("shared")),
+                mounts,
+            );
+            let mut config = init_config();
+            config.root.path = rootfs.path.to_string_lossy().to_string();
+            rootfs.do_mounts(&config).unwrap();
+
+            assert!(rootfs.create_default_devices(false).is_ok());
+            for dev in Device::new(rootfs.path.clone()).default_devices() {
+                assert!(dev.path.exists());
+                let metadata = fs::metadata(&dev.path).unwrap();
+                assert!(metadata.file_type().is_char_device());
+            }
+        }
+
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_create_devices() {
+            remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+            set_namespace(NamespaceType::Mount);
+
+            let mounts = vec![OciMount {
+                destination: String::from("/dev"),
+                source: Some(String::from("tmpfs")),
+                options: Some(vec![
+                    String::from("nosuid"),
+                    String::from("strictatime"),
+                    String::from("mode=755"),
+                    String::from("size=65536k"),
+                ]),
+                fs_type: Some(String::from("tmpfs")),
+                uidMappings: None,
+                gidMappings: None,
+            }];
+            let rootfs = init_rootfs(
+                "/tmp/ozonec/test_create_devices",
+                Some(String::from("shared")),
+                mounts,
+            );
+            let mut config = init_config();
+            config.root.path = rootfs.path.to_string_lossy().to_string();
+            rootfs.do_mounts(&config).unwrap();
+
+            let devices = vec![OciDevice {
+                dev_type: String::from("c"),
+                path: String::from("/dev/test"),
+                major: Some(1),
+                minor: Some(3),
+                fileMode: Some(0o666u32),
+                uid: None,
+                gid: None,
+            }];
+            assert!(rootfs.create_devices(&devices, true).is_ok());
+            let path = rootfs.path.join("dev/test");
+            assert!(path.exists());
+            let metadata = fs::metadata(&path).unwrap();
+            assert!(metadata.file_type().is_char_device());
         }
     }
 }
