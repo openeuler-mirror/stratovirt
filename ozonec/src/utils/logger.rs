@@ -238,3 +238,55 @@ pub fn init(path: &Option<PathBuf>, debug: bool) -> Result<()> {
         .with_context(|| "Logger has been already set")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, os::unix::fs::MetadataExt};
+
+    use super::*;
+
+    #[test]
+    fn test_logger_init() {
+        assert!(init(&Some(PathBuf::from("/tmp/ozonec.log")), false).is_ok());
+        remove_file(Path::new("/tmp/ozonec.log")).unwrap();
+    }
+
+    #[test]
+    fn test_logger_rotate() {
+        let log_file = PathBuf::from("/tmp/ozonec.log");
+        let logger = Logger::new(&Some(log_file.clone()), Level::Debug).unwrap();
+        let mut locked_rotate = logger.rotate.lock().unwrap();
+        // Time in metadata are not changed as the file descriptor is still opened.
+        let inode = fs::metadata(&log_file).unwrap().ino();
+        for i in 1..LOG_ROTATE_CNT_MAX {
+            let file = format!("{}{}", locked_rotate.path, i);
+            let path = Path::new(&file);
+            File::create(path).unwrap();
+        }
+
+        locked_rotate.size = Wrapping(0);
+        assert!(locked_rotate.rotate(1024).is_ok());
+        let mut new_inode = fs::metadata(&log_file).unwrap().ino();
+        assert_eq!(inode, new_inode);
+
+        locked_rotate.size = Wrapping(LOG_ROTATE_SIZE_MAX);
+        assert!(locked_rotate.rotate(1024).is_ok());
+        new_inode = fs::metadata(&log_file).unwrap().ino();
+        assert_ne!(inode, new_inode);
+        assert_eq!(locked_rotate.size, Wrapping(0));
+
+        locked_rotate.size = Wrapping(0);
+        locked_rotate.created_day = formatted_time(wall_time().0)[2] - 1;
+        assert!(locked_rotate.rotate(1024).is_ok());
+        new_inode = fs::metadata(&log_file).unwrap().ino();
+        assert_ne!(inode, new_inode);
+        assert_eq!(locked_rotate.size, Wrapping(0));
+
+        for i in 1..LOG_ROTATE_CNT_MAX {
+            let file = format!("{}{}", locked_rotate.path, i);
+            let path = Path::new(&file);
+            remove_file(path).unwrap();
+        }
+        remove_file(Path::new("/tmp/ozonec.log")).unwrap();
+    }
+}
