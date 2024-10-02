@@ -431,7 +431,7 @@ fn to_cap(value: &str) -> Result<Capability> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::path::Path;
 
     use nix::sys::resource::{getrlimit, Resource};
@@ -445,7 +445,7 @@ mod tests {
 
     use super::*;
 
-    fn init_oci_process() -> OciProcess {
+    pub fn init_oci_process() -> OciProcess {
         let user = User {
             uid: 0,
             gid: 0,
