@@ -87,4 +87,24 @@ mod tests {
         assert!(state.annotations.contains_key("myKey"));
         assert_eq!(state.annotations.get("myKey"), Some(&"myValue".to_string()));
     }
+
+    #[test]
+    fn test_container_status_to_string() {
+        assert_eq!(
+            ContainerStatus::Creating.to_string(),
+            String::from("creating")
+        );
+        assert_eq!(
+            ContainerStatus::Created.to_string(),
+            String::from("created")
+        );
+        assert_eq!(
+            ContainerStatus::Running.to_string(),
+            String::from("running")
+        );
+        assert_eq!(
+            ContainerStatus::Stopped.to_string(),
+            String::from("stopped")
+        );
+    }
 }
