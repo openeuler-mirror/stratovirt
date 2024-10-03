@@ -987,7 +987,7 @@ impl CameraIoHandler {
             if let Some(transfer) = locked_p.xfer_ops.as_ref() {
                 if let Some(ops) = transfer.clone().upgrade() {
                     drop(locked_p);
-                    ops.lock().unwrap().submit_transfer();
+                    ops.lock().unwrap().transfer_complete_cb();
                 }
             }
         }
@@ -1056,7 +1056,7 @@ impl EventNotifierHelper for CameraIoHandler {
                     if let Some(transfer) = locked_p.xfer_ops.as_ref() {
                         if let Some(ops) = transfer.clone().upgrade() {
                             drop(locked_p);
-                            ops.lock().unwrap().submit_transfer();
+                            ops.lock().unwrap().transfer_complete_cb();
                         }
                     }
                 }

@@ -191,7 +191,7 @@ impl XhciTransfer {
         self.status = usb_packet_status_to_trb_code(self.packet.lock().unwrap().status)?;
         if self.status == TRBCCode::Success {
             trace::usb_xhci_xfer_success(&self.packet.lock().unwrap().actual_length);
-            self.submit_transfer()?;
+            self.report_transfer_success()?;
             let ring = self.ep_context.get_ring(self.streamid).with_context(|| {
                 format!(
                     "Failed to find Transfer Ring with Endpoint ID {}, Slot ID {}, Stream ID {}.",
@@ -215,8 +215,8 @@ impl XhciTransfer {
         Ok(())
     }
 
-    /// Submit the succeed transfer TRBs.
-    pub fn submit_transfer(&mut self) -> Result<()> {
+    /// Report the succeeded transfer TRBs.
+    pub fn report_transfer_success(&mut self) -> Result<()> {
         // Event Data Transfer Length Accumulator.
         let mut edtla: u32 = 0;
         let mut shortpkt = false;
@@ -313,9 +313,9 @@ impl XhciTransfer {
 }
 
 impl TransferOps for XhciTransfer {
-    fn submit_transfer(&mut self) {
+    fn transfer_complete_cb(&mut self) {
         if let Err(e) = self.complete_transfer() {
-            error!("Failed to submit transfer, error {:?}", e);
+            error!("Failed to complete transfer, error {:?}", e);
         }
     }
 }
@@ -2652,7 +2652,7 @@ impl XhciDevice {
         Ok(dev.clone())
     }
 
-    /// Update packet status and then submit transfer.
+    /// Update packet status and then complete the transfer.
     fn complete_packet(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         if xfer.packet.lock().unwrap().is_async {
             trace::usb_xhci_xfer_async();
@@ -2710,7 +2710,7 @@ impl XhciDevice {
 
         if report != TRBCCode::Invalid && (xfer.running_async || xfer.running_retry) {
             xfer.status = report;
-            xfer.submit_transfer()?;
+            xfer.report_transfer_success()?;
         }
 
         if xfer.running_async {
@@ -2876,7 +2876,7 @@ impl XhciDevice {
             cmd_ring_state: self.cmd_ring.get_snapshot_state(),
             mfindex_secs: self.mfindex_start.as_secs(),
             mfindex_nanos: self.mfindex_start.subsec_nanos(),
-            mfwrap_timer_id: self.timer_id.unwrap_or(u64::MAX),
+            mfwrap_timer_id: self.mfwrap_timer_id.unwrap_or(u64::MAX),
             bme: self.bme.load(Ordering::SeqCst).into(),
         }
     }

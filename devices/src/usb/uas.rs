@@ -516,7 +516,7 @@ fn complete_async_packet(packet: &Arc<Mutex<UsbPacket>>) {
     if let Some(xfer_ops) = locked_packet.xfer_ops.as_ref() {
         if let Some(xfer_ops) = xfer_ops.clone().upgrade() {
             drop(locked_packet);
-            xfer_ops.lock().unwrap().submit_transfer();
+            xfer_ops.lock().unwrap().transfer_complete_cb();
         }
     }
 }

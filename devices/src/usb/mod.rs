@@ -585,7 +585,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>, ep_id: u8) -> Result<(
 
 /// Transfer ops for submit callback.
 pub trait TransferOps: Send + Sync {
-    fn submit_transfer(&mut self);
+    fn transfer_complete_cb(&mut self);
 }
 
 /// Usb packet used for device transfer data.
