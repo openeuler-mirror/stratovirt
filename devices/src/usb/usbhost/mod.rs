@@ -157,7 +157,7 @@ impl UsbHostRequest {
                         self.ctrl_transfer_packet(&mut locked_packet, 0);
                     }
                     drop(locked_packet);
-                    ops.lock().unwrap().submit_transfer();
+                    ops.lock().unwrap().transfer_complete_cb();
                 }
             }
         }

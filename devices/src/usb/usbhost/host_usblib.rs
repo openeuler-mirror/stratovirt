@@ -232,7 +232,7 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
     if let Some(transfer) = locked_packet.xfer_ops.as_ref() {
         if let Some(ops) = transfer.clone().upgrade() {
             drop(locked_packet);
-            ops.lock().unwrap().submit_transfer();
+            ops.lock().unwrap().transfer_complete_cb();
         }
     }
 
