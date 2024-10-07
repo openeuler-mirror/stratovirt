@@ -10,14 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::LinkedList;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use log::error;
-
-use crate::link_list::{List, Node};
 
 const MIN_THREADS: u64 = 1;
 const MAX_THREADS: u64 = 10;
@@ -45,7 +44,7 @@ struct PoolState {
     /// The maximum number of threads that thread pool can create.
     max_threads: u64,
     /// List of pending tasks in the thread pool.
-    req_lists: List<PoolTask>,
+    req_lists: LinkedList<PoolTask>,
 }
 
 /// SAFETY: All the operations on req_lists are protected by the mutex,
@@ -61,7 +60,7 @@ impl PoolState {
             pending_threads: 0,
             min_threads: MIN_THREADS,
             max_threads: MAX_THREADS,
-            req_lists: List::new(),
+            req_lists: LinkedList::new(),
         }
     }
 
@@ -131,7 +130,7 @@ impl ThreadPool {
         if locked_state.spawn_thread_needed() {
             locked_state.spawn_thread(pool.clone())?
         }
-        locked_state.req_lists.add_tail(Box::new(Node::new(task)));
+        locked_state.req_lists.push_back(task);
         drop(locked_state);
 
         pool.request_cond.notify_one();
@@ -197,10 +196,10 @@ fn worker_thread(pool: Arc<ThreadPool>) {
             continue;
         }
 
-        let mut req = locked_state.req_lists.pop_head().unwrap();
+        let mut req = locked_state.req_lists.pop_front().unwrap();
         drop(locked_state);
 
-        (*req.value).run();
+        req.run();
 
         locked_state = pool.pool_state.lock().unwrap();
     }
