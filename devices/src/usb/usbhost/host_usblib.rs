@@ -248,10 +248,10 @@ extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
     }
 
     let iso_transfer = get_iso_transfer_from_transfer(host_transfer);
-    let locketd_iso_transfer = iso_transfer.lock().unwrap();
+    let locked_iso_transfer = iso_transfer.lock().unwrap();
 
-    if let Some(iso_queue) = locketd_iso_transfer.iso_queue.clone().upgrade() {
-        drop(locketd_iso_transfer);
+    if let Some(iso_queue) = locked_iso_transfer.iso_queue.clone().upgrade() {
+        drop(locked_iso_transfer);
         let mut locked_iso_queue = iso_queue.lock().unwrap();
         let iso_transfer = locked_iso_queue.inflight.pop_front().unwrap();
         if locked_iso_queue.inflight.is_empty() {
