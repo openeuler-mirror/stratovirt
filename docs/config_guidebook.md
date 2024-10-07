@@ -1036,7 +1036,7 @@ Sample Configuration：
 ```shell
 -object authz-simple,id=authz0,identity=username
 -object tls-creds-x509,id=vnc-tls-creds0,dir=/etc/pki/vnc
--vnc 0.0.0.0:0,tls-creds=vnc-tls-creds0,sasl=on,sasl-authz=authz0
+-vnc 0.0.0.0:0,tls-creds=vnc-tls-creds0,sasl,sasl-authz=authz0
 ```
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
