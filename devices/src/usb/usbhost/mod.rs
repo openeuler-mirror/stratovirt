@@ -272,18 +272,18 @@ impl IsoTransfer {
     }
 
     pub fn copy_data(&mut self, packet: Arc<Mutex<UsbPacket>>, ep_max_packet_size: u32) -> bool {
-        let mut lockecd_packet = packet.lock().unwrap();
+        let mut locked_packet = packet.lock().unwrap();
         let mut size: usize;
-        if lockecd_packet.pid == u32::from(USB_TOKEN_OUT) {
-            size = lockecd_packet.get_iovecs_size() as usize;
+        if locked_packet.pid == u32::from(USB_TOKEN_OUT) {
+            size = locked_packet.get_iovecs_size() as usize;
             if size > ep_max_packet_size as usize {
                 size = ep_max_packet_size as usize;
             }
             set_iso_packet_length(self.host_transfer, self.packet, size as u32);
         } else {
             size = get_iso_packet_acl_length(self.host_transfer, self.packet) as usize;
-            if size > lockecd_packet.get_iovecs_size() as usize {
-                size = lockecd_packet.get_iovecs_size() as usize;
+            if size > locked_packet.get_iovecs_size() as usize {
+                size = locked_packet.get_iovecs_size() as usize;
             }
         }
         let buffer =
@@ -291,7 +291,7 @@ impl IsoTransfer {
             // and packet is guaranteed to be not out of boundary.
             unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
 
-        lockecd_packet.transfer_packet(
+        locked_packet.transfer_packet(
             // SAFETY: buffer is already allocated and size will not be exceed
             // the size of buffer.
             unsafe { std::slice::from_raw_parts_mut(buffer, size) },
