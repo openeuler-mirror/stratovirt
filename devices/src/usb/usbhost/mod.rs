@@ -15,7 +15,7 @@ mod host_usblib;
 mod ohusb;
 
 use std::{
-    collections::LinkedList,
+    collections::{HashMap, LinkedList},
     ffi::{c_char, CStr},
     os::unix::io::RawFd,
     rc::Rc,
@@ -444,7 +444,7 @@ pub struct UsbHost {
     /// All pending asynchronous usb request.
     requests: Arc<Mutex<List<UsbHostRequest>>>,
     /// ISO queues corresponding to all endpoints.
-    iso_queues: Arc<Mutex<LinkedList<Arc<Mutex<IsoQueue>>>>>,
+    iso_queues: Arc<Mutex<HashMap<u8, Arc<Mutex<IsoQueue>>>>>,
     iso_urb_frames: u32,
     iso_urb_count: u32,
     #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
@@ -487,7 +487,7 @@ impl UsbHost {
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
             base: UsbDeviceBase::new(id, USB_HOST_BUFFER_LEN),
             requests: Arc::new(Mutex::new(List::new())),
-            iso_queues: Arc::new(Mutex::new(LinkedList::new())),
+            iso_queues: Arc::new(Mutex::new(HashMap::new())),
             iso_urb_frames,
             iso_urb_count,
             #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
@@ -906,11 +906,10 @@ impl UsbHost {
 
     fn clear_iso_queues(&mut self) {
         let mut locked_iso_queues = self.iso_queues.lock().unwrap();
-        for queue in locked_iso_queues.iter() {
-            (*queue).lock().unwrap().clear();
+        for queue in locked_iso_queues.values() {
+            queue.lock().unwrap().clear();
         }
         locked_iso_queues.clear();
-        drop(locked_iso_queues);
     }
 
     pub fn abort_host_transfers(&mut self) -> Result<()> {
@@ -935,12 +934,7 @@ impl UsbHost {
     }
 
     fn find_iso_queue(&self, ep: &UsbEndpoint) -> Option<Arc<Mutex<IsoQueue>>> {
-        for queue in self.iso_queues.lock().unwrap().iter() {
-            if (*queue).lock().unwrap().ep_number == ep.ep_number {
-                return Some(queue.clone());
-            }
-        }
-        None
+        self.iso_queues.lock().unwrap().get(&ep.ep_number).cloned()
     }
 
     fn create_iso_queue(&mut self, ep: &UsbEndpoint) -> Result<Arc<Mutex<IsoQueue>>> {
@@ -959,7 +953,10 @@ impl UsbHost {
             ep,
             cloned_iso_queue,
         )?;
-        self.iso_queues.lock().unwrap().push_back(iso_queue.clone());
+        self.iso_queues
+            .lock()
+            .unwrap()
+            .insert(ep.ep_number, iso_queue.clone());
         Ok(iso_queue)
     }
 
