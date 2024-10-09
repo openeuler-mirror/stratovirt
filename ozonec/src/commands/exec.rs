@@ -112,3 +112,17 @@ impl Exec {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_key_val() {
+        let (key, value): (String, String) = parse_key_val("OZONEC_LOG_LEVEL=info").unwrap();
+        assert_eq!(key, "OZONEC_LOG_LEVEL");
+        assert_eq!(value, "info");
+
+        assert!(parse_key_val::<String, String>("OZONEC_LOG_LEVEL").is_err());
+    }
+}
