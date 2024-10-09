@@ -10,8 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod container;
+
 mod apparmor;
-mod container;
 mod device;
 mod mount;
 mod namespace;
