@@ -41,35 +41,58 @@ pub struct GICv3Config {
 pub trait GICv3Access: Send + Sync {
     fn init_gic(
         &self,
-        nr_irqs: u32,
-        redist_regions: Vec<GicRedistRegion>,
-        dist_base: u64,
-    ) -> Result<()>;
+        _nr_irqs: u32,
+        _redist_regions: Vec<GicRedistRegion>,
+        _dist_base: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
 
-    /// Returns `gicr_attr` of `vCPU`.
-    fn vcpu_gicr_attr(&self, cpu: usize) -> u64;
+    fn vcpu_gicr_attr(&self, _cpu: usize) -> u64 {
+        0
+    }
 
-    fn access_gic_distributor(&self, offset: u64, gicd_value: &mut u32, write: bool) -> Result<()>;
+    fn access_gic_distributor(
+        &self,
+        _offset: u64,
+        _gicd_value: &mut u32,
+        _write: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn access_gic_redistributor(
         &self,
-        offset: u64,
-        cpu: usize,
-        gicr_value: &mut u32,
-        write: bool,
-    ) -> Result<()>;
+        _offset: u64,
+        _cpu: usize,
+        _gicr_value: &mut u32,
+        _write: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn access_gic_cpu(
         &self,
-        offset: u64,
-        cpu: usize,
-        gicc_value: &mut u64,
-        write: bool,
-    ) -> Result<()>;
+        _offset: u64,
+        _cpu: usize,
+        _gicc_value: &mut u64,
+        _write: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
 
-    fn access_gic_line_level(&self, offset: u64, gicll_value: &mut u32, write: bool) -> Result<()>;
+    fn access_gic_line_level(
+        &self,
+        _offset: u64,
+        _gicll_value: &mut u32,
+        _write: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
 
-    fn pause(&self) -> Result<()>;
+    fn pause(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -328,13 +351,21 @@ impl GICDevice for GICv3 {
 }
 
 pub trait GICv3ItsAccess: Send + Sync {
-    fn init_gic_its(&self, msi_base: u64) -> Result<()>;
+    fn init_gic_its(&self, _msi_base: u64) -> Result<()> {
+        Ok(())
+    }
 
-    fn access_gic_its(&self, attr: u32, its_value: &mut u64, write: bool) -> Result<()>;
+    fn access_gic_its(&self, _attr: u32, _its_value: &mut u64, _write: bool) -> Result<()> {
+        Ok(())
+    }
 
-    fn access_gic_its_tables(&self, save: bool) -> Result<()>;
+    fn access_gic_its_tables(&self, _save: bool) -> Result<()> {
+        Ok(())
+    }
 
-    fn reset(&self) -> Result<()>;
+    fn reset(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub struct GICv3Its {
