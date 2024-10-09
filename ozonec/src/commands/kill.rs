@@ -53,3 +53,19 @@ fn parse_signal(signal: &str) -> Result<Signal> {
     }
     Ok(Signal::from_str(&uppercase_sig)?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_signal() {
+        assert_eq!(parse_signal("9").unwrap(), Signal::SIGKILL);
+        assert_eq!(parse_signal("sigterm").unwrap(), Signal::SIGTERM);
+        assert_eq!(parse_signal("SIGBUS").unwrap(), Signal::SIGBUS);
+        assert_eq!(parse_signal("hup").unwrap(), Signal::SIGHUP);
+        assert_eq!(parse_signal("ABRT").unwrap(), Signal::SIGABRT);
+        assert!(parse_signal("100").is_err());
+        assert!(parse_signal("ERROR").is_err());
+    }
+}
