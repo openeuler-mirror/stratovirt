@@ -532,6 +532,103 @@ pub mod tests {
         env::remove_var("OZONEC_ENV_1");
     }
 
+    #[test]
+    fn test_to_cap() {
+        assert_eq!(
+            to_cap("CAP_AUDIT_CONTROL").unwrap(),
+            Capability::CAP_AUDIT_CONTROL
+        );
+        assert_eq!(
+            to_cap("CAP_AUDIT_READ").unwrap(),
+            Capability::CAP_AUDIT_READ
+        );
+        assert_eq!(
+            to_cap("CAP_AUDIT_WRITE").unwrap(),
+            Capability::CAP_AUDIT_WRITE
+        );
+        assert_eq!(
+            to_cap("CAP_BLOCK_SUSPEND").unwrap(),
+            Capability::CAP_BLOCK_SUSPEND
+        );
+        assert_eq!(to_cap("CAP_BPF").unwrap(), Capability::CAP_BPF);
+        assert_eq!(
+            to_cap("CAP_CHECKPOINT_RESTORE").unwrap(),
+            Capability::CAP_CHECKPOINT_RESTORE
+        );
+        assert_eq!(to_cap("CAP_CHOWN").unwrap(), Capability::CAP_CHOWN);
+        assert_eq!(
+            to_cap("CAP_DAC_OVERRIDE").unwrap(),
+            Capability::CAP_DAC_OVERRIDE
+        );
+        assert_eq!(
+            to_cap("CAP_DAC_READ_SEARCH").unwrap(),
+            Capability::CAP_DAC_READ_SEARCH
+        );
+        assert_eq!(to_cap("CAP_FOWNER").unwrap(), Capability::CAP_FOWNER);
+        assert_eq!(to_cap("CAP_FSETID").unwrap(), Capability::CAP_FSETID);
+        assert_eq!(to_cap("CAP_IPC_LOCK").unwrap(), Capability::CAP_IPC_LOCK);
+        assert_eq!(to_cap("CAP_IPC_OWNER").unwrap(), Capability::CAP_IPC_OWNER);
+        assert_eq!(to_cap("CAP_KILL").unwrap(), Capability::CAP_KILL);
+        assert_eq!(to_cap("CAP_LEASE").unwrap(), Capability::CAP_LEASE);
+        assert_eq!(
+            to_cap("CAP_LINUX_IMMUTABLE").unwrap(),
+            Capability::CAP_LINUX_IMMUTABLE
+        );
+        assert_eq!(to_cap("CAP_MAC_ADMIN").unwrap(), Capability::CAP_MAC_ADMIN);
+        assert_eq!(
+            to_cap("CAP_MAC_OVERRIDE").unwrap(),
+            Capability::CAP_MAC_OVERRIDE
+        );
+        assert_eq!(to_cap("CAP_MKNOD").unwrap(), Capability::CAP_MKNOD);
+        assert_eq!(to_cap("CAP_NET_ADMIN").unwrap(), Capability::CAP_NET_ADMIN);
+        assert_eq!(
+            to_cap("CAP_NET_BIND_SERVICE").unwrap(),
+            Capability::CAP_NET_BIND_SERVICE
+        );
+        assert_eq!(
+            to_cap("CAP_NET_BROADCAST").unwrap(),
+            Capability::CAP_NET_BROADCAST
+        );
+        assert_eq!(to_cap("CAP_NET_RAW").unwrap(), Capability::CAP_NET_RAW);
+        assert_eq!(to_cap("CAP_PERFMON").unwrap(), Capability::CAP_PERFMON);
+        assert_eq!(to_cap("CAP_SETGID").unwrap(), Capability::CAP_SETGID);
+        assert_eq!(to_cap("CAP_SETFCAP").unwrap(), Capability::CAP_SETFCAP);
+        assert_eq!(to_cap("CAP_SETPCAP").unwrap(), Capability::CAP_SETPCAP);
+        assert_eq!(to_cap("CAP_SETUID").unwrap(), Capability::CAP_SETUID);
+        assert_eq!(to_cap("CAP_SYS_ADMIN").unwrap(), Capability::CAP_SYS_ADMIN);
+        assert_eq!(to_cap("CAP_SYS_BOOT").unwrap(), Capability::CAP_SYS_BOOT);
+        assert_eq!(
+            to_cap("CAP_SYS_CHROOT").unwrap(),
+            Capability::CAP_SYS_CHROOT
+        );
+        assert_eq!(
+            to_cap("CAP_SYS_MODULE").unwrap(),
+            Capability::CAP_SYS_MODULE
+        );
+        assert_eq!(to_cap("CAP_SYS_NICE").unwrap(), Capability::CAP_SYS_NICE);
+        assert_eq!(to_cap("CAP_SYS_PACCT").unwrap(), Capability::CAP_SYS_PACCT);
+        assert_eq!(
+            to_cap("CAP_SYS_PTRACE").unwrap(),
+            Capability::CAP_SYS_PTRACE
+        );
+        assert_eq!(to_cap("CAP_SYS_RAWIO").unwrap(), Capability::CAP_SYS_RAWIO);
+        assert_eq!(
+            to_cap("CAP_SYS_RESOURCE").unwrap(),
+            Capability::CAP_SYS_RESOURCE
+        );
+        assert_eq!(to_cap("CAP_SYS_TIME").unwrap(), Capability::CAP_SYS_TIME);
+        assert_eq!(
+            to_cap("CAP_SYS_TTY_CONFIG").unwrap(),
+            Capability::CAP_SYS_TTY_CONFIG
+        );
+        assert_eq!(to_cap("CAP_SYSLOG").unwrap(), Capability::CAP_SYSLOG);
+        assert_eq!(
+            to_cap("CAP_WAKE_ALARM").unwrap(),
+            Capability::CAP_WAKE_ALARM
+        );
+        assert!(to_cap("CAP_TO_CAP").is_err());
+    }
+
     rusty_fork_test! {
         #[test]
         #[ignore = "oom_score_adj may not be permitted to set"]
