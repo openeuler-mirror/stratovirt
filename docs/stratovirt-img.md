@@ -91,13 +91,14 @@ Operating internal snapshot for disk, it is only supported by qcow2.
 Command syntax:
 
 ```shell
-snapshot [-l | -a snapshot_name | -c snapshot_name | -d snapshot_name] img_path
+snapshot [-l | -a snapshot_name | -c snapshot_name | -d snapshot_name | -r old_snapshot_name new_snapshot_name] img_path
 ```
 
 - -a snapshot_name: applies a snapshot (revert disk to saved state).
 - -c snapshot_name: creates a snapshot.
 - -d snapshot_name: deletes a snapshot.
 - -l: lists all snapshots in the given image.
+- -r old_snapshot_name new_snapshot_name: change the name from 'old_Snapshot_name' to 'new_Snapshot_name'.
 
 Sample Configuration：
 
@@ -106,6 +107,7 @@ stratovirt-img snapshot -c snapshot_name img_path
 stratovirt-img snapshot -a snapshot_name img_path
 stratovirt-img snapshot -d snapshot_name img_path
 stratovirt-img snapshot -l img_path
+stratovirt-img snapshot -r old_snapshot_name new_snapshot_name img_path
 ```
 
 Note: The internal snapshot is not supported by raw.
