@@ -37,6 +37,7 @@ enum SnapshotOperation {
     Delete,
     Apply,
     List,
+    Rename,
 }
 
 pub struct ImageFile {
@@ -380,8 +381,11 @@ pub(crate) fn image_resize(mut args: Vec<String>) -> Result<()> {
 }
 
 pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
-    let mut arg_parser =
-        ArgsParse::create(vec!["l", "h", "help"], vec!["f", "c", "d", "a"], vec![]);
+    let mut arg_parser = ArgsParse::create(
+        vec!["l", "h", "help", "r"],
+        vec!["f", "c", "d", "a"],
+        vec![],
+    );
     arg_parser.parse(args)?;
 
     if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
@@ -426,11 +430,25 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
         snapshot_name = name;
     }
 
-    // Parse image path.
     let len = arg_parser.free.len();
+
+    // Rename snapshot name.
+    let mut old_snapshot_name = String::from("");
+    let mut new_snapshot_name = String::from("");
+    if arg_parser.opt_present("r") {
+        if len != 3 {
+            bail!("Invalid args number.");
+        }
+        snapshot_operation = Some(SnapshotOperation::Rename);
+        old_snapshot_name = arg_parser.free[0].clone();
+        new_snapshot_name = arg_parser.free[1].clone();
+    }
+
+    // Parse image path.
     let path = match len {
         0 => bail!("Image snapshot requires path"),
         1 => arg_parser.free[0].clone(),
+        3 => arg_parser.free[2].clone(),
         _ => {
             let param = arg_parser.free[1].clone();
             bail!("Unexpected argument: {}", param);
@@ -474,6 +492,9 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
         }
         Some(SnapshotOperation::Apply) => {
             qcow2_driver.apply_snapshot(snapshot_name)?;
+        }
+        Some(SnapshotOperation::Rename) => {
+            qcow2_driver.rename_snapshot(old_snapshot_name, new_snapshot_name)?;
         }
         None => return Ok(()),
     };
@@ -531,7 +552,7 @@ create [-f fmt] [-o options] filename [size]
 info filename
 check [-r [leaks | all]] [-no_print_error] [-f fmt] filename
 resize [-f fmt] filename [+]size
-snapshot [-l | -a snapshot | -c snapshot | -d snapshot] filename
+snapshot [-l | -a snapshot | -c snapshot | -d snapshot | -r old_snapshot_name new_snapshot_name] filename
 
 Command parameters:
 'filename' is a disk image filename
@@ -552,6 +573,7 @@ Parameters to snapshot subcommand:
  '-c' creates a snapshot
  '-d' deletes a snapshot
  '-l' lists all snapshots in the given image
+ '-r' change the name of a snapshot
 "#,
     );
 }
@@ -1569,9 +1591,15 @@ mod test {
         let test_case = [
             ("qcow2", "-c snapshot0 img_path", true),
             ("qcow2", "-f qcow2 -l img_path", true),
+            ("qcow2", "-r old_snapshot_name img_path", false),
             ("qcow2", "-d snapshot0 img_path", false),
             ("qcow2", "-a snapshot0 img_path", false),
             ("qcow2", "-c snapshot0 -l img_path", false),
+            (
+                "raw",
+                "-r old_snapshot_name new_snapshot_name img_path",
+                false,
+            ),
             ("raw", "-f qcow2 -l img_path", false),
             ("raw", "-l img_path", false),
         ];
@@ -1676,6 +1704,126 @@ mod test {
         ])
         .is_ok());
         assert!(test_image.check_image(quite, fix));
+        let buf = vec![0_u8; cluster_size as usize];
+        assert!(test_image.read_data(0, &buf).is_ok());
+        for elem in buf {
+            assert_eq!(elem, 2);
+        }
+    }
+
+    /// Test the function of snapshot rename.
+    ///
+    /// TestStep:
+    ///   1. Create a new image. alloc a new cluster and write 1.
+    ///   2. Create snapshot named test_snapshot0, write 2 to the cluster.
+    ///   3. Create snapshot named test_snapshot1, write 3 to the cluster.
+    ///   4. Rename test_snapshot0 to test_snapshot0-new.
+    ///   5. Apply snapshot named test_snapshot0.
+    ///   6. Apply snapshot named test_snapshot0-new.
+    /// Expect:
+    ///   1. step 5 is failure and step 1/2/3/4/6 is success.
+    ///   2. The data read after snapshot apply is 2.
+    #[test]
+    fn test_snapshot_rename_basic() {
+        let path = "/tmp/test_snapshot_rename_basic.qcow2";
+        let cluster_bits = 16;
+        let cluster_size = 1 << cluster_bits;
+        let refcount_bits = 16;
+
+        // Create a new image. alloc a new cluster and write 1.
+        let test_image = TestQcow2Image::create(cluster_bits, refcount_bits, path, "+1G");
+        let buf = vec![1_u8; cluster_size as usize];
+        assert!(test_image.write_data(0, &buf).is_ok());
+
+        // Create snapshot named test_snapshot0, write 2 to the cluster.
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "test_snapshot0".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        let buf = vec![2_u8; cluster_size as usize];
+        assert!(test_image.write_data(0, &buf).is_ok());
+
+        // Create snapshot named test_snapshot1, write 3 to the cluster.
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "test_snapshot1".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        let buf = vec![3_u8; cluster_size as usize];
+        assert!(test_image.write_data(0, &buf).is_ok());
+
+        // Rename test_snapshot0 to test_snapshot1.
+        assert!(image_snapshot(vec![
+            "-r".to_string(),
+            "test_snapshot0".to_string(),
+            "test_snapshot1".to_string(),
+            path.to_string()
+        ])
+        .is_err());
+
+        // Rename test_snapshot0 to test_snapshot0-new.
+        assert!(image_snapshot(vec![
+            "-r".to_string(),
+            "test_snapshot0".to_string(),
+            "test_snapshot0-new".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+
+        // Apply snapshot named test_snapshot0.
+        assert!(image_snapshot(vec![
+            "-a".to_string(),
+            "test_snapshot0".to_string(),
+            path.to_string()
+        ])
+        .is_err());
+
+        // Apply snapshot named test_snapshot-new.
+        assert!(image_snapshot(vec![
+            "-a".to_string(),
+            "test_snapshot0-new".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+
+        // The data read after snapshot apply is 2.
+        let buf = vec![0_u8; cluster_size as usize];
+        assert!(test_image.read_data(0, &buf).is_ok());
+        for elem in buf {
+            assert_eq!(elem, 1);
+        }
+
+        // Rename non-existed snapshot name.
+        assert!(image_snapshot(vec![
+            "-r".to_string(),
+            "test_snapshot11111".to_string(),
+            "test_snapshot11111-new".to_string(),
+            path.to_string()
+        ])
+        .is_err());
+
+        let buf = vec![4_u8; cluster_size as usize];
+        assert!(test_image.write_data(0, &buf).is_ok());
+
+        // Rename test_snapshot1 to test_snapshot123.
+        assert!(image_snapshot(vec![
+            "-r".to_string(),
+            "test_snapshot1".to_string(),
+            "test_snapshot123".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+
+        // Apply snapshot named test_snapshot123
+        assert!(image_snapshot(vec![
+            "-a".to_string(),
+            "test_snapshot123".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
         let buf = vec![0_u8; cluster_size as usize];
         assert!(test_image.read_data(0, &buf).is_ok());
         for elem in buf {
