@@ -329,7 +329,11 @@ impl PFlash {
         }
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + u64::from(size) > mr.size() {
+        if offset
+            .checked_add(size as u64)
+            .map(|sum| sum > mr.size())
+            .unwrap_or(true)
+        {
             return Err(anyhow!(LegacyError::PFlashWriteOverflow(
                 mr.size(),
                 offset,
@@ -361,7 +365,11 @@ impl PFlash {
     fn read_data(&mut self, data: &mut [u8], offset: u64) -> Result<()> {
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + data.len() as u64 > mr.size() {
+        if offset
+            .checked_add(data.len() as u64)
+            .map(|sum| sum > mr.size())
+            .unwrap_or(true)
+        {
             return Err(anyhow!(LegacyError::PFlashReadOverflow(
                 mr.size(),
                 offset,
@@ -390,7 +398,11 @@ impl PFlash {
         );
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + data.len() as u64 > mr.size() {
+        if offset
+            .checked_add(data.len() as u64)
+            .map(|sum| sum > mr.size())
+            .unwrap_or(true)
+        {
             return Err(anyhow!(LegacyError::PFlashWriteOverflow(
                 mr.size(),
                 offset,
