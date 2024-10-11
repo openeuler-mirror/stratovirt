@@ -564,7 +564,14 @@ impl<T: Clone + 'static> Aio<T> {
 
     pub fn submit_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
         trace::aio_submit_request(cb.file_fd, &cb.opcode, cb.offset, cb.nbytes);
-        if self.ctx.is_none() {
+        if self.ctx.is_none()
+            || [
+                OpCode::Discard,
+                OpCode::WriteZeroes,
+                OpCode::WriteZeroesUnmap,
+            ]
+            .contains(&cb.opcode)
+        {
             return self.handle_sync_request(cb);
         }
 
