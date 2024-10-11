@@ -12,7 +12,7 @@
 
 use std::{
     collections::HashMap,
-    fs::{self, canonicalize, create_dir_all, read_to_string, File},
+    fs::{self, canonicalize, create_dir_all, read_to_string},
     path::{Path, PathBuf},
 };
 
@@ -20,11 +20,12 @@ use anyhow::{anyhow, bail, Context, Result};
 use nix::{
     mount::MsFlags,
     sys::statfs::{statfs, CGROUP2_SUPER_MAGIC},
+    unistd::close,
 };
-
-use crate::utils::OzonecErr;
-use oci_spec::runtime::Mount as OciMount;
 use procfs::process::{MountInfo, Process};
+
+use crate::utils::{openat2_in_root, proc_fd_path, OzonecErr};
+use oci_spec::runtime::Mount as OciMount;
 
 enum CgroupType {
     CgroupV1,
@@ -98,9 +99,8 @@ impl Mount {
     }
 
     fn do_one_mount(&self, mount: &OciMount, label: &Option<String>) -> Result<()> {
-        let fs_type = mount.fs_type.as_deref();
-        let (flag, mut data) = self.get_mount_flag_data(mount);
-
+        let mut fs_type = mount.fs_type.as_deref();
+        let (mut mnt_flags, mut data) = self.get_mount_flag_data(mount);
         if let Some(label) = label {
             if fs_type != Some("proc") && fs_type != Some("sysfs") {
                 match data.is_empty() {
@@ -110,16 +110,13 @@ impl Mount {
             }
         }
 
-        // If destination begins with "/", then ignore the first "/".
-        let binding = self.rootfs.join(&mount.destination[1..]);
-        let dest_path = Path::new(&binding);
-        let binding = &mount
+        let src_binding = mount
             .source
             .clone()
             .ok_or(anyhow!("Mount source not set"))?;
-        let source = Path::new(&binding);
+        let source = Path::new(&src_binding);
         let canonicalized;
-        let src_path = match fs_type {
+        let source = match fs_type {
             Some("bind") => {
                 canonicalized = canonicalize(source)
                     .with_context(|| format!("Failed to canonicalize {}", source.display()))?;
@@ -127,54 +124,49 @@ impl Mount {
             }
             _ => source,
         };
+        // Strip the first "/".
+        let target_binding = self.rootfs.join(&mount.destination[1..]);
+        let target = Path::new(&target_binding);
 
         match fs_type {
             Some("bind") => {
-                let dir = if src_path.is_file() {
-                    dest_path.parent().ok_or(anyhow!(
+                let dir = if source.is_file() {
+                    target.parent().ok_or(anyhow!(
                         "Failed to get parent directory: {}",
-                        dest_path.display()
+                        target.display()
                     ))?
                 } else {
-                    dest_path
+                    target
                 };
-
                 create_dir_all(dir)
                     .with_context(|| OzonecErr::CreateDir(dir.to_string_lossy().to_string()))?;
-                if src_path.is_file() && !dest_path.exists() {
-                    File::create(dest_path)
-                        .with_context(|| format!("Failed to create {}", dest_path.display()))?;
-                }
 
-                nix::mount::mount(
-                    Some(src_path),
-                    dest_path,
-                    None::<&str>,
-                    MsFlags::MS_BIND | MsFlags::MS_REC,
-                    Some(data.as_str()),
-                )
-                .with_context(|| OzonecErr::Mount(src_path.to_string_lossy().to_string()))?;
+                mnt_flags = MsFlags::MS_BIND | MsFlags::MS_REC;
+                fs_type = None::<&str>;
             }
             _ => {
-                create_dir_all(&dest_path).with_context(|| {
-                    OzonecErr::CreateDir(dest_path.to_string_lossy().to_string())
-                })?;
                 // Sysfs doesn't support duplicate mounting to one directory.
-                if self.is_mounted_sysfs_dir(&dest_path.to_string_lossy().to_string()) {
-                    nix::mount::umount(dest_path)
-                        .with_context(|| format!("Failed to umount {}", dest_path.display()))?;
+                if self.is_mounted_sysfs_dir(&target.to_string_lossy().to_string()) {
+                    nix::mount::umount(target)
+                        .with_context(|| format!("Failed to umount {}", target.display()))?;
                 }
-                nix::mount::mount(
-                    Some(src_path),
-                    dest_path,
-                    fs_type,
-                    flag,
-                    Some(data.as_str()),
-                )
-                .with_context(|| OzonecErr::Mount(src_path.to_string_lossy().to_string()))?;
             }
         }
 
+        let target_fd = openat2_in_root(
+            &Path::new(&self.rootfs),
+            &Path::new(&mount.destination[1..]),
+            !source.is_file(),
+        )?;
+        nix::mount::mount(
+            Some(source),
+            &proc_fd_path(target_fd),
+            fs_type,
+            mnt_flags,
+            Some(data.as_str()),
+        )
+        .with_context(|| OzonecErr::Mount(source.to_string_lossy().to_string()))?;
+        close(target_fd).with_context(|| OzonecErr::CloseFd)?;
         Ok(())
     }
 
@@ -210,22 +202,22 @@ impl Mount {
     }
 
     fn do_cgroup_mount(&self, mount: &OciMount) -> Result<()> {
-        // If destination begins with "/", then ignore the first "/".
-        let binding = self.rootfs.join(&mount.destination[1..]);
-        let mut dest = Path::new(&binding);
+        // Strip the first "/".
+        let rel_target = Path::new(&mount.destination[1..]);
+        let target_fd = openat2_in_root(&Path::new(&self.rootfs), rel_target, true)?;
         nix::mount::mount(
             Some("tmpfs"),
-            dest,
+            &proc_fd_path(target_fd),
             Some("tmpfs"),
             MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
             None::<&str>,
         )
         .with_context(|| OzonecErr::Mount(String::from("tmpfs")))?;
+        close(target_fd).with_context(|| OzonecErr::CloseFd)?;
 
         let process = Process::myself().with_context(|| OzonecErr::AccessProcSelf)?;
         let mnt_info: Vec<MountInfo> =
             process.mountinfo().with_context(|| OzonecErr::GetMntInfo)?;
-
         let proc_cgroups: HashMap<String, String> = process
             .cgroups()
             .with_context(|| "Failed to get cgroups belong to")?
@@ -239,12 +231,6 @@ impl Mount {
             .map(|m| m.mount_point)
             .collect();
         for cg_path in host_cgroups {
-            let binding = self.rootfs.join(
-                cg_path
-                    .strip_prefix("/")
-                    .with_context(|| format!("Strip {} error", cg_path.display()))?,
-            );
-            dest = Path::new(&binding);
             let cg = cg_path
                 .file_name()
                 .ok_or(anyhow!("Failed to get controller file"))?
@@ -261,19 +247,20 @@ impl Mount {
 
             if let Some(src) = proc_cgroups.get(&proc_cg_key) {
                 let source = cg_path.join(&src[1..]);
-                if !dest.exists() {
-                    create_dir_all(dest).with_context(|| {
-                        OzonecErr::CreateDir(dest.to_string_lossy().to_string())
-                    })?;
-                }
+                let rel_target = cg_path
+                    .strip_prefix("/")
+                    .with_context(|| format!("{} doesn't start with '/'", cg_path.display()))?;
+                let target_fd = openat2_in_root(&Path::new(&self.rootfs), rel_target, true)?;
+
                 nix::mount::mount(
                     Some(&source),
-                    dest,
+                    &proc_fd_path(target_fd),
                     Some("bind"),
                     MsFlags::MS_BIND | MsFlags::MS_REC,
                     None::<&str>,
                 )
                 .with_context(|| OzonecErr::Mount(source.to_string_lossy().to_string()))?;
+                close(target_fd).with_context(|| OzonecErr::CloseFd)?;
             }
         }
 
