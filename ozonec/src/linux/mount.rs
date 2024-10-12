@@ -100,7 +100,7 @@ impl Mount {
 
     fn do_one_mount(&self, mount: &OciMount, label: &Option<String>) -> Result<()> {
         let mut fs_type = mount.fs_type.as_deref();
-        let (mut mnt_flags, mut data) = self.get_mount_flag_data(mount);
+        let (mnt_flags, mut data) = self.get_mount_flag_data(mount);
         if let Some(label) = label {
             if fs_type != Some("proc") && fs_type != Some("sysfs") {
                 match data.is_empty() {
@@ -114,42 +114,33 @@ impl Mount {
             .source
             .clone()
             .ok_or(anyhow!("Mount source not set"))?;
-        let source = Path::new(&src_binding);
+        let mut source = Path::new(&src_binding);
         let canonicalized;
-        let source = match fs_type {
-            Some("bind") => {
-                canonicalized = canonicalize(source)
-                    .with_context(|| format!("Failed to canonicalize {}", source.display()))?;
-                canonicalized.as_path()
-            }
-            _ => source,
-        };
         // Strip the first "/".
         let target_binding = self.rootfs.join(&mount.destination[1..]);
         let target = Path::new(&target_binding);
 
-        match fs_type {
-            Some("bind") => {
-                let dir = if source.is_file() {
-                    target.parent().ok_or(anyhow!(
-                        "Failed to get parent directory: {}",
-                        target.display()
-                    ))?
-                } else {
-                    target
-                };
-                create_dir_all(dir)
-                    .with_context(|| OzonecErr::CreateDir(dir.to_string_lossy().to_string()))?;
-
-                mnt_flags = MsFlags::MS_BIND | MsFlags::MS_REC;
-                fs_type = None::<&str>;
-            }
-            _ => {
-                // Sysfs doesn't support duplicate mounting to one directory.
-                if self.is_mounted_sysfs_dir(&target.to_string_lossy().to_string()) {
-                    nix::mount::umount(target)
-                        .with_context(|| format!("Failed to umount {}", target.display()))?;
-                }
+        if !(mnt_flags & MsFlags::MS_BIND).is_empty() {
+            canonicalized = canonicalize(source)
+                .with_context(|| format!("Failed to canonicalize {}", source.display()))?;
+            source = canonicalized.as_path();
+            let dir = if source.is_file() {
+                target.parent().ok_or(anyhow!(
+                    "Failed to get parent directory: {}",
+                    target.display()
+                ))?
+            } else {
+                target
+            };
+            create_dir_all(dir)
+                .with_context(|| OzonecErr::CreateDir(dir.to_string_lossy().to_string()))?;
+            // Actually when MS_BIND is set, filesystemtype is ignored by mount syscall.
+            fs_type = Some("bind");
+        } else {
+            // Sysfs doesn't support duplicate mounting to one directory.
+            if self.is_mounted_sysfs_dir(&target.to_string_lossy().to_string()) {
+                nix::mount::umount(target)
+                    .with_context(|| format!("Failed to umount {}", target.display()))?;
             }
         }
 
