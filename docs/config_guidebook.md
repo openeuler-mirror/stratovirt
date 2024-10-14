@@ -939,6 +939,22 @@ Note:
 
 Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-host.
 
+#### 2.13.7 USB Uas
+USB Mass Storage Device that is based on the USB Attached Scsi (UAS) protocol. It should be attached to USB controller.
+
+Three properties can be set for USB Uas.
+
+* id: unique device id.
+* file: the path of backend image file.
+* media: the media type of storage. Possible values are `disk` or `cdrom`. If not set, default is `disk`.
+
+```shell
+-device usb-uas,drive=<drive_id>,id=<uas_id>
+-drive id=<drive_id>,file=<path_on_host>[,media={disk|cdrom}],aio=off,direct=false
+```
+
+Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
