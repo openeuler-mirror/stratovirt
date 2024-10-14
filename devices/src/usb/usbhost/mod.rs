@@ -1081,7 +1081,23 @@ impl UsbDevice for UsbHost {
         Ok(())
     }
 
-    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+    fn cancel_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
+        let locked_requests = self.requests.lock().unwrap();
+        let req = locked_requests
+            .iter()
+            .find(|r| Arc::ptr_eq(&r.packet, packet));
+
+        if let Some(req) = req {
+            req.packet.lock().unwrap().is_async = false;
+            if let Err(e) = cancel_host_transfer(req.host_transfer) {
+                warn!(
+                    "Usb Host device {} failed to abort host transfers: {:?}",
+                    self.device_id(),
+                    e
+                );
+            }
+        }
+    }
 
     fn reset(&mut self) {
         info!("Usb Host device {} reset", self.device_id());
