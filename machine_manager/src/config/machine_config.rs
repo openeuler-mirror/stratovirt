@@ -20,6 +20,7 @@ use crate::config::{
     check_arg_too_long, check_path_too_long, CmdParser, ConfigCheck, ExBool, IntegerList, VmConfig,
     MAX_NODES,
 };
+use crate::machine::HypervisorType;
 
 const DEFAULT_CPUS: u8 = 1;
 const DEFAULT_THREADS: u8 = 1;
@@ -167,6 +168,7 @@ pub enum ShutdownAction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineConfig {
     pub mach_type: MachineType,
+    pub hypervisor: HypervisorType,
     pub nr_cpus: u8,
     pub nr_threads: u8,
     pub nr_cores: u8,
@@ -185,6 +187,7 @@ impl Default for MachineConfig {
     fn default() -> Self {
         MachineConfig {
             mach_type: MachineType::MicroVm,
+            hypervisor: HypervisorType::Kvm,
             nr_cpus: DEFAULT_CPUS,
             nr_threads: DEFAULT_THREADS,
             nr_cores: DEFAULT_CORES,
@@ -239,9 +242,14 @@ impl VmConfig {
 
         if let Some(accel) = cmd_parser.get_value::<String>("accel")? {
             // Libvirt checks the parameter types of 'kvm', 'kvm:tcg' and 'tcg'.
-            if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") {
-                bail!("Only \'kvm\', \'kvm:tcg\' and \'tcg\' are supported for \'accel\' of \'machine\'");
+            if accel.ne("kvm:tcg") && accel.ne("tcg") && accel.ne("kvm") && accel.ne("test") {
+                bail!("Only \'kvm\', \'kvm:tcg\', \'test\' and \'tcg\' are supported for \'accel\' of \'machine\'");
             }
+
+            match accel.as_str() {
+                "test" => self.machine_config.hypervisor = HypervisorType::Test,
+                _ => self.machine_config.hypervisor = HypervisorType::Kvm,
+            };
         }
         if let Some(usb) = cmd_parser.get_value::<ExBool>("usb")? {
             if usb.into() {
@@ -276,10 +284,11 @@ impl VmConfig {
         cmd_parser.push("");
         cmd_parser.parse(accel_config)?;
 
-        if let Some(accel) = cmd_parser.get_value::<String>("")? {
-            if accel.ne("kvm") {
-                bail!("Only \'kvm\' is supported for \'accel\'");
-            }
+        if let Some(accel) = cmd_parser
+            .get_value::<HypervisorType>("")
+            .with_context(|| "Only \'kvm\' and \'test\' is supported for \'accel\'")?
+        {
+            self.machine_config.hypervisor = accel;
         }
 
         Ok(())
@@ -747,6 +756,7 @@ mod tests {
         };
         let mut machine_config = MachineConfig {
             mach_type: MachineType::MicroVm,
+            hypervisor: HypervisorType::Kvm,
             nr_cpus: 1,
             nr_cores: 1,
             nr_threads: 1,
