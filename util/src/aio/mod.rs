@@ -663,10 +663,10 @@ impl<T: Clone + 'static> Aio<T> {
             warn!("Can not process aio list with invalid ctx.");
             return Ok(());
         }
-        while self.aio_in_queue.len > 0 && self.aio_in_flight.len < self.max_events {
+        while !self.aio_in_queue.is_empty() && self.aio_in_flight.len() < self.max_events {
             let mut iocbs = Vec::new();
 
-            for _ in self.aio_in_flight.len..self.max_events {
+            for _ in self.aio_in_flight.len()..self.max_events {
                 match self.aio_in_queue.pop_tail() {
                     Some(node) => {
                         iocbs.push(&node.value as *const AioCb<T>);
@@ -729,7 +729,7 @@ impl<T: Clone + 'static> Aio<T> {
 
         self.aio_in_queue.add_head(node);
         self.incomplete_cnt.fetch_add(1, Ordering::SeqCst);
-        if self.aio_in_queue.len + self.aio_in_flight.len >= self.max_events {
+        if self.aio_in_queue.len() + self.aio_in_flight.len() >= self.max_events {
             self.process_list()?;
         }
 

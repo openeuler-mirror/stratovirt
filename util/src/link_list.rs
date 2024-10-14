@@ -23,7 +23,7 @@ pub struct Node<T> {
 pub struct List<T> {
     head: Option<NonNull<Node<T>>>,
     tail: Option<NonNull<Node<T>>>,
-    pub len: usize,
+    len: usize,
     marker: PhantomData<Box<Node<T>>>,
 }
 
@@ -137,6 +137,80 @@ impl<T> List<T> {
 
             self.len -= 1;
             node
+        })
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline(always)]
+    pub fn iter(&'_ self) -> impl Iterator<Item = &'_ T> {
+        Iter::new(self)
+    }
+
+    #[inline(always)]
+    pub fn iter_mut(&'_ mut self) -> impl Iterator<Item = &'_ mut T> {
+        IterMut::new(self)
+    }
+}
+
+struct Iter<'a, T> {
+    curr: Option<NonNull<Node<T>>>,
+    list: PhantomData<&'a List<T>>,
+}
+
+impl<'a, T> Iter<'a, T> {
+    fn new(list: &'a List<T>) -> Self {
+        Self {
+            curr: list.head,
+            list: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.curr.map(|node| {
+            // SAFETY: node is guaranteed not to be null.
+            let node = unsafe { node.as_ref() };
+            self.curr = node.next;
+            &node.value
+        })
+    }
+}
+
+struct IterMut<'a, T> {
+    curr: Option<NonNull<Node<T>>>,
+    list: PhantomData<&'a mut List<T>>,
+}
+
+impl<'a, T> IterMut<'a, T> {
+    fn new(list: &'a mut List<T>) -> Self {
+        Self {
+            curr: list.head,
+            list: PhantomData,
+        }
+    }
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.curr.map(|mut node| {
+            // SAFETY: node is guaranteed not to be null.
+            let node = unsafe { node.as_mut() };
+            self.curr = node.next;
+            &mut node.value
         })
     }
 }

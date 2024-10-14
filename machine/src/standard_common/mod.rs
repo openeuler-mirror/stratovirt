@@ -1878,7 +1878,7 @@ impl DeviceInterface for StdMachine {
                 }
 
                 let qcow2_list = QCOW2_LIST.lock().unwrap();
-                if qcow2_list.len() == 0 {
+                if qcow2_list.is_empty() {
                     return Response::create_response(
                         serde_json::to_value("There is no snapshot available.\r\n").unwrap(),
                         None,
