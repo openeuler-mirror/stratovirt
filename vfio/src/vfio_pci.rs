@@ -723,7 +723,7 @@ impl VfioPciDevice {
 
     fn vfio_enable_msix(&mut self) -> Result<()> {
         let mut gsi_routes = self.gsi_msi_routes.lock().unwrap();
-        if gsi_routes.len() == 0 {
+        if gsi_routes.is_empty() {
             let irq_fd = create_new_eventfd().unwrap();
             let gsi_route = GsiMsiRoute {
                 irq_fd: Some(Arc::new(irq_fd)),

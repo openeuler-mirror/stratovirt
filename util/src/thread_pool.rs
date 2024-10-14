@@ -167,7 +167,7 @@ fn worker_thread(pool: Arc<ThreadPool>) {
     while locked_state.is_running() {
         let result;
 
-        if locked_state.req_lists.len == 0 {
+        if locked_state.req_lists.is_empty() {
             locked_state.blocked_threads += 1;
             match pool
                 .request_cond
@@ -186,7 +186,7 @@ fn worker_thread(pool: Arc<ThreadPool>) {
             locked_state.blocked_threads -= 1;
 
             if result.timed_out()
-                && locked_state.req_lists.len == 0
+                && locked_state.req_lists.is_empty()
                 && locked_state.total_threads > locked_state.min_threads
             {
                 // If wait time_out and no pending task and current total number
@@ -205,7 +205,7 @@ fn worker_thread(pool: Arc<ThreadPool>) {
         locked_state = pool.pool_state.lock().unwrap();
     }
     locked_state.total_threads -= 1;
-    trace::thread_pool_exit_thread(&locked_state.total_threads, &locked_state.req_lists.len);
+    trace::thread_pool_exit_thread(&locked_state.total_threads, &locked_state.req_lists.len());
 
     pool.stop_cond.notify_one();
     pool.request_cond.notify_one();
@@ -243,7 +243,7 @@ mod test {
         }
 
         // Waiting for creating.
-        while pool.pool_state.lock().unwrap().req_lists.len != 0 {
+        while !pool.pool_state.lock().unwrap().req_lists.is_empty() {
             thread::sleep(time::Duration::from_millis(10));
 
             let now = time::SystemTime::now();
