@@ -35,7 +35,7 @@ fn parse_action(action: OciSeccompAction, errno: Option<u32>) -> ScmpAction {
     }
 }
 
-fn parse_cmp(op: SeccompOp) -> ScmpCompareOp {
+fn parse_cmp(op: SeccompOp, mask: u64) -> ScmpCompareOp {
     match op {
         SeccompOp::ScmpCmpNe => ScmpCompareOp::NotEqual,
         SeccompOp::ScmpCmpLt => ScmpCompareOp::Less,
@@ -43,7 +43,7 @@ fn parse_cmp(op: SeccompOp) -> ScmpCompareOp {
         SeccompOp::ScmpCmpEq => ScmpCompareOp::Equal,
         SeccompOp::ScmpCmpGe => ScmpCompareOp::GreaterEqual,
         SeccompOp::ScmpCmpGt => ScmpCompareOp::Greater,
-        _ => ScmpCompareOp::Equal,
+        SeccompOp::ScmpCmpMaskedEq => ScmpCompareOp::MaskedEqual(mask),
     }
 }
 
@@ -97,8 +97,13 @@ pub fn set_seccomp(seccomp: &Seccomp) -> Result<()> {
                 let mut comparators: Vec<ScmpArgCompare> = vec![];
                 if let Some(args) = &syscall.args {
                     for arg in args {
-                        let op = parse_cmp(arg.op);
-                        let cmp = ScmpArgCompare::new(arg.index as u32, op, arg.value);
+                        let op = parse_cmp(arg.op, arg.value);
+                        let cmp = match arg.op {
+                            SeccompOp::ScmpCmpMaskedEq => {
+                                ScmpArgCompare::new(arg.index as u32, op, arg.valueTwo.unwrap_or(0))
+                            }
+                            _ => ScmpArgCompare::new(arg.index as u32, op, arg.value),
+                        };
                         comparators.push(cmp);
                     }
                 }
