@@ -1872,7 +1872,7 @@ pub trait MachineOps: MachineLifecycle {
                     .drives
                     .remove(&device_cfg.drive)
                     .with_context(|| "No drive configured matched for usb uas device.")?;
-                let uas = UsbUas::new(device_cfg, drive_cfg, self.get_drive_files());
+                let uas = UsbUas::new(device_cfg, drive_cfg, self.get_drive_files())?;
                 uas.realize()
                     .with_context(|| "Failed to realize usb uas device")?
             }

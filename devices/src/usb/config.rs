@@ -155,6 +155,8 @@ pub const USB_RECIPIENT_DEVICE: u8 = 0;
 pub const USB_RECIPIENT_INTERFACE: u8 = 1;
 pub const USB_RECIPIENT_ENDPOINT: u8 = 2;
 pub const USB_RECIPIENT_OTHER: u8 = 3;
+pub const USB_TYPE_MASK: u8 = 3 << 5;
+pub const USB_RECIPIENT_MASK: u8 = 0x1F;
 
 /// USB device request combination
 pub const USB_DEVICE_IN_REQUEST: u8 =
@@ -211,7 +213,9 @@ pub const USB_DT_ENDPOINT_COMPANION: u8 = 48;
 
 /// USB SuperSpeed Device Capability.
 pub const USB_SS_DEVICE_CAP: u8 = 0x3;
+pub const USB_SS_DEVICE_SPEED_SUPPORTED_HIGH: u16 = 1 << 2;
 pub const USB_SS_DEVICE_SPEED_SUPPORTED_SUPER: u16 = 1 << 3;
+pub const USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_HIGH: u8 = 2;
 pub const USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER: u8 = 3;
 
 /// USB Descriptor size

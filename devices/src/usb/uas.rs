@@ -27,8 +27,9 @@ use super::config::*;
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
-    UsbSuperSpeedEndpointCompDescriptor,
+    UsbSuperSpeedCapDescriptor, UsbSuperSpeedEndpointCompDescriptor,
 };
+use super::storage::{UsbStorage, UsbStorageConfig, GET_MAX_LUN, MASS_STORAGE_RESET};
 use super::xhci::xhci_controller::XhciDevice;
 use super::{
     UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
@@ -42,8 +43,8 @@ use crate::ScsiBus::{
 use crate::ScsiDisk::{ScsiDevConfig, ScsiDevice};
 use crate::{Bus, Device};
 use machine_manager::config::{DriveConfig, DriveFile};
-use util::byte_code::ByteCode;
 use util::gen_base_func;
+use util::{aio::AioEngine, byte_code::ByteCode};
 
 // Size of UasIUBody
 const UAS_IU_BODY_SIZE: usize = 30;
@@ -87,6 +88,10 @@ const _UAS_TMF_QUERY_TASK: u8 = 0x80;
 const _UAS_TMF_QUERY_TASK_SET: u8 = 0x81;
 const _UAS_TMF_QUERY_ASYNC_EVENT: u8 = 0x82;
 
+// Interface alt settings
+const UAS_ALT_SETTING_BOT: u8 = 0;
+const UAS_ALT_SETTING_UAS: u8 = 1;
+
 #[derive(Parser, Clone, Debug)]
 #[command(no_binary_name(true))]
 pub struct UsbUasConfig {
@@ -95,13 +100,23 @@ pub struct UsbUasConfig {
     #[arg(long)]
     pub drive: String,
     #[arg(long)]
-    pub id: Option<String>,
-    #[arg(long)]
-    pub speed: Option<String>,
+    pub id: String,
     #[arg(long)]
     bus: Option<String>,
     #[arg(long)]
     port: Option<String>,
+}
+
+impl From<UsbUasConfig> for UsbStorageConfig {
+    fn from(uas_config: UsbUasConfig) -> Self {
+        Self {
+            classtype: uas_config.classtype,
+            id: String::new(),
+            drive: uas_config.drive,
+            bus: uas_config.bus,
+            port: uas_config.port,
+        }
+    }
 }
 
 pub struct UsbUas {
@@ -114,6 +129,8 @@ pub struct UsbUas {
     commands: [Option<UasIU>; UAS_MAX_STREAMS + 1],
     statuses: [Option<Arc<Mutex<UsbPacket>>>; UAS_MAX_STREAMS + 1],
     data: [Option<Arc<Mutex<UsbPacket>>>; UAS_MAX_STREAMS + 1],
+    bot: UsbStorage,
+    is_bot: bool,
 }
 
 #[derive(Debug, Default, EnumCount)]
@@ -296,7 +313,7 @@ static DESC_IFACE_UAS: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bLength: USB_DT_INTERFACE_SIZE,
             bDescriptorType: USB_DT_INTERFACE,
             bInterfaceNumber: 0,
-            bAlternateSetting: 1,
+            bAlternateSetting: UAS_ALT_SETTING_UAS,
             bNumEndpoints: 4,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
             bInterfaceSubClass: USB_SUBCLASS_SCSI,
@@ -425,26 +442,73 @@ static DESC_IFACE_UAS: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
     })
 });
 
-// NOTE: Fake BOT interface descriptor is needed here since Windows UASP driver always expects two
-// interfaces: both BOT and UASP. It also anticipates the UASP descriptor to be the second one.
-// Therefore, the first one can be a BOT storage stub.
 static DESC_IFACE_BOT: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
     Arc::new(UsbDescIface {
         interface_desc: UsbInterfaceDescriptor {
             bLength: USB_DT_INTERFACE_SIZE,
             bDescriptorType: USB_DT_INTERFACE,
             bInterfaceNumber: 0,
-            bAlternateSetting: 0,
-            bNumEndpoints: 0,
+            bAlternateSetting: UAS_ALT_SETTING_BOT,
+            bNumEndpoints: 2,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
             bInterfaceSubClass: USB_SUBCLASS_SCSI,
             bInterfaceProtocol: USB_IFACE_PROTOCOL_BOT,
             iInterface: 0,
         },
         other_desc: vec![],
-        endpoints: vec![],
+        endpoints: vec![
+            Arc::new(UsbDescEndpoint {
+                endpoint_desc: UsbEndpointDescriptor {
+                    bLength: USB_DT_ENDPOINT_SIZE,
+                    bDescriptorType: USB_DT_ENDPOINT,
+                    bEndpointAddress: USB_DIRECTION_DEVICE_TO_HOST | 0x01,
+                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
+                    wMaxPacketSize: 1024,
+                    bInterval: 0,
+                },
+                extra: UsbSuperSpeedEndpointCompDescriptor {
+                    bLength: USB_DT_SS_EP_COMP_SIZE,
+                    bDescriptorType: USB_DT_ENDPOINT_COMPANION,
+                    bMaxBurst: 15,
+                    bmAttributes: 0,
+                    wBytesPerInterval: 0,
+                }
+                .as_bytes()
+                .to_vec(),
+            }),
+            Arc::new(UsbDescEndpoint {
+                endpoint_desc: UsbEndpointDescriptor {
+                    bLength: USB_DT_ENDPOINT_SIZE,
+                    bDescriptorType: USB_DT_ENDPOINT,
+                    bEndpointAddress: USB_DIRECTION_HOST_TO_DEVICE | 0x02,
+                    bmAttributes: USB_ENDPOINT_ATTR_BULK,
+                    wMaxPacketSize: 1024,
+                    bInterval: 0,
+                },
+                extra: UsbSuperSpeedEndpointCompDescriptor {
+                    bLength: USB_DT_SS_EP_COMP_SIZE,
+                    bDescriptorType: USB_DT_ENDPOINT_COMPANION,
+                    bMaxBurst: 15,
+                    bmAttributes: 0,
+                    wBytesPerInterval: 0,
+                }
+                .as_bytes()
+                .to_vec(),
+            }),
+        ],
     })
 });
+
+static DESC_CAP_UAS: UsbSuperSpeedCapDescriptor = UsbSuperSpeedCapDescriptor {
+    bLength: USB_DT_SS_CAP_SIZE,
+    bDescriptorType: USB_DT_DEVICE_CAPABILITY,
+    bDevCapabilityType: USB_SS_DEVICE_CAP,
+    bmAttributes: 0,
+    wSpeedsSupported: USB_SS_DEVICE_SPEED_SUPPORTED_SUPER | USB_SS_DEVICE_SPEED_SUPPORTED_HIGH,
+    bFunctionalitySupport: USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_HIGH,
+    bU1DevExitLat: 0xA,
+    wU2DevExitLat: 0x20,
+};
 
 fn complete_async_packet(packet: &Arc<Mutex<UsbPacket>>) {
     let locked_packet = packet.lock().unwrap();
@@ -462,27 +526,67 @@ impl UsbUas {
         uas_config: UsbUasConfig,
         drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
-    ) -> Self {
-        Self {
-            base: UsbDeviceBase::new(
-                uas_config.id.as_ref().unwrap().clone(),
-                USB_DEVICE_BUFFER_DEFAULT_LEN,
-            ),
-            uas_config,
+    ) -> Result<Self> {
+        if drive_cfg.aio != AioEngine::Off || drive_cfg.direct {
+            bail!("USB UAS: \"aio=off,direct=false\" must be configured.");
+        }
+
+        Ok(Self {
+            base: UsbDeviceBase::new(uas_config.id.clone(), USB_DEVICE_BUFFER_DEFAULT_LEN),
+            uas_config: uas_config.clone(),
             scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
             scsi_device: None,
-            drive_cfg,
-            drive_files,
+            drive_cfg: drive_cfg.clone(),
+            drive_files: drive_files.clone(),
             commands: array::from_fn(|_| None),
             statuses: array::from_fn(|_| None),
             data: array::from_fn(|_| None),
-        }
+            bot: UsbStorage::new(uas_config.into(), drive_cfg, drive_files)?,
+            is_bot: true,
+        })
     }
 
     fn cancel_io(&mut self) {
         self.commands = array::from_fn(|_| None);
         self.statuses = array::from_fn(|_| None);
         self.data = array::from_fn(|_| None);
+    }
+
+    /// Class (Mass Storage) specific requests.
+    fn handle_control_for_device(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+        match device_req.request_type {
+            USB_ENDPOINT_OUT_REQUEST => {
+                if device_req.request == USB_REQUEST_CLEAR_FEATURE {
+                    return;
+                }
+            }
+            USB_INTERFACE_CLASS_OUT_REQUEST => {
+                // NOTE: See USB Mass Storage Class specification: 3.1 Bulk-Only Mass Storage Reset
+                if device_req.request == MASS_STORAGE_RESET {
+                    // Set storage state mode.
+                    self.bot.handle_control_packet(packet, device_req);
+                    self.cancel_io();
+                    return;
+                }
+            }
+            USB_INTERFACE_CLASS_IN_REQUEST => {
+                // NOTE: See USB Mass Storage Class specification: 3.2 Get Max LUN
+                if device_req.request == GET_MAX_LUN {
+                    // Now only supports 1 LUN.
+                    self.base.data_buf[0] = 0;
+                    packet.actual_length = 1;
+                    return;
+                }
+            }
+            _ => (),
+        }
+
+        error!(
+            "UAS {} device unhandled control request {:?}.",
+            self.device_id(),
+            device_req
+        );
+        packet.status = UsbPacketStatus::Stall;
     }
 
     fn handle_iu_command(
@@ -732,7 +836,7 @@ impl UsbUas {
         match result {
             Ok(result) => result,
             Err(err) => {
-                error!("UAS {} device error: {:#?}.", self.device_id(), err);
+                error!("UAS {} device error: {:?}.", self.device_id(), err);
                 UasPacketStatus::Completed
             }
         }
@@ -750,6 +854,7 @@ impl UsbDevice for UsbUas {
         let prefix = &s[UsbUasStringId::SerialNumber as usize];
         s[UsbUasStringId::SerialNumber as usize] = self.base.generate_serial_number(prefix);
         self.base.init_descriptor(DESC_DEVICE_UAS.clone(), s)?;
+        self.base.set_capability_descriptors(vec![DESC_CAP_UAS]);
 
         // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
         // supported.
@@ -775,6 +880,8 @@ impl UsbDevice for UsbUas {
             .lock()
             .unwrap()
             .attach_child(get_scsi_key(0, 0), realized_scsi)?;
+
+        self.bot.do_realize()?;
         let uas = Arc::new(Mutex::new(self));
         Ok(uas)
     }
@@ -788,6 +895,8 @@ impl UsbDevice for UsbUas {
         self.base.remote_wakeup = 0;
         self.base.addr = 0;
         self.cancel_io();
+        // Reset storage state.
+        self.bot.reset();
     }
 
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest) {
@@ -797,6 +906,12 @@ impl UsbDevice for UsbUas {
             self.device_id(),
             device_req.as_bytes(),
         );
+
+        if device_req.request_type == USB_INTERFACE_OUT_REQUEST
+            && device_req.request == USB_REQUEST_SET_INTERFACE
+        {
+            self.is_bot = device_req.value != UAS_ALT_SETTING_UAS as u16;
+        }
 
         match self
             .base
@@ -811,12 +926,7 @@ impl UsbDevice for UsbUas {
                     return;
                 }
 
-                error!(
-                    "UAS {} device unhandled control request {:?}.",
-                    self.device_id(),
-                    device_req
-                );
-                locked_packet.status = UsbPacketStatus::Stall;
+                self.handle_control_for_device(&mut locked_packet, device_req);
             }
             Err(err) => {
                 warn!(
@@ -830,6 +940,10 @@ impl UsbDevice for UsbUas {
     }
 
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
+        if self.is_bot {
+            return self.bot.handle_data(packet);
+        }
+
         let locked_packet = packet.lock().unwrap();
         let stream = locked_packet.stream as usize;
         let ep_number = locked_packet.ep_number;
