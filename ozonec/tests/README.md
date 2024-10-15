@@ -12,7 +12,7 @@ $ cd bats-core
 $ ./install.sh /usr/local
 ```
 
-And *jq* is may also needed to modify json file in tests.
+*bundle* directory which includes *config.json* and *rootfs* directory may be required to archived to bundle.tar.gz under the directory the test script belongs to. And *jq* may also be needed to modify json file in tests.
 
 ## Running tests
 
