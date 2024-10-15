@@ -61,13 +61,14 @@ pub use vnc::*;
 use std::collections::HashMap;
 use std::fs::{canonicalize, File};
 use std::io::Read;
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use log::error;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 
 use trace::{enable_state_by_type, set_state_by_pattern, TraceType};
@@ -314,6 +315,7 @@ impl VmConfig {
             req_align,
             buf_align,
         };
+        info!("Open file {}, fd: {}", path, drive_file.file.as_raw_fd());
         drive_files.insert(path.to_string(), drive_file);
         Ok(())
     }
