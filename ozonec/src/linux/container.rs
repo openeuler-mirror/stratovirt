@@ -127,7 +127,7 @@ impl LinuxContainer {
         process: &mut Process,
         parent_channel: &Channel<Message>,
         fst_stage_channel: &Channel<Message>,
-        notify_listener: Option<NotifyListener>,
+        notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
         debug!("First stage process start");
 
@@ -146,7 +146,7 @@ impl LinuxContainer {
 
         // Spawn a child process to perform the second stage to initialize container.
         let init_pid = clone_process("ozonec:[2:INIT]", || {
-            self.do_second_stage(process, parent_channel, notify_listener)
+            self.do_second_stage(process, parent_channel, &notify_listener)
                 .with_context(|| "Second stage process encounters errors")?;
             Ok(0)
         })?;
@@ -162,7 +162,7 @@ impl LinuxContainer {
         &mut self,
         process: &mut Process,
         parent_channel: &Channel<Message>,
-        notify_listener: Option<NotifyListener>,
+        notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
         debug!("Second stage process start");
 
@@ -677,7 +677,7 @@ impl Container for LinuxContainer {
                 process,
                 &parent_channel,
                 &fst_stage_channel,
-                notify_listener,
+                &notify_listener,
             )
             .with_context(|| "First stage process encounters errors")?;
             Ok(0)
