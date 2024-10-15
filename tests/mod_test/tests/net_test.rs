@@ -332,7 +332,7 @@ impl ByteCode for VirtioNetHdr {}
 
 fn execute_cmd(cmd: String, check: bool) {
     let args = cmd.split(' ').collect::<Vec<&str>>();
-    if args.len() <= 0 {
+    if args.is_empty() {
         return;
     }
 

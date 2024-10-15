@@ -843,18 +843,14 @@ impl UsbHost {
     }
 
     pub fn abort_host_transfers(&mut self) -> Result<()> {
-        let mut locked_requests = self.requests.lock().unwrap();
-        for _i in 0..locked_requests.len {
-            let mut node = locked_requests.pop_head().unwrap();
-            node.value.abort_req();
-            locked_requests.add_tail(node);
+        for req in self.requests.lock().unwrap().iter_mut() {
+            req.abort_req();
         }
-        drop(locked_requests);
 
         // Max counts of uncompleted request to be handled.
         let mut limit: i32 = 100;
         loop {
-            if self.requests.lock().unwrap().len == 0 {
+            if self.requests.lock().unwrap().is_empty() {
                 return Ok(());
             }
             let timeout = Some(Duration::from_millis(HANDLE_TIMEOUT_MS));
