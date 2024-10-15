@@ -26,8 +26,10 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use caps::{self, CapSet, Capability, CapsHashSet};
+use libc::SIGCHLD;
 use nix::{
     errno::Errno,
+    sched::{clone, CloneFlags},
     unistd::{self, chdir, setresgid, setresuid, Gid, Pid, Uid},
 };
 use rlimit::{setrlimit, Resource, Rlim};
@@ -324,15 +326,35 @@ impl Process {
 }
 
 // Clone a new child process.
-pub fn clone_process<F: FnOnce() -> Result<i32>>(child_name: &str, cb: F) -> Result<Pid> {
+pub fn clone_process<F: FnMut() -> Result<i32>>(child_name: &str, mut cb: F) -> Result<Pid> {
     let mut clone3 = Clone3::default();
-    clone3.exit_signal(libc::SIGCHLD as u64);
+    clone3.exit_signal(SIGCHLD as u64);
 
-    match clone3
-        .call()
-        .map_err(|e| anyhow!("Clone3() error: {}", e))?
-    {
-        0 => {
+    let mut ret = clone3.call();
+    if ret.is_err() {
+        // clone3() may not be supported in the kernel, fallback to clone();
+        let mut stack = [0; 1024 * 1024];
+        ret = clone(
+            Box::new(|| match cb() {
+                Ok(r) => r as isize,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    -1
+                }
+            }),
+            &mut stack,
+            CloneFlags::empty(),
+            Some(SIGCHLD),
+        )
+        .map_err(|e| anyhow!("Clone error: errno {}", e));
+    }
+
+    match ret {
+        Ok(pid) => {
+            if pid.as_raw() != 0 {
+                return Ok(pid);
+            }
+
             prctl::set_name(child_name)
                 .map_err(|e| anyhow!("Failed to set process name: errno {}", e))?;
             let ret = match cb() {
@@ -344,7 +366,7 @@ pub fn clone_process<F: FnOnce() -> Result<i32>>(child_name: &str, cb: F) -> Res
             };
             std::process::exit(ret);
         }
-        pid => Ok(Pid::from_raw(pid)),
+        Err(e) => bail!(e),
     }
 }
 

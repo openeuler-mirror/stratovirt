@@ -12,8 +12,9 @@
 
 use std::os::unix::io::{AsRawFd, RawFd};
 
-use anyhow::{bail, Result};
-use nix::errno::errno;
+use anyhow::{bail, Context, Result};
+use libc::pid_t;
+use nix::{errno::errno, unistd::Pid};
 
 bitflags::bitflags! {
     #[derive(Default)]
@@ -92,7 +93,7 @@ impl<'a> Clone3<'a> {
         self
     }
 
-    pub fn call(&mut self) -> Result<libc::pid_t> {
+    pub fn call(&mut self) -> Result<Pid> {
         let clone_args = CloneArgs {
             flags: self.flags.bits(),
             pid_fd: option_as_mut_ptr(&mut self.pidfd) as u64,
@@ -114,8 +115,11 @@ impl<'a> Clone3<'a> {
             )
         };
         if ret == -1 {
-            bail!("errno {}", errno());
+            bail!("clone3 error: errno {}", errno());
         }
-        Ok(ret as libc::pid_t)
+
+        Ok(Pid::from_raw(
+            pid_t::try_from(ret).with_context(|| "Invalid pid")?,
+        ))
     }
 }
