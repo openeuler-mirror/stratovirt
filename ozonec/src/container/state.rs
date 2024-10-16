@@ -117,3 +117,88 @@ impl State {
         root.join(id).join("state.json")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use fs::{create_dir_all, remove_dir_all};
+    use nix::unistd::getpid;
+
+    use crate::linux::container::tests::init_config;
+    use oci_spec::{
+        linux::{Namespace, NamespaceType},
+        state::ContainerStatus,
+    };
+
+    use super::*;
+
+    fn init_state(root: &Path, id: &str) -> State {
+        let oci_state = OciState {
+            ociVersion: String::from("1.2"),
+            id: String::from(id),
+            status: ContainerStatus::Created,
+            pid: 100,
+            bundle: root.to_string_lossy().to_string(),
+            annotations: HashMap::new(),
+        };
+        State::new(root, root, oci_state, 0, SystemTime::now(), &init_config())
+    }
+
+    #[test]
+    fn test_state_update() {
+        let root = "/tmp/ozonec";
+        remove_dir_all(root).unwrap_or_default();
+        let mut state = init_state(Path::new(root), "test_state_update");
+        state
+            .config
+            .as_mut()
+            .unwrap()
+            .linux
+            .as_mut()
+            .unwrap()
+            .namespaces
+            .push(Namespace {
+                ns_type: NamespaceType::Mount,
+                path: None,
+            });
+        state.pid = getpid().as_raw();
+        state.update();
+
+        for ns in &state
+            .config
+            .as_ref()
+            .unwrap()
+            .linux
+            .as_ref()
+            .unwrap()
+            .namespaces
+        {
+            assert_eq!(
+                ns.path.as_ref().unwrap().to_str().unwrap(),
+                format!(
+                    "/proc/{}/ns/{}",
+                    state.pid,
+                    <NamespaceType as Into<String>>::into(ns.ns_type)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn test_state_load() {
+        let root = "/tmp/ozonec";
+        remove_dir_all(root).unwrap_or_default();
+
+        let state = init_state(Path::new(root), "test_state_load");
+        let dir = PathBuf::from(String::from(root)).join("test_state_load");
+        create_dir_all(&dir).unwrap();
+
+        assert!(state.save().is_ok());
+        assert!(dir.join("state.json").exists());
+        let loaded_state = State::load(Path::new(root), "test_state_load").unwrap();
+        assert_eq!(loaded_state.id, state.id);
+        assert!(state.remove_dir().is_ok());
+        assert!(State::load(Path::new(root), "test_state_load").is_err());
+    }
+}

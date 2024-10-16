@@ -127,7 +127,7 @@ impl LinuxContainer {
         process: &mut Process,
         parent_channel: &Channel<Message>,
         fst_stage_channel: &Channel<Message>,
-        notify_listener: Option<NotifyListener>,
+        notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
         debug!("First stage process start");
 
@@ -146,7 +146,7 @@ impl LinuxContainer {
 
         // Spawn a child process to perform the second stage to initialize container.
         let init_pid = clone_process("ozonec:[2:INIT]", || {
-            self.do_second_stage(process, parent_channel, notify_listener)
+            self.do_second_stage(process, parent_channel, &notify_listener)
                 .with_context(|| "Second stage process encounters errors")?;
             Ok(0)
         })?;
@@ -162,7 +162,7 @@ impl LinuxContainer {
         &mut self,
         process: &mut Process,
         parent_channel: &Channel<Message>,
-        notify_listener: Option<NotifyListener>,
+        notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
         debug!("Second stage process start");
 
@@ -677,7 +677,7 @@ impl Container for LinuxContainer {
                 process,
                 &parent_channel,
                 &fst_stage_channel,
-                notify_listener,
+                &notify_listener,
             )
             .with_context(|| "First stage process encounters errors")?;
             Ok(0)
@@ -790,5 +790,469 @@ impl Container for LinuxContainer {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use std::ffi::CStr;
+
+    use chrono::DateTime;
+    use fs::{read_to_string, remove_dir_all, File};
+    use libc::getdomainname;
+    use nix::sys::stat::stat;
+    use rusty_fork::rusty_fork_test;
+    use unistd::{gethostname, getpid};
+
+    use crate::linux::{
+        mount::Mount, namespace::tests::set_namespace, process::tests::init_oci_process,
+    };
+    use oci_spec::{
+        linux::{LinuxPlatform, Namespace},
+        posix::{Root, User},
+        process::Process as OciProcess,
+        runtime::Mount as OciMount,
+    };
+
+    use super::*;
+
+    pub fn init_config() -> RuntimeConfig {
+        let root = Root {
+            path: String::from("/tmp/ozonec/bundle/rootfs"),
+            readonly: true,
+        };
+        let user = User {
+            uid: 0,
+            gid: 0,
+            umask: None,
+            additionalGids: None,
+        };
+        let process = OciProcess {
+            cwd: String::from("/"),
+            args: Some(vec![String::from("bash")]),
+            env: None,
+            terminal: false,
+            consoleSize: None,
+            rlimits: None,
+            apparmorProfile: None,
+            capabilities: None,
+            noNewPrivileges: None,
+            oomScoreAdj: None,
+            scheduler: None,
+            selinuxLabel: None,
+            ioPriority: None,
+            execCPUAffinity: None,
+            user,
+        };
+        let linux = LinuxPlatform {
+            namespaces: Vec::new(),
+            uidMappings: None,
+            gidMappings: None,
+            timeOffsets: None,
+            devices: None,
+            cgroupsPath: None,
+            rootfsPropagation: None,
+            maskedPaths: None,
+            readonlyPaths: None,
+            mountLabel: None,
+            personality: None,
+            resources: None,
+            rdma: None,
+            unified: None,
+            sysctl: None,
+            seccomp: None,
+            #[cfg(target_arch = "x86_64")]
+            intelRdt: None,
+        };
+        RuntimeConfig {
+            ociVersion: String::from("1.2"),
+            root,
+            mounts: Vec::new(),
+            process,
+            hostname: None,
+            domainname: None,
+            linux: Some(linux),
+            vm: None,
+            hooks: None,
+            annotations: None,
+        }
+    }
+
+    #[test]
+    fn test_linux_container_new() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let config = init_config();
+        let mut exist: bool = false;
+        let container = LinuxContainer::new(
+            &String::from("LinuxContainer_new"),
+            &String::from("/tmp/ozonec"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .unwrap();
+
+        let root = Path::new(&container.root);
+        assert!(root.exists());
+        let root_stat = stat(root).unwrap();
+        assert_eq!(root_stat.st_uid, geteuid().as_raw());
+        assert_eq!(root_stat.st_gid, getegid().as_raw());
+
+        assert!(LinuxContainer::new(
+            &String::from("LinuxContainer_new"),
+            &String::from("/tmp/ozonec"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .is_err());
+        assert_eq!(exist, true);
+    }
+
+    #[test]
+    fn test_validate_config() {
+        let mut config = init_config();
+        config.linux = None;
+        assert!(LinuxContainer::validate_config(&config).is_err());
+
+        let linux = LinuxPlatform {
+            namespaces: Vec::new(),
+            uidMappings: None,
+            gidMappings: None,
+            timeOffsets: None,
+            devices: None,
+            cgroupsPath: None,
+            rootfsPropagation: None,
+            maskedPaths: None,
+            readonlyPaths: None,
+            mountLabel: None,
+            personality: None,
+            resources: None,
+            rdma: None,
+            unified: None,
+            sysctl: None,
+            seccomp: None,
+            #[cfg(target_arch = "x86_64")]
+            intelRdt: None,
+        };
+        config.process.args = None;
+        config.linux = Some(linux);
+        assert!(LinuxContainer::validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn test_load_from_state() {
+        let mut state = State {
+            oci_version: String::from("1.2"),
+            id: String::from("load_from_state"),
+            pid: 0,
+            root: PathBuf::from("/tmp/ozonec/root"),
+            bundle: PathBuf::from("/tmp/ozonec/bundle"),
+            rootfs: String::from("/tmp/ozonec/bundle/rootfs"),
+            start_time: 0,
+            created_time: DateTime::from(SystemTime::now()),
+            config: None,
+        };
+        assert!(LinuxContainer::load_from_state(&state, &None).is_err());
+
+        let config = init_config();
+        state.config = Some(config);
+        assert!(LinuxContainer::load_from_state(&state, &None).is_ok());
+    }
+
+    #[test]
+    fn test_status() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let config = init_config();
+        create_dir_all(&config.root.path).unwrap();
+        let mut exist: bool = false;
+        let mut container = LinuxContainer::new(
+            &String::from("get_container_status"),
+            &String::from("/tmp/ozonec"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .unwrap();
+        container.pid = -1;
+
+        assert_eq!(container.status().unwrap(), ContainerStatus::Creating);
+
+        container.pid = 0;
+        assert_eq!(container.status().unwrap(), ContainerStatus::Stopped);
+
+        container.pid = getpid().as_raw();
+        assert_eq!(container.status().unwrap(), ContainerStatus::Stopped);
+
+        let proc_stat = procfs::process::Process::new(container.pid)
+            .unwrap()
+            .stat()
+            .unwrap();
+        container.start_time = proc_stat.starttime;
+        assert_eq!(container.status().unwrap(), ContainerStatus::Running);
+
+        let notify_socket = PathBuf::from(&container.root).join(NOTIFY_SOCKET);
+        File::create(&notify_socket).unwrap();
+        assert_eq!(container.status().unwrap(), ContainerStatus::Created);
+    }
+
+    #[test]
+    fn test_is_namespace_set() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let mut config = init_config();
+        config.linux.as_mut().unwrap().namespaces.push(Namespace {
+            ns_type: NamespaceType::Mount,
+            path: None,
+        });
+        let mut exist = false;
+        let container = LinuxContainer::new(
+            &String::from("test_is_namespace_set"),
+            &String::from("/tmp/ozonec/test_is_namespace_set"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .unwrap();
+
+        assert!(container.is_namespace_set(NamespaceType::Mount).unwrap());
+        assert!(!container.is_namespace_set(NamespaceType::User).unwrap());
+    }
+
+    #[test]
+    #[ignore = "unshare may not be permitted"]
+    fn test_set_pid_namespace() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let mut config = init_config();
+        config.linux.as_mut().unwrap().namespaces.push(Namespace {
+            ns_type: NamespaceType::Pid,
+            path: None,
+        });
+        let mut exist = false;
+        let container = LinuxContainer::new(
+            &String::from("test_set_pid_namespace"),
+            &String::from("/tmp/ozonec/test_set_pid_namespace"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .unwrap();
+
+        assert!(container.set_pid_namespace().is_ok());
+    }
+
+    #[test]
+    #[ignore = "unshare may not be permitted"]
+    fn test_set_id_mappings() {
+        remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+        let mut config = init_config();
+        let linux = config.linux.as_mut().unwrap();
+        linux.namespaces = vec![Namespace {
+            ns_type: NamespaceType::User,
+            path: None,
+        }];
+        linux.uidMappings = Some(vec![IdMapping {
+            containerID: 0,
+            hostID: 0,
+            size: 1000,
+        }]);
+        linux.gidMappings = Some(vec![IdMapping {
+            containerID: 0,
+            hostID: 0,
+            size: 1000,
+        }]);
+        let mut exist = false;
+        let container = LinuxContainer::new(
+            &String::from("test_set_id_mappings"),
+            &String::from("/tmp/ozonec/test_set_id_mappings"),
+            &config,
+            &None,
+            &mut exist,
+        )
+        .unwrap();
+
+        let fst_channel = Channel::<Message>::new().unwrap();
+        let sec_channel = Channel::<Message>::new().unwrap();
+        let child = clone_process("test_set_id_mappings", || {
+            let process = Process::new(&init_oci_process(), false);
+            assert!(container
+                .set_user_namespace(&fst_channel, &sec_channel, &process)
+                .is_ok());
+            Ok(1)
+        })
+        .unwrap();
+
+        assert!(container
+            .set_id_mappings(&fst_channel, &sec_channel, &child)
+            .is_ok());
+        let path = format!("/proc/{}/setgroups", child.as_raw().to_string());
+        let setgroups = fs::read_to_string(path).unwrap();
+        assert_eq!(setgroups.trim(), "deny");
+        let path = format!("/proc/{}/uid_map", child.as_raw().to_string());
+        let uid_map = fs::read_to_string(path).unwrap();
+        let mut iter = uid_map.split_ascii_whitespace();
+        assert_eq!(iter.next(), Some("0"));
+        assert_eq!(iter.next(), Some("0"));
+        assert_eq!(iter.next(), Some("1000"));
+        assert_eq!(iter.next(), None);
+        let path = format!("/proc/{}/gid_map", child.as_raw().to_string());
+        let gid_map = fs::read_to_string(path).unwrap();
+        let mut iter = gid_map.split_ascii_whitespace();
+        assert_eq!(iter.next(), Some("0"));
+        assert_eq!(iter.next(), Some("0"));
+        assert_eq!(iter.next(), Some("1000"));
+        assert_eq!(iter.next(), None);
+
+        match waitpid(child, None) {
+            Ok(WaitStatus::Exited(_, s)) => {
+                assert_eq!(s, 1);
+            }
+            Ok(_) => (),
+            Err(e) => {
+                panic!("Failed to waitpid for child process: {e}");
+            }
+        }
+    }
+
+    rusty_fork_test! {
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_set_readonly_paths() {
+            remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+            set_namespace(NamespaceType::Mount);
+            let root = PathBuf::from("/tmp/ozonec/test_set_readonly_paths");
+            let mut config = init_config();
+            let path = root.to_string_lossy().to_string();
+            config.linux.as_mut().unwrap().readonlyPaths = Some(vec![path.clone()]);
+            let mut exist = false;
+            let container = LinuxContainer::new(
+                &String::from("test_set_readonly_paths"),
+                &root.to_string_lossy().to_string(),
+                &config,
+                &None,
+                &mut exist,
+            )
+            .unwrap();
+            File::create(root.join("test")).unwrap();
+
+            assert!(container.set_readonly_paths().is_ok());
+            let path = PathBuf::from(path).join("test");
+            assert!(File::create(&path).is_err());
+        }
+
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_set_masked_paths() {
+            remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+            set_namespace(NamespaceType::Mount);
+            let root = PathBuf::from("/tmp/ozonec/test_set_masked_paths");
+            let mut config = init_config();
+            config.linux.as_mut().unwrap().maskedPaths = Some(vec![root.to_string_lossy().to_string()]);
+            let mut exist = false;
+            let container = LinuxContainer::new(
+                &String::from("test_set_masked_paths"),
+                &root.to_string_lossy().to_string(),
+                &config,
+                &None,
+                &mut exist,
+            )
+            .unwrap();
+
+            File::create(root.join("test")).unwrap();
+            assert!(container.set_masked_paths().is_ok());
+            assert!(!root.join("test").exists());
+        }
+
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_set_rest_namespaces() {
+            remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+            let root = PathBuf::from("/tmp/ozonec/test_set_rest_namespaces");
+            let mut config = init_config();
+            config.linux.as_mut().unwrap().namespaces = vec![
+                Namespace {
+                    ns_type: NamespaceType::User,
+                    path: None,
+                },
+                Namespace {
+                    ns_type: NamespaceType::Uts,
+                    path: None,
+                },
+            ];
+            config.hostname = Some(String::from("test_set_rest_namespaces"));
+            config.domainname = Some(String::from("test_set_rest_namespaces"));
+            let mut exist = false;
+            let container = LinuxContainer::new(
+                &String::from("test_set_rest_namespaces"),
+                &root.to_string_lossy().to_string(),
+                &config,
+                &None,
+                &mut exist,
+            )
+            .unwrap();
+
+            assert!(container.set_rest_namespaces().is_ok());
+            assert_eq!(
+                gethostname().unwrap().to_str().unwrap(),
+                "test_set_rest_namespaces"
+            );
+            let len = 100;
+            let mut domain: Vec<u8> = Vec::with_capacity(len);
+            unsafe {
+                getdomainname(domain.as_mut_ptr().cast(), len);
+                // Ensure always null-terminated.
+                domain.as_mut_ptr().wrapping_add(len - 1).write(0);
+                let len = CStr::from_ptr(domain.as_ptr().cast()).to_bytes().len();
+                domain.set_len(len);
+            }
+            assert_eq!(String::from_utf8_lossy(&domain), "test_set_rest_namespaces");
+        }
+
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_set_sysctl_parameters() {
+            remove_dir_all("/tmp/ozonec").unwrap_or_default();
+
+            set_namespace(NamespaceType::Mount);
+            let root = PathBuf::from("/tmp/ozonec/test_set_sysctl_parameters");
+            let mut config = init_config();
+            config.linux.as_mut().unwrap().sysctl = Some(HashMap::new());
+            let sysctl = &mut config.linux.as_mut().unwrap().sysctl;
+            sysctl
+                .as_mut()
+                .unwrap()
+                .insert(String::from("vm.oom_dump_tasks"), String::from("0"));
+
+            let mut exist = false;
+            let container = LinuxContainer::new(
+                &String::from("test_set_sysctl_parameters"),
+                &root.to_string_lossy().to_string(),
+                &config,
+                &None,
+                &mut exist,
+            )
+            .unwrap();
+
+            let mounts = vec![OciMount {
+                destination: String::from("/proc"),
+                source: Some(String::from("proc")),
+                options: None,
+                fs_type: Some(String::from("proc")),
+                uidMappings: None,
+                gidMappings: None,
+            }];
+            let mnt = Mount::new(&root);
+            mnt.do_mounts(&mounts, &None).unwrap();
+
+            assert!(container.set_sysctl_parameters().is_ok());
+            assert_eq!(read_to_string("/proc/sys/vm/oom_dump_tasks").unwrap().trim(), "0");
+        }
     }
 }

@@ -10,8 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod container;
+
 mod apparmor;
-mod container;
 mod device;
 mod mount;
 mod namespace;
@@ -23,4 +24,6 @@ mod terminal;
 
 pub use container::LinuxContainer;
 pub use notify_socket::NotifyListener;
+#[allow(unused_imports)]
+pub use process::clone_process;
 pub use process::Process;

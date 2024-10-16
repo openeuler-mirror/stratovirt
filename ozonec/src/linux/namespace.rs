@@ -64,3 +64,78 @@ impl NsController {
         Ok(self.namespaces.get(&clone_flags))
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use std::{path::PathBuf, thread::sleep, time::Duration};
+
+    use nix::sys::{
+        signal::{self, Signal},
+        wait::{waitpid, WaitStatus},
+    };
+
+    use crate::linux::process::clone_process;
+
+    use super::*;
+
+    fn init_ns_controller(ns_type: NamespaceType) -> NsController {
+        let mut ns_ctrl = NsController {
+            namespaces: HashMap::new(),
+        };
+        let ns = Namespace {
+            ns_type,
+            path: None,
+        };
+        ns_ctrl.namespaces.insert(ns_type.try_into().unwrap(), ns);
+        ns_ctrl
+    }
+
+    pub fn set_namespace(ns_type: NamespaceType) {
+        let ns_ctrl = init_ns_controller(ns_type);
+        ns_ctrl.set_namespace(ns_type).unwrap();
+    }
+
+    #[test]
+    #[ignore = "unshare may not be permitted"]
+    fn test_set_namespace() {
+        let mut ns_ctrl = init_ns_controller(NamespaceType::Mount);
+        let fst_child = clone_process("test_set_namespace_with_unshare", || {
+            assert!(ns_ctrl.set_namespace(NamespaceType::Mount).is_ok());
+            sleep(Duration::from_secs(10));
+            Ok(1)
+        })
+        .unwrap();
+
+        let ns_path = PathBuf::from(format!("/proc/{}/ns/mnt", fst_child.as_raw()));
+        ns_ctrl
+            .namespaces
+            .get_mut(&CloneFlags::CLONE_NEWNS)
+            .unwrap()
+            .path = Some(ns_path);
+        let sec_child = clone_process("test_set_namespace_with_setns", || {
+            assert!(ns_ctrl.set_namespace(NamespaceType::Mount).is_ok());
+            Ok(1)
+        })
+        .unwrap();
+
+        match waitpid(sec_child, None) {
+            Ok(WaitStatus::Exited(_, s)) => {
+                assert_eq!(s, 1);
+            }
+            Ok(_) => (),
+            Err(e) => {
+                panic!("Failed to waitpid for unshare process: {e}");
+            }
+        }
+        signal::kill(fst_child.clone(), Signal::SIGKILL).unwrap();
+        match waitpid(fst_child, None) {
+            Ok(WaitStatus::Exited(_, s)) => {
+                assert_eq!(s, 1);
+            }
+            Ok(_) => (),
+            Err(e) => {
+                panic!("Failed to waitpid for setns process: {e}");
+            }
+        }
+    }
+}

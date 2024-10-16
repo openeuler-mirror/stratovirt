@@ -27,6 +27,7 @@ use procfs::process::{MountInfo, Process};
 use crate::utils::{openat2_in_root, proc_fd_path, OzonecErr};
 use oci_spec::runtime::Mount as OciMount;
 
+#[derive(PartialEq, Debug)]
 enum CgroupType {
     CgroupV1,
     CgroupV2,
@@ -269,5 +270,185 @@ impl Mount {
             return Ok(CgroupType::CgroupV2);
         }
         Ok(CgroupType::CgroupV1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusty_fork::rusty_fork_test;
+
+    use crate::linux::namespace::tests::set_namespace;
+    use oci_spec::linux::NamespaceType;
+
+    use super::*;
+
+    fn init_mount(rootfs: &str) -> Mount {
+        let path = PathBuf::from(rootfs);
+        create_dir_all(&path).unwrap();
+        Mount::new(&path)
+    }
+
+    #[test]
+    fn test_is_mounted_sysfs_dir() {
+        let mut path = PathBuf::from("/test");
+        let mut mnt = Mount::new(&path);
+        assert!(!mnt.is_mounted_sysfs_dir(path.to_str().unwrap()));
+
+        path = PathBuf::from("/sys");
+        mnt = Mount::new(&path);
+        assert!(mnt.is_mounted_sysfs_dir(path.to_str().unwrap()));
+    }
+
+    #[test]
+    fn test_cgroup_type() {
+        let rootfs = PathBuf::from("/tmp/ozonec/test_cgroup_type");
+        let mnt = Mount::new(&rootfs);
+        let cgroup_path = Path::new("/sys/fs/cgroup");
+
+        if !cgroup_path.exists() {
+            assert!(mnt.cgroup_type().is_err());
+        } else {
+            let st = statfs(cgroup_path).unwrap();
+            if st.filesystem_type() == CGROUP2_SUPER_MAGIC {
+                assert_eq!(mnt.cgroup_type().unwrap(), CgroupType::CgroupV2);
+            } else {
+                assert_eq!(mnt.cgroup_type().unwrap(), CgroupType::CgroupV1);
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_mount_flag_data() {
+        let rootfs = PathBuf::from("/test_get_mount_flag_data");
+        let mnt = Mount::new(&rootfs);
+        let mut oci_mnt = OciMount {
+            destination: String::new(),
+            source: None,
+            options: Some(vec![
+                String::from("defaults"),
+                String::from("rw"),
+                String::from("suid"),
+                String::from("dev"),
+                String::from("exec"),
+                String::from("async"),
+                String::from("nomand"),
+                String::from("atime"),
+                String::from("diratime"),
+                String::from("norelatime"),
+                String::from("nostrictatime"),
+            ]),
+            fs_type: None,
+            uidMappings: None,
+            gidMappings: None,
+        };
+
+        let (flags, _data) = mnt.get_mount_flag_data(&oci_mnt);
+        assert_eq!(flags, MsFlags::empty());
+
+        oci_mnt.options = Some(vec![
+            String::from("ro"),
+            String::from("nosuid"),
+            String::from("nodev"),
+            String::from("noexec"),
+            String::from("sync"),
+            String::from("dirsync"),
+            String::from("remount"),
+            String::from("mand"),
+            String::from("noatime"),
+            String::from("nodiratime"),
+            String::from("bind"),
+            String::from("unbindable"),
+            String::from("private"),
+            String::from("shared"),
+            String::from("slave"),
+            String::from("relatime"),
+            String::from("strictatime"),
+        ]);
+        let (flags, _data) = mnt.get_mount_flag_data(&oci_mnt);
+        assert_eq!(
+            flags,
+            MsFlags::MS_RDONLY
+                | MsFlags::MS_NOSUID
+                | MsFlags::MS_NODEV
+                | MsFlags::MS_NOEXEC
+                | MsFlags::MS_SYNCHRONOUS
+                | MsFlags::MS_DIRSYNC
+                | MsFlags::MS_REMOUNT
+                | MsFlags::MS_MANDLOCK
+                | MsFlags::MS_NOATIME
+                | MsFlags::MS_NODIRATIME
+                | MsFlags::MS_BIND
+                | MsFlags::MS_UNBINDABLE
+                | MsFlags::MS_PRIVATE
+                | MsFlags::MS_SHARED
+                | MsFlags::MS_SLAVE
+                | MsFlags::MS_RELATIME
+                | MsFlags::MS_STRICTATIME
+        );
+
+        oci_mnt.options = Some(vec![String::from("rbind")]);
+        let (flags, _data) = mnt.get_mount_flag_data(&oci_mnt);
+        assert_eq!(flags, MsFlags::MS_BIND | MsFlags::MS_REC);
+        oci_mnt.options = Some(vec![String::from("runbindable")]);
+        let (flags, _data) = mnt.get_mount_flag_data(&oci_mnt);
+        assert_eq!(flags, MsFlags::MS_UNBINDABLE | MsFlags::MS_REC);
+        oci_mnt.options = Some(vec![String::from("rprivate")]);
+        let (flags, _data) = mnt.get_mount_flag_data(&oci_mnt);
+        assert_eq!(flags, MsFlags::MS_PRIVATE | MsFlags::MS_REC);
+        oci_mnt.options = Some(vec![String::from("rshared")]);
+        let (flags, _data) = mnt.get_mount_flag_data(&oci_mnt);
+        assert_eq!(flags, MsFlags::MS_SHARED | MsFlags::MS_REC);
+        oci_mnt.options = Some(vec![String::from("rslave")]);
+        let (flags, _data) = mnt.get_mount_flag_data(&oci_mnt);
+        assert_eq!(flags, MsFlags::MS_SLAVE | MsFlags::MS_REC);
+    }
+
+    rusty_fork_test! {
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_do_mounts_cgroup() {
+            set_namespace(NamespaceType::Mount);
+
+            let mounts = vec![OciMount {
+                destination: String::from("/sys/fs/cgroup"),
+                source: Some(String::from("cgroup")),
+                options: Some(vec![
+                    String::from("nosuid"),
+                    String::from("noexec"),
+                    String::from("nodev"),
+                    String::from("relatime"),
+                    String::from("ro"),
+                ]),
+                fs_type: Some(String::from("cgroup")),
+                uidMappings: None,
+                gidMappings: None,
+            }];
+            let mnt = init_mount("/tmp/ozonec/test_do_mounts_cgroup");
+
+            assert!(mnt.do_mounts(&mounts, &None).is_ok());
+            assert!(mnt.rootfs.join("sys/fs/cgroup").exists());
+        }
+
+        #[test]
+        #[ignore = "unshare may not be permitted"]
+        fn test_do_mounts_bind() {
+            set_namespace(NamespaceType::Mount);
+
+            let mounts = vec![OciMount {
+                destination: String::from("/dest"),
+                source: Some(String::from("/tmp/ozonec/test_do_mounts_bind/source")),
+                options: Some(vec![
+                    String::from("rbind")
+                ]),
+                fs_type: None,
+                uidMappings: None,
+                gidMappings: None,
+            }];
+            let mnt = init_mount("/tmp/ozonec/test_do_mounts_bind");
+            create_dir_all(&mnt.rootfs.join("source")).unwrap();
+
+            assert!(mnt.do_mounts(&mounts, &None).is_ok());
+            assert!(mnt.rootfs.join("dest").exists());
+        }
     }
 }
