@@ -19,7 +19,6 @@ teardown_file()
 {
     ozonec --root "$ROOT_DIR" kill "$CONTAINER_ID" 9
     ozonec --root "$ROOT_DIR" delete "$CONTAINER_ID"
-    remove_test_dir
 }
 
 @test "ozonec exec" {
