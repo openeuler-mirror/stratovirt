@@ -401,8 +401,6 @@ pub struct UsbHost {
     /// Configuration interface number.
     ifs_num: u8,
     ifs: [InterfaceStatus; USB_MAX_INTERFACES as usize],
-    /// Callback for release dev to Host after the vm exited.
-    exit: Option<Arc<ExitNotifier>>,
     /// All pending asynchronous usb request.
     requests: Arc<Mutex<List<UsbHostRequest>>>,
     /// ISO queues corresponding to all endpoints.
@@ -439,7 +437,6 @@ impl UsbHost {
             ifs_num: 0,
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
             base: UsbDeviceBase::new(id, USB_HOST_BUFFER_LEN),
-            exit: None,
             requests: Arc::new(Mutex::new(List::new())),
             iso_queues: Arc::new(Mutex::new(LinkedList::new())),
             iso_urb_frames,
@@ -683,19 +680,6 @@ impl UsbHost {
         trace::usb_host_open_success(self.config.hostbus, self.config.hostaddr);
 
         Ok(())
-    }
-
-    fn register_exit(&mut self) {
-        let exit = self as *const Self as u64;
-        let exit_notifier = Arc::new(move || {
-            let usb_host =
-                // SAFETY: This callback is deleted after the device hot-unplug, so it is called only
-                // when the vm exits abnormally.
-                &mut unsafe { std::slice::from_raw_parts_mut(exit as *mut UsbHost, 1) }[0];
-            usb_host.release_dev_to_host();
-        }) as Arc<ExitNotifier>;
-        self.exit = Some(exit_notifier.clone());
-        TempCleaner::add_exit_notifier(self.device_id().to_string(), exit_notifier);
     }
 
     fn release_interfaces(&mut self) {
@@ -1053,6 +1037,17 @@ impl EventNotifierHelper for UsbHost {
     }
 }
 
+fn register_exit(usbhost: Arc<Mutex<UsbHost>>) {
+    let usbhost_cloned = usbhost.clone();
+    let exit_notifier = Arc::new(move || {
+        usbhost_cloned.lock().unwrap().release_dev_to_host();
+    }) as Arc<ExitNotifier>;
+    TempCleaner::add_exit_notifier(
+        usbhost.lock().unwrap().device_id().to_string(),
+        exit_notifier,
+    );
+}
+
 impl UsbDevice for UsbHost {
     gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
@@ -1065,7 +1060,7 @@ impl UsbDevice for UsbHost {
         let notifiers = EventNotifierHelper::internal_notifiers(usbhost.clone());
         register_event_helper(notifiers, None, &mut usbhost.lock().unwrap().libevt)?;
         // UsbHost addr is changed after Arc::new, so so the registration must be here.
-        usbhost.lock().unwrap().register_exit();
+        register_exit(usbhost.clone());
 
         Ok(usbhost)
     }
