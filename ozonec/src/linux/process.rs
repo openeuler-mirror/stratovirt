@@ -34,10 +34,7 @@ use nix::{
 };
 use rlimit::{setrlimit, Resource, Rlim};
 
-use super::{
-    apparmor,
-    terminal::{connect_stdio, setup_console},
-};
+use super::{apparmor, terminal::setup_console};
 use crate::utils::{prctl, Clone3, OzonecErr};
 use oci_spec::{linux::IoPriClass, process::Process as OciProcess};
 
@@ -76,14 +73,6 @@ impl Process {
             }
             setup_console(&console_fd.unwrap().as_raw_fd(), mount)
                 .with_context(|| "Failed to setup console")?;
-        } else {
-            connect_stdio(
-                self.stdin.as_ref().unwrap(),
-                self.stdout.as_ref().unwrap(),
-                self.stderr.as_ref().unwrap(),
-            )?;
-            // SAFETY: FFI call with valid arguments.
-            unsafe { libc::ioctl(0, libc::TIOCSCTTY) };
         }
         Ok(())
     }
