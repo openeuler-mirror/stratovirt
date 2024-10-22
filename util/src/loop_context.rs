@@ -557,13 +557,6 @@ impl EventLoopContext {
     }
 
     pub fn iothread_run(&mut self) -> Result<bool> {
-        if let Some(manager) = &self.manager {
-            if manager.lock().unwrap().loop_should_exit() {
-                manager.lock().unwrap().loop_cleanup()?;
-                return Ok(false);
-            }
-        }
-
         let min_timeout_ns = self.timers_min_duration();
         if min_timeout_ns.is_none() {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
@@ -720,6 +713,13 @@ impl EventLoopContext {
         self.run_timers();
         self.clear_gc();
         Ok(true)
+    }
+
+    pub fn clean_event_loop(&mut self) -> Result<()> {
+        if let Some(manager) = &self.manager {
+            manager.lock().unwrap().loop_cleanup()?;
+        }
+        Ok(())
     }
 }
 
