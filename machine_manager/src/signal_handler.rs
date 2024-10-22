@@ -50,7 +50,7 @@ pub fn set_signal(num: c_int) {
         unsafe {
             RECEIVED_SIGNAL.store(num, Ordering::SeqCst);
         }
-        EventLoop::kick_all();
+        EventLoop::get_ctx(None).unwrap().kick();
     }
 }
 

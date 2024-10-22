@@ -444,6 +444,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     if let Err(e) = qcow2.lock().unwrap().flush() {
                         error!("Failed to flush qcow2 {:?}", e);
                     }
+                    info!("Flush qcow2 {} metadata success.", cloned_drive_id);
                 }
             }) as Arc<ExitNotifier>;
             TempCleaner::add_exit_notifier(prop.id.clone(), exit_notifier);

@@ -2324,7 +2324,7 @@ fn handle_destroy_request(vm: &Arc<Mutex<dyn MachineOps>>) -> bool {
     }
 
     info!("vm destroy");
-    EventLoop::kick_all();
+    EventLoop::get_ctx(None).unwrap().kick();
 
     true
 }
