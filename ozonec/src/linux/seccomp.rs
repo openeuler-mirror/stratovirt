@@ -31,7 +31,7 @@ fn parse_action(action: OciSeccompAction, errno: Option<u32>) -> ScmpAction {
         OciSeccompAction::ScmpActTrace => ScmpAction::Trace(errno as u16),
         OciSeccompAction::ScmpActLog => ScmpAction::Log,
         OciSeccompAction::ScmpActAllow => ScmpAction::Allow,
-        _ => ScmpAction::KillThread,
+        OciSeccompAction::ScmpActNotify => ScmpAction::Notify,
     }
 }
 
@@ -127,6 +127,62 @@ mod tests {
     use oci_spec::linux::{SeccompSyscall, SeccompSyscallArg};
 
     use super::*;
+
+    #[test]
+    fn test_parse_action() {
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActKill, None),
+            ScmpAction::KillThread
+        );
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActKillProcess, None),
+            ScmpAction::KillProcess
+        );
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActTrap, None),
+            ScmpAction::Trap
+        );
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActErrno, Some(1)),
+            ScmpAction::Errno(1)
+        );
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActTrace, Some(1)),
+            ScmpAction::Trace(1)
+        );
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActLog, None),
+            ScmpAction::Log
+        );
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActAllow, None),
+            ScmpAction::Allow
+        );
+        assert_eq!(
+            parse_action(OciSeccompAction::ScmpActNotify, None),
+            ScmpAction::Notify
+        );
+    }
+
+    #[test]
+    fn test_parse_cmp() {
+        assert_eq!(parse_cmp(SeccompOp::ScmpCmpNe, 0), ScmpCompareOp::NotEqual);
+        assert_eq!(parse_cmp(SeccompOp::ScmpCmpLt, 0), ScmpCompareOp::Less);
+        assert_eq!(
+            parse_cmp(SeccompOp::ScmpCmpLe, 0),
+            ScmpCompareOp::LessOrEqual
+        );
+        assert_eq!(parse_cmp(SeccompOp::ScmpCmpEq, 0), ScmpCompareOp::Equal);
+        assert_eq!(
+            parse_cmp(SeccompOp::ScmpCmpGe, 0),
+            ScmpCompareOp::GreaterEqual
+        );
+        assert_eq!(parse_cmp(SeccompOp::ScmpCmpGt, 0), ScmpCompareOp::Greater);
+        assert_eq!(
+            parse_cmp(SeccompOp::ScmpCmpMaskedEq, 1),
+            ScmpCompareOp::MaskedEqual(1)
+        );
+    }
 
     #[test]
     fn test_check_seccomp() {
