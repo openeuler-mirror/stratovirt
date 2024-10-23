@@ -131,8 +131,6 @@ impl LinuxContainer {
     ) -> Result<()> {
         debug!("First stage process start");
 
-        self.set_user_namespace(parent_channel, fst_stage_channel, process)?;
-
         fst_stage_channel
             .receiver
             .close()
@@ -141,6 +139,7 @@ impl LinuxContainer {
         process
             .set_rlimits()
             .with_context(|| "Failed to set rlimit")?;
+        self.set_user_namespace(parent_channel, fst_stage_channel, process)?;
         // New pid namespace goes intto effect in cloned child processes.
         self.set_pid_namespace()?;
 
