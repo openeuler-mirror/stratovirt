@@ -85,7 +85,7 @@ impl EventLoop {
                                 id: id.to_string(),
                             };
                             IOTHREADS.lock().unwrap().push(iothread_info);
-                            while let Ok(_) = ctx.iothread_run() {
+                            while ctx.iothread_run().is_ok() {
                                 // If is_cleaned() is true, it means the main thread will exit.
                                 // So, exit the iothread.
                                 if TempCleaner::is_cleaned() {
