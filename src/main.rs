@@ -117,6 +117,7 @@ fn run() -> Result<()> {
             info!("MainLoop over, Vm exit");
             // clean temporary file
             TempCleaner::clean();
+            EventLoop::loop_clean();
             handle_signal();
         }
         Err(ref e) => {
@@ -124,6 +125,7 @@ fn run() -> Result<()> {
             error!("{}", format!("{:?}\r\n", e));
             // clean temporary file
             TempCleaner::clean();
+            EventLoop::loop_clean();
             exit_with_code(VM_EXIT_GENE_ERR);
         }
     }
@@ -228,6 +230,5 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     machine::vm_run(&vm, cmd_args).with_context(|| "Failed to start VM.")?;
 
     EventLoop::loop_run().with_context(|| "MainLoop exits unexpectedly: error occurs")?;
-    EventLoop::loop_clean();
     Ok(())
 }

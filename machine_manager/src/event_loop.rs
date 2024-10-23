@@ -16,12 +16,13 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::{process, thread};
 
 use anyhow::{bail, Result};
-use log::info;
+use log::{error, info};
 
 use super::config::IothreadConfig;
 use crate::machine::IOTHREADS;
 use crate::qmp::qmp_schema::IothreadInfo;
 use crate::signal_handler::get_signal;
+use crate::temp_cleaner::TempCleaner;
 use util::loop_context::{
     gen_delete_notifiers, get_notifiers_fds, EventLoopContext, EventLoopManager, EventNotifier,
 };
@@ -84,10 +85,15 @@ impl EventLoop {
                                 id: id.to_string(),
                             };
                             IOTHREADS.lock().unwrap().push(iothread_info);
-                            while let Ok(ret) = ctx.iothread_run() {
-                                if !ret || get_signal() != 0 {
+                            while let Ok(_) = ctx.iothread_run() {
+                                // If is_cleaned() is true, it means the main thread will exit.
+                                // So, exit the iothread.
+                                if TempCleaner::is_cleaned() {
                                     break;
                                 }
+                            }
+                            if let Err(e) = ctx.clean_event_loop() {
+                                error!("Failed to clean event loop {:?}", e);
                             }
                             ctx.thread_exit_barrier.wait();
                         })?;
@@ -167,12 +173,10 @@ impl EventLoop {
                     let sig_num = get_signal();
                     if sig_num != 0 {
                         info!("MainLoop exits due to receive signal {}", sig_num);
-                        event_loop.main_loop.thread_exit_barrier.wait();
                         return Ok(());
                     }
                     if !event_loop.main_loop.run()? {
                         info!("MainLoop exits due to guest internal operation.");
-                        event_loop.main_loop.thread_exit_barrier.wait();
                         return Ok(());
                     }
                 }
@@ -183,21 +187,24 @@ impl EventLoop {
     }
 
     pub fn loop_clean() {
+        EventLoop::kick_iothreads();
         // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
         // accessing.
         unsafe {
+            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
+                event_loop.main_loop.thread_exit_barrier.wait();
+            }
             GLOBAL_EVENT_LOOP = None;
         }
     }
 
-    pub fn kick_all() {
+    pub fn kick_iothreads() {
         // SAFETY: All concurrently accessed data of EventLoopContext is protected.
         unsafe {
             if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
                 for (_name, io_thread) in event_loop.io_threads.iter_mut() {
                     io_thread.kick();
                 }
-                event_loop.main_loop.kick();
             }
         }
     }

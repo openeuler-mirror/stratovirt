@@ -553,17 +553,11 @@ impl EventLoopContext {
             }
         }
 
-        self.epoll_wait_manager(self.timers_min_duration())
+        self.epoll_wait_manager(self.timers_min_duration())?;
+        Ok(true)
     }
 
-    pub fn iothread_run(&mut self) -> Result<bool> {
-        if let Some(manager) = &self.manager {
-            if manager.lock().unwrap().loop_should_exit() {
-                manager.lock().unwrap().loop_cleanup()?;
-                return Ok(false);
-            }
-        }
-
+    pub fn iothread_run(&mut self) -> Result<()> {
         let min_timeout_ns = self.timers_min_duration();
         if min_timeout_ns.is_none() {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
@@ -579,7 +573,8 @@ impl EventLoopContext {
                 }
             }
         }
-        self.epoll_wait_manager(min_timeout_ns)
+        self.epoll_wait_manager(min_timeout_ns)?;
+        Ok(())
     }
 
     /// Call the function given by `func` after `delay` time.
@@ -658,7 +653,7 @@ impl EventLoopContext {
         }
     }
 
-    fn epoll_wait_manager(&mut self, mut time_out: Option<Duration>) -> Result<bool> {
+    fn epoll_wait_manager(&mut self, mut time_out: Option<Duration>) -> Result<()> {
         let need_kick = !(time_out.is_some() && *time_out.as_ref().unwrap() == Duration::ZERO);
         if need_kick {
             self.kick_me.store(true, Ordering::SeqCst);
@@ -719,7 +714,14 @@ impl EventLoopContext {
 
         self.run_timers();
         self.clear_gc();
-        Ok(true)
+        Ok(())
+    }
+
+    pub fn clean_event_loop(&mut self) -> Result<()> {
+        if let Some(manager) = &self.manager {
+            manager.lock().unwrap().loop_cleanup()?;
+        }
+        Ok(())
     }
 }
 
