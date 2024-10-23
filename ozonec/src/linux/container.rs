@@ -480,13 +480,15 @@ impl LinuxContainer {
     fn set_rest_namespaces(&self) -> Result<()> {
         let ns_config = &self.config.linux.as_ref().unwrap().namespaces;
         let ns_controller: NsController = ns_config.clone().try_into()?;
+        let mut mnt_ns = false;
 
         for ns in ns_config {
             match ns.ns_type {
                 // User namespace and pid namespace have been set in the first stage.
                 // Mount namespace is going to be set later to avoid failure with
                 // existed namespaces.
-                NamespaceType::User | NamespaceType::Pid | NamespaceType::Mount => (),
+                NamespaceType::User | NamespaceType::Pid => (),
+                NamespaceType::Mount => mnt_ns = true,
                 _ => ns_controller.set_namespace(ns.ns_type).with_context(|| {
                     format!(
                         "Failed to set {} namespace",
@@ -518,9 +520,11 @@ impl LinuxContainer {
             }
         }
 
-        ns_controller
-            .set_namespace(NamespaceType::Mount)
-            .with_context(|| "Failed to set mount namespace")?;
+        if mnt_ns {
+            ns_controller
+                .set_namespace(NamespaceType::Mount)
+                .with_context(|| "Failed to set mount namespace")?;
+        }
         Ok(())
     }
 
