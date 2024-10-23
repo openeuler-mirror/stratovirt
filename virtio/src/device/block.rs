@@ -1448,6 +1448,7 @@ mod tests {
     use machine_manager::config::{
         str_slip_to_clap, IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
     };
+    use machine_manager::temp_cleaner::TempCleaner;
 
     const QUEUE_NUM_BLK: usize = 1;
     const CONFIG_SPACE_SIZE: usize = 60;
@@ -1628,6 +1629,7 @@ mod tests {
     // io request will be handled by this thread.
     #[test]
     fn test_iothread() {
+        TempCleaner::object_init();
         let thread_name = "io1".to_string();
 
         // spawn io thread
@@ -1785,6 +1787,7 @@ mod tests {
                 break;
             }
         }
+        TempCleaner::clean();
         EventLoop::loop_clean();
     }
 }
