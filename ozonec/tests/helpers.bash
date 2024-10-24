@@ -13,7 +13,7 @@ function update_config()
 function setup_bundle()
 {
     # Directory for each container.
-    TEST_DIR=$(mktemp -d "$BATS_RUN_TMPDIR/ozonec.XXXXXX")
+    export TEST_DIR=$(mktemp -d "$BATS_RUN_TMPDIR/ozonec.XXXXXX")
     chmod a+x "$TEST_DIR" "$BATS_RUN_TMPDIR"
 
     local bundle="$BATS_TEST_DIRNAME/bundle.tar.gz"
@@ -21,9 +21,13 @@ function setup_bundle()
     cd "$TEST_DIR/bundle"
 }
 
-function remove_test_dir()
+function setup_pty_server()
 {
-    rm -rf "$TEST_DIR"
+    export CONSOLE_PATH="$TEST_DIR/console.sock"
+    rm -f $CONSOLE_PATH
+    # Fork twice to avoid sending SIGTTIN/SIGTTOU to pty-server.
+    # --no-stdin option is set to avoid SIGHUP sent to ozonec.
+    (pty-server --no-stdin $CONSOLE_PATH > $TEST_DIR/console.log &) &
 }
 
 function check_container_status() {

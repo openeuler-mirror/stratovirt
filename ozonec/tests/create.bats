@@ -7,11 +7,6 @@ setup_file()
     setup_bundle
 }
 
-teardown_file()
-{
-    remove_test_dir
-}
-
 setup()
 {
     CONTAINER_ID=$(uuidgen)
