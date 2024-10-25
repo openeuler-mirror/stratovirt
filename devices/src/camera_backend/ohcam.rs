@@ -29,6 +29,9 @@ static OHCAM_CALLBACK: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(OhCamCallBack::d
 // In UVC, interval's unit is 100ns.
 // So, fps * interval / 10_000_000 == 1.
 const FPS_INTERVAL_TRANS: u32 = 10_000_000;
+const RESOLUTION_WHITELIST: [(i32, i32); 2] = [(640, 480), (1280, 720)];
+const FRAME_FORMAT_WHITELIST: [i32; 1] = [CAMERA_FORMAT_YUV420SP];
+const FPS_WHITELIST: [i32; 1] = [30];
 
 #[derive(Default)]
 struct OhCamCallBack {
@@ -166,13 +169,12 @@ impl CameraBackend for OhCameraBackend {
 
         for idx in 0..self.profile_cnt {
             match self.ctx.get_profile(self.camidx as i32, idx as i32) {
-                Ok((fmt, width, height, mut fps)) => {
-                    if (fmt != CAMERA_FORMAT_YUV420SP) && (fmt != CAMERA_FORMAT_MJPEG) {
+                Ok((fmt, width, height, fps)) => {
+                    if !FRAME_FORMAT_WHITELIST.iter().any(|&x| x == fmt)
+                        || !RESOLUTION_WHITELIST.iter().any(|&x| x == (width, height))
+                        || !FPS_WHITELIST.iter().any(|&x| x == fps)
+                    {
                         continue;
-                    }
-                    // NOTE: windows camera APP doesn't support fps lower than 30, and some OH PC only support 15 fps.
-                    if fps < 30 {
-                        fps = 30;
                     }
 
                     let frame = CameraFrame {
