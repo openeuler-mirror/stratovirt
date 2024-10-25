@@ -928,7 +928,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         if self.snapshot.snapshots_number() > 0 {
             new_snapshots_offset = self.alloc_cluster(new_snapshot_table_clusters, true)?;
             self.snapshot
-                .save_snapshot_table(new_snapshots_offset, &snap, false)?;
+                .save_snapshot_table(new_snapshots_offset, Some(&snap), false)?;
         }
         self.snapshot.snapshot_table_offset = new_snapshots_offset;
 
@@ -968,7 +968,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.table.save_l1_table()?;
 
         // Update the snapshot information in qcow2 header.
-        self.update_snapshot_info_in_header(new_snapshots_offset, false)?;
+        self.update_snapshot_info_in_header(new_snapshots_offset, -1)?;
 
         // Discard unused clusters.
         self.refcount.sync_process_discards(OpCode::Discard);
@@ -1048,7 +1048,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Append the new snapshot to the snapshot table and write new snapshot table to file.
         self.snapshot
-            .save_snapshot_table(new_snapshots_offset, &snap, true)?;
+            .save_snapshot_table(new_snapshots_offset, Some(&snap), true)?;
 
         // Free the old snapshot table cluster if snapshot exists.
         if self.header.snapshots_offset != 0 {
@@ -1068,7 +1068,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.table.save_l1_table()?;
 
         // Update snapshot offset and num in qcow2 header.
-        self.update_snapshot_info_in_header(new_snapshots_offset, true)?;
+        self.update_snapshot_info_in_header(new_snapshots_offset, 1)?;
 
         // Add and update snapshot information in memory.
         self.snapshot.add_snapshot(snap);
@@ -1080,14 +1080,10 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(())
     }
 
-    fn update_snapshot_info_in_header(&mut self, snapshot_offset: u64, add: bool) -> Result<()> {
+    fn update_snapshot_info_in_header(&mut self, snapshot_offset: u64, add: i32) -> Result<()> {
         let mut new_header = self.header.clone();
         new_header.snapshots_offset = snapshot_offset;
-        if add {
-            new_header.nb_snapshots += 1;
-        } else {
-            new_header.nb_snapshots -= 1;
-        }
+        new_header.nb_snapshots = (new_header.nb_snapshots as i32 + add) as u32;
         self.sync_aio
             .borrow_mut()
             .write_buffer(0, &new_header.to_vec())?;
@@ -1422,6 +1418,11 @@ pub trait InternalSnapshotOps: Send + Sync {
     fn apply_snapshot(&mut self, name: String) -> Result<()>;
     fn list_snapshots(&self) -> String;
     fn get_status(&self) -> Arc<Mutex<BlockStatus>>;
+    fn rename_snapshot(
+        &mut self,
+        old_snapshot_name: String,
+        new_snapshot_name: String,
+    ) -> Result<()>;
 }
 
 impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
@@ -1460,6 +1461,52 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
 
     fn get_status(&self) -> Arc<Mutex<BlockStatus>> {
         self.status.clone()
+    }
+
+    fn rename_snapshot(
+        &mut self,
+        old_snapshot_name: String,
+        new_snapshot_name: String,
+    ) -> Result<()> {
+        if self.get_snapshot_by_name(&new_snapshot_name) != -1 {
+            bail!("New snapshot name {} exits!", new_snapshot_name);
+        }
+
+        let snap_id = self.get_snapshot_by_name(&old_snapshot_name);
+        if snap_id < 0 {
+            bail!("Snapshot name {} doesn't exit!", old_snapshot_name);
+        }
+
+        // Update snapshot info in memory. Note: Stratovirt-img will exit if next actions fail.
+        // And these modified snapshot information in memory will not affect.
+        self.snapshot.snapshots[snap_id as usize].name = new_snapshot_name;
+
+        // Write new snapshot info to new snapshot table.
+        let old_snapshots_offset = self.header.snapshots_offset;
+        let cluster_size = self.header.cluster_size();
+        let snapshot_table_len = self.snapshot.snapshot_size;
+        let snapshot_table_clusters = bytes_to_clusters(snapshot_table_len, cluster_size).unwrap();
+        let new_snapshots_offset = self.alloc_cluster(snapshot_table_clusters, true)?;
+        self.snapshot
+            .save_snapshot_table(new_snapshots_offset, None, true)?;
+
+        // Update the snapshot information in qcow2 header.
+        self.update_snapshot_info_in_header(new_snapshots_offset, 0)?;
+
+        // Delete old snapshot: Free the cluster of the old snapshot table.
+        self.refcount.update_refcount(
+            old_snapshots_offset,
+            snapshot_table_clusters,
+            -1,
+            false,
+            &Qcow2DiscardType::Snapshot,
+        )?;
+        self.flush()?;
+
+        // Discard unused clusters.
+        self.refcount.sync_process_discards(OpCode::Discard);
+
+        Ok(())
     }
 }
 

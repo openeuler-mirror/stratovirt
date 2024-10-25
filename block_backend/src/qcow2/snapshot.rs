@@ -98,18 +98,20 @@ impl InternalSnapshot {
     pub fn save_snapshot_table(
         &self,
         addr: u64,
-        extra_snap: &QcowSnapshot,
+        extra_snap: Option<&QcowSnapshot>,
         attach: bool,
     ) -> Result<()> {
         let mut buf = Vec::new();
         for snap in &self.snapshots {
-            if !attach && snap.id == extra_snap.id {
+            if !attach && extra_snap.is_some() && snap.id == extra_snap.unwrap().id {
                 continue;
             }
             buf.append(&mut snap.gen_snapshot_table_entry());
         }
         if attach {
-            buf.append(&mut extra_snap.gen_snapshot_table_entry());
+            if let Some(extra) = extra_snap {
+                buf.append(&mut extra.gen_snapshot_table_entry());
+            }
         }
         self.sync_aio.borrow_mut().write_buffer(addr, &buf)
     }
