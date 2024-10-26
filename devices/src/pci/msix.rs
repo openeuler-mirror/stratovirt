@@ -332,9 +332,11 @@ impl Msix {
             locked_msix.table[offset..(offset + 4)].copy_from_slice(data);
 
             let is_masked: bool = locked_msix.is_vector_masked(vector);
-            if was_masked != is_masked && locked_msix.update_irq_routing(vector, is_masked).is_err()
-            {
-                return false;
+            if was_masked != is_masked {
+                if let Err(e) = locked_msix.update_irq_routing(vector, is_masked) {
+                    error!("Failed to update irq routing: {:?}", e);
+                    return false;
+                }
             }
 
             // Clear the pending vector just when it is pending. Otherwise, it
