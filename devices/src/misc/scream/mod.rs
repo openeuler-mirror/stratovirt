@@ -271,6 +271,10 @@ impl ScreamCond {
     fn set_stream_pause(&self, paused: bool) {
         self.set_value(Self::STREAM_PAUSE_BIT, paused);
     }
+
+    fn stream_paused(&self) -> bool {
+        *self.paused.lock().unwrap() != 0
+    }
 }
 
 /// Audio stream data structure.
@@ -584,8 +588,7 @@ impl Scream {
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
         self.interface_resource.push(interface.clone());
-        let cloned_interface = interface.clone();
-        self.register_state_query("scream-play".to_string(), cloned_interface);
+        self.register_state_query("scream-play".to_string(), cond.clone());
         thread::Builder::new()
             .name("scream audio play worker".to_string())
             .spawn(move || {
@@ -619,8 +622,7 @@ impl Scream {
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
         let _ti = self.token_id.clone();
         self.interface_resource.push(interface.clone());
-        let cloned_interface = interface.clone();
-        self.register_state_query("scream-record".to_string(), cloned_interface);
+        self.register_state_query("scream-record".to_string(), cond.clone());
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {
@@ -648,12 +650,12 @@ impl Scream {
         Ok(())
     }
 
-    fn register_state_query(&self, module: String, interface: Arc<Mutex<dyn AudioInterface>>) {
+    fn register_state_query(&self, module: String, cond: Arc<ScreamCond>) {
         register_state_query_callback(
             module,
-            Arc::new(move || match interface.lock().unwrap().get_status() {
-                AudioStatus::Started => "On".to_string(),
-                _ => "Off".to_string(),
+            Arc::new(move || match cond.stream_paused() {
+                false => "On".to_string(),
+                true => "Off".to_string(),
             }),
         );
     }
