@@ -298,6 +298,15 @@ impl OhUiServer {
 
 impl DisplayChangeListenerOperations for OhUiServer {
     fn dpy_switch(&self, surface: &DisplaySurface) -> Result<()> {
+        let height = surface.height() as u64;
+        let stride = surface.stride() as u64;
+        if self.framebuffer != 0 && height * stride > VIRTIO_GPU_ENABLE_BAR0_SIZE {
+            bail!(
+                "surface size is larger than ohui buffer size {}",
+                VIRTIO_GPU_ENABLE_BAR0_SIZE
+            );
+        }
+
         let mut locked_surface = self.surface.write().unwrap();
 
         unref_pixman_image(locked_surface.guest_image);
