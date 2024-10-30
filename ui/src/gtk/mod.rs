@@ -18,6 +18,7 @@ use std::{
     cmp,
     collections::HashMap,
     env, fs,
+    os::unix::fs::OpenOptionsExt,
     path::Path,
     ptr,
     rc::Rc,
@@ -1104,6 +1105,10 @@ fn create_file(gpu_info: &mut GpuInfo, dev_name: &String) -> Result<fs::File> {
     gpu_info.fileDir = file_dir.clone();
     let nsec = gettime()?.1;
     let file_name = file_dir + "/stratovirt-display-" + dev_name + "-" + &nsec.to_string() + ".png";
-    let file = fs::File::create(file_name)?;
+    let file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(file_name)?;
     Ok(file)
 }
