@@ -167,6 +167,9 @@ impl VirtioDevice for Fs {
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        if let Some(client) = &self.client {
+            client.lock().unwrap().reset_vhost_user(true);
+        }
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
         Ok(())
     }
