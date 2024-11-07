@@ -130,7 +130,8 @@ impl RamfbState {
             .addr_cache_init(GuestAddress(addr), AddressAttr::Ram)
         {
             Some((hva, len)) => {
-                if len < u64::from(stride) {
+                let sf_len = u64::from(stride) * u64::from(height);
+                if len < sf_len {
                     error!("Insufficient contiguous memory length");
                     return;
                 }
