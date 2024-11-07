@@ -123,8 +123,15 @@ impl PulseStreamData {
         }
     }
 
-    fn transfer_channel_map(&mut self, format: &ShmemStreamFmt) {
+    fn transfer_channel_map(&mut self, format: &ShmemStreamFmt) -> bool {
         self.channel_map.init();
+        let channels = format.channels;
+        if channels <= Map::CHANNELS_MAX {
+            self.channel_map.set_len(channels);
+        } else {
+            error!("invalid channels {}", channels);
+            return false;
+        }
         self.channel_map.set_len(format.channels);
         let map: &mut [Position] = self.channel_map.get_mut();
         // In Windows, the channel mask shows as following figure.
@@ -149,6 +156,7 @@ impl PulseStreamData {
                 *item = Position::FrontCenter;
             }
         }
+        true
     }
 
     fn check_fmt_update(&mut self, recv_data: &StreamData) {
@@ -181,8 +189,8 @@ impl PulseStreamData {
             self.channel_map.init_mono();
         } else if recv_data.fmt.channels == 2 {
             self.channel_map.init_stereo();
-        } else {
-            self.transfer_channel_map(&recv_data.fmt);
+        } else if !self.transfer_channel_map(&recv_data.fmt) {
+            return;
         }
 
         if !self.channel_map.is_valid() {
@@ -318,7 +326,8 @@ mod tests {
         // set 8: BC, 6: FLC, 4: BL, 2: FC, 0: FL
         test_data.fmt.channels = 5;
         test_data.fmt.channel_map = 0b1_0101_0101;
-        pulse.transfer_channel_map(&test_data.fmt);
+        let ret = pulse.transfer_channel_map(&test_data.fmt);
+        assert_eq!(ret, true);
 
         assert_eq!(pulse.channel_map.len(), 5);
         let map = pulse.channel_map.get_mut();
@@ -331,7 +340,8 @@ mod tests {
         // The first 12 bits are set to 1.
         test_data.fmt.channels = 12;
         test_data.fmt.channel_map = 0b1111_1111_1111;
-        pulse.transfer_channel_map(&test_data.fmt);
+        let ret = pulse.transfer_channel_map(&test_data.fmt);
+        assert_eq!(ret, true);
 
         assert_eq!(pulse.channel_map.len(), 12);
         let map = pulse.channel_map.get_mut();
