@@ -33,6 +33,7 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
+use std::thread;
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 use std::u64;
@@ -1880,10 +1881,52 @@ pub trait MachineOps: MachineLifecycle {
             "usb-host" => {
                 let config =
                     UsbHostConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
-                let usbhost = UsbHost::new(config)?;
-                usbhost
-                    .realize()
-                    .with_context(|| "Failed to realize usb host device")?
+                let parent_dev = self
+                    .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
+                    .with_context(|| "No nec-usb-xhci device found")?;
+
+                thread::Builder::new()
+                    .name("usb host initialization".to_string())
+                    .spawn(move || {
+                        let usbhost = match UsbHost::new(config) {
+                            Ok(dev) => dev,
+                            Err(err) => {
+                                log::error!("Failed to create usb host device: {:?}", err);
+                                return;
+                            }
+                        };
+
+                        let usbhost = match usbhost.realize() {
+                            Ok(dev) => dev,
+                            Err(err) => {
+                                log::error!("Failed to realize usb host device: {:?}", err);
+                                return;
+                            }
+                        };
+
+                        let res = match parent_dev
+                            .lock()
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<XhciPciDevice>()
+                        {
+                            Some(xhci_pci) => xhci_pci.attach_device(&(usbhost)),
+                            None => {
+                                log::error!("Failed to downcast PciDevOps to XhciPciDevice");
+                                return;
+                            }
+                        };
+
+                        if let Err(err) = res {
+                            log::error!(
+                                "Failed to attach usb host device to xhci controller: {:?}",
+                                err
+                            );
+                        }
+                    })
+                    .with_context(|| "Failed to spawn usb host initializer thread")?;
+
+                return Ok(());
             }
             _ => bail!("Unknown usb device classes."),
         };
