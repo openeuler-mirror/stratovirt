@@ -51,7 +51,7 @@ pub const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
 
 pub const WINDOWS_SAMPLE_BASE_RATE: u8 = 128;
 
-pub const TARGET_LATENCY_MS: u32 = 50;
+pub const TARGET_LATENCY_MS: u32 = 20;
 
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 const IVSHMEM_VOLUME_SYNC_VECTOR: u16 = 0;
@@ -64,10 +64,10 @@ pub const STATUS_PLAY_BIT: u32 = 0x1;
 pub const STATUS_START_BIT: u32 = 0x2;
 const STATUS_MIC_AVAIL_BIT: u32 = 0x4;
 
-// A frame of back-end audio data is 50ms, and the next frame of audio data needs
-// to be trained in polling within 50ms. Theoretically, the shorter the polling time,
+// A frame of back-end audio data is 20ms, and the next frame of audio data needs
+// to be trained in polling within 20ms. Theoretically, the shorter the polling time,
 // the better. However, if the value is too small, the overhead is high. So take a
-// compromise: 50 * 1000 / 8 us.
+// compromise: 20 * 1000 / 8 us.
 const POLL_DELAY_US: u64 = (TARGET_LATENCY_MS as u64) * 1000 / 8;
 
 pub const SCREAM_MAGIC: u64 = 0x02032023;

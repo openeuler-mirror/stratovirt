@@ -23,7 +23,7 @@ use log::{error, info, warn};
 use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{
     AudioExtension, AudioInterface, AudioStatus, ScreamDirection, StreamData,
-    IVSHMEM_VOLUME_SYNC_VECTOR,
+    IVSHMEM_VOLUME_SYNC_VECTOR, TARGET_LATENCY_MS,
 };
 use machine_manager::event_loop::EventLoop;
 use util::ohos_binding::audio::*;
@@ -33,6 +33,7 @@ const FLUSH_DELAY_MS: u64 = 5;
 const FLUSH_DELAY_CNT: u64 = 200;
 const SCREAM_MAX_VOLUME: u32 = 110;
 const CAPTURE_WAIT_TIMEOUT: u64 = 500;
+const RENDER_WAIT_TIMEOUT: u64 = TARGET_LATENCY_MS as u64 * 2;
 const MS_PER_SECOND: u64 = 1000;
 
 trait OhAudioProcess {
@@ -166,6 +167,7 @@ struct OhAudioRender {
     stream_data: Arc<Mutex<StreamQueue>>,
     flushing: AtomicBool,
     status: AudioStatus,
+    cond: Condvar,
 }
 
 impl Default for OhAudioRender {
@@ -175,6 +177,7 @@ impl Default for OhAudioRender {
             stream_data: Arc::new(Mutex::new(StreamQueue::new(STREAM_DATA_VEC_CAPACITY))),
             flushing: AtomicBool::new(false),
             status: AudioStatus::default(),
+            cond: Condvar::new(),
         }
     }
 }
@@ -279,6 +282,7 @@ impl OhAudioProcess for OhAudioRender {
             recv_data.audio_base as usize,
             recv_data.audio_size as usize,
         ));
+        self.cond.notify_all();
 
         if self.status == AudioStatus::Error || self.status == AudioStatus::Intr {
             error!(
@@ -553,7 +557,20 @@ extern "C" fn on_write_data_cb(
 
     trace::oh_scream_on_write_data_cb(len);
     trace::trace_scope_start!(ohaudio_write_cb, args = (len));
-    match render.stream_data.lock().unwrap().read_exact(wbuf) {
+    let mut locked_stream_data = match render.stream_data.lock().unwrap().data_size() == 0 {
+        true => {
+            render
+                .cond
+                .wait_timeout(
+                    render.stream_data.lock().unwrap(),
+                    Duration::from_millis(RENDER_WAIT_TIMEOUT),
+                )
+                .unwrap()
+                .0
+        }
+        false => render.stream_data.lock().unwrap(),
+    };
+    match locked_stream_data.read_exact(wbuf) {
         Ok(()) => {
             if render.is_flushing() {
                 render.flush_renderer();
