@@ -367,7 +367,7 @@ pub struct UsbHostConfig {
     #[arg(long)]
     pub classtype: String,
     #[arg(long, value_parser = valid_id)]
-    id: String,
+    pub id: String,
     #[arg(long, default_value = "0")]
     hostbus: u8,
     #[arg(long, default_value = "0", value_parser = clap::value_parser!(u8).range(..=USBHOST_ADDR_MAX))]
