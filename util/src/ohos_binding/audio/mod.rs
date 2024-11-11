@@ -24,6 +24,7 @@ pub use sys as capi;
 
 const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
+const RENDER_CB_FREQUENCY: i32 = 50;
 
 macro_rules! call_capi {
     ( $f: ident ( $($x: expr),* ) ) => {
@@ -265,10 +266,18 @@ impl AudioContext {
         ))
     }
 
+    #[allow(unused)]
     fn set_latency_mode(&self) -> Result<(), OAErr> {
         call_capi!(OH_AudioStreamBuilder_SetLatencyMode(
             self.builder,
             capi::OH_AUDIO_STREAM_LATENCY_MODE_FAST
+        ))
+    }
+
+    pub fn set_frame_size(&self, size: i32) -> Result<(), OAErr> {
+        call_capi!(OH_AudioStreamBuilder_SetFrameSizeInCallback(
+            self.builder,
+            size
         ))
     }
 
@@ -353,8 +362,8 @@ impl AudioContext {
         self.set_fmt(size, rate, channels)?;
         self.set_sample_rate()?;
         self.set_sample_format()?;
-        if let capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_RERNDERER = self.stream_type.into() {
-            self.set_latency_mode()?;
+        if capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_RERNDERER == self.stream_type.into() {
+            self.set_frame_size(rate as i32 / RENDER_CB_FREQUENCY)?;
         }
         self.create_processor(cb)
     }
