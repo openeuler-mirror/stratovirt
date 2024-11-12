@@ -288,6 +288,10 @@ extern "C" {
         renderer: *mut OhAudioRenderer,
         encodingType: *mut OhAudioStreamEncodingType,
     ) -> OhAudioStreamResult;
+    pub fn OH_AudioStreamBuilder_SetFrameSizeInCallback(
+        builder: *mut OhAudioStreamBuilder,
+        size: i32,
+    ) -> OhAudioStreamResult;
     /// Create a streamBuilder can be used to open a renderer or capturer client.
     ///
     /// OH_AudioStreamBuilder_Destroy() must be called when you are done using the builder.
