@@ -31,13 +31,11 @@ use crate::event_loop::EventLoop;
 use crate::machine::{MachineExternalInterface, VmState};
 use crate::socket::SocketHandler;
 use crate::socket::SocketRWHandler;
-use crate::temp_cleaner::TempCleaner;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-use util::set_termi_canon_mode;
 use util::socket::{SocketListener, SocketStream};
 use util::unix::parse_unix_uri;
 
@@ -402,10 +400,6 @@ fn handle_qmp(
                     reason: "host-qmp-quit".to_string(),
                 };
                 event!(Shutdown; shutdown_msg);
-                TempCleaner::clean();
-                set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
-
-                std::process::exit(0);
             }
 
             Ok(())
