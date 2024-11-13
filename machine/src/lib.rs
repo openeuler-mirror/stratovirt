@@ -20,6 +20,11 @@ pub mod x86_64;
 mod micro_common;
 
 pub use crate::error::MachineError;
+#[cfg(feature = "usb_host")]
+use machine_manager::{
+    event,
+    qmp::{qmp_channel::QmpChannel, qmp_schema::UsbHostAddRes},
+};
 pub use micro_common::LightMachine;
 pub use standard_common::StdMachine;
 
@@ -33,6 +38,7 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
+#[cfg(feature = "usb_host")]
 use std::thread;
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
@@ -1885,43 +1891,37 @@ pub trait MachineOps: MachineLifecycle {
                     .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
                     .with_context(|| "No nec-usb-xhci device found")?;
 
+                let update_vm_config = self.get_vm_config();
+
                 thread::Builder::new()
                     .name("usb host initialization".to_string())
                     .spawn(move || {
-                        let usbhost = match UsbHost::new(config) {
-                            Ok(dev) => dev,
-                            Err(err) => {
-                                log::error!("Failed to create usb host device: {:?}", err);
-                                return;
+                        let dev_id = config.id.clone();
+                        match initialize_usb_host(config, parent_dev) {
+                            Ok(_) => {
+                                if QmpChannel::is_connected() {
+                                    let success_msg = UsbHostAddRes {
+                                        device: Some(dev_id),
+                                        state_msg: Some("Add usb host device success".to_string()),
+                                    };
+                                    event!(UsbHostAddRes; success_msg);
+                                }
                             }
-                        };
-
-                        let usbhost = match usbhost.realize() {
-                            Ok(dev) => dev,
-                            Err(err) => {
-                                log::error!("Failed to realize usb host device: {:?}", err);
-                                return;
+                            Err(e) => {
+                                error!("Usb host device initialization failed: {:?}", e);
+                                let mut locked_vm_config = update_vm_config.lock().unwrap();
+                                locked_vm_config.del_device_by_id(dev_id.clone());
+                                if QmpChannel::is_connected() {
+                                    let fail_msg = UsbHostAddRes {
+                                        device: Some(dev_id),
+                                        state_msg: Some(format!(
+                                            "Usb host device initialization failed: {:?}",
+                                            e
+                                        )),
+                                    };
+                                    event!(UsbHostAddRes; fail_msg);
+                                }
                             }
-                        };
-
-                        let res = match parent_dev
-                            .lock()
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<XhciPciDevice>()
-                        {
-                            Some(xhci_pci) => xhci_pci.attach_device(&(usbhost)),
-                            None => {
-                                log::error!("Failed to downcast PciDevOps to XhciPciDevice");
-                                return;
-                            }
-                        };
-
-                        if let Err(err) = res {
-                            log::error!(
-                                "Failed to attach usb host device to xhci controller: {:?}",
-                                err
-                            );
                         }
                     })
                     .with_context(|| "Failed to spawn usb host initializer thread")?;
@@ -2558,6 +2558,27 @@ pub fn type_init() -> Result<()> {
     vfio_register_pcidevops_type()?;
     virtio_register_pcidevops_type()?;
     devices_register_pcidevops_type()?;
+
+    Ok(())
+}
+
+#[cfg(feature = "usb_host")]
+fn initialize_usb_host(config: UsbHostConfig, parent_dev: Arc<Mutex<dyn Device>>) -> Result<()> {
+    let usbhost = UsbHost::new(config).with_context(|| "Failed to create usb host device")?;
+
+    let usbhost = usbhost
+        .realize()
+        .with_context(|| "Failed to realize usb host device")?;
+
+    let parent = parent_dev.lock().unwrap();
+    let xhci_pci = parent
+        .as_any()
+        .downcast_ref::<XhciPciDevice>()
+        .ok_or_else(|| anyhow!("Failed to downcast PciDevOps to XhciPciDevice"))?;
+
+    xhci_pci
+        .attach_device(&usbhost)
+        .with_context(|| "Failed to attach usb host device to xhci controller")?;
 
     Ok(())
 }
