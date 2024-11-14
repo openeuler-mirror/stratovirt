@@ -19,7 +19,11 @@ use std::{
     ffi::{c_char, CStr},
     os::unix::io::RawFd,
     rc::Rc,
-    sync::{Arc, Mutex, Weak},
+    slice,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, Weak,
+    },
     time::Duration,
 };
 
@@ -68,6 +72,7 @@ const NON_ISO_PACKETS_NUMS: c_int = 0;
 const HANDLE_TIMEOUT_MS: u64 = 2;
 const USB_HOST_BUFFER_LEN: usize = 12 * 1024;
 const USBHOST_ADDR_MAX: i64 = 127;
+const USBHOST_DEV_MEM_SIZE: usize = 1 << 20;
 
 #[derive(Default, Copy, Clone)]
 struct InterfaceStatus {
@@ -82,7 +87,8 @@ pub struct UsbHostRequest {
     pub packet: Arc<Mutex<UsbPacket>>,
     pub host_transfer: *mut libusb_transfer,
     /// Async data buffer.
-    pub buffer: Vec<u8>,
+    pub buffer: Option<Vec<u8>>,
+    pub dev_mem: Option<UsbDevMem>,
     pub is_control: bool,
 }
 
@@ -108,31 +114,52 @@ impl UsbHostRequest {
             requests,
             packet,
             host_transfer,
-            buffer: Vec::new(),
+            buffer: None,
+            dev_mem: None,
             is_control,
         }
     }
 
-    pub fn setup_data_buffer(&mut self) {
+    pub fn setup_data_buffer(&mut self, dev_mem: &Option<UsbDevMem>) {
         let mut locked_packet = self.packet.lock().unwrap();
         let size = locked_packet.get_iovecs_size();
-        self.buffer = vec![0; size as usize];
+        let data_buffer;
+
+        match dev_mem {
+            Some(mem) if !mem.used.load(Ordering::SeqCst) && mem.size as u64 >= size => {
+                mem.used.store(true, Ordering::SeqCst);
+                self.dev_mem.clone_from(dev_mem);
+                // SAFETY: The dev_mem's mem is obtained from libusb.
+                unsafe {
+                    data_buffer = slice::from_raw_parts_mut(mem.mem, size as usize);
+                }
+            }
+            _ => {
+                self.buffer = Some(vec![0; size as usize]);
+                data_buffer = self.buffer.as_mut().unwrap().as_mut();
+            }
+        }
+
         if locked_packet.pid as u8 == USB_TOKEN_OUT {
-            locked_packet.transfer_packet(self.buffer.as_mut(), size as usize);
+            locked_packet.transfer_packet(data_buffer, size as usize);
         }
     }
 
     pub fn setup_ctrl_buffer(&mut self, data_buf: &[u8], device_req: &UsbDeviceRequest) {
-        self.buffer = vec![0; (device_req.length + 8) as usize];
-        self.buffer[..8].copy_from_slice(device_req.as_bytes());
+        let mut buffer = vec![0; (device_req.length + 8) as usize];
+        buffer[..8].copy_from_slice(device_req.as_bytes());
         if self.packet.lock().unwrap().pid as u8 == USB_TOKEN_OUT {
-            self.buffer[8..].copy_from_slice(data_buf);
+            buffer[8..].copy_from_slice(data_buf);
         }
+        self.buffer = Some(buffer);
     }
 
     pub fn free(&mut self) {
         free_host_transfer(self.host_transfer);
-        self.buffer.clear();
+        self.buffer = None;
+        if let Some(dev_mem) = &self.dev_mem {
+            dev_mem.used.store(false, Ordering::SeqCst);
+        }
         self.host_transfer = std::ptr::null_mut();
     }
 
@@ -386,6 +413,13 @@ pub struct UsbHostConfig {
     iso_urb_count: u32,
 }
 
+#[derive(Clone)]
+pub struct UsbDevMem {
+    mem: *mut u8,
+    size: usize,
+    used: Arc<AtomicBool>,
+}
+
 /// Abstract object of the host USB device.
 pub struct UsbHost {
     base: UsbDeviceBase,
@@ -396,6 +430,8 @@ pub struct UsbHost {
     libdev: Option<Device<Context>>,
     /// A handle to an open USB device.
     handle: Option<DeviceHandle<Context>>,
+    /// The direct DMA memory used for transfer.
+    devmem: Option<UsbDevMem>,
     /// Describes a device.
     ddesc: Option<DeviceDescriptor>,
     /// EventFd for libusb.
@@ -442,6 +478,7 @@ impl UsbHost {
             context,
             libdev: None,
             handle: None,
+            devmem: None,
             ddesc: None,
             libevt: Vec::new(),
             ifs_num: 0,
@@ -688,6 +725,22 @@ impl UsbHost {
             speed => self.base.speed = speed - 1,
         };
 
+        match dev_mem_alloc(self.handle.as_mut().unwrap(), USBHOST_DEV_MEM_SIZE) {
+            Ok(mem) => {
+                self.devmem = Some(UsbDevMem {
+                    mem: mem.as_mut_ptr(),
+                    size: mem.len(),
+                    used: Arc::new(AtomicBool::new(false)),
+                });
+            }
+            Err(_) => {
+                warn!(
+                    "Failed to alloc dev mem for usbhost device {}",
+                    self.device_id()
+                );
+            }
+        }
+
         trace::usb_host_open_success(self.config.hostbus, self.config.hostaddr);
 
         Ok(())
@@ -818,6 +871,20 @@ impl UsbHost {
 
         self.abort_host_transfers()
             .unwrap_or_else(|e| error!("Failed to abort all libusb transfers: {:?}", e));
+
+        if let Some(devmem) = &self.devmem {
+            // SAFETY: The dev_mem's mem is obtained from libusb.
+            let mem = unsafe { slice::from_raw_parts_mut(devmem.mem, devmem.size) };
+            if let Err(e) = dev_mem_free(self.handle.as_mut().unwrap(), mem) {
+                warn!(
+                    "Failed to free dev mem of usbhost device {}, {}",
+                    self.device_id(),
+                    e
+                );
+            }
+            self.devmem = None;
+        }
+
         self.release_interfaces();
         self.handle.as_mut().unwrap().reset().unwrap_or_else(|e| {
             error!(
@@ -1255,7 +1322,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     false,
                 )));
-                node.value.setup_data_buffer();
+                node.value.setup_data_buffer(&self.devmem);
 
                 if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
                     ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
@@ -1279,7 +1346,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     false,
                 )));
-                node.value.setup_data_buffer();
+                node.value.setup_data_buffer(&self.devmem);
 
                 if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
                     ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
