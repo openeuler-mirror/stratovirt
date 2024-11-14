@@ -34,6 +34,7 @@ pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x40;
 pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x80;
 pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x100;
 pub const INPUT_BUTTON_MASK: u32 = 0x1f;
+pub const INPUT_POINT_MAX: u32 = INPUT_POINT_FORWARD;
 
 // ASCII value.
 pub const ASCII_A: i32 = 65;
@@ -261,6 +262,7 @@ struct Inputs {
     tablet_ids: Vec<String>,
     tablet_lists: HashMap<String, Arc<Mutex<dyn PointerOpts>>>,
     keyboard_state: KeyBoardState,
+    btn_state: u32,
 }
 
 impl Inputs {
@@ -326,6 +328,14 @@ impl Inputs {
         }
         Ok(())
     }
+
+    fn update_button_state(&mut self, btn: u32, press: bool) {
+        if press {
+            self.btn_state |= btn;
+        } else {
+            self.btn_state &= !btn;
+        }
+    }
 }
 
 pub fn register_keyboard(device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
@@ -365,8 +375,23 @@ pub fn input_button(button: u32, down: bool) -> Result<()> {
     let mouse = INPUTS.lock().unwrap().get_active_mouse();
     if let Some(m) = mouse {
         m.lock().unwrap().update_point_state(input_event)?;
+        INPUTS.lock().unwrap().update_button_state(button, down);
     }
 
+    Ok(())
+}
+
+/// Release all pressed button.
+pub fn release_all_btn() -> Result<()> {
+    let state = INPUTS.lock().unwrap().btn_state;
+    let mut checked_btn = INPUT_POINT_LEFT;
+    while checked_btn <= INPUT_POINT_MAX {
+        if (state & checked_btn) != 0 {
+            input_button(checked_btn, false)?;
+            input_point_sync()?;
+        }
+        checked_btn <<= 1;
+    }
     Ok(())
 }
 
