@@ -86,6 +86,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_accept4),
         BpfRule::new(libc::SYS_lseek),
         futex_rule(),
+        BpfRule::new(libc::SYS_clone),
         BpfRule::new(libc::SYS_exit),
         BpfRule::new(libc::SYS_exit_group),
         BpfRule::new(libc::SYS_rt_sigreturn),
