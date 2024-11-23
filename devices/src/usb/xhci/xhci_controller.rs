@@ -690,6 +690,7 @@ pub struct XhciDevice {
     /// Runtime Register.
     mfindex_start: Duration,
     timer_id: Option<u64>,
+    packet_count: u32,
 }
 
 impl XhciDevice {
@@ -726,6 +727,7 @@ impl XhciDevice {
         }
 
         let xhci = XhciDevice {
+            packet_count: 0,
             oper,
             usb_ports: Vec::new(),
             numports_3: p3,
@@ -921,6 +923,11 @@ impl XhciDevice {
         self.oper.set_usb_status_flag(USB_STS_PCD);
         self.port_notify(port, PORTSC_CSC)?;
         Ok(())
+    }
+
+    fn generate_packet_id(&mut self) -> u32 {
+        self.packet_count = self.packet_count.wrapping_add(1);
+        self.packet_count
     }
 
     fn get_slot_id(&self, evt: &mut XhciEvent, trb: &XhciTRB) -> u32 {
@@ -1182,7 +1189,9 @@ impl XhciDevice {
             index: 0,
             length: 0,
         };
+        let packet_id = self.generate_packet_id();
         let p = Arc::new(Mutex::new(UsbPacket::new(
+            packet_id,
             USB_TOKEN_OUT as u32,
             0,
             Vec::new(),
@@ -1929,9 +1938,11 @@ impl XhciDevice {
                     .get_address_map(GuestAddress(dma_addr), chunk as u64, &mut vec)?;
             }
         }
+
+        let packet_id = self.generate_packet_id();
         let (_, ep_number) = endpoint_id_to_number(locked_xfer.epid as u8);
         let xfer_ops = Arc::downgrade(xfer) as Weak<Mutex<dyn TransferOps>>;
-        let packet = UsbPacket::new(dir as u32, ep_number, vec, Some(xfer_ops));
+        let packet = UsbPacket::new(packet_id, dir as u32, ep_number, vec, Some(xfer_ops));
         Ok(Arc::new(Mutex::new(packet)))
     }
 

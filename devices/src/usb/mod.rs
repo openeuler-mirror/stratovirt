@@ -491,6 +491,8 @@ pub trait TransferOps: Send + Sync {
 /// Usb packet used for device transfer data.
 #[derive(Default)]
 pub struct UsbPacket {
+    /// USB packet unique identifier.
+    pub packet_id: u32,
     /// USB packet id.
     pub pid: u32,
     pub is_async: bool,
@@ -505,6 +507,8 @@ pub struct UsbPacket {
     pub ep_number: u8,
     /// Transfer for complete packet.
     pub xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
+    /// Stream id.
+    pub stream: u32,
 }
 
 impl std::fmt::Display for UsbPacket {
@@ -519,12 +523,14 @@ impl std::fmt::Display for UsbPacket {
 
 impl UsbPacket {
     pub fn new(
+        packet_id: u32,
         pid: u32,
         ep_number: u8,
         iovecs: Vec<Iovec>,
         xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
     ) -> Self {
         Self {
+            packet_id,
             pid,
             is_async: false,
             iovecs,
@@ -533,6 +539,7 @@ impl UsbPacket {
             actual_length: 0,
             ep_number,
             xfer_ops,
+            stream: 0,
         }
     }
 
