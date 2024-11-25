@@ -221,7 +221,7 @@ message = "status={:?}"
 enabled = true
 
 [[events]]
-name = "usb_xhci_flush_ep_transfer"
+name = "usb_xhci_cancel_all_ep_transfers"
 args = "slotid: &dyn fmt::Debug, epid: &dyn fmt::Debug"
 message = "slotid={:?} epid={:?}"
 enabled = true
