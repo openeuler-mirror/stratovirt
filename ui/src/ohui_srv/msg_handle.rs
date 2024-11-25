@@ -35,6 +35,7 @@ use crate::{
     },
     keycode::{DpyMod, KeyCode},
 };
+use machine_manager::notifier::register_vm_pause_notifier;
 
 fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
     if x < 0.0 || y < 0.0 || x > w || y > h {
@@ -141,16 +142,31 @@ pub struct OhUiMsgHandler {
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<Option<MsgReader>>,
     writer: Mutex<Option<MsgWriter>>,
+    vm_pause: Arc<RwLock<bool>>,
+    pause_notifier_id: Mutex<u64>,
 }
 
 impl OhUiMsgHandler {
     pub fn new() -> Self {
-        OhUiMsgHandler {
+        let handler = OhUiMsgHandler {
             state: Mutex::new(WindowState::default()),
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
             reader: Mutex::new(None),
             writer: Mutex::new(None),
-        }
+            vm_pause: Arc::new(RwLock::new(false)),
+            pause_notifier_id: Mutex::new(0),
+        };
+        handler.register_pause_notifier(handler.vm_pause.clone());
+
+        handler
+    }
+
+    fn register_pause_notifier(&self, vm_pause: Arc<RwLock<bool>>) {
+        let pause_notify = Arc::new(move |paused: bool| {
+            info!("Message Handler get vm pause state {:?}", paused);
+            *vm_pause.write().unwrap() = paused;
+        });
+        *self.pause_notifier_id.lock().unwrap() = register_vm_pause_notifier(pause_notify);
     }
 
     pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
@@ -165,6 +181,10 @@ impl OhUiMsgHandler {
             .as_mut()
             .with_context(|| "handle_msg: no connection established")?;
         if !reader.recv()? {
+            return Ok(());
+        }
+        if *self.vm_pause.read().unwrap() {
+            reader.clear();
             return Ok(());
         }
 
