@@ -398,6 +398,9 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
     aio: Aio<T>,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
+    let cloned_drive_id = prop.id.clone();
+    // NOTE: we can drain request when request in io thread.
+    let drain = prop.iothread.is_some();
     match prop.format {
         DiskFormat::Raw => {
             let mut raw_file = RawDriver::new(file, aio, prop.clone());
@@ -405,7 +408,28 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
             if file_size & (u64::from(prop.req_align) - 1) != 0 {
                 bail!("The size of raw file is not aligned to {}.", prop.req_align);
             }
-            Ok(Arc::new(Mutex::new(raw_file)))
+            let new_raw = Arc::new(Mutex::new(raw_file));
+
+            let cloned_raw = Arc::downgrade(&new_raw);
+            let exit_notifier = Arc::new(move || {
+                if let Some(raw) = cloned_raw.upgrade() {
+                    info!("clean up raw {:?} resources.", cloned_drive_id);
+                    if drain {
+                        info!("Drain the inflight IO for drive \"{}\"", cloned_drive_id);
+                        let incomplete = raw.lock().unwrap().get_inflight();
+                        while incomplete.load(Ordering::SeqCst) != 0 {
+                            yield_now();
+                        }
+                    }
+                    info!(
+                        "Drain the inflight IO for drive \"{}\" ends.",
+                        cloned_drive_id
+                    );
+                }
+            }) as Arc<ExitNotifier>;
+            TempCleaner::add_exit_notifier(prop.id, exit_notifier);
+
+            Ok(new_raw)
         }
         DiskFormat::Qcow2 => {
             let mut qcow2 = Qcow2Driver::new(file, aio, prop.clone())
@@ -426,11 +450,8 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                 .lock()
                 .unwrap()
                 .insert(prop.id.clone(), new_qcow2.clone());
-            let cloned_qcow2 = Arc::downgrade(&new_qcow2);
-            // NOTE: we can drain request when request in io thread.
-            let drain = prop.iothread.is_some();
-            let cloned_drive_id = prop.id.clone();
 
+            let cloned_qcow2 = Arc::downgrade(&new_qcow2);
             let exit_notifier = Arc::new(move || {
                 if let Some(qcow2) = cloned_qcow2.upgrade() {
                     info!("clean up qcow2 {:?} resources.", cloned_drive_id);
