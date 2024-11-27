@@ -38,7 +38,8 @@ use util::{
 macro_rules! add_args_to_config {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temp) = &$x {
-            $z.$s(temp)?;
+            $z.$s(temp)
+                .with_context(|| format!("Add args {:?} error.", temp))?;
         }
     };
     ( $x:tt, $z:expr, $s:tt, vec ) => {
@@ -65,7 +66,8 @@ macro_rules! add_args_to_config_multi {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temps) = &$x {
             for temp in temps {
-                $z.$s(temp)?;
+                $z.$s(temp)
+                    .with_context(|| format!("Add args {:?} error.", temp))?;
             }
         }
     };
