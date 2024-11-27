@@ -2206,11 +2206,15 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().disable_clock();
 
-        self.deactive_drive_files()?;
-
+        // Deactive files so that VM on the other end can active files.
+        if MigrationManager::is_active() {
+            self.deactive_drive_files()?;
+        }
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             if let Err(e) = cpu.pause() {
-                self.active_drive_files()?;
+                if MigrationManager::is_active() {
+                    self.active_drive_files()?;
+                }
                 return Err(anyhow!("Failed to pause vcpu{}, {:?}", cpu_index, e));
             }
         }
