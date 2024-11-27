@@ -2090,7 +2090,7 @@ impl XhciDevice {
                     }
                 };
                 let ep_state = epctx.get_ep_state();
-                if ep_state == EP_STOPPED && ep_state == EP_ERROR {
+                if ep_state == EP_STOPPED || ep_state == EP_ERROR {
                     return;
                 }
                 if let Err(e) = locked_xhci.kick_endpoint(slotid, epid, 0) {
