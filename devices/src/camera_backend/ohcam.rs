@@ -269,6 +269,11 @@ impl CameraBackend for OhCameraBackend {
                 Err(e) => error!("{:?}", e),
             }
         }
+
+        // Just for APP ToDesk, This stupid APP uses the format reported first
+        // to realize camera-related functions. It doesn't support NV12, so
+        // we put YUY2 forward.s
+        fmt_list.sort_by(|a, b| a.format.partial_cmp(&b.format).unwrap());
         self.fmt_list = fmt_list.clone();
         Ok(fmt_list)
     }
