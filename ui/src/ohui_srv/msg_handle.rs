@@ -21,6 +21,7 @@ use util::byte_code::ByteCode;
 
 use super::{
     channel::{recv_slice, send_obj, OhUiChannel},
+    dup_fd,
     msg::*,
     touchpad::*,
 };
@@ -234,8 +235,8 @@ impl OhUiMsgHandler {
 
     pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
         let fd = channel.lock().unwrap().get_stream_raw_fd().unwrap();
-        *self.reader.lock().unwrap() = Some(MsgReader::new(fd));
-        *self.writer.lock().unwrap() = Some(MsgWriter::new(fd));
+        *self.reader.lock().unwrap() = Some(MsgReader::new(dup_fd(fd)));
+        *self.writer.lock().unwrap() = Some(MsgWriter::new(dup_fd(fd)));
     }
 
     pub fn handle_msg(&self, token_id: Arc<RwLock<u64>>) -> Result<()> {

@@ -23,6 +23,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, RwLock,
 };
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
@@ -42,7 +43,7 @@ use address_space::FileBackend;
 use channel::*;
 use machine_manager::{
     config::{DisplayConfig, VIRTIO_GPU_ENABLE_BAR0_SIZE},
-    event_loop::register_event_helper,
+    event_loop::{register_event_helper, EventLoop},
     temp_cleaner::TempCleaner,
 };
 use migration::snapshot::OHUI_SNAPSHOT_ID;
@@ -322,8 +323,8 @@ impl OhUiServer {
         if conn {
             self.msg_handler.update_sock(self.channel.clone());
         } else {
-            self.channel.lock().unwrap().disconnect();
             self.msg_handler.reset();
+            self.channel.lock().unwrap().disconnect();
         }
     }
 
@@ -501,6 +502,19 @@ impl OhUiTrans {
             .get_stream_raw_fd()
             .unwrap()
     }
+
+    fn delay_close_fd(&self, fd: RawFd) {
+        let func = Box::new(move || {
+            // SAFETY: the fd is guanranteed by the caller.
+            let ret = unsafe { libc::close(fd) };
+            if ret != 0 {
+                error!("Failed to close fd, {:?}", std::io::Error::last_os_error());
+            }
+        });
+        EventLoop::get_ctx(self.server.iothread.get_or_init(|| None).as_ref())
+            .unwrap()
+            .timer_add(func, Duration::ZERO);
+    }
 }
 
 impl EventNotifierHelper for OhUiTrans {
@@ -509,7 +523,9 @@ impl EventNotifierHelper for OhUiTrans {
         let handler: Rc<NotifierCallback> = Rc::new(move |event: EventSet, fd: RawFd| {
             if event & EventSet::HANG_UP == EventSet::HANG_UP {
                 error!("OhUiTrans: disconnected.");
-                trans_ref.lock().unwrap().handle_disconnect();
+                let locked_trans = trans_ref.lock().unwrap();
+                locked_trans.handle_disconnect();
+                locked_trans.delay_close_fd(fd);
                 // Delete stream notifiers
                 return Some(gen_delete_notifiers(&[fd]));
             } else if event & EventSet::IN == EventSet::IN {
@@ -518,15 +534,19 @@ impl EventNotifierHelper for OhUiTrans {
                 if let Err(e) = locked_trans.handle_recv() {
                     error!("{}.", e);
                     locked_trans.handle_disconnect();
+                    locked_trans.delay_close_fd(fd);
                     return Some(gen_delete_notifiers(&[fd]));
                 }
             }
             None
         });
 
+        let fd = trans.lock().unwrap().get_fd();
+        let new_fd = dup_fd(fd);
+
         vec![EventNotifier::new(
             NotifierOperation::AddShared,
-            trans.lock().unwrap().get_fd(),
+            new_fd,
             None,
             EventSet::IN | EventSet::HANG_UP,
             vec![handler],
@@ -613,6 +633,24 @@ fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
     ohui_register_event(OhUiListener::new(server.clone()), server)?;
     info!("Successfully start listener.");
     Ok(())
+}
+
+pub fn dup_fd(fd: RawFd) -> RawFd {
+    // SAFETY: The validation of fd is guaranteed by the caller.
+    // Event though it's invalid, dup syscall can return err.
+    let new_fd = unsafe { libc::dup(fd) };
+    if new_fd == -1 {
+        error!(
+            "Failed to duplicate fd {}, err {:?}",
+            fd,
+            std::io::Error::last_os_error()
+        );
+        // Directly return the old fd. There would be badfd error
+        // occurred while handling disconnection,
+        // but it doesn't matter.
+        return fd;
+    }
+    new_fd
 }
 
 /// Migration
