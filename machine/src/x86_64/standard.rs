@@ -42,7 +42,9 @@ use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
-use machine_manager::config::{BootIndexInfo, DriveConfig, NumaNode, SerialConfig, VmConfig};
+use machine_manager::config::{
+    BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
+};
 use machine_manager::event;
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
@@ -321,7 +323,7 @@ impl StdMachineOps for StdMachine {
                 hypervisor,
                 self.base.cpu_topo.max_cpus,
             )?;
-            vcpu.realize(boot_cfg, topology).with_context(|| {
+            vcpu.realize(&Some(boot_cfg), topology).with_context(|| {
                 format!(
                     "Failed to realize arch cpu register/features for CPU {}",
                     vcpu_id
@@ -507,7 +509,12 @@ impl MachineOps for StdMachine {
         locked_vm.add_devices(vm_config)?;
 
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
-        let boot_config = locked_vm.load_boot_source(fwcfg.as_ref())?;
+        let migrate = locked_vm.get_migrate_info();
+        let boot_config = if migrate.0 == MigrateMode::Unknown {
+            Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
+        } else {
+            None
+        };
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
             vm_config.machine_config.nr_cores,
@@ -523,7 +530,9 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        locked_vm.init_cpu_controller(boot_config, topology, vm.clone())?;
+        if migrate.0 == MigrateMode::Unknown {
+            locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
+        }
 
         if let Some(fw_cfg) = fwcfg {
             locked_vm

@@ -60,7 +60,7 @@ use machine_manager::config::str_slip_to_clap;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    BootIndexInfo, DriveConfig, NumaNode, Param, SerialConfig, VmConfig,
+    BootIndexInfo, DriveConfig, MigrateMode, NumaNode, Param, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{MachineLifecycle, VmState};
@@ -556,8 +556,16 @@ impl MachineOps for StdMachine {
             .with_context(|| MachineError::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
-        let boot_config = locked_vm
-            .load_boot_source(fwcfg.as_ref(), MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        let migrate = locked_vm.get_migrate_info();
+        let boot_config =
+            if migrate.0 == MigrateMode::Unknown {
+                Some(locked_vm.load_boot_source(
+                    fwcfg.as_ref(),
+                    MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+                )?)
+            } else {
+                None
+            };
         let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
@@ -582,22 +590,24 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .with_context(|| "Failed to add devices")?;
 
-        let mut fdt_helper = FdtBuilder::new();
-        locked_vm
-            .generate_fdt_node(&mut fdt_helper)
-            .with_context(|| MachineError::GenFdtErr)?;
-        let fdt_vec = fdt_helper.finish()?;
-        locked_vm.dtb_vec = fdt_vec.clone();
-        locked_vm
-            .base
-            .sys_mem
-            .write(
-                &mut fdt_vec.as_slice(),
-                GuestAddress(boot_config.fdt_addr),
-                fdt_vec.len() as u64,
-                AddressAttr::Ram,
-            )
-            .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
+        if let Some(boot_cfg) = boot_config {
+            let mut fdt_helper = FdtBuilder::new();
+            locked_vm
+                .generate_fdt_node(&mut fdt_helper)
+                .with_context(|| MachineError::GenFdtErr)?;
+            let fdt_vec = fdt_helper.finish()?;
+            locked_vm.dtb_vec = fdt_vec.clone();
+            locked_vm
+                .base
+                .sys_mem
+                .write(
+                    &mut fdt_vec.as_slice(),
+                    GuestAddress(boot_cfg.fdt_addr),
+                    fdt_vec.len() as u64,
+                    AddressAttr::Ram,
+                )
+                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+        }
 
         // If it is direct kernel boot mode, the ACPI can not be enabled.
         if let Some(fw_cfg) = fwcfg {

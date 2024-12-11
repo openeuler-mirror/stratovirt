@@ -162,8 +162,8 @@ impl CpuController {
         None
     }
 
-    pub fn get_boot_config(&self) -> &CPUBootConfig {
-        &self.cpu_config.as_ref().unwrap().boot_config
+    pub fn get_boot_config(&self) -> CPUBootConfig {
+        self.cpu_config.as_ref().unwrap().boot_config
     }
 
     pub fn get_hotplug_cpu_info(&self) -> (String, u8) {
