@@ -22,7 +22,7 @@ use devices::legacy::{FwCfgOps, Serial, SERIAL_ADDR};
 use devices::Device;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
-use machine_manager::config::{SerialConfig, VmConfig};
+use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::gen_base_func;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
@@ -170,7 +170,12 @@ impl MachineOps for LightMachine {
         locked_vm.add_devices(vm_config)?;
         trace::replaceable_info(&locked_vm.replaceable_info);
 
-        let boot_config = locked_vm.load_boot_source(None)?;
+        let migrate_info = locked_vm.get_migrate_info();
+        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+            Some(locked_vm.load_boot_source(None)?)
+        } else {
+            None
+        };
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),

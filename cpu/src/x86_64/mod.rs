@@ -75,7 +75,7 @@ pub enum X86RegsIndex {
 
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Copy)]
 pub struct X86CPUBootConfig {
     pub prot64_mode: bool,
     /// Register %rip value

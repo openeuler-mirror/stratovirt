@@ -21,7 +21,7 @@ use cpu::CPUTopology;
 use devices::legacy::{PL011, PL031};
 use devices::{Device, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor::kvm::aarch64::*;
-use machine_manager::config::{Param, SerialConfig, VmConfig};
+use machine_manager::config::{MigrateMode, Param, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::gen_base_func;
@@ -153,8 +153,12 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_cpus,
         )?;
 
-        let boot_config =
-            locked_vm.load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        let migrate_info = locked_vm.get_migrate_info();
+        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+            Some(locked_vm.load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?)
+        } else {
+            None
+        };
         let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
@@ -179,21 +183,23 @@ impl MachineOps for LightMachine {
         locked_vm.add_devices(vm_config)?;
         trace::replaceable_info(&locked_vm.replaceable_info);
 
-        let mut fdt_helper = FdtBuilder::new();
-        locked_vm
-            .generate_fdt_node(&mut fdt_helper)
-            .with_context(|| MachineError::GenFdtErr)?;
-        let fdt_vec = fdt_helper.finish()?;
-        locked_vm
-            .base
-            .sys_mem
-            .write(
-                &mut fdt_vec.as_slice(),
-                GuestAddress(boot_config.fdt_addr),
-                fdt_vec.len() as u64,
-                AddressAttr::Ram,
-            )
-            .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
+        if let Some(boot_cfg) = boot_config {
+            let mut fdt_helper = FdtBuilder::new();
+            locked_vm
+                .generate_fdt_node(&mut fdt_helper)
+                .with_context(|| MachineError::GenFdtErr)?;
+            let fdt_vec = fdt_helper.finish()?;
+            locked_vm
+                .base
+                .sys_mem
+                .write(
+                    &mut fdt_vec.as_slice(),
+                    GuestAddress(boot_cfg.fdt_addr),
+                    fdt_vec.len() as u64,
+                    AddressAttr::Ram,
+                )
+                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+        }
         register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
             .with_context(|| "Failed to register shutdown event")?;
 
