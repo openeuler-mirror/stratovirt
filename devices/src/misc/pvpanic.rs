@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::sync::{
-    atomic::{AtomicU16, Ordering},
+    atomic::{AtomicBool, AtomicU16, Ordering},
     Arc, Mutex, Weak,
 };
 
@@ -115,6 +115,7 @@ impl PvPanicPci {
                 base: DeviceBase::new(config.id.clone(), false, Some(parent_bus)),
                 config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             dev_id: AtomicU16::new(0),
             pvpanic: Arc::new(PvPanicState::new(config.supported_features)),

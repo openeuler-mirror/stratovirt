@@ -160,7 +160,7 @@ impl XhciOperReg {
         self.usb_status.load(Ordering::Acquire)
     }
 
-    pub fn set_usb_status_flag(&mut self, value: u32) {
+    pub fn set_usb_status_flag(&self, value: u32) {
         self.usb_status.fetch_or(value, Ordering::SeqCst);
     }
 
