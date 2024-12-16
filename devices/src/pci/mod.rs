@@ -33,6 +33,7 @@ pub use root_port::{RootPort, RootPortConfig};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::mem::size_of;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Result};
@@ -143,6 +144,8 @@ pub struct PciDevBase {
     pub config: PciConfig,
     /// Devfn.
     pub devfn: u8,
+    /// Bus master enable.
+    pub bme: Arc<AtomicBool>,
 }
 
 pub trait PciDevOps: Device + Send {
@@ -416,6 +419,7 @@ mod tests {
                     base: DeviceBase::new(name.to_string(), false, Some(parent_bus)),
                     config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, 0),
                     devfn,
+                    bme: Arc::new(AtomicBool::new(false)),
                 },
             }
         }

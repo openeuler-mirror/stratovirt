@@ -646,6 +646,8 @@ pub fn init_msix(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
     use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
     use crate::pci::host::tests::create_pci_host;
@@ -660,6 +662,7 @@ mod tests {
             base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
             config: PciConfig::new(1, PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
+            bme: Arc::new(AtomicBool::new(false)),
         };
         // Too many vectors.
         assert!(init_msix(
@@ -765,6 +768,7 @@ mod tests {
             base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
             config: PciConfig::new(1, PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
+            bme: Arc::new(AtomicBool::new(false)),
         };
         init_msix(&mut base, 0, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();
         let msix = base.config.msix.as_ref().unwrap();

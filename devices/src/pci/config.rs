@@ -1208,6 +1208,10 @@ impl PciConfig {
         let max_vector = table_len / MSIX_TABLE_ENTRY_SIZE as usize;
         vector_nr < max_vector as u32
     }
+
+    pub fn bus_maser_enable(&self) -> bool {
+        self.config[COMMAND as usize] as u16 & COMMAND_BUS_MASTER != 0
+    }
 }
 
 #[cfg(test)]

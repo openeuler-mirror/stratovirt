@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     Arc, Mutex, Weak,
 };
 
@@ -67,6 +67,7 @@ impl LPCBridge {
                 base: DeviceBase::new("ICH9 LPC bridge".to_string(), false, Some(parent_bus)),
                 config: PciConfig::new(0x1F << 3, PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0x1F << 3,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             sys_io,
             pm_timer: Arc::new(Mutex::new(AcpiPMTimer::new())),

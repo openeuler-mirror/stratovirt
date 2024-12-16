@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::sync::{
-    atomic::{AtomicU16, Ordering},
+    atomic::{AtomicBool, AtomicU16, Ordering},
     Arc, Mutex, RwLock, Weak,
 };
 
@@ -73,6 +73,7 @@ impl Ivshmem {
                 base: DeviceBase::new(name, false, Some(parent_bus)),
                 config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
                 devfn,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             dev_id: Arc::new(AtomicU16::new(0)),
             ram_mem_region,

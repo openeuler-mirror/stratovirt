@@ -12,7 +12,7 @@
 
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -135,6 +135,7 @@ impl VfioPciDevice {
                 base: DeviceBase::new(name, true, Some(parent_bus)),
                 config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
                 devfn,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             config_size: 0,
             config_offset: 0,
