@@ -743,8 +743,8 @@ impl SysBusDevOps for PFlash {
         // - cmd 0x98 represents PFlash CFI query.
         match self.cmd {
             0x00 => {
-                if self.read_data(data, offset).is_err() {
-                    error!("Failed to read data from PFlash.");
+                if let Err(e) = self.read_data(data, offset) {
+                    error!("Failed to read data from PFlash {:?}.", e);
                 }
                 return true;
             }
@@ -885,15 +885,10 @@ impl SysBusDevOps for PFlash {
         let data_len: u8 = data.len() as u8;
         trace::pflash_io_write(offset, data_len, value, self.write_cycle);
 
-        if self.write_cycle == 0
-            && self
-                .rom
-                .as_ref()
-                .unwrap()
-                .set_rom_device_romd(false)
-                .is_err()
-        {
-            error!("Failed PFlash to set device to read array mode.");
+        if self.write_cycle == 0 {
+            if let Err(e) = self.rom.as_ref().unwrap().set_rom_device_romd(false) {
+                error!("Failed PFlash to set device to read array mode {:?}.", e);
+            }
         }
 
         // Write:
