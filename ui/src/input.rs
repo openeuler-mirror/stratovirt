@@ -252,6 +252,23 @@ impl KeyBoardState {
 #[derive(Default)]
 struct LedState {
     kbd_led: u8,
+    sync: Option<Arc<dyn SyncLedstate>>,
+}
+
+pub trait SyncLedstate: Send + Sync {
+    fn sync_to_host(&self, state: u8) {
+        debug!("ledstate in guest is {}", state);
+    }
+}
+
+impl LedState {
+    fn register_led_sync(&mut self, sync: Arc<dyn SyncLedstate>) {
+        self.sync = Some(sync);
+    }
+
+    fn unregister_led_sync(&mut self) {
+        self.sync = None;
+    }
 }
 
 #[derive(Default)]
@@ -326,6 +343,14 @@ impl Inputs {
         }
         Ok(())
     }
+}
+
+pub fn register_led_sync(sync: Arc<dyn SyncLedstate>) {
+    LED_STATE.lock().unwrap().register_led_sync(sync);
+}
+
+pub fn unregister_led_sync() {
+    LED_STATE.lock().unwrap().unregister_led_sync();
 }
 
 pub fn register_keyboard(device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
@@ -465,6 +490,9 @@ pub fn get_kbd_led_state() -> u8 {
 
 pub fn set_kbd_led_state(state: u8) {
     LED_STATE.lock().unwrap().kbd_led = state;
+    if let Some(sync_cb) = LED_STATE.lock().unwrap().sync.as_ref() {
+        sync_cb.sync_to_host(state);
+    }
 }
 
 pub fn keyboard_modifier_get(key_mod: KeyboardModifier) -> bool {

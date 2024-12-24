@@ -32,7 +32,6 @@ use migration_derive::{ByteCode, Desc};
 use util::{
     byte_code::ByteCode,
     num_ops::{ranges_overlap, round_up},
-    test_helper::{add_msix_msg, is_test_enabled},
 };
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
@@ -400,14 +399,6 @@ impl Msix {
 
     pub fn send_msix(&self, vector: u16, dev_id: u16) {
         let msg = self.get_message(vector);
-
-        if is_test_enabled() {
-            let data = msg.data;
-            let mut addr: u64 = msg.address_hi as u64;
-            addr = (addr << 32) + msg.address_lo as u64;
-            add_msix_msg(addr, data);
-            return;
-        }
 
         let msix_vector = MsiVector {
             msg_addr_lo: msg.address_lo,

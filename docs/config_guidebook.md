@@ -1036,7 +1036,7 @@ Sample Configuration：
 ```shell
 -object authz-simple,id=authz0,identity=username
 -object tls-creds-x509,id=vnc-tls-creds0,dir=/etc/pki/vnc
--vnc 0.0.0.0:0,tls-creds=vnc-tls-creds0,sasl=on,sasl-authz=authz0
+-vnc 0.0.0.0:0,tls-creds=vnc-tls-creds0,sasl,sasl-authz=authz0
 ```
 
 Note: 1. Only one client can be connected at the same time. Follow-up clients connections will result in failure. 2. TLS encrypted transmission can be configured separately, but authentication must be used together with encryption.
@@ -1107,14 +1107,15 @@ Usually used in conjunction with VNC, the final images is rendered to the VNC cl
 
 Sample Configuration：
 ```shell
--device virtio-gpu-pci,id=<your id>,bus=pcie.0,addr=0x2.0x0[,max_outputs=<your max_outputs>][,edid=true|false][,xres=<your expected width>][,yres= <your expected height>][,max_hostmem=<max host memory can use>]
+-device virtio-gpu-pci,id=<your id>,bus=pcie.0,addr=0x2.0x0[,max_outputs=<your max_outputs>][,edid=true|false][,xres=<your expected width>][,yres= <your expected height>][,max_hostmem=<max host memory can use>][,enable_bar0=true|false]
 ```
 
-In addition to the required slot information, five optional properties are supported for virtio-gpu.
+In addition to the required slot information, six optional properties are supported for virtio-gpu.
 * max_outputs: Number of screens supported by the current graphics card. The maximum value is 16. (can switch by using ctrl + alt + <num>, for details, see vnc Client switchover)
 * edid: Edid feature, the virtual machine's kernel may checks this feature for HiDPi. You are advised to set to true.
 * xres/yres: The size of the login windows.
 * max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resolutions is affected.
+* enable_bar0: Enable a 64M bar0 in virtio-gpu.
 
 Note:
 1. Only virtio-gpu 2D supported.

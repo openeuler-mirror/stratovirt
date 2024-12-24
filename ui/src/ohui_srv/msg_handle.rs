@@ -22,10 +22,11 @@ use crate::{
     console::{get_active_console, graphic_hardware_ui_info},
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
-        release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED, INPUT_BUTTON_WHEEL_DOWN,
-        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK,
-        INPUT_POINT_FORWARD, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
-        KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
+        release_all_key, trigger_key, Axis, SyncLedstate, ABS_MAX, CAPS_LOCK_LED,
+        INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
+        INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD, INPUT_POINT_LEFT,
+        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK,
+        KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
     },
     keycode::{DpyMod, KeyCode},
 };
@@ -124,6 +125,20 @@ pub struct OhUiMsgHandler {
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<MsgReader>,
     writer: Mutex<MsgWriter>,
+}
+
+impl SyncLedstate for OhUiMsgHandler {
+    fn sync_to_host(&self, state: u8) {
+        let body = LedstateEvent::new(state as u32);
+        if let Err(e) = self
+            .writer
+            .lock()
+            .unwrap()
+            .send_message(EventType::Ledstate, &body)
+        {
+            error!("sync_to_host: failed to send message with error {e}");
+        }
+    }
 }
 
 impl OhUiMsgHandler {
@@ -307,11 +322,14 @@ impl OhUiMsgHandler {
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
         let body = WindowInfoEvent::new(w, h);
-        self.writer
+        if let Err(e) = self
+            .writer
             .lock()
             .unwrap()
             .send_message(EventType::WindowInfo, &body)
-            .unwrap();
+        {
+            error!("send_windowinfo: failed to send message with error {e}");
+        }
     }
 
     pub fn handle_dirty_area(&self, x: u32, y: u32, w: u32, h: u32) {

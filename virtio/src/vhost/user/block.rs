@@ -232,18 +232,13 @@ impl VirtioDevice for Block {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.client
-            .as_ref()
-            .with_context(|| "Failed to get client when deactivating device")?
-            .lock()
-            .unwrap()
-            .reset_vhost_user()?;
-        if !self.base.deactivate_evts.is_empty() {
-            unregister_event_helper(
-                self.blk_cfg.iothread.as_ref(),
-                &mut self.base.deactivate_evts,
-            )?;
+        if let Some(client) = &self.client {
+            client.lock().unwrap().reset_vhost_user(false);
         }
+        unregister_event_helper(
+            self.blk_cfg.iothread.as_ref(),
+            &mut self.base.deactivate_evts,
+        )?;
         Ok(())
     }
 

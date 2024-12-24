@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(feature = "virtio_gpu")]
@@ -316,6 +316,8 @@ pub struct VirtioPciDevice {
     multi_func: bool,
     /// If the device need to register irqfd.
     need_irqfd: bool,
+    /// Device activation error
+    activate_err: bool,
 }
 
 impl VirtioPciDevice {
@@ -326,6 +328,7 @@ impl VirtioPciDevice {
         device: Arc<Mutex<dyn VirtioDevice>>,
         parent_bus: Weak<Mutex<PciBus>>,
         multi_func: bool,
+        need_irqfd: bool,
     ) -> Self {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
@@ -342,12 +345,9 @@ impl VirtioPciDevice {
             notify_eventfds: Arc::new(NotifyEventFds::new(queue_num)),
             interrupt_cb: None,
             multi_func,
-            need_irqfd: false,
+            need_irqfd,
+            activate_err: false,
         }
-    }
-
-    pub fn enable_need_irqfd(&mut self) {
-        self.need_irqfd = true;
     }
 
     fn assign_interrupt_cb(&mut self) {
@@ -431,8 +431,8 @@ impl VirtioPciDevice {
         Ok(write_start)
     }
 
-    fn activate_device(&self) -> bool {
-        trace::virtio_tpt_common("activate_device", &self.base.base.id);
+    fn activate_device(&mut self) -> bool {
+        info!("func: activate_device, id: {:?}", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         if locked_dev.device_activated() {
             return true;
@@ -457,7 +457,10 @@ impl VirtioPciDevice {
             }
             let queue = Queue::new(*q_config, queue_type).unwrap();
             if q_config.ready && !queue.is_valid(&self.sys_mem) {
-                error!("Failed to activate device: Invalid queue");
+                error!(
+                    "Failed to activate device {}: Invalid queue",
+                    self.base.base.id
+                );
                 return false;
             }
             let arc_queue = Arc::new(Mutex::new(queue));
@@ -479,12 +482,18 @@ impl VirtioPciDevice {
             }
             let call_evts = NotifyEventFds::new(queue_num);
             if let Err(e) = locked_dev.set_guest_notifiers(&call_evts.events) {
-                error!("Failed to set guest notifiers, error is {:?}", e);
+                error!(
+                    "Failed to set guest notifiers, device {} error is {:?}",
+                    self.base.base.id, e
+                );
                 return false;
             }
             drop(locked_dev);
             if !self.queues_register_irqfd(&call_evts.events) {
-                error!("Failed to register queues irqfd.");
+                error!(
+                    "Failed to register queues irqfd for device {}",
+                    self.base.base.id
+                );
                 return false;
             }
             locked_dev = self.device.lock().unwrap();
@@ -496,40 +505,47 @@ impl VirtioPciDevice {
             self.interrupt_cb.clone().unwrap(),
             queue_evts,
         ) {
-            error!("Failed to activate device, error is {:?}", e);
+            // log only first activation error
+            if !self.activate_err {
+                self.activate_err = true;
+                error!(
+                    "Failed to activate device {}, error is {:?}",
+                    self.base.base.id, e
+                );
+            }
             return false;
         }
+        self.activate_err = false;
 
         locked_dev.set_device_activated(true);
         true
     }
 
-    fn deactivate_device(&self) -> bool {
-        trace::virtio_tpt_common("deactivate_device", &self.base.base.id);
+    fn deactivate_device(&self) {
+        info!("func: deactivate_device, id: {:?}", &self.base.base.id);
         if self.need_irqfd && self.base.config.msix.is_some() {
             let msix = self.base.config.msix.as_ref().unwrap();
             if msix.lock().unwrap().unregister_irqfd().is_err() {
-                return false;
+                warn!("unregister_irqfd failed");
             }
         }
-
+        // call deactivate unconditionally, since device can be
+        // in half initialized state
         let mut locked_dev = self.device.lock().unwrap();
-        if locked_dev.device_activated() {
-            if let Err(e) = locked_dev.deactivate() {
-                error!("Failed to deactivate virtio device, error is {:?}", e);
-                return false;
-            }
-            locked_dev.virtio_base_mut().reset();
+        if let Err(e) = locked_dev.deactivate() {
+            error!(
+                "Failed to deactivate virtio device {}, error is {:?}",
+                self.base.base.id, e
+            );
         }
+        locked_dev.virtio_base_mut().reset();
 
         if let Some(intx) = &self.base.config.intx {
             intx.lock().unwrap().reset();
         }
         if let Some(msix) = &self.base.config.msix {
             msix.lock().unwrap().clear_pending_vectors();
-        }
-
-        true
+        };
     }
 
     /// Read data from the common config of virtio device.
@@ -621,7 +637,7 @@ impl VirtioPciDevice {
             }
             COMMON_GF_REG => {
                 if locked_device.device_status() & CONFIG_STATUS_FEATURES_OK != 0 {
-                    error!("it's not allowed to set features after having been negoiated");
+                    error!("it's not allowed to set features after having been negoiated for device {}", self.base.base.id);
                     return Ok(());
                 }
                 let gfeatures_sel = locked_device.gfeatures_sel();
@@ -652,13 +668,16 @@ impl VirtioPciDevice {
                     let features = (locked_device.driver_features(1) as u64) << 32;
                     if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
                         error!(
-                            "Device is modern only, but the driver not support VIRTIO_F_VERSION_1"
+                            "Device {} is modern only, but the driver not support VIRTIO_F_VERSION_1", self.base.base.id
                         );
                         return Ok(());
                     }
                 }
                 if value != 0 && (locked_device.device_status() & !value) != 0 {
-                    error!("Driver must not clear a device status bit");
+                    error!(
+                        "Driver must not clear a device status bit, device {}",
+                        self.base.base.id
+                    );
                     return Ok(());
                 }
 
@@ -688,7 +707,10 @@ impl VirtioPciDevice {
                 .map(|config| config.size = value as u16)?,
             COMMON_Q_ENABLE_REG => {
                 if value != 1 {
-                    error!("Driver set illegal value for queue_enable {}", value);
+                    error!(
+                        "Driver set illegal value for queue_enable {}, device {}",
+                        value, self.base.base.id
+                    );
                     return Err(anyhow!(PciError::QueueEnable(value)));
                 }
                 locked_device
@@ -924,7 +946,7 @@ impl VirtioPciDevice {
         };
         if let Err(e) = result {
             error!(
-                "Failed to access virtio configuration through VirtioPciCfgAccessCap. {:?}",
+                "Failed to access virtio configuration through VirtioPciCfgAccessCap. device is {}, error is {:?}", self.base.base.id,
                 e
             );
         }
@@ -940,7 +962,10 @@ impl VirtioPciDevice {
 
     fn queues_register_irqfd(&self, call_fds: &[Arc<EventFd>]) -> bool {
         if self.base.config.msix.is_none() {
-            error!("Failed to get msix in virtio pci device configure");
+            error!(
+                "Failed to get msix in virtio pci device configure, device is {}",
+                self.base.base.id
+            );
             return false;
         }
 
@@ -997,6 +1022,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn realize(mut self) -> Result<()> {
+        info!("func: realize, id: {:?}", &self.base.base.id);
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -1164,7 +1190,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        trace::virtio_tpt_common("unrealize", &self.base.base.id);
+        info!("func: unrealize, id: {:?}", &self.base.base.id);
         self.device
             .lock()
             .unwrap()
@@ -1191,8 +1217,8 @@ impl PciDevOps for VirtioPciDevice {
         let end = offset + data_size;
         if end > PCIE_CONFIG_SPACE_SIZE || data_size > REG_SIZE {
             error!(
-                "Failed to write pcie config space at offset 0x{:x} with data size {}",
-                offset, data_size
+                "Failed to write pcie config space at offset {:#x} with data size {}, device is {}",
+                offset, data_size, self.base.base.id
             );
             return;
         }
@@ -1212,7 +1238,7 @@ impl PciDevOps for VirtioPciDevice {
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        trace::virtio_tpt_common("reset", &self.base.base.id);
+        info!("func: reset, id: {:?}", &self.base.base.id);
         self.deactivate_device();
         self.device
             .lock()
@@ -1333,10 +1359,16 @@ impl MigrationHook for VirtioPciDevice {
                     .unwrap()
                     .activate(self.sys_mem.clone(), cb, queue_evts)
             {
-                error!("Failed to resume device, error is {:?}", e);
+                error!(
+                    "Failed to resume device {}, error is {:?}",
+                    self.base.base.id, e
+                );
             }
         } else {
-            error!("Failed to resume device: No interrupt callback");
+            error!(
+                "Failed to resume device {}: No interrupt callback",
+                self.base.base.id
+            );
         }
 
         Ok(())
@@ -1456,6 +1488,7 @@ mod tests {
             virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
 
         // Read virtio device features
@@ -1513,6 +1546,7 @@ mod tests {
             virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
 
         // Read Queue's Descriptor Table address
@@ -1563,6 +1597,7 @@ mod tests {
             sys_mem,
             cloned_virtio_dev,
             Arc::downgrade(&parent_bus),
+            false,
             false,
         );
 
@@ -1638,6 +1673,7 @@ mod tests {
             virtio_dev,
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
         virtio_pci.init_write_mask(false).unwrap();
         virtio_pci.init_write_clear_mask(false).unwrap();
@@ -1678,6 +1714,7 @@ mod tests {
             virtio_dev,
             Arc::downgrade(&parent_bus),
             false,
+            false,
         );
         assert!(virtio_pci.realize().is_ok());
     }
@@ -1716,6 +1753,7 @@ mod tests {
             sys_mem,
             virtio_dev.clone(),
             Arc::downgrade(&parent_bus),
+            false,
             false,
         );
         #[cfg(target_arch = "aarch64")]
@@ -1808,6 +1846,7 @@ mod tests {
             virtio_dev,
             Arc::downgrade(&parent_bus),
             true,
+            false,
         );
 
         assert!(init_multifunction(

@@ -295,8 +295,14 @@ impl StreamData {
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let play = &header.play;
 
-        while play.fmt.fmt_generation == self.fmt.fmt_generation && self.chunk_idx != play.chunk_idx
-        {
+        loop {
+            if play.fmt.fmt_generation != self.fmt.fmt_generation {
+                break;
+            }
+            if self.chunk_idx == play.chunk_idx {
+                thread::sleep(time::Duration::from_micros(POLL_DELAY_US));
+                continue;
+            }
             // If the difference between the currently processed chunk_idx and the chunk_idx in
             // the shared memory is greater than 4, the processing of the backend device is too
             // slow and the backward data is skipped.

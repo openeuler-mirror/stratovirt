@@ -12,12 +12,12 @@
 
 use std::os::raw::c_void;
 use std::sync::{
-    atomic::{fence, AtomicI32, Ordering},
+    atomic::{fence, AtomicBool, AtomicI32, Ordering},
     Arc, Mutex,
 };
 use std::{cmp, ptr, thread, time};
 
-use log::{error, warn};
+use log::error;
 
 use crate::misc::scream::{AudioInterface, ScreamDirection, ShmemStreamHeader, StreamData};
 use util::ohos_binding::audio::*;
@@ -36,12 +36,16 @@ struct StreamUnit {
 }
 
 const STREAM_DATA_VEC_CAPACITY: usize = 30;
+const FLUSH_DELAY_THRESHOLD_MS: u64 = 100;
+const FLUSH_DELAY_MS: u64 = 5;
+const FLUSH_DELAY_CNT: u64 = 200;
 
 struct OhAudioRender {
     ctx: Option<AudioContext>,
     stream_data: Arc<Mutex<Vec<StreamUnit>>>,
-    prepared_data: u32,
+    data_size: AtomicI32,
     start: bool,
+    flushing: AtomicBool,
 }
 
 impl Default for OhAudioRender {
@@ -49,23 +53,14 @@ impl Default for OhAudioRender {
         OhAudioRender {
             ctx: None,
             stream_data: Arc::new(Mutex::new(Vec::with_capacity(STREAM_DATA_VEC_CAPACITY))),
-            prepared_data: 0,
+            data_size: AtomicI32::new(0),
             start: false,
+            flushing: AtomicBool::new(false),
         }
     }
 }
 
 impl OhAudioRender {
-    #[inline(always)]
-    fn check_data_ready(&self, recv_data: &StreamData) -> bool {
-        let size = recv_data.fmt.size as u32 / 8;
-        let channels = recv_data.fmt.channels as u32;
-        let rate = recv_data.fmt.get_rate();
-        // Wait for data of 500 ms ready.
-        // FIXME: the value of rate is wrong.
-        self.prepared_data >= (size * channels * rate / 2)
-    }
-
     fn check_fmt_update(&mut self, recv_data: &StreamData) {
         if self.ctx.is_some()
             && !self.ctx.as_ref().unwrap().check_fmt(
@@ -77,46 +72,62 @@ impl OhAudioRender {
             self.destroy();
         }
     }
+
+    fn flush(&mut self) {
+        self.flushing.store(true, Ordering::Release);
+        let mut cnt = 0;
+        while (cnt < FLUSH_DELAY_CNT) && (self.flushing.load(Ordering::Acquire)) {
+            thread::sleep(time::Duration::from_millis(FLUSH_DELAY_MS));
+            cnt += 1;
+        }
+        // We need to wait for 100ms to ensure the audio data has
+        // been flushed before stop renderer.
+        thread::sleep(time::Duration::from_millis(FLUSH_DELAY_THRESHOLD_MS));
+        let _ = self.ctx.as_ref().unwrap().flush_renderer();
+    }
 }
 
 impl OhAudioProcess for OhAudioRender {
     fn init(&mut self, stream: &StreamData) -> bool {
-        let mut context = AudioContext::new(AudioStreamType::Render);
-        match context.init(
-            stream.fmt.size,
-            stream.fmt.get_rate(),
-            stream.fmt.channels,
-            AudioProcessCb::RendererCb(Some(on_write_data_cb)),
-            ptr::addr_of!(*self) as *mut c_void,
-        ) {
-            Ok(()) => self.ctx = Some(context),
-            Err(e) => {
-                error!("failed to create oh audio render context: {}", e);
-                return false;
+        if self.ctx.is_none() {
+            let mut context = AudioContext::new(AudioStreamType::Render);
+            match context.init(
+                stream.fmt.size,
+                stream.fmt.get_rate(),
+                stream.fmt.channels,
+                AudioProcessCb::RendererCb(Some(on_write_data_cb)),
+                ptr::addr_of!(*self) as *mut c_void,
+            ) {
+                Ok(()) => self.ctx = Some(context),
+                Err(e) => {
+                    error!("failed to create oh audio render context: {}", e);
+                    return false;
+                }
             }
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
                 self.start = true;
-                true
             }
             Err(e) => {
                 error!("failed to start oh audio renderer: {}", e);
-                false
             }
         }
+        self.start
     }
 
     fn destroy(&mut self) {
         if self.ctx.is_some() {
             if self.start {
+                self.flush();
                 self.ctx.as_mut().unwrap().stop();
                 self.start = false;
             }
             self.ctx = None;
         }
-        self.stream_data.lock().unwrap().clear();
-        self.prepared_data = 0;
+        let mut locked_data = self.stream_data.lock().unwrap();
+        locked_data.clear();
+        self.data_size.store(0, Ordering::Relaxed);
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
@@ -128,14 +139,15 @@ impl OhAudioProcess for OhAudioRender {
             addr: recv_data.audio_base,
             len: recv_data.audio_size as u64,
         };
-        self.stream_data.lock().unwrap().push(su);
+        let mut locked_data = self.stream_data.lock().unwrap();
+        locked_data.push(su);
+        self.data_size
+            .fetch_add(recv_data.audio_size as i32, Ordering::Relaxed);
+        drop(locked_data);
 
-        if !self.start {
-            self.prepared_data += recv_data.audio_size;
-            if self.check_data_ready(recv_data) && !self.init(recv_data) {
-                error!("failed to init oh audio");
-                self.destroy();
-            }
+        if !self.start && !self.init(recv_data) {
+            error!("failed to init oh audio");
+            self.destroy();
         }
         0
     }
@@ -239,7 +251,11 @@ extern "C" fn on_write_data_cb(
             .as_mut()
             .unwrap_unchecked()
     };
-    if !render.start {
+
+    let data_size = render.data_size.load(Ordering::Relaxed);
+    if !render.flushing.load(Ordering::Acquire) && data_size < length {
+        // SAFETY: we checked len.
+        unsafe { ptr::write_bytes(buffer as *mut u8, 0, length as usize) };
         return 0;
     }
 
@@ -265,8 +281,16 @@ extern "C" fn on_write_data_cb(
             su.addr += len;
         }
     }
+    render
+        .data_size
+        .fetch_sub(length - left as i32, Ordering::Relaxed);
+
     if left > 0 {
-        warn!("data in stream unit list is not enough");
+        // SAFETY: we checked len.
+        unsafe { ptr::write_bytes(dst_addr as *mut u8, 0, left as usize) };
+    }
+    if render.flushing.load(Ordering::Acquire) && su_list.is_empty() {
+        render.flushing.store(false, Ordering::Release);
     }
     0
 }

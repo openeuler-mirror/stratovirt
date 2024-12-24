@@ -16,25 +16,25 @@ use std::time::{Duration, Instant};
 use once_cell::sync::{Lazy, OnceCell};
 
 #[derive(Default, Clone, Copy)]
-struct MsixMsg {
-    addr: u64,
-    data: u32,
+pub struct MsixMsg {
+    pub addr: u64,
+    pub data: u32,
 }
 
 impl MsixMsg {
-    fn new(addr: u64, data: u32) -> Self {
+    pub fn new(addr: u64, data: u32) -> Self {
         MsixMsg { addr, data }
     }
 }
 
 #[derive(Default, Clone, Copy, Debug)]
-struct IntxInfo {
-    irq: u32,
-    level: i8,
+pub struct IntxInfo {
+    pub irq: u32,
+    pub level: i8,
 }
 
 impl IntxInfo {
-    fn new(irq: u32, level: i8) -> Self {
+    pub fn new(irq: u32, level: i8) -> Self {
         IntxInfo { irq, level }
     }
 }
@@ -42,8 +42,8 @@ impl IntxInfo {
 static TEST_ENABLED: OnceCell<bool> = OnceCell::new();
 static TEST_BASE_TIME: OnceCell<Instant> = OnceCell::new();
 static mut TEST_CLOCK: Option<Arc<RwLock<u64>>> = None;
-static TEST_MSIX_LIST: Lazy<Mutex<Vec<MsixMsg>>> = Lazy::new(|| Mutex::new(Vec::new()));
-static TEST_INTX_LIST: Lazy<Mutex<Vec<IntxInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
+pub static TEST_MSIX_LIST: Lazy<Mutex<Vec<MsixMsg>>> = Lazy::new(|| Mutex::new(Vec::new()));
+pub static TEST_INTX_LIST: Lazy<Mutex<Vec<IntxInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 pub fn set_test_enabled() {
     if let Err(_e) = TEST_ENABLED.set(true) {
@@ -137,20 +137,6 @@ pub fn has_msix_msg(addr: u64, data: u32) -> bool {
         }
         None => false,
     }
-}
-
-pub fn trigger_intx(irq: u32, change: i8) {
-    let new_intx = IntxInfo::new(irq, change);
-    let mut intx_list_lock = TEST_INTX_LIST.lock().unwrap();
-
-    for intx in intx_list_lock.iter_mut() {
-        if intx.irq == new_intx.irq {
-            intx.level += new_intx.level;
-            return;
-        }
-    }
-
-    intx_list_lock.push(new_intx);
 }
 
 pub fn query_intx(irq: u32) -> bool {

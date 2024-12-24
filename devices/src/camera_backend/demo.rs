@@ -13,13 +13,10 @@
 //! Demo backend for vCamera device, that helps for testing.
 
 use std::fs::read_to_string;
-use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-#[cfg(not(target_env = "ohos"))]
-use cairo::{Format, ImageSurface};
 use log::{debug, error, info};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -239,20 +236,13 @@ impl ImageFrame {
             ImageMode::Random => RgbColor::from(self.frame_idx as u8 % 8),
         };
         debug!("Demo Image color {:?}", color);
-        let mut surface = ImageSurface::create(Format::Rgb24, width as i32, height as i32)?;
-        let cr = cairo::Context::new(&surface)?;
         let (r, g, b) = get_rgb_color(&color);
-        cr.set_source_rgb(r as f64, g as f64, b as f64);
-        cr.rectangle(0.0, 0.0, width as f64, height as f64);
-        cr.fill()?;
-        cr.paint()?;
-        drop(cr);
-        let data = surface.data()?;
+        let data = init_img(width, height, (r, g, b));
         let image = match format {
             FmtType::Mjpg => build_fake_mjpg(width, height),
-            FmtType::Yuy2 => convert_to_yuy2(data.deref(), width, height),
-            FmtType::Rgb565 => data.deref().to_vec(),
-            FmtType::Nv12 => bail!("demo device does not support NV12 now"),
+            FmtType::Yuy2 => convert_to_yuy2(&data, width, height),
+            FmtType::Rgb565 => data,
+            FmtType::Nv12 => convert_to_nv12(&data, width, height),
         };
         self.frame_idx += 1;
         if self.frame_idx > FRAME_IDX_LIMIT {
@@ -269,7 +259,12 @@ fn read_config(path: &str) -> Result<DeviceConfig> {
 }
 
 fn build_format_list() -> Vec<CameraFormatList> {
-    vec![build_yuy2_list(), build_mjpg_list(), build_rgb565_list()]
+    vec![
+        build_yuy2_list(),
+        build_mjpg_list(),
+        build_rgb565_list(),
+        build_nv12_list(),
+    ]
 }
 
 fn build_yuy2_list() -> CameraFormatList {
@@ -354,6 +349,33 @@ fn build_rgb565_list() -> CameraFormatList {
     CameraFormatList {
         format: FmtType::Rgb565,
         fmt_index: 3,
+        frame: vec![
+            CameraFrame {
+                width: 1280,
+                height: 720,
+                interval: INTERVALS_PER_SEC / 10,
+                index: 1,
+            },
+            CameraFrame {
+                width: 640,
+                height: 480,
+                interval: INTERVALS_PER_SEC / 30,
+                index: 2,
+            },
+            CameraFrame {
+                width: 480,
+                height: 240,
+                interval: INTERVALS_PER_SEC / 30,
+                index: 3,
+            },
+        ],
+    }
+}
+
+fn build_nv12_list() -> CameraFormatList {
+    CameraFormatList {
+        format: FmtType::Nv12,
+        fmt_index: 4,
         frame: vec![
             CameraFrame {
                 width: 1280,
@@ -500,6 +522,48 @@ fn clip(x: i32) -> u8 {
     } else {
         x as u8
     }
+}
+
+fn init_img(width: u32, height: u32, color: (u8, u8, u8)) -> Vec<u8> {
+    let len = height * width;
+    let (r, g, b) = color;
+    let mut img: Vec<u8> = Vec::with_capacity((len * 4) as usize);
+    for _ in 0..len {
+        img.push(b);
+        img.push(g);
+        img.push(r);
+        img.push(255);
+    }
+    img
+}
+
+fn convert_to_nv12(source: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let pixel = 4;
+    let len = height * width;
+    let mut img_nv12: Vec<u8> = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let idx = (i * pixel) as usize;
+        let (b, g, r) = (
+            source[idx] as f32,
+            source[idx + 1] as f32,
+            source[idx + 2] as f32,
+        );
+        let y = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+        img_nv12.push(y as u8);
+    }
+    for i in 0..(width * height / 2) {
+        let idx = (i * 2 * pixel) as usize;
+        let (b, g, r) = (
+            source[idx] as f32,
+            source[idx + 1] as f32,
+            source[idx + 2] as f32,
+        );
+        let u = (-0.147 * r - 0.289 * g + 0.436 * b + 128_f32) as u8;
+        let v = (0.615 * r - 0.515 * g - 0.100 * b + 128_f32) as u8;
+        img_nv12.push(u);
+        img_nv12.push(v);
+    }
+    img_nv12
 }
 
 fn convert_to_yuy2(source: &[u8], width: u32, height: u32) -> Vec<u8> {

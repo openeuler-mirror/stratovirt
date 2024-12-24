@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
@@ -188,7 +188,7 @@ impl VirtioMmioDevice {
     /// Activate the virtio device, this function is called by vcpu thread when frontend
     /// virtio driver is ready and write `DRIVER_OK` to backend.
     fn activate(&mut self) -> Result<()> {
-        trace::virtio_tpt_common("activate", &self.base.base.id);
+        info!("func: activate, id: {:?}", &self.base.base.id);
         let mut locked_dev = self.device.lock().unwrap();
         let queue_num = locked_dev.queue_num();
         let queue_type = locked_dev.queue_type();
@@ -409,10 +409,8 @@ impl SysBusDevOps for VirtioMmioDevice {
                     Ok(v) => v,
                     Err(ref e) => {
                         error!(
-                            "Failed to read mmio register {}, type: {}, {:?}",
-                            offset,
-                            self.device.lock().unwrap().device_type(),
-                            e,
+                            "Failed to read mmio register {:#x}, device: {}, {:?}",
+                            offset, self.base.base.id, e,
                         );
                         return false;
                     }
@@ -427,9 +425,9 @@ impl SysBusDevOps for VirtioMmioDevice {
                     .read_config(offset - 0x100, data)
                 {
                     error!(
-                        "Failed to read virtio-dev config space {} type: {} {:?}",
+                        "Failed to read virtio-dev config space {:#x} device: {}, {:?}",
                         offset - 0x100,
-                        self.device.lock().unwrap().device_type(),
+                        self.base.base.id,
                         e,
                     );
                     return false;
@@ -437,9 +435,8 @@ impl SysBusDevOps for VirtioMmioDevice {
             }
             _ => {
                 warn!(
-                    "Failed to read mmio register: overflows, offset is 0x{:x}, type: {}",
-                    offset,
-                    self.device.lock().unwrap().device_type(),
+                    "Failed to read mmio register: overflows, offset is {:#x}, device: {}",
+                    offset, self.base.base.id
                 );
             }
         };
@@ -454,10 +451,8 @@ impl SysBusDevOps for VirtioMmioDevice {
                 let value = LittleEndian::read_u32(data);
                 if let Err(ref e) = self.write_common_config(offset, value) {
                     error!(
-                        "Failed to write mmio register {}, type: {}, {:?}",
-                        offset,
-                        self.device.lock().unwrap().device_type(),
-                        e,
+                        "Failed to write mmio register {:#x}, device: {}, {:?}",
+                        offset, self.base.base.id, e,
                     );
                     return false;
                 }
@@ -474,9 +469,8 @@ impl SysBusDevOps for VirtioMmioDevice {
                     drop(locked_dev);
                     if let Err(ref e) = self.activate() {
                         error!(
-                            "Failed to activate dev, type: {}, {:?}",
-                            self.device.lock().unwrap().device_type(),
-                            e,
+                            "Failed to activate dev, device: {}, {:?}",
+                            self.base.base.id, e,
                         );
                         return false;
                     }
@@ -488,26 +482,25 @@ impl SysBusDevOps for VirtioMmioDevice {
                 if locked_device.check_device_status(CONFIG_STATUS_DRIVER, CONFIG_STATUS_FAILED) {
                     if let Err(ref e) = locked_device.write_config(offset - 0x100, data) {
                         error!(
-                            "Failed to write virtio-dev config space {}, type: {}, {:?}",
+                            "Failed to write virtio-dev config space {:#x}, device: {}, {:?}",
                             offset - 0x100,
-                            locked_device.device_type(),
+                            self.base.base.id,
                             e,
                         );
                         return false;
                     }
                 } else {
-                    error!("Failed to write virtio-dev config space: driver is not ready 0x{:X}, type: {}",
+                    error!("Failed to write virtio-dev config space: driver is not ready {:#x}, device: {}",
                         locked_device.device_status(),
-                        locked_device.device_type(),
+                        self.base.base.id,
                     );
                     return false;
                 }
             }
             _ => {
                 warn!(
-                    "Failed to write mmio register: overflows, offset is 0x{:x} type: {}",
-                    offset,
-                    self.device.lock().unwrap().device_type(),
+                    "Failed to write mmio register: overflows, offset is {:#x} device: {}",
+                    offset, self.base.base.id,
                 );
                 return false;
             }

@@ -38,7 +38,6 @@ pub enum CamBackendType {
     V4l2,
     #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
     OhCamera,
-    #[cfg(not(target_env = "ohos"))]
     Demo,
 }
 
@@ -51,7 +50,6 @@ impl FromStr for CamBackendType {
             "v4l2" => Ok(CamBackendType::V4l2),
             #[cfg(all(target_env = "ohos", feature = "usb_camera_oh"))]
             "ohcamera" => Ok(CamBackendType::OhCamera),
-            #[cfg(not(target_env = "ohos"))]
             "demo" => Ok(CamBackendType::Demo),
             _ => Err(anyhow!("Unknown camera backend type")),
         }

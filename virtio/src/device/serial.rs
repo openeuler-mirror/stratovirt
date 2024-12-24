@@ -263,8 +263,8 @@ impl VirtioDevice for Serial {
                 0 => 0,
                 1 => continue,
                 _ => queue_id - 1,
-            };
-            let port = find_port_by_nr(&self.ports, nr as u32);
+            } as u32;
+            let port = find_port_by_nr(&self.ports, nr);
             let handler = SerialPortHandler {
                 input_queue: queues[queue_id * 2].clone(),
                 input_queue_evt: queue_evts[queue_id * 2].clone(),
@@ -275,6 +275,7 @@ impl VirtioDevice for Serial {
                 driver_features: self.base.driver_features,
                 device_broken: self.base.broken.clone(),
                 port: port.clone(),
+                nr,
             };
             let handler_h = Arc::new(Mutex::new(handler));
             let notifiers = EventNotifierHelper::internal_notifiers(handler_h.clone());
@@ -412,6 +413,7 @@ struct SerialPortHandler {
     /// Virtio serial device is broken or not.
     device_broken: Arc<AtomicBool>,
     port: Option<Arc<Mutex<SerialPort>>>,
+    nr: u32,
 }
 
 /// Handler for queues which are used for control.
@@ -431,7 +433,7 @@ impl SerialPortHandler {
     fn output_handle(&mut self) {
         trace::virtio_receive_request("Serial".to_string(), "to IO".to_string());
         self.output_handle_internal().unwrap_or_else(|e| {
-            error!("Port handle output error: {:?}", e);
+            error!("Port {} handle output error: {:?}", self.nr, e);
             report_virtio_error(
                 self.interrupt_cb.clone(),
                 self.driver_features,
@@ -523,13 +525,13 @@ impl SerialPortHandler {
             // This may occur when chardev is abnormal. Consider optimizing this logic in the
             // future.
             if let Err(e) = locked_output.write_all(&buffer[..write_len]) {
-                error!("Failed to write msg to chardev: {:?}", e);
+                error!("Port {} failed to write msg to chardev: {:?}", self.nr, e);
             }
             if let Err(e) = locked_output.flush() {
-                error!("Failed to flush msg to chardev: {:?}", e);
+                error!("Port {} failed to flush msg to chardev: {:?}", self.nr, e);
             }
         } else {
-            error!("Failed to get output fd");
+            error!("Port {} failed to get output fd", self.nr);
         };
     }
 
@@ -552,7 +554,10 @@ impl SerialPortHandler {
         {
             Ok(n) => n,
             Err(_) => {
-                warn!("error occurred while getting available bytes of vring");
+                warn!(
+                    "error occurred while port {} getting available bytes of vring",
+                    self.nr
+                );
                 0
             }
         }
@@ -697,7 +702,7 @@ impl EventNotifierHelper for SerialPortHandler {
 impl InputReceiver for SerialPortHandler {
     fn receive(&mut self, buffer: &[u8]) {
         self.input_handle_internal(buffer).unwrap_or_else(|e| {
-            error!("Port handle input error: {:?}", e);
+            error!("Port {} handle input error: {:?}", self.nr, e);
             report_virtio_error(
                 self.interrupt_cb.clone(),
                 self.driver_features,

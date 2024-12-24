@@ -132,6 +132,12 @@ pub struct LedstateEvent {
 
 impl ByteCode for LedstateEvent {}
 
+impl LedstateEvent {
+    pub fn new(state: u32) -> Self {
+        LedstateEvent { state }
+    }
+}
+
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct GreetEvent {

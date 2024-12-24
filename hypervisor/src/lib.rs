@@ -14,6 +14,7 @@
 
 pub mod error;
 pub mod kvm;
+pub mod test;
 
 pub use error::HypervisorError;
 

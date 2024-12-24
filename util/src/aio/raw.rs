@@ -37,7 +37,8 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     }
     if ret < 0 {
         error!(
-            "Failed to pread: buf{}, size{}, offset{}, errno{}.",
+            "Failed to pread: fd {} buf {:#x}, size {}, offset{:#x}, errno {}.",
+            fd,
             buf,
             size,
             offset,
@@ -66,7 +67,8 @@ pub fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
     }
     if ret < 0 {
         error!(
-            "Failed to preadv: offset{}, errno{}.",
+            "Failed to preadv: fd {} offset {:#x}, errno {}.",
+            fd,
             offset,
             nix::errno::errno(),
         );
@@ -93,7 +95,8 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     }
     if ret < 0 {
         error!(
-            "Failed to pwrite: buf{}, size{}, offset{}, errno{}.",
+            "Failed to pwrite: fd {} buf {:#x}, size{}, offset {:#x}, errno {}.",
+            fd,
             buf,
             size,
             offset,
@@ -122,7 +125,8 @@ pub fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
     }
     if ret < 0 {
         error!(
-            "Failed to pwritev: offset{}, errno{}.",
+            "Failed to pwritev: fd {} offset {:#x}, errno {}.",
+            fd,
             offset,
             nix::errno::errno(),
         );
@@ -134,7 +138,7 @@ pub fn raw_datasync(fd: RawFd) -> i64 {
     // SAFETY: fd is valid.
     let ret = unsafe { i64::from(fdatasync(fd)) };
     if ret < 0 {
-        error!("Failed to fdatasync: errno{}.", nix::errno::errno());
+        error!("Failed to fdatasync: errno {}.", nix::errno::errno());
     }
     ret
 }
@@ -143,7 +147,7 @@ pub fn raw_discard(fd: RawFd, offset: usize, size: u64) -> i32 {
     let ret = do_fallocate(fd, FallocateMode::PunchHole, true, offset as u64, size);
 
     if ret < 0 && ret != -libc::ENOTSUP {
-        error!("Failed to fallocate for {}, errno {}.", fd, ret);
+        error!("Failed to fallocate for fd {}, errno {}.", fd, ret);
     }
     ret
 }

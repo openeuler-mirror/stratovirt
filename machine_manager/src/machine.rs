@@ -11,9 +11,11 @@
 // See the Mulan PSL v2 for more details.
 
 use std::os::unix::io::RawFd;
+use std::str::FromStr;
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use strum::VariantNames;
 
 use crate::config::ShutdownAction;
@@ -44,10 +46,23 @@ pub enum VmState {
 }
 
 /// Type for Hypervisor.
-#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HypervisorType {
     #[default]
     Kvm,
+    Test,
+}
+
+impl FromStr for HypervisorType {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "kvm" => Ok(HypervisorType::Kvm),
+            "test" => Ok(HypervisorType::Test),
+            _ => Err(()),
+        }
+    }
 }
 
 /// Trait to handle virtual machine lifecycle.

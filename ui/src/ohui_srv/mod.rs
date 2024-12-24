@@ -35,6 +35,7 @@ use crate::{
         DisplayChangeListenerOperations, DisplayMouse, DisplaySurface,
         DISPLAY_UPDATE_INTERVAL_DEFAULT,
     },
+    input::{register_led_sync, unregister_led_sync},
     pixman::{bytes_per_pixel, get_image_data, ref_pixman_image, unref_pixman_image},
 };
 use address_space::FileBackend;
@@ -94,7 +95,7 @@ pub struct OhUiServer {
     // transfer channel via unix sock
     channel: Arc<OhUiChannel>,
     // message handler
-    msg_handler: OhUiMsgHandler,
+    msg_handler: Arc<OhUiMsgHandler>,
     // connected or not
     connected: AtomicBool,
     // iothread processing unix socket
@@ -168,7 +169,7 @@ impl OhUiServer {
             passthru: OnceCell::new(),
             surface: RwLock::new(GuestSurface::new()),
             channel: channel.clone(),
-            msg_handler: OhUiMsgHandler::new(channel),
+            msg_handler: Arc::new(OhUiMsgHandler::new(channel)),
             connected: AtomicBool::new(false),
             iothread: OnceCell::new(),
             cursorbuffer,
@@ -252,6 +253,11 @@ impl OhUiServer {
     #[inline(always)]
     fn set_connect(&self, conn: bool) {
         self.connected.store(conn, Ordering::Relaxed);
+        if conn {
+            register_led_sync(self.msg_handler.clone());
+        } else {
+            unregister_led_sync();
+        }
     }
 
     fn set_iothread(&self, iothread: Option<String>) {
