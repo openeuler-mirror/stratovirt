@@ -60,6 +60,12 @@ pub enum UsbPacketStatus {
     IoError,
 }
 
+impl Default for UsbPacketStatus {
+    fn default() -> Self {
+        Self::NoDev
+    }
+}
+
 /// USB request used to transfer to USB device.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -385,10 +391,10 @@ pub trait UsbDevice: Send + Sync {
         }
     }
 
-    /// Handle control pakcet.
+    /// Handle control packet.
     fn handle_control(&mut self, packet: &Arc<Mutex<UsbPacket>>, device_req: &UsbDeviceRequest);
 
-    /// Handle data pakcet.
+    /// Handle data packet.
     fn handle_data(&mut self, packet: &Arc<Mutex<UsbPacket>>);
 
     /// Unique device id.
@@ -483,7 +489,10 @@ pub trait TransferOps: Send + Sync {
 }
 
 /// Usb packet used for device transfer data.
+#[derive(Default)]
 pub struct UsbPacket {
+    /// USB packet unique identifier.
+    pub packet_id: u32,
     /// USB packet id.
     pub pid: u32,
     pub is_async: bool,
@@ -498,6 +507,8 @@ pub struct UsbPacket {
     pub ep_number: u8,
     /// Transfer for complete packet.
     pub xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
+    /// Stream id.
+    pub stream: u32,
 }
 
 impl std::fmt::Display for UsbPacket {
@@ -512,12 +523,14 @@ impl std::fmt::Display for UsbPacket {
 
 impl UsbPacket {
     pub fn new(
+        packet_id: u32,
         pid: u32,
         ep_number: u8,
         iovecs: Vec<Iovec>,
         xfer_ops: Option<Weak<Mutex<dyn TransferOps>>>,
     ) -> Self {
         Self {
+            packet_id,
             pid,
             is_async: false,
             iovecs,
@@ -526,6 +539,7 @@ impl UsbPacket {
             actual_length: 0,
             ep_number,
             xfer_ops,
+            stream: 0,
         }
     }
 
@@ -573,28 +587,13 @@ impl UsbPacket {
         self.actual_length = copied as u32;
     }
 
-    pub fn get_iovecs_size(&mut self) -> u64 {
+    pub fn get_iovecs_size(&self) -> u64 {
         let mut size = 0;
         for iov in &self.iovecs {
             size += iov.iov_len;
         }
 
         size
-    }
-}
-
-impl Default for UsbPacket {
-    fn default() -> UsbPacket {
-        UsbPacket {
-            pid: 0,
-            is_async: false,
-            iovecs: Vec::new(),
-            parameter: 0,
-            status: UsbPacketStatus::NoDev,
-            actual_length: 0,
-            ep_number: 0,
-            xfer_ops: None,
-        }
     }
 }
 

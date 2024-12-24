@@ -690,6 +690,7 @@ pub struct XhciDevice {
     /// Runtime Register.
     mfindex_start: Duration,
     timer_id: Option<u64>,
+    packet_count: u32,
 }
 
 impl XhciDevice {
@@ -726,6 +727,7 @@ impl XhciDevice {
         }
 
         let xhci = XhciDevice {
+            packet_count: 0,
             oper,
             usb_ports: Vec::new(),
             numports_3: p3,
@@ -923,6 +925,11 @@ impl XhciDevice {
         Ok(())
     }
 
+    fn generate_packet_id(&mut self) -> u32 {
+        self.packet_count = self.packet_count.wrapping_add(1);
+        self.packet_count
+    }
+
     fn get_slot_id(&self, evt: &mut XhciEvent, trb: &XhciTRB) -> u32 {
         let slot_id = (trb.control >> TRB_CR_SLOTID_SHIFT) & TRB_CR_SLOTID_MASK;
         if slot_id < 1 || slot_id > self.slots.len() as u32 {
@@ -1075,7 +1082,7 @@ impl XhciDevice {
         for i in 1..=self.slots[(slot_id - 1) as usize].endpoints.len() as u32 {
             let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(i - 1) as usize];
             if epctx.enabled {
-                self.flush_ep_transfer(slot_id, i, TRBCCode::Invalid)?;
+                self.cancel_all_ep_transfers(slot_id, i, TRBCCode::Invalid)?;
             }
         }
         self.slots[(slot_id - 1) as usize].usb_port = None;
@@ -1182,7 +1189,9 @@ impl XhciDevice {
             index: 0,
             length: 0,
         };
+        let packet_id = self.generate_packet_id();
         let p = Arc::new(Mutex::new(UsbPacket::new(
+            packet_id,
             USB_TOKEN_OUT as u32,
             0,
             Vec::new(),
@@ -1432,7 +1441,7 @@ impl XhciDevice {
             trace::usb_xhci_unimplemented(&"Endpoint already disabled".to_string());
             return Ok(TRBCCode::Success);
         }
-        self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Invalid)?;
+        self.cancel_all_ep_transfers(slot_id, ep_id, TRBCCode::Invalid)?;
         let epctx = &mut self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize];
         if self.oper.dcbaap != 0 {
             epctx.set_state(EP_DISABLED)?;
@@ -1465,7 +1474,7 @@ impl XhciDevice {
             );
             return Ok(TRBCCode::ContextStateError);
         }
-        if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Stopped)? > 0 {
+        if self.cancel_all_ep_transfers(slot_id, ep_id, TRBCCode::Stopped)? > 0 {
             trace::usb_xhci_unimplemented(&format!(
                 "Endpoint stop when xfers running, slot_id {} epid {}",
                 slot_id, ep_id
@@ -1495,7 +1504,7 @@ impl XhciDevice {
             error!("Endpoint is not halted");
             return Ok(TRBCCode::ContextStateError);
         }
-        if self.flush_ep_transfer(slot_id, ep_id, TRBCCode::Invalid)? > 0 {
+        if self.cancel_all_ep_transfers(slot_id, ep_id, TRBCCode::Invalid)? > 0 {
             warn!("endpoint reset when xfers running!");
         }
         let slot = &mut self.slots[(slot_id - 1) as usize];
@@ -1929,9 +1938,11 @@ impl XhciDevice {
                     .get_address_map(GuestAddress(dma_addr), chunk as u64, &mut vec)?;
             }
         }
+
+        let packet_id = self.generate_packet_id();
         let (_, ep_number) = endpoint_id_to_number(locked_xfer.epid as u8);
         let xfer_ops = Arc::downgrade(xfer) as Weak<Mutex<dyn TransferOps>>;
-        let packet = UsbPacket::new(dir as u32, ep_number, vec, Some(xfer_ops));
+        let packet = UsbPacket::new(packet_id, dir as u32, ep_number, vec, Some(xfer_ops));
         Ok(Arc::new(Mutex::new(packet)))
     }
 
@@ -1971,8 +1982,8 @@ impl XhciDevice {
     }
 
     /// Flush transfer in endpoint in some case such as stop endpoint.
-    fn flush_ep_transfer(&mut self, slotid: u32, epid: u32, report: TRBCCode) -> Result<u32> {
-        trace::usb_xhci_flush_ep_transfer(&slotid, &epid);
+    fn cancel_all_ep_transfers(&mut self, slotid: u32, epid: u32, report: TRBCCode) -> Result<u32> {
+        trace::usb_xhci_cancel_all_ep_transfers(&slotid, &epid);
         let mut cnt = 0;
         let mut report = report;
         while let Some(xfer) = self.slots[(slotid - 1) as usize].endpoints[(epid - 1) as usize]
@@ -1983,7 +1994,7 @@ impl XhciDevice {
             if locked_xfer.complete {
                 continue;
             }
-            cnt += self.do_ep_transfer(slotid, epid, &mut locked_xfer, report)?;
+            cnt += self.cancel_one_ep_transfer(slotid, epid, &mut locked_xfer, report)?;
             if cnt != 0 {
                 // Only report once.
                 report = TRBCCode::Invalid;
@@ -1995,7 +2006,7 @@ impl XhciDevice {
         Ok(cnt)
     }
 
-    fn do_ep_transfer(
+    fn cancel_one_ep_transfer(
         &mut self,
         slotid: u32,
         ep_id: u32,
