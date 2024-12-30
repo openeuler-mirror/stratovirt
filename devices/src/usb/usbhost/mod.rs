@@ -1016,11 +1016,8 @@ impl EventNotifierHelper for UsbHost {
 
         let timeout = Some(Duration::new(0, 0));
         let handler: Rc<NotifierCallback> = Rc::new(move |_, _fd: RawFd| {
-            cloned_usbhost
-                .lock()
-                .unwrap()
-                .context
-                .handle_events(timeout)
+            let ctx = cloned_usbhost.lock().unwrap().context.clone();
+            ctx.handle_events(timeout)
                 .unwrap_or_else(|e| error!("Failed to handle event: {:?}", e));
             None
         });
