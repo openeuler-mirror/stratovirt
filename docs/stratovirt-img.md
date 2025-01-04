@@ -111,3 +111,26 @@ stratovirt-img snapshot -r old_snapshot_name new_snapshot_name img_path
 ```
 
 Note: The internal snapshot is not supported by raw.
+
+## Convert
+
+Convert the disk image to a new disk image using new format.
+Command syntax:
+
+```shell
+convert [ -f input_fmt | -O output_fmt | -S sparse_size ] input_filename output_filename
+```
+
+- -f fmt: Input image format.
+- -O output_fmt: Output image format.
+- -S sparse_size: the consecutive number of bytes that must contain only zeroes to create a sparse image during conversion. Unit: sector(512 bytes). Default is 8.
+- input_filename: name of the input file using *input_fmt* image format.
+- output_filename: name of the output file using *output_fmt* image format.
+
+Sample Configuration：
+
+```shell
+stratovirt-img convert -f qcow2 -O raw qcow2_img_path raw_img_path
+```
+
+Note: Only qcow2 image to raw image conversion is supported currently.
