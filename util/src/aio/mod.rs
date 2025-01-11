@@ -835,20 +835,21 @@ pub fn iov_discard_front_direct(iovec: &mut [Iovec], mut size: u64) -> Option<&m
     None
 }
 
+// Caller should have valid buffer base/len.
+unsafe fn buffer_is_zero(base: u64, len: u64) -> bool {
+    let slice = std::slice::from_raw_parts(base as *const u8, len as usize);
+    let (prefix, aligned, suffix) = slice.align_to::<u128>();
+    prefix.iter().all(|&x| x == 0)
+        && aligned.iter().all(|&x| x == 0)
+        && suffix.iter().all(|&x| x == 0)
+}
+
 // Caller should have valid hva iovec.
 unsafe fn iovec_is_zero(iovecs: &[Iovec]) -> bool {
-    let size = std::mem::size_of::<u64>() as u64;
     for iov in iovecs {
-        if iov.iov_len % size != 0 {
-            return false;
-        }
         // SAFETY: iov_base and iov_len has been checked in pop_avail().
-        let slice =
-            std::slice::from_raw_parts(iov.iov_base as *const u64, (iov.iov_len / size) as usize);
-        for val in slice.iter() {
-            if *val != 0 {
-                return false;
-            }
+        if !buffer_is_zero(iov.iov_base, iov.iov_len) {
+            return false;
         }
     }
     true
@@ -1058,5 +1059,60 @@ mod tests {
         unsafe { iovec_write_zero(&iovecs) };
         assert_eq!(buf1, vec![0_u8; 100]);
         assert_eq!(buf2, vec![0_u8; 40]);
+    }
+
+    #[test]
+    fn test_buffer_is_zero() {
+        let buf1: Vec<u8> = vec![0; 6];
+        let result1 = unsafe { buffer_is_zero(buf1.as_ptr() as u64, buf1.len() as u64) };
+        assert_eq!(result1, true);
+
+        let buf2: Vec<u8> = vec![0; 128];
+        let result2 = unsafe { buffer_is_zero(buf2.as_ptr() as u64, buf2.len() as u64) };
+        assert_eq!(result2, true);
+
+        let buf3: Vec<u8> = vec![0; 513];
+        let result3 = unsafe { buffer_is_zero(buf3.as_ptr() as u64, buf3.len() as u64) };
+        assert_eq!(result3, true);
+
+        let buf4: Vec<u8> = Vec::new();
+        let result4 = unsafe { buffer_is_zero(buf4.as_ptr() as u64, buf4.len() as u64) };
+        assert_eq!(result4, true);
+
+        let buf5: Vec<u8> = vec![0, 1, 0];
+        let result5 = unsafe { buffer_is_zero(buf5.as_ptr() as u64, buf5.len() as u64) };
+        assert_eq!(result5, false);
+
+        let buf6: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 0];
+        let result6 = unsafe { buffer_is_zero(buf6.as_ptr() as u64, buf6.len() as u64) };
+        assert_eq!(result6, false);
+
+        let mut buf7: Vec<u8> = vec![0; 1025];
+        buf7[700] = 1;
+        let result7 = unsafe { buffer_is_zero(buf7.as_ptr() as u64, buf7.len() as u64) };
+        assert_eq!(result7, false);
+    }
+
+    #[test]
+    fn test_iovec_is_zero() {
+        let buf1: Vec<u8> = vec![0; 5];
+        let buf2: Vec<u8> = vec![0; 16];
+        let iovecs1 = vec![
+            Iovec::new(buf1.as_ptr() as u64, buf1.len() as u64),
+            Iovec::new(buf2.as_ptr() as u64, buf2.len() as u64),
+        ];
+
+        let result1 = unsafe { iovec_is_zero(&iovecs1) };
+        assert_eq!(result1, true);
+
+        let buf3: Vec<u8> = vec![0, 1, 0];
+        let buf4: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 1, 0];
+        let iovecs2 = vec![
+            Iovec::new(buf3.as_ptr() as u64, buf3.len() as u64),
+            Iovec::new(buf4.as_ptr() as u64, buf4.len() as u64),
+        ];
+
+        let result2 = unsafe { iovec_is_zero(&iovecs2) };
+        assert_eq!(result2, false);
     }
 }
