@@ -557,7 +557,8 @@ extern "C" fn on_write_data_cb(
 
     trace::oh_scream_on_write_data_cb(len);
     trace::trace_scope_start!(ohaudio_write_cb, args = (len));
-    let mut locked_stream_data = match render.stream_data.lock().unwrap().data_size() == 0 {
+    let is_empty = render.stream_data.lock().unwrap().data_size() == 0;
+    let mut locked_stream_data = match is_empty {
         true => {
             render
                 .cond
