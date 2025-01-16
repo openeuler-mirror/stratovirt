@@ -113,6 +113,32 @@ impl Drop for ImageFile {
     }
 }
 
+fn image_do_create(create_options: &CreateOptions, print_info: bool) -> Result<()> {
+    let path = create_options.path.clone();
+    let file = Arc::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CREAT | libc::O_TRUNC)
+            .mode(0o660)
+            .open(path)?,
+    );
+
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
+
+    let mut driver: Box<dyn BlockDriverOps<()>> = match create_options.conf.format {
+        DiskFormat::Raw => Box::new(RawDriver::new(file, aio, create_options.conf.clone())),
+        DiskFormat::Qcow2 => Box::new(Qcow2Driver::new(file, aio, create_options.conf.clone())?),
+    };
+    let image_info = driver.as_mut().create_image(create_options)?;
+
+    if print_info {
+        println!("Stratovirt-img: {}", image_info);
+    }
+
+    Ok(())
+}
+
 pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     let mut create_options = CreateOptions::default();
     let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec!["f"], vec!["o"]);
@@ -123,10 +149,8 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let mut disk_fmt = DiskFormat::Raw;
-    if let Some(fmt) = arg_parser.opt_str("f") {
-        disk_fmt = DiskFormat::from_str(&fmt)?;
-    };
+    let fmt = arg_parser.opt_str("f").unwrap_or_else(|| "raw".to_string());
+    create_options.conf.format = DiskFormat::from_str(&fmt)?;
 
     let extra_options = arg_parser.opt_strs("o");
     for option in extra_options {
@@ -165,30 +189,7 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
         }
     }
 
-    let path = create_options.path.clone();
-    let file = Arc::new(
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_CREAT | libc::O_TRUNC)
-            .mode(0o660)
-            .open(path)?,
-    );
-
-    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
-    let image_info = match disk_fmt {
-        DiskFormat::Raw => {
-            create_options.conf.format = DiskFormat::Raw;
-            let mut raw_driver = RawDriver::new(file, aio, create_options.conf.clone());
-            raw_driver.create_image(&create_options)?
-        }
-        DiskFormat::Qcow2 => {
-            create_options.conf.format = DiskFormat::Qcow2;
-            let mut qcow2_driver = Qcow2Driver::new(file, aio, create_options.conf.clone())?;
-            qcow2_driver.create_image(&create_options)?
-        }
-    };
-    println!("Stratovirt-img: {}", image_info);
+    image_do_create(&create_options, true)?;
 
     Ok(())
 }
