@@ -247,10 +247,27 @@ impl ScreamCond {
     }
 
     fn wait_if_paused(&self, interface: Arc<Mutex<dyn AudioInterface>>) {
+        let mut destroy_thread_handle = None;
         let mut locked_pause = self.paused.lock().unwrap();
         while *locked_pause != 0 {
-            interface.lock().unwrap().destroy();
+            if destroy_thread_handle.is_none() {
+                let cloned_interface = interface.clone();
+                destroy_thread_handle = Some(
+                    thread::Builder::new()
+                        .name("scream destroy".to_string())
+                        .spawn(move || {
+                            cloned_interface.lock().unwrap().destroy();
+                        })
+                        .unwrap(),
+                );
+            }
             locked_pause = self.cond.wait(locked_pause).unwrap();
+        }
+        drop(locked_pause);
+        if let Some(handle) = destroy_thread_handle {
+            if let Err(e) = handle.join() {
+                error!("failed to join destroy thread, {:?}", e);
+            }
         }
     }
 
