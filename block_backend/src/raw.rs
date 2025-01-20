@@ -24,8 +24,8 @@ use anyhow::{bail, Result};
 use crate::{
     file::{CombineRequest, FileDriver},
     qcow2::is_aligned,
-    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
-    ImageInfo, SECTOR_SIZE,
+    BlockAllocStatus, BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+    CheckResult, CreateOptions, ImageInfo, SECTOR_SIZE,
 };
 use util::{
     aio::{get_iov_size, raw_write, Aio, Iovec},
@@ -211,5 +211,49 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
 
     fn get_status(&mut self) -> Arc<Mutex<BlockStatus>> {
         self.status.clone()
+    }
+
+    fn get_address_alloc_status(
+        &mut self,
+        offset: u64,
+        bytes: u64,
+    ) -> Result<(BlockAllocStatus, u64)> {
+        let data_start = self.driver.find_range_start(offset, true)?;
+        let hole_start = self.driver.find_range_start(offset, false)?;
+
+        if (data_start != offset as i64 && hole_start != offset as i64)
+            || (data_start == offset as i64 && hole_start == offset as i64)
+        {
+            bail!(
+                "Impossible! Offset {} cannot be both hole and data, or neither hole nor data.",
+                offset
+            );
+        }
+
+        // Data range.
+        if data_start == offset as i64 {
+            if hole_start == -1 {
+                // No hole. All data.
+                let disk_size = self.disk_size()?;
+                let size = std::cmp::min(disk_size - offset, bytes);
+                return Ok((BlockAllocStatus::DATA, size));
+            }
+
+            // It was all data before the hole.
+            let size = std::cmp::min((hole_start - data_start) as u64, bytes);
+            return Ok((BlockAllocStatus::DATA, size));
+        }
+
+        // hole_start == offset. Zero range.
+        if data_start == -1 {
+            // No data. All hole.
+            let disk_size = self.disk_size()?;
+            let size = std::cmp::min(disk_size - offset, bytes);
+            return Ok((BlockAllocStatus::ZERO, size));
+        }
+
+        // It was all hole before the data.
+        let size = std::cmp::min((data_start - hole_start) as u64, bytes);
+        Ok((BlockAllocStatus::ZERO, size))
     }
 }
