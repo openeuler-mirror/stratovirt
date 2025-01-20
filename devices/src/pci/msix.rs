@@ -301,7 +301,12 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let table_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
-            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+            let offset = offset as usize;
+            if offset
+                .checked_add(data.len())
+                .filter(|&sum| sum <= cloned_msix.lock().unwrap().table.len())
+                .is_none()
+            {
                 error!(
                     "It's forbidden to read out of the msix table(size: {}), with offset of {} and size of {}",
                     cloned_msix.lock().unwrap().table.len(),
@@ -310,13 +315,17 @@ impl Msix {
                 );
                 return false;
             }
-            let offset = offset as usize;
             data.copy_from_slice(&cloned_msix.lock().unwrap().table[offset..(offset + data.len())]);
             true
         };
         let cloned_msix = msix.clone();
         let table_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
-            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+            let offset = offset as usize;
+            if offset
+                .checked_add(data.len())
+                .filter(|&sum| sum <= cloned_msix.lock().unwrap().table.len())
+                .is_none()
+            {
                 error!(
                     "It's forbidden to write out of the msix table(size: {}), with offset of {} and size of {}",
                     cloned_msix.lock().unwrap().table.len(),
@@ -328,7 +337,6 @@ impl Msix {
             let mut locked_msix = cloned_msix.lock().unwrap();
             let vector: u16 = offset as u16 / MSIX_TABLE_ENTRY_SIZE;
             let was_masked: bool = locked_msix.is_vector_masked(vector);
-            let offset = offset as usize;
             locked_msix.table[offset..(offset + 4)].copy_from_slice(data);
 
             let is_masked: bool = locked_msix.is_vector_masked(vector);
@@ -357,7 +365,12 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let pba_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
-            if offset as usize + data.len() > cloned_msix.lock().unwrap().pba.len() {
+            let offset = offset as usize;
+            if offset
+                .checked_add(data.len())
+                .filter(|&sum| sum <= cloned_msix.lock().unwrap().pba.len())
+                .is_none()
+            {
                 error!(
                     "Fail to read msi pba, illegal data length {}, offset {}",
                     data.len(),
@@ -365,7 +378,6 @@ impl Msix {
                 );
                 return false;
             }
-            let offset = offset as usize;
             data.copy_from_slice(&cloned_msix.lock().unwrap().pba[offset..(offset + data.len())]);
             true
         };
