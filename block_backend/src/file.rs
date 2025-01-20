@@ -25,7 +25,7 @@ use std::{
     },
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 
@@ -212,6 +212,81 @@ impl<T: Clone + 'static> FileDriver<T> {
         }
         Ok(())
     }
+
+    // Find the data / hole range around offset `start`.
+    // According to linux man-pages:
+    //
+    // off_t lseek(int fd, off_t offset, int whence);
+    //
+    // SEEK_DATA:
+    // Adjust the file offset to the next location in the file greater than or equal to `offset`
+    // containing data. If offset points to data, then the file offset is set to `offset`.
+    // SEEK_HOLE:
+    // Adjust the file offset to the next hole in the file greater than or equal to offset. If offset points into the
+    // middle of a hole, then the file offset is set to offset. If there is no hole past offset, then the file offset is
+    // adjusted to the end of the file (i.e., there is an implicit hole at the end of any file).
+    //
+    // Return Value:
+    // Upon successful completion, lseek() returns the resulting offset location as measured in bytes from the beginning of the file.
+    // On error, the value (off_t) -1 is returned and errno is set to indicate the error.
+    //
+    // Common error codes:
+    // EBADF: fd is not an open file descriptor.
+    // EINVAL: whence is not valid. Or: the resulting file offset would be negative, or beyond the end of a seekable device.
+    // EOVERFLOW: The resulting file offset cannot be represented in an off_t.
+    // ESPIPE: fd is associated with a pipe, socket, or FIFO.
+    // ENXIO: whence is SEEK_DATA or SEEK_HOLE, and the current file offset is beyond the end of the file.
+    //
+    // So, SEEK_DATA has these cases:
+    // D1. doff == start: start is in data.
+    // D2. doff > start: start is in a hole, next data at doff.
+    // D3. doff < 0 && errno == ENXIO: either start is in a trailing hole or start is beyond EOF.
+    // D4. doff < 0 && errno != ENXIO: error.
+    //
+    // SEEK_HOLE has these cases:
+    // H1: hoff == start: start is in a hole.
+    // H2: hoff > start: start is in data, next hole at hoff.
+    // H3: hoff < 0, errno = ENXIO: start is beyond EOF.
+    // H4: hoff < 0, errno != ENXIO: error.
+    pub fn find_range_start(&mut self, start: u64, data_range: bool) -> Result<i64> {
+        if start > std::i64::MAX as u64 {
+            bail!("Too large offset {}", start);
+        }
+
+        let file_fd = self.file.as_raw_fd();
+        let whence = if data_range {
+            libc::SEEK_DATA
+        } else {
+            libc::SEEK_HOLE
+        };
+
+        // SAFETY: validated `start`.
+        let off = unsafe { libc::lseek(file_fd, start as i64, whence) };
+
+        if off < 0 {
+            let errno = nix::errno::errno();
+            // D4 or H4: error.
+            if errno != libc::ENXIO {
+                bail!("lseek() whence {} error {}", whence, errno);
+            }
+            // D3 or H3.
+            return Ok(-1);
+        }
+
+        // Invalid return by lseek().
+        if off < start as i64 {
+            bail!(
+                "lseek() whence {} return invalid value {} around offset {}",
+                whence,
+                off,
+                start
+            );
+        }
+
+        // D1 or H1: off == start: start(off) is in a data(D1) / hole(H1).
+        // D2 or H2: off > start: start is in hole(D2) / data(H2), next data(D2) / hole(H2) at off.
+        Ok(off)
+    }
 }
 
 struct FileIoHandler<T: Clone + 'static> {
@@ -306,4 +381,51 @@ fn build_event_notifier(
     );
     notifier.handler_poll = handler_poll;
     notifier
+}
+
+#[cfg(test)]
+mod test {
+    use std::fs::{remove_file, OpenOptions};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    use super::*;
+    use crate::qcow2::SyncAioInfo;
+    use crate::*;
+    use util::aio::AioEngine;
+
+    #[test]
+    fn test_find_range_start() {
+        let path = "/tmp/test_find_range_start_file";
+        let file = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_CREAT | libc::O_TRUNC | libc::O_RDWR)
+                .mode(0o660)
+                .open(path)
+                .unwrap(),
+        );
+
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let mut file_driver = FileDriver::new(file, aio, BlockProperty::default());
+        // End of file.
+        let off = file_driver.find_range_start(0, false).unwrap();
+        assert_eq!(off, -1);
+        let off = file_driver.find_range_start(0, true).unwrap();
+        assert_eq!(off, -1);
+
+        // Write 4096 bytes in offset 4096 bytes.
+        // Note: We are using cache IO. Different file systems may have differences in cache IO alignment.
+        // So we tested all by using 4K alignment IO, which can already meet the needs of the vast majority of file systems.
+        let buf = [1_u8; 4094];
+        let iov = Iovec::new(buf.as_ptr() as u64, buf.len() as u64);
+        let req = CombineRequest::new(vec![iov], 4096, buf.len() as u64);
+        assert!(file_driver.write_vectored(vec![req], ()).is_ok());
+        let off = file_driver.find_range_start(0, true).unwrap();
+        assert_eq!(off, 4096);
+        let off = file_driver.find_range_start(0, false).unwrap();
+        assert_eq!(off, 0);
+
+        remove_file(path).unwrap();
+    }
 }
