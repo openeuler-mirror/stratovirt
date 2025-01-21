@@ -709,11 +709,11 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         if !read_data_u32(data, &mut value) {
             return false;
         }
-        if !xhci.lock().unwrap().running() {
+        let mut xhci = xhci.lock().unwrap();
+        if !xhci.running() {
             error!("Failed to write doorbell, XHCI is not running");
             return false;
         }
-        let mut xhci = xhci.lock().unwrap();
         let slot_id = (offset >> 2) as u32;
         if slot_id == 0 {
             error!("Invalid slot id 0 !");
