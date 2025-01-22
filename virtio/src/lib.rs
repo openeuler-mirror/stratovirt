@@ -36,6 +36,7 @@ pub use device::balloon::*;
 pub use device::block::{Block, BlockState, VirtioBlkConfig, VirtioBlkDevConfig};
 #[cfg(feature = "virtio_gpu")]
 pub use device::gpu::*;
+pub use device::input::*;
 pub use device::net::*;
 #[cfg(feature = "virtio_rng")]
 pub use device::rng::{Rng, RngConfig, RngState};
@@ -83,6 +84,7 @@ pub const VIRTIO_TYPE_RNG: u32 = 4;
 pub const VIRTIO_TYPE_BALLOON: u32 = 5;
 pub const VIRTIO_TYPE_SCSI: u32 = 8;
 pub const VIRTIO_TYPE_GPU: u32 = 16;
+pub const VIRTIO_TYPE_INPUT: u32 = 18;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const VIRTIO_TYPE_FS: u32 = 26;
 
