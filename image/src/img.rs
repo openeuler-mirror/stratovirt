@@ -23,12 +23,12 @@ use crate::{cmdline::ArgsParse, BINARY_NAME};
 use block_backend::{
     qcow2::{header::QcowHeader, InternalSnapshotOps, Qcow2Driver, SyncAioInfo},
     raw::RawDriver,
-    BlockDriverOps, BlockProperty, CheckResult, CreateOptions, ImageInfo, FIX_ERRORS, FIX_LEAKS,
-    NO_FIX, SECTOR_SIZE,
+    BlockAllocStatus, BlockDriverOps, BlockProperty, CheckResult, CreateOptions, ImageInfo,
+    FIX_ERRORS, FIX_LEAKS, NO_FIX, SECTOR_SIZE,
 };
 use machine_manager::config::{memory_unit_conversion, DiskFormat};
 use util::{
-    aio::{Aio, AioEngine, WriteZeroesState},
+    aio::{buffer_is_zero, Aio, AioEngine, Iovec, WriteZeroesState},
     file::{lock_file, open_file, unlock_file},
 };
 
@@ -113,6 +113,32 @@ impl Drop for ImageFile {
     }
 }
 
+fn image_do_create(create_options: &CreateOptions, print_info: bool) -> Result<()> {
+    let path = create_options.path.clone();
+    let file = Arc::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CREAT | libc::O_TRUNC)
+            .mode(0o660)
+            .open(path)?,
+    );
+
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
+
+    let mut driver: Box<dyn BlockDriverOps<()>> = match create_options.conf.format {
+        DiskFormat::Raw => Box::new(RawDriver::new(file, aio, create_options.conf.clone())),
+        DiskFormat::Qcow2 => Box::new(Qcow2Driver::new(file, aio, create_options.conf.clone())?),
+    };
+    let image_info = driver.as_mut().create_image(create_options)?;
+
+    if print_info {
+        println!("Stratovirt-img: {}", image_info);
+    }
+
+    Ok(())
+}
+
 pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     let mut create_options = CreateOptions::default();
     let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec!["f"], vec!["o"]);
@@ -123,10 +149,8 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let mut disk_fmt = DiskFormat::Raw;
-    if let Some(fmt) = arg_parser.opt_str("f") {
-        disk_fmt = DiskFormat::from_str(&fmt)?;
-    };
+    let fmt = arg_parser.opt_str("f").unwrap_or_else(|| "raw".to_string());
+    create_options.conf.format = DiskFormat::from_str(&fmt)?;
 
     let extra_options = arg_parser.opt_strs("o");
     for option in extra_options {
@@ -165,30 +189,7 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
         }
     }
 
-    let path = create_options.path.clone();
-    let file = Arc::new(
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_CREAT | libc::O_TRUNC)
-            .mode(0o660)
-            .open(path)?,
-    );
-
-    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
-    let image_info = match disk_fmt {
-        DiskFormat::Raw => {
-            create_options.conf.format = DiskFormat::Raw;
-            let mut raw_driver = RawDriver::new(file, aio, create_options.conf.clone());
-            raw_driver.create_image(&create_options)?
-        }
-        DiskFormat::Qcow2 => {
-            create_options.conf.format = DiskFormat::Qcow2;
-            let mut qcow2_driver = Qcow2Driver::new(file, aio, create_options.conf.clone())?;
-            qcow2_driver.create_image(&create_options)?
-        }
-    };
-    println!("Stratovirt-img: {}", image_info);
+    image_do_create(&create_options, true)?;
 
     Ok(())
 }
@@ -380,6 +381,250 @@ pub(crate) fn image_resize(mut args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+// Default 4k(8 sectors) for sparse detection.
+const DEFAULT_SPARSE_SIZE: u8 = 8;
+// Default 2M buffer size for convert.
+const DEFAULT_BUF_SIZE: usize = 1 << 21;
+
+#[derive(Debug, PartialEq, Eq)]
+enum ConvertDataStatus {
+    Zero = 0,
+    Data,
+}
+
+impl ConvertDataStatus {
+    fn from_bool(is_zero: bool) -> Self {
+        if is_zero {
+            ConvertDataStatus::Zero
+        } else {
+            ConvertDataStatus::Data
+        }
+    }
+}
+
+// Describe a continuous address segment which has the same allocation status when converting.
+#[derive(PartialEq, Eq)]
+struct ConvertSeg {
+    start: u64,
+    len: u64,
+    status: ConvertDataStatus,
+}
+
+impl ConvertSeg {
+    fn new(start: u64, len: u64, is_zero: bool) -> Self {
+        Self {
+            start,
+            len,
+            status: ConvertDataStatus::from_bool(is_zero),
+        }
+    }
+}
+
+fn convert_do_read(
+    driver: &mut dyn BlockDriverOps<()>,
+    buf: &mut [u8],
+    len: u64,
+    offset: u64,
+) -> Result<()> {
+    let iov = vec![Iovec {
+        iov_base: buf.as_ptr() as u64,
+        iov_len: len,
+    }];
+    driver.read_vectored(iov, offset as usize, ())
+}
+
+fn convert_do_seg_write(
+    driver: &mut dyn BlockDriverOps<()>,
+    buf: &mut [u8],
+    data_seg: &ConvertSeg,
+) -> Result<()> {
+    match data_seg.status {
+        ConvertDataStatus::Data => {
+            let iov = vec![Iovec {
+                iov_base: buf.as_ptr() as u64,
+                iov_len: data_seg.len,
+            }];
+            driver.write_vectored(iov, data_seg.start as usize, ())
+        }
+        ConvertDataStatus::Zero => {
+            // The output image is a newly created sparse file, which defaults to all holes.
+            // Sequential writing does not require writing zeroes again. Do nothing.
+            Ok(())
+        }
+    }
+}
+
+fn convert_do_write(
+    driver: &mut dyn BlockDriverOps<()>,
+    buf: &mut [u8],
+    buf_len: u64,
+    offset: u64,
+    sparse_size: u64,
+) -> Result<()> {
+    let mut convert_seg = ConvertSeg::new(offset, 0, true);
+    let mut first_check = true;
+
+    let mut pos = 0_u64;
+    while pos < buf_len {
+        let detect_size = std::cmp::min(sparse_size, buf_len - pos);
+        let detect_buf = &buf[pos as usize..(pos + detect_size) as usize];
+
+        // SAFETY: Buffer is a local `Vec` variable in `image_convert`, its base and len are both valid values.
+        let local_zero = unsafe { buffer_is_zero(detect_buf.as_ptr() as u64, detect_size) };
+
+        if first_check {
+            convert_seg.status = ConvertDataStatus::from_bool(local_zero);
+            first_check = false;
+        }
+
+        if ConvertDataStatus::from_bool(local_zero) != convert_seg.status {
+            convert_do_seg_write(
+                driver,
+                &mut buf[(convert_seg.start - offset) as usize..pos as usize],
+                &convert_seg,
+            )?;
+
+            convert_seg.status = ConvertDataStatus::from_bool(local_zero);
+            convert_seg.start = offset + pos;
+            convert_seg.len = detect_size;
+
+            pos += detect_size;
+            continue;
+        }
+
+        convert_seg.len += detect_size;
+        pos += detect_size;
+    }
+
+    if !first_check {
+        convert_do_seg_write(
+            driver,
+            &mut buf[(convert_seg.start - offset) as usize..pos as usize],
+            &convert_seg,
+        )?;
+    }
+    Ok(())
+}
+
+fn image_create_blockdriver(
+    file: Arc<File>,
+    format: DiskFormat,
+) -> Result<Box<dyn BlockDriverOps<()>>> {
+    let conf = BlockProperty {
+        format,
+        ..Default::default()
+    };
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+
+    match format {
+        DiskFormat::Qcow2 => {
+            let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone())?;
+            qcow2_driver.load_metadata(conf)?;
+            Ok(Box::new(qcow2_driver))
+        }
+        DiskFormat::Raw => Ok(Box::new(RawDriver::new(file, aio, conf))),
+    }
+}
+
+pub(crate) fn image_convert(args: Vec<String>) -> Result<()> {
+    let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec!["f", "O", "S"], vec![]);
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    // Parse the image path. Command line should have 2 args at the end(input filename and output filename).
+    if arg_parser.free.len() != 2 {
+        bail!("Invalid input/output filenames.");
+    }
+    let input_path = arg_parser.free[0].clone();
+    let output_path = arg_parser.free[1].clone();
+
+    // Check output image filename: to avoid accidentally deleting existing files,
+    // it is prohibited to use the name of an existing file as the output image name.
+    if std::path::Path::new(&output_path).exists() {
+        bail!(
+            "The file {} already exists, please use a different name.",
+            output_path
+        );
+    }
+
+    // Parse the input image format. If not set, it will detect the corresponding image file to determine the image format.
+    let input_fmt_str = arg_parser.opt_str("f").unwrap_or_default();
+    let input_image_file = ImageFile::create(&input_path, true)?;
+    let detect_input_fmt = input_image_file.detect_img_format()?;
+    if !input_fmt_str.is_empty() {
+        let input_fmt = DiskFormat::from_str(&input_fmt_str)?;
+        if detect_input_fmt != input_fmt {
+            bail!("'{}' is not a {} file.", input_path, input_fmt_str);
+        }
+    }
+
+    // Parse the output image format. Default is "raw".
+    let output_fmt_str = arg_parser.opt_str("O").unwrap_or_else(|| "raw".to_string());
+    let output_fmt = DiskFormat::from_str(&output_fmt_str)?;
+
+    // Parse the min sparse.
+    let min_sparse_str = arg_parser
+        .opt_str("S")
+        .unwrap_or_else(|| DEFAULT_SPARSE_SIZE.to_string());
+    let min_sparse = min_sparse_str.parse::<u64>()? * SECTOR_SIZE;
+
+    // Create input image driver.
+    let mut input_driver_box =
+        image_create_blockdriver(input_image_file.file.clone(), detect_input_fmt)?;
+    let input_driver = input_driver_box.as_mut();
+    let size = input_driver.disk_size()?;
+
+    // Create new output file.
+    let mut create_options = CreateOptions {
+        path: output_path.clone(),
+        img_size: size,
+        ..Default::default()
+    };
+    create_options.conf.format = output_fmt;
+    image_do_create(&create_options, false)?;
+
+    // Create output image driver.
+    let output_image_file = ImageFile::create(&output_path, false)?;
+    let mut output_driver_box =
+        image_create_blockdriver(output_image_file.file.clone(), output_fmt)?;
+    let output_driver = output_driver_box.as_mut();
+
+    // Convert from src image to dst image.
+    let mut offset = 0;
+    let mut buf = vec![0_u8; DEFAULT_BUF_SIZE];
+    while offset < size {
+        // Get address segments with the same allocation status.
+        let (status, len) = input_driver.get_address_alloc_status(offset as u64, size - offset)?;
+        match status {
+            // `DATA` means that these data should be read from the src image and be written to the dst image.
+            BlockAllocStatus::DATA => {
+                let mut need_convert = len;
+                let mut cur_offset = offset;
+                while need_convert > 0 {
+                    let data_len = std::cmp::min(DEFAULT_BUF_SIZE as u64, need_convert);
+                    convert_do_read(input_driver, &mut buf, data_len, cur_offset)?;
+                    convert_do_write(output_driver, &mut buf, data_len, cur_offset, min_sparse)?;
+                    cur_offset += data_len;
+                    need_convert -= data_len;
+                }
+            }
+            // `ZERO` means that these data can be treated as holes.
+            BlockAllocStatus::ZERO => {
+                // The output image is a newly created sparse file, which defaults to all holes.
+                // Sequential writing does not require writing zeroes again. Do nothing.
+            }
+        };
+
+        offset += len;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
     let mut arg_parser = ArgsParse::create(
         vec!["l", "h", "help", "r"],
@@ -553,6 +798,7 @@ info filename
 check [-r [leaks | all]] [-no_print_error] [-f fmt] filename
 resize [-f fmt] filename [+]size
 snapshot [-l | -a snapshot | -c snapshot | -d snapshot | -r old_snapshot_name new_snapshot_name] filename
+convert [-f input_fmt | -O output_fmt | -S sparse_size ] input_filename output_filename
 
 Command parameters:
 'filename' is a disk image filename
@@ -574,6 +820,13 @@ Parameters to snapshot subcommand:
  '-d' deletes a snapshot
  '-l' lists all snapshots in the given image
  '-r' change the name of a snapshot
+
+Parameters to convert subcommand:
+ '-f fmt' is input image format.
+ '-O output_fmt' is output image format.
+ '-S sparse_size' is the consecutive number of bytes that must contain only zeroes to create a sparse image during conversion. Unit: sector(512 bytes). Default is 8.
+ 'input_filename' is the name of the input file using *input_fmt* image format.
+ 'output_filename' is the name of the output file using *output_fmt* image format.
 "#,
     );
 }
@@ -592,6 +845,7 @@ mod test {
     };
     use util::aio::Iovec;
 
+    const K: u64 = 1024;
     const M: u64 = 1024 * 1024;
     const G: u64 = 1024 * 1024 * 1024;
 
@@ -2116,5 +2370,181 @@ mod test {
         assert_eq!(driver.header.size, 21 * G);
         drop(driver);
         assert!(test_image.check_image(quite, fix));
+    }
+
+    /// Test image convert from qcow2 to raw.
+    ///
+    /// TestStep:
+    /// 1. Create a qcow2 image with size of 10G.
+    /// 2. Write data to this image in different position.
+    /// 3. Convert this qcow2 to raw.
+    /// 4. Read data in the same position.
+    #[test]
+    fn test_image_convert_from_qcow2_to_raw() {
+        let src_path = "/tmp/test_image_convert_src.qcow2";
+        let dst_path = "/tmp/test_image_convert_dst.raw";
+        let _ = remove_file(src_path.clone());
+        let _ = remove_file(dst_path.clone());
+
+        let test_image = TestQcow2Image::create(16, 16, src_path, "10G");
+        let mut src_driver = test_image.create_driver();
+
+        // Write 1M data(number 1) in offset 0.
+        let buf1 = vec![1_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 0, &buf1).is_ok());
+        // Write 1M data(number 2) in offset 5G.
+        let buf2 = vec![2_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 5 * G as usize, &buf2).is_ok());
+        // Write 1M data(number 3) in last 1M.
+        let buf3 = vec![3_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 10 * G as usize - 1 * M as usize, &buf3).is_ok());
+        // Write 1M data(number 0) in random offset (eg: 300M offset).
+        let buf4 = vec![0_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 300 * M as usize, &buf4).is_ok());
+
+        drop(src_driver);
+
+        assert!(image_convert(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            "-O".to_string(),
+            "raw".to_string(),
+            src_path.to_string(),
+            dst_path.to_string()
+        ])
+        .is_ok());
+
+        // Open the converted raw image.
+        let conf = BlockProperty::default();
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let file = open_file(dst_path, true, false).unwrap();
+        let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
+
+        // Read 1M data in offset 0.
+        let buf = vec![0; 1 * M as usize];
+        assert!(image_read(&mut dst_driver, 0, &buf).is_ok());
+        assert_eq!(buf, buf1);
+        // Read 1M data in offset 5G.
+        assert!(image_read(&mut dst_driver, 5 * G as usize, &buf).is_ok());
+        assert_eq!(buf, buf2);
+        // Read 1M data in last 1M.
+        assert!(image_read(&mut dst_driver, 10 * G as usize - 1 * M as usize, &buf).is_ok());
+        assert_eq!(buf, buf3);
+
+        let mut img_info = ImageInfo::default();
+        assert!(dst_driver.query_image(&mut img_info).is_ok());
+        assert_eq!(img_info.virtual_size, 10 * G);
+        // 1M data(number 0) in offset 300M will not consume space.
+        assert_eq!(img_info.actual_size, 3 * M);
+
+        // Clean.
+        assert!(remove_file(dst_path.clone()).is_ok());
+    }
+
+    /// Test image convert parameters parsing.
+    ///
+    /// TestStep:
+    /// 1. Create a qcow2 image with size of 1G.
+    /// 2. Write two continuous `4k 0 buffer + 4k 1 buffer` to this image.
+    /// 3. Test default parameters.
+    /// 4. Test existed destination file.
+    /// 5. Test min sparse.
+    #[test]
+    fn test_image_convert_parameters_parsing() {
+        let src_path = "/tmp/test_image_convert_paring_src.qcow2";
+        let dst_path = "/tmp/test_image_convert_paring_dst.raw";
+        let _ = remove_file(src_path.clone());
+        let _ = remove_file(dst_path.clone());
+
+        let test_image = TestQcow2Image::create(16, 16, src_path, "1G");
+        let mut src_driver = test_image.create_driver();
+
+        // Write 4k data(number 0) in offset 16k.
+        assert!(image_write(
+            &mut src_driver,
+            16 * K as usize,
+            &vec![0_u8; 4 * K as usize]
+        )
+        .is_ok());
+        // Write 4k data(number 1) in offset 20k.
+        assert!(image_write(
+            &mut src_driver,
+            20 * K as usize,
+            &vec![1_u8; 4 * K as usize]
+        )
+        .is_ok());
+        // Write 4k data(number 0) in offset 24k.
+        assert!(image_write(
+            &mut src_driver,
+            24 * K as usize,
+            &vec![0_u8; 4 * K as usize]
+        )
+        .is_ok());
+        // Write 4k data(number 1) in offset 28k.
+        assert!(image_write(
+            &mut src_driver,
+            28 * K as usize,
+            &vec![1_u8; 4 * K as usize]
+        )
+        .is_ok());
+
+        drop(src_driver);
+
+        // test1: The default value of the parameters.
+        // `stratovirt-img convert src_path dst_path`
+        // Eq: `stratovirt-img convert -f qcow2 -O raw -S 8 src_path dst_path`
+        assert!(image_convert(vec![src_path.to_string(), dst_path.to_string()]).is_ok());
+        // Check output format.
+        let output_image_file = ImageFile::create(&dst_path, true).unwrap();
+        let detect_output_fmt = output_image_file.detect_img_format().unwrap();
+        assert_eq!(detect_output_fmt, DiskFormat::Raw);
+        drop(output_image_file);
+        // Check sparse size by querying output file size.
+        let conf = BlockProperty::default();
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let file = open_file(dst_path, true, false).unwrap();
+        let mut img_info = ImageInfo::default();
+        let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
+        assert!(dst_driver.query_image(&mut img_info).is_ok());
+        // Raw file has allocated filled first part (sized 4k(host page size), see function `alloc_first_block`) for
+        // detecting the alignment length.
+        assert_eq!(img_info.actual_size, 4 * K + 8 * K); // 4K allocated filled first part + 8K data.
+        drop(dst_driver);
+        assert!(remove_file(dst_path.clone()).is_ok());
+
+        // test2: The destination file already exists.
+        let existed_raw = TestRawImage::create(dst_path.to_string(), "1G".to_string());
+        assert!(image_convert(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            "-O".to_string(),
+            "raw".to_string(),
+            src_path.to_string(),
+            dst_path.to_string()
+        ])
+        .is_err());
+        drop(existed_raw);
+
+        // test3: Sparse test.
+        // stratovirt-img convert -f qcow2 -O raw -S 16 src_path dst_path
+        assert!(image_convert(vec![
+            "-S".to_string(),
+            "16".to_string(), // 16 sectors.(8K)
+            src_path.to_string(),
+            dst_path.to_string()
+        ])
+        .is_ok());
+        // Query the image size.
+        let conf = BlockProperty::default();
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let file = open_file(dst_path, true, false).unwrap();
+        let mut img_info = ImageInfo::default();
+        let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
+        assert!(dst_driver.query_image(&mut img_info).is_ok());
+        // min_sparse is 16k. So, these continuous `4K 0 buffer + 4K 1 buffer` will be considered as all data buffer sized 8k.
+        // Will not create holes here.
+        assert_eq!(img_info.actual_size, 4 * K + 16 * K);
+        drop(dst_driver);
+        assert!(remove_file(dst_path.clone()).is_ok());
     }
 }

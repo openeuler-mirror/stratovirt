@@ -49,8 +49,8 @@ use crate::{
         snapshot::{InternalSnapshot, QcowSnapshot, QcowSnapshotExtraData, QCOW2_MAX_SNAPSHOTS},
         table::{Qcow2ClusterType, Qcow2Table},
     },
-    BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
-    ImageInfo, SECTOR_SIZE,
+    BlockAllocStatus, BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus,
+    CheckResult, CreateOptions, ImageInfo, SECTOR_SIZE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_schema::SnapshotInfo;
@@ -1981,6 +1981,17 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
 
     fn get_status(&mut self) -> Arc<Mutex<BlockStatus>> {
         self.status.clone()
+    }
+
+    fn get_address_alloc_status(
+        &mut self,
+        offset: u64,
+        bytes: u64,
+    ) -> Result<(BlockAllocStatus, u64)> {
+        match self.host_offset_for_read(offset, bytes)? {
+            HostRange::DataNotInit(size) => Ok((BlockAllocStatus::ZERO, size)),
+            HostRange::DataAddress(_, size) => Ok((BlockAllocStatus::DATA, size)),
+        }
     }
 }
 
