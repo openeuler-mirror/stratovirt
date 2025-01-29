@@ -513,7 +513,7 @@ pub trait MachineOps: MachineLifecycle {
         nr_cpus: u8,
         #[cfg(target_arch = "x86_64")] max_cpus: u8,
         topology: &CPUTopology,
-        boot_cfg: &CPUBootConfig,
+        boot_cfg: &Option<CPUBootConfig>,
         #[cfg(target_arch = "aarch64")] vcpu_cfg: &CPUFeatures,
     ) -> Result<Vec<Arc<CPU>>>
     where

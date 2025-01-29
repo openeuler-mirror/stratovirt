@@ -120,7 +120,7 @@ pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
     fn realize(
         &self,
-        boot: &CPUBootConfig,
+        boot: &Option<CPUBootConfig>,
         topology: &CPUTopology,
         #[cfg(target_arch = "aarch64")] features: &CPUFeatures,
     ) -> Result<()>;
@@ -313,7 +313,7 @@ impl CPU {
 impl CPUInterface for CPU {
     fn realize(
         &self,
-        boot: &CPUBootConfig,
+        boot: &Option<CPUBootConfig>,
         topology: &CPUTopology,
         #[cfg(target_arch = "aarch64")] config: &CPUFeatures,
     ) -> Result<()> {
@@ -326,14 +326,16 @@ impl CPUInterface for CPU {
             ))));
         }
 
-        self.hypervisor_cpu
-            .set_boot_config(
-                self.arch_cpu.clone(),
-                boot,
-                #[cfg(target_arch = "aarch64")]
-                config,
-            )
-            .with_context(|| "Failed to realize arch cpu")?;
+        if let Some(boot) = boot {
+            self.hypervisor_cpu
+                .set_boot_config(
+                    self.arch_cpu.clone(),
+                    boot,
+                    #[cfg(target_arch = "aarch64")]
+                    config,
+                )
+                .with_context(|| "Failed to realize arch cpu")?;
+        }
 
         self.arch_cpu
             .lock()
