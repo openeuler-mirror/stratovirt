@@ -14,7 +14,7 @@ use std::cmp::max;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::prelude::RawFd;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
@@ -111,13 +111,15 @@ impl XhciPciDevice {
         parent_bus: Weak<Mutex<dyn Bus>>,
         mem_space: &Arc<AddressSpace>,
     ) -> Self {
+        let bme = Arc::new(AtomicBool::new(false));
         Self {
             base: PciDevBase {
                 base: DeviceBase::new(config.id.clone().unwrap(), true, Some(parent_bus)),
                 config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, 1),
                 devfn,
+                bme: bme.clone(),
             },
-            xhci: XhciDevice::new(mem_space, config),
+            xhci: XhciDevice::new(mem_space, config, &bme),
             dev_id: Arc::new(AtomicU16::new(0)),
             mem_region: Region::init_container_region(
                 u64::from(XHCI_PCI_CONFIG_LENGTH),
@@ -369,6 +371,12 @@ impl PciDevOps for XhciPciDevice {
             Some(&pci_bus.io_region),
             Some(&pci_bus.mem_region),
         );
+
+        // Make sure synchronize with memory or I/O access.
+        let _locked_xhci = self.xhci.lock().unwrap();
+        self.base
+            .bme
+            .store(self.base.config.bus_maser_enable(), Ordering::SeqCst);
     }
 }
 

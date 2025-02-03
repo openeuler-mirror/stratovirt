@@ -12,7 +12,7 @@
 
 use std::cmp::{max, min};
 use std::mem::size_of;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -337,6 +337,7 @@ impl VirtioPciDevice {
                 base: DeviceBase::new(name, true, Some(parent_bus)),
                 config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             device,
             dev_id: Arc::new(AtomicU16::new(0)),

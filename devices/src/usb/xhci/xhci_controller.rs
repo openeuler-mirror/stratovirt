@@ -13,7 +13,7 @@
 use std::collections::LinkedList;
 use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -929,10 +929,15 @@ pub struct XhciDevice {
     mfindex_start: Duration,
     timer_id: Option<u64>,
     packet_count: u32,
+    bme: Arc<AtomicBool>,
 }
 
 impl XhciDevice {
-    pub fn new(mem_space: &Arc<AddressSpace>, config: &XhciConfig) -> Arc<Mutex<Self>> {
+    pub fn new(
+        mem_space: &Arc<AddressSpace>,
+        config: &XhciConfig,
+        bme: &Arc<AtomicBool>,
+    ) -> Arc<Mutex<Self>> {
         let mut p2 = XHCI_DEFAULT_PORT;
         let mut p3 = XHCI_DEFAULT_PORT;
         if config.p2.is_some() {
@@ -976,6 +981,7 @@ impl XhciDevice {
             mem_space: mem_space.clone(),
             mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
             timer_id: None,
+            bme: bme.clone(),
         };
         let xhci = Arc::new(Mutex::new(xhci));
         let clone_xhci = xhci.clone();
@@ -1052,7 +1058,7 @@ impl XhciDevice {
         self.oper.get_usb_status() & USB_STS_HCH != USB_STS_HCH
     }
 
-    pub fn host_controller_error(&mut self) {
+    pub fn host_controller_error(&self) {
         error!("Xhci host controller error!");
         self.oper.set_usb_status_flag(USB_STS_HCE)
     }
@@ -1121,9 +1127,15 @@ impl XhciDevice {
         }
         trace::usb_xhci_port_notify(&locked_port.port_id, &flag);
         locked_port.portsc |= flag;
+
         if !self.running() {
             return Ok(());
         }
+        self.check_bme_valid().map_err(|e| {
+            self.host_controller_error();
+            e
+        })?;
+
         let mut evt = XhciEvent::new(TRBType::ErPortStatusChange, TRBCCode::Success);
         evt.ptr = u64::from(u32::from(locked_port.port_id) << PORT_EVENT_ID_SHIFT);
         self.intrs[0].lock().unwrap().send_event(&evt)?;
@@ -1199,6 +1211,9 @@ impl XhciDevice {
 
     /// Control plane
     pub fn handle_command(&mut self) -> Result<()> {
+        // The caller will set HCE if handle_command() returns error.
+        self.check_bme_valid()?;
+
         self.oper.start_cmd_ring();
         let mut slot_id: u32 = 0;
         let mut event = XhciEvent::new(TRBType::ErCommandComplete, TRBCCode::Success);
@@ -1822,6 +1837,11 @@ impl XhciDevice {
             return Ok(());
         }
 
+        self.check_bme_valid().map_err(|e| {
+            self.host_controller_error();
+            e
+        })?;
+
         trace::usb_xhci_ep_kick(&slot_id, &ep_id, &ring.get_dequeue_ptr());
         if self.slots[(slot_id - 1) as usize].endpoints[(ep_id - 1) as usize]
             .retry
@@ -2343,6 +2363,12 @@ impl XhciDevice {
             locked_intr.er_size = 0;
             return Ok(());
         }
+
+        self.check_bme_valid().map_err(|e| {
+            self.host_controller_error();
+            e
+        })?;
+
         let mut seg = XhciEventRingSeg::new(&self.mem_space);
         seg.fetch_event_ring_seg(locked_intr.erstba)?;
         if seg.size < 16 || seg.size > 4096 {
@@ -2406,6 +2432,13 @@ impl XhciDevice {
             }
         }
         None
+    }
+
+    fn check_bme_valid(&self) -> Result<()> {
+        if !self.bme.load(Ordering::SeqCst) {
+            bail!("BME is cleared.")
+        }
+        Ok(())
     }
 }
 

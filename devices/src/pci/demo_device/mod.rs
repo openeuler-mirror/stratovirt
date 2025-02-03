@@ -33,7 +33,7 @@ pub mod dpy_device;
 pub mod gpu_device;
 pub mod kbd_pointer_device;
 
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
@@ -105,6 +105,7 @@ impl DemoDev {
                 base: DeviceBase::new(cfg.id.clone(), false, Some(parent_bus)),
                 config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
                 devfn,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             cmd_cfg: cfg,
             mem_region: Region::init_container_region(u64::from(u32::MAX), "DemoDev"),

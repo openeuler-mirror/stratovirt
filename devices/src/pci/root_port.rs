@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -128,6 +128,7 @@ impl RootPort {
                 base: dev_base,
                 config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, 2),
                 devfn,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             port_num: cfg.port,
             #[cfg(target_arch = "x86_64")]
