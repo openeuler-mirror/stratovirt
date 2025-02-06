@@ -1205,6 +1205,30 @@ Sample Configuration：
 
 Please see the [4. Build with features](docs/build_guide.md) if you want to enable pvpanic.
 
+### 2.22 virtio-input
+virtio-input is a virtualized input device can be used to create human interface devices such as tablet, mouse.
+
+Five properties are supported for virtio-input.
+* id: unique device id.
+* evdev: the path of character evdev device in host.
+
+For virtio-input-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it. As virtio pci input device is a
+single function device, the function number should be set to zero.
+
+Sample Configuration：
+```shell
+# virtio mmio input device
+-device virtio-input-device,id=<input_id>,evdev=<evdev0>
+# virtio pci input device
+-device virtio-input-pci,id=<input_id>,evdev=<evdev0>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]
+```
+
+Note:
+1. Only host evdev passthrough supported.
+
 ## 3. Trace
 
 Users can specify a configuration file which lists the traces that needs to be enabled, or specify the trace type that needs to be enabled. Setting both file and type is also allowed, so that traces with the specified type and traces listed in the file will all be enabled.
