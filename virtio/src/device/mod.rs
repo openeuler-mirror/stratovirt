@@ -14,6 +14,7 @@ pub mod balloon;
 pub mod block;
 #[cfg(feature = "virtio_gpu")]
 pub mod gpu;
+pub mod input;
 pub mod net;
 #[cfg(feature = "virtio_rng")]
 pub mod rng;

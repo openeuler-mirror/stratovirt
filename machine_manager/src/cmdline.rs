@@ -249,6 +249,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd virtio pci balloon: -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]; \
                    \n\t\tadd virtio mmio rng: -device virtio-rng-device,rng=<objrng0>,max-bytes=<1234>,period=<1000>; \
                    \n\t\tadd virtio pci rng: -device virtio-rng-pci,id=<rng_id>,rng=<objrng0>,max-bytes=<1234>,period=<1000>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
+                   \n\t\tadd virtio mmio input: -device virtio-input-device,id=<input_id>,evdev=<evdev0>; \
+                   \n\t\tadd virtio pci input: -device virtio-input-pci,id=<input_id>,evdev=<evdev0>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
                    \n\t\tadd pcie root port: -device pcie-root-port,id=<pcie.1>,port=<0x1>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
                    \n\t\tadd vfio pci: -device vfio-pci,id=<vfio_id>,host=<0000:1a:00.3>,bus=<pcie.0>,addr=<0x03>[,multifunction=on|off]; \
                    \n\t\tadd usb controller: -device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>; \

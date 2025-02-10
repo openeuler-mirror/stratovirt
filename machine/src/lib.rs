@@ -128,9 +128,9 @@ use virtio::VhostUser;
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Serial,
-    SerialPort, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState,
-    VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Input,
+    InputConfig, Serial, SerialPort, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice,
+    VirtioMmioState, VirtioNetState, VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
@@ -914,6 +914,35 @@ pub trait MachineOps: MachineLifecycle {
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
         bail!("No pci host found");
+    }
+
+    /// Add virtio-input device
+    ///
+    /// # Arguments
+    ///
+    /// * `cfg_args` - Device configuration arguments.
+    fn add_virtio_input(&mut self, cfg_args: &str) -> Result<()> {
+        let cfg = InputConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let dev = Arc::new(Mutex::new(Input::new(cfg.clone())?));
+        match cfg.classtype.as_str() {
+            "virtio-input-device" => {
+                check_arg_nonexist!(
+                    ("bus", cfg.bus),
+                    ("addr", cfg.addr),
+                    ("multifunction", cfg.multifunction)
+                );
+                self.add_virtio_mmio_device(cfg.id.clone(), dev)
+                    .with_context(|| "Failed to add virtio mmio input device")?;
+            }
+            _ => {
+                check_arg_exist!(("bus", cfg.bus), ("addr", cfg.addr));
+                let bdf = PciBdf::new(cfg.bus.clone().unwrap(), cfg.addr.unwrap());
+                let multi_func = cfg.multifunction.unwrap_or_default();
+                self.add_virtio_pci_device(&cfg.id, &bdf, dev, multi_func, false)
+                    .with_context(|| "Failed to add virtio pci input device")?;
+            }
+        }
+        Ok(())
     }
 
     /// Add virtioFs device.
@@ -1978,6 +2007,7 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-net-pci", add_virtio_pci_net, vm_config, cfg_args, false),
                 ("pcie-root-port", add_pci_root_port, cfg_args),
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
+                ("virtio-input-device" | "virtio-input-pci", add_virtio_input, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
