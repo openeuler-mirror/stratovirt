@@ -16,6 +16,7 @@ pub mod block;
 pub mod gpu;
 pub mod input;
 pub mod memory;
+pub mod multitouch;
 pub mod net;
 #[cfg(feature = "virtio_rng")]
 pub mod rng;

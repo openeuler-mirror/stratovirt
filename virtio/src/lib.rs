@@ -38,6 +38,7 @@ pub use device::block::{Block, BlockState, VirtioBlkConfig, VirtioBlkDevConfig};
 pub use device::gpu::*;
 pub use device::input::*;
 pub use device::memory::*;
+pub use device::multitouch::*;
 pub use device::net::*;
 #[cfg(feature = "virtio_rng")]
 pub use device::rng::{Rng, RngConfig, RngState};

@@ -186,7 +186,8 @@ impl VirtioInputEvent {
 
 impl ByteCode for VirtioInputEvent {}
 
-struct EvdevConfig {
+#[derive(Default)]
+pub struct EvdevConfig {
     /// config select
     select: u8,
     /// config sub select
@@ -194,18 +195,27 @@ struct EvdevConfig {
     /// ID information of the device
     device_ids: virtio_input_device_ids,
     /// Name of the device
-    name: Vec<u8>,
+    pub name: Vec<u8>,
     /// Serial of the device
-    serial: Vec<u8>,
+    pub serial: Vec<u8>,
     /// Properties of the device
-    properties: EvdevBuf,
+    pub properties: EvdevBuf,
     /// Events supported of the device
-    event_supported: BTreeMap<u8, EvdevBuf>,
+    pub event_supported: BTreeMap<u8, EvdevBuf>,
     /// Axis information of the device
-    abs_info: BTreeMap<u8, InputAbsInfo>,
+    pub abs_info: BTreeMap<u8, InputAbsInfo>,
 }
 
 impl EvdevConfig {
+    pub fn new_with_id(devid: EvdevId) -> Self {
+        Self {
+            select: VIRTIO_INPUT_CFG_UNSET,
+            subsel: 0,
+            device_ids: virtio_input_device_ids::from_evdevid(devid),
+            ..Default::default()
+        }
+    }
+
     fn new(fd: &File) -> Result<Self> {
         // SAFETY: req and len is valid.
         let version = unsafe { evdev_ioctl(fd, EVIOCGVERSION(), size_of::<c_int>()) };
@@ -275,7 +285,7 @@ impl EvdevConfig {
     }
 }
 
-struct InputIoHandler {
+pub struct InputIoHandler {
     /// The features of driver
     driver_features: u64,
     /// Address space
@@ -407,6 +417,21 @@ impl InputIoHandler {
             }
         }
     }
+
+    pub fn send_event(&mut self, evt: &InputEvent) -> bool {
+        match self.input_event_send(evt) {
+            Ok(_) => true,
+            Err(e) => {
+                error!("Failed to send event: {:?}", e);
+                report_virtio_error(
+                    self.interrupt_cb.clone(),
+                    self.driver_features,
+                    &self.device_broken,
+                );
+                false
+            }
+        }
+    }
 }
 
 /// Create a new EventNotifier.
@@ -490,12 +515,22 @@ pub struct Input {
     /// Input device config data.
     evdev_cfg: EvdevConfig,
     /// EventFd for device deactivate.
-    deactivate_evts: Vec<RawFd>,
+    pub deactivate_evts: Vec<RawFd>,
     /// Event file fd.
     fd: Option<Arc<File>>,
 }
 
 impl Input {
+    pub fn new_with_cfg(evdev_cfg: EvdevConfig) -> Self {
+        Self {
+            base: VirtioBase::new(VIRTIO_TYPE_INPUT, QUEUE_NUM_INPUT, DEFAULT_VIRTQUEUE_SIZE),
+            interrupt_cb: None,
+            evdev_cfg,
+            deactivate_evts: Vec::new(),
+            fd: None,
+        }
+    }
+
     pub fn new(option: InputConfig) -> Result<Self> {
         let fd = OpenOptions::new()
             .read(true)
@@ -516,6 +551,41 @@ impl Input {
             evdev_cfg,
             deactivate_evts: Vec::new(),
             fd: Some(Arc::new(fd)),
+        })
+    }
+
+    pub fn create_io_handler(
+        &mut self,
+        mem_space: Arc<AddressSpace>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queue_evts: Vec<Arc<EventFd>>,
+    ) -> Result<InputIoHandler> {
+        let queues = &self.base.queues;
+        if queues.len() != self.queue_num() {
+            return Err(anyhow!(VirtioError::IncorrectQueueNum(
+                self.queue_num(),
+                queues.len()
+            )));
+        }
+
+        let event_queue = queues[0].clone();
+        let event_queue_evt = queue_evts[0].clone();
+        let status_queue = queues[1].clone();
+        let status_queue_evt = queue_evts[1].clone();
+
+        self.interrupt_cb = Some(interrupt_cb.clone());
+
+        Ok(InputIoHandler {
+            driver_features: self.base.driver_features,
+            mem_space,
+            event_queue,
+            event_queue_evt,
+            status_queue,
+            status_queue_evt,
+            event_buf: Vec::new(),
+            device_broken: self.base.broken.clone(),
+            interrupt_cb: interrupt_cb.clone(),
+            evdev_fd: self.fd.clone(),
         })
     }
 }
@@ -560,32 +630,7 @@ impl VirtioDevice for Input {
         interrupt_cb: Arc<VirtioInterrupt>,
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
-        let queues = &self.base.queues;
-        if queues.len() != self.queue_num() {
-            return Err(anyhow!(VirtioError::IncorrectQueueNum(
-                self.queue_num(),
-                queues.len()
-            )));
-        }
-
-        let event_queue = queues[0].clone();
-        let event_queue_evt = queue_evts[0].clone();
-        let status_queue = queues[1].clone();
-        let status_queue_evt = queue_evts[1].clone();
-
-        self.interrupt_cb = Some(interrupt_cb.clone());
-        let handler = InputIoHandler {
-            driver_features: self.base.driver_features,
-            mem_space,
-            event_queue,
-            event_queue_evt,
-            status_queue,
-            status_queue_evt,
-            event_buf: Vec::new(),
-            device_broken: self.base.broken.clone(),
-            interrupt_cb: interrupt_cb.clone(),
-            evdev_fd: self.fd.clone(),
-        };
+        let handler = self.create_io_handler(mem_space, interrupt_cb, queue_evts)?;
         register_event_helper(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
