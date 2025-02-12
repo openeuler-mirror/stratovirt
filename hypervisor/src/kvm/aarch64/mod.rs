@@ -422,7 +422,7 @@ impl KvmCpu {
     }
 
     fn reg_sync_by_cpreg_list(reg_id: u64) -> Result<bool> {
-        let coproc = u32::try_from(reg_id)? & KVM_REG_ARM_COPROC_MASK;
+        let coproc = reg_id as u32 & KVM_REG_ARM_COPROC_MASK;
         if coproc == KVM_REG_ARM_CORE {
             return Ok(false);
         }
