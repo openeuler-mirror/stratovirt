@@ -974,12 +974,8 @@ impl SysBusDevOps for FwCfgMem {
                 self.fwcfg.select_entry(value as u16);
             }
             16..=23 => {
-                if self
-                    .fwcfg
-                    .dma_mem_write(offset - 0x10, value, size)
-                    .is_err()
-                {
-                    error!("Failed to write dma at offset=0x{:x}.", offset);
+                if let Err(e) = self.fwcfg.dma_mem_write(offset - 0x10, value, size) {
+                    error!("Failed to write dma at offset=0x{:x} {:?}.", offset, e);
                     return false;
                 }
             }

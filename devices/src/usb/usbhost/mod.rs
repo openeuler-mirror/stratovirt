@@ -558,13 +558,8 @@ impl UsbHost {
     }
 
     fn attach_kernel(&mut self) {
-        if self
-            .libdev
-            .as_ref()
-            .unwrap()
-            .active_config_descriptor()
-            .is_err()
-        {
+        if let Err(e) = self.libdev.as_ref().unwrap().active_config_descriptor() {
+            warn!("Failed to active config descriptor: {:?}.", e);
             return;
         }
         for i in 0..self.ifs_num {
@@ -699,7 +694,8 @@ impl UsbHost {
 
     fn claim_interfaces(&mut self) -> UsbPacketStatus {
         self.base.altsetting = [0; USB_MAX_INTERFACES as usize];
-        if self.detach_kernel().is_err() {
+        if let Err(e) = self.detach_kernel() {
+            error!("Failed to detach kernel for usbhost: {:?}.", e);
             return UsbPacketStatus::Stall;
         }
 
