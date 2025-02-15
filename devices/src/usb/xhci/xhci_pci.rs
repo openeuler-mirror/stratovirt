@@ -243,9 +243,8 @@ impl Device for XhciPciDevice {
 
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
         self.xhci.lock().unwrap().reset();
-
         self.base.config.reset()?;
-
+        self.base.bme.store(false, Ordering::SeqCst);
         Ok(())
     }
 
