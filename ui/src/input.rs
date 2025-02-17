@@ -12,10 +12,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use log::debug;
 use once_cell::sync::Lazy;
 
@@ -569,6 +569,199 @@ pub trait PointerOpts: Send {
 
 pub trait ConsumerOpts: Send {
     fn do_consumer_event(&mut self, keycode: u16, down: bool) -> Result<()>;
+}
+
+//
+// the code for multitouch
+//
+static MT_OPS_HANDLER: Lazy<Mutex<Option<MultiTouchDevice>>> = Lazy::new(|| Mutex::new(None));
+
+#[inline]
+fn get_mt_handler() -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
+    let locked_handler = MT_OPS_HANDLER.lock().unwrap();
+    if locked_handler.is_none() {
+        bail!("no multitouch device");
+    }
+    Ok(locked_handler)
+}
+
+pub fn register_mt_handler(
+    ops: Arc<Mutex<dyn MultitouchOps>>,
+    x_max: u32,
+    y_max: u32,
+    slot_max: u32,
+) -> Result<()> {
+    let mt_state = MultiTouchDevice {
+        ops,
+        x_max,
+        y_max,
+        slot_max,
+        slots: vec![MultiTouchAbsData::default(); (slot_max + 1) as usize],
+    };
+
+    let mut locked_handler = MT_OPS_HANDLER.lock().unwrap();
+    if locked_handler.is_some() {
+        bail!("only support one multitouch device");
+    }
+
+    *locked_handler = Some(mt_state);
+    input_state_changed(InputStateChangeReason::MultitouchRegister);
+    Ok(())
+}
+
+pub fn unregister_mt_handler() {
+    input_state_changed(InputStateChangeReason::MultitouchUnregister);
+    *MT_OPS_HANDLER.lock().unwrap() = None;
+}
+
+#[derive(Clone)]
+pub enum MultiTouchEventKind {
+    BEGIN,
+    UPDATE,
+    END,
+}
+
+#[derive(Clone)]
+pub struct MultiTouchAbsData {
+    pub kind: MultiTouchEventKind,
+    pub x: u32,
+    pub y: u32,
+    pub major: u32,
+    pub minor: u32,
+    pub slot: i32,
+    pub tracking_id: i32,
+}
+
+impl MultiTouchAbsData {
+    pub fn new(
+        kind: MultiTouchEventKind,
+        x: u32,
+        y: u32,
+        major: u32,
+        minor: u32,
+        slot: i32,
+        tracking_id: i32,
+    ) -> Self {
+        Self {
+            kind,
+            x,
+            y,
+            major,
+            minor,
+            slot,
+            tracking_id,
+        }
+    }
+
+    fn scale_axis(&mut self, ui_width: u32, ui_height: u32, x_max: u32, y_max: u32) {
+        self.x = Self::scale(self.x, 0, ui_width, 0, x_max);
+        self.y = Self::scale(self.y, 0, ui_height, 0, y_max);
+    }
+
+    fn scale(val: u32, min_in: u32, max_in: u32, min_out: u32, max_out: u32) -> u32 {
+        let range_in = (max_in - min_in) as i64;
+        let range_out = (max_out - min_out) as i64;
+
+        ((val - min_in) as i64 * range_out / range_in + min_out as i64) as u32
+    }
+}
+
+impl Default for MultiTouchAbsData {
+    fn default() -> Self {
+        Self {
+            kind: MultiTouchEventKind::END,
+            x: 0,
+            y: 0,
+            major: 0,
+            minor: 0,
+            slot: -1,
+            tracking_id: -1,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct MultiTouchDevice {
+    ops: Arc<Mutex<dyn MultitouchOps>>,
+    x_max: u32,
+    y_max: u32,
+    slot_max: u32,
+    slots: Vec<MultiTouchAbsData>,
+}
+
+impl MultiTouchDevice {
+    fn send_event(
+        &mut self,
+        evt: &mut MultiTouchAbsData,
+        ui_width: u32,
+        ui_height: u32,
+    ) -> Result<()> {
+        let mut locked_ops = self.ops.lock().unwrap();
+        let slot_id = evt.slot as usize;
+
+        if slot_id as u32 > self.slot_max {
+            bail!("slot id {} exceeds {}", slot_id, self.slot_max);
+        }
+
+        match evt.kind {
+            MultiTouchEventKind::BEGIN => {
+                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max)
+            }
+            MultiTouchEventKind::END => locked_ops.send_event(evt)?,
+            MultiTouchEventKind::UPDATE => {
+                if self.slots[slot_id].tracking_id == -1 {
+                    bail!("UPDATE is only valid after the pointer was pressed");
+                }
+                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max);
+            }
+        }
+        self.slots[slot_id] = evt.clone();
+
+        for slot in self.slots.iter() {
+            if slot.tracking_id == -1 {
+                continue;
+            }
+            locked_ops.send_event(slot)?;
+        }
+
+        Ok(())
+    }
+
+    fn send_sync(&self) -> Result<()> {
+        self.ops.lock().unwrap().send_sync()
+    }
+
+    fn lift_all_fingers(&mut self) -> Result<()> {
+        let mut locked_ops = self.ops.lock().unwrap();
+        for slot in self.slots.iter_mut() {
+            if slot.tracking_id != -1 {
+                slot.tracking_id = -1;
+                locked_ops.send_event(slot)?;
+            }
+        }
+        locked_ops.send_sync()?;
+        Ok(())
+    }
+}
+
+pub trait MultitouchOps: Send {
+    fn send_event(&mut self, evt: &MultiTouchAbsData) -> Result<()>;
+    fn send_sync(&mut self) -> Result<()>;
+}
+
+pub fn send_mt_event(evt: &mut MultiTouchAbsData, ui_width: u32, ui_height: u32) -> Result<()> {
+    get_mt_handler()?
+        .as_mut()
+        .unwrap()
+        .send_event(evt, ui_width, ui_height)
+}
+
+pub fn send_mt_sync() -> Result<()> {
+    get_mt_handler()?.as_ref().unwrap().send_sync()
+}
+
+pub fn lift_all_fingers() -> Result<()> {
+    get_mt_handler()?.as_mut().unwrap().lift_all_fingers()
 }
 
 #[cfg(test)]
