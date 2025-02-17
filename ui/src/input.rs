@@ -12,7 +12,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, RwLock},
 };
 
 use anyhow::{bail, Result};
@@ -762,6 +762,66 @@ pub fn send_mt_sync() -> Result<()> {
 
 pub fn lift_all_fingers() -> Result<()> {
     get_mt_handler()?.as_mut().unwrap().lift_all_fingers()
+}
+
+//
+// notifier for input device (un)registration
+//
+static NOTIFIER_MANAGER: Lazy<RwLock<InputStateNotifier>> =
+    Lazy::new(|| RwLock::new(InputStateNotifier::new()));
+
+pub type InputStateNotifyCallback = dyn Fn(InputStateChangeReason) + Send + Sync;
+
+#[derive(Clone, Copy)]
+pub enum InputStateChangeReason {
+    MultitouchRegister,
+    MultitouchUnregister,
+}
+
+struct InputStateNotifier {
+    notifiers: HashMap<u64, Arc<InputStateNotifyCallback>>,
+    next_id: u64,
+}
+
+impl InputStateNotifier {
+    fn new() -> Self {
+        Self {
+            notifiers: HashMap::new(),
+            next_id: 0,
+        }
+    }
+
+    fn register_notifier(&mut self, notifier: Arc<InputStateNotifyCallback>) -> u64 {
+        let id = self.next_id;
+        self.notifiers.insert(id, notifier);
+        self.next_id += 1;
+        id
+    }
+
+    fn unregister_notifier(&mut self, id: u64) {
+        self.notifiers.remove(&id);
+    }
+
+    fn notify(&self, reason: InputStateChangeReason) {
+        for (_, notify) in self.notifiers.iter() {
+            notify(reason);
+        }
+    }
+}
+
+pub fn register_input_notifier(notifier: Arc<InputStateNotifyCallback>) -> u64 {
+    NOTIFIER_MANAGER
+        .write()
+        .unwrap()
+        .register_notifier(notifier)
+}
+
+pub fn unregister_input_notifier(id: u64) {
+    NOTIFIER_MANAGER.write().unwrap().unregister_notifier(id);
+}
+
+fn input_state_changed(reason: InputStateChangeReason) {
+    NOTIFIER_MANAGER.read().unwrap().notify(reason);
 }
 
 #[cfg(test)]
