@@ -57,6 +57,8 @@ pub const BTN_TOUCH: u16 = 0x14A;
 pub const EV_SYN: u16 = 0x00;
 /// Synchronization event.
 pub const SYN_REPORT: u16 = 0x00;
+/// Synchronization multitouch point.
+pub const SYN_MT_REPORT: u16 = 0x2;
 
 /// direct input devices.
 pub const INPUT_PROP_DIRECT: u16 = 0x01;
@@ -290,3 +292,14 @@ pub struct InputEvent {
 }
 
 impl ByteCode for InputEvent {}
+
+impl InputEvent {
+    pub fn new(ev_type: u16, code: u16, value: i32) -> Self {
+        Self {
+            timestamp: [0; 2],
+            ev_type,
+            code,
+            value,
+        }
+    }
+}

@@ -15,6 +15,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser};
+use ui::input::{
+    register_mt_handler, unregister_mt_handler, MultiTouchAbsData, MultiTouchEventKind,
+    MultitouchOps,
+};
 
 use crate::VirtioBase;
 use crate::VirtioDevice;
@@ -22,13 +26,11 @@ use crate::VirtioInterrupt;
 use crate::{EvdevConfig, Input, InputIoHandler};
 use address_space::AddressSpace;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
-use machine_manager::event_loop::register_event_helper;
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::evdev::*;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::str_to_num;
 use vmm_sys_util::eventfd::EventFd;
-
-static mut MT_DEV_HANDLER: Option<Arc<Mutex<InputIoHandler>>> = None;
 
 #[derive(Parser, Debug, Clone, Default)]
 #[command(no_binary_name(true))]
@@ -58,6 +60,8 @@ pub const ABS_MT_PRESSURE_MAX: u32 = 0x64;
 
 pub struct Multitouch {
     device: Input,
+    x_max: u32,
+    y_max: u32,
 }
 
 impl Multitouch {
@@ -120,6 +124,8 @@ impl Multitouch {
 
         Self {
             device: Input::new_with_cfg(evdev_cfg),
+            x_max: option.x as u32,
+            y_max: option.y as u32,
         }
     }
 }
@@ -159,15 +165,12 @@ impl VirtioDevice for Multitouch {
             interrupt_cb,
             queue_evts,
         )?));
-        // SAFETY: The MT_DEV_HANDLER protect with mutex.
-        unsafe {
-            match MT_DEV_HANDLER.as_ref() {
-                Some(_) => {
-                    bail!("only support one multitouch device")
-                }
-                None => MT_DEV_HANDLER = Some(handler.clone()),
-            }
-        };
+        register_mt_handler(
+            handler.clone(),
+            self.x_max,
+            self.y_max,
+            ABS_MT_TRACKING_ID_MAX,
+        )?;
 
         register_event_helper(
             EventNotifierHelper::internal_notifiers(handler),
@@ -179,19 +182,75 @@ impl VirtioDevice for Multitouch {
         Ok(())
     }
 
-    fn reset(&mut self) -> Result<()> {
-        // SAFETY: The MT_DEV_HANDLER protect with mutex.
-        unsafe { MT_DEV_HANDLER = None };
+    fn deactivate(&mut self) -> Result<()> {
+        unregister_event_helper(None, &mut self.device.deactivate_evts)?;
+        unregister_mt_handler();
+        Ok(())
+    }
 
+    fn reset(&mut self) -> Result<()> {
+        unregister_mt_handler();
         Ok(())
     }
 }
 
-pub fn send_mt_event(evt: &InputEvent) -> bool {
-    // SAFETY: The MT_DEV_HANDLER protect with mutex.
-    if let Some(mt) = unsafe { MT_DEV_HANDLER.as_ref() } {
-        mt.lock().unwrap().send_event(evt);
-        return true;
+impl MultitouchOps for InputIoHandler {
+    fn send_event(&mut self, mtt_evt: &MultiTouchAbsData) -> Result<()> {
+        match mtt_evt.kind {
+            MultiTouchEventKind::BEGIN | MultiTouchEventKind::UPDATE => {
+                let evts = [
+                    InputEvent::new(EV_ABS as u16, ABS_MT_SLOT as u16, mtt_evt.slot),
+                    InputEvent::new(
+                        EV_ABS as u16,
+                        ABS_MT_TRACKING_ID as u16,
+                        mtt_evt.tracking_id,
+                    ),
+                    InputEvent::new(EV_ABS as u16, ABS_MT_POSITION_X as u16, mtt_evt.x as i32),
+                    InputEvent::new(EV_ABS as u16, ABS_MT_POSITION_Y as u16, mtt_evt.y as i32),
+                    InputEvent::new(
+                        EV_ABS as u16,
+                        ABS_MT_TOUCH_MAJOR as u16,
+                        mtt_evt.major as i32,
+                    ),
+                    InputEvent::new(
+                        EV_ABS as u16,
+                        ABS_MT_TOUCH_MINOR as u16,
+                        mtt_evt.minor as i32,
+                    ),
+                ];
+
+                for evt in &evts {
+                    if !self.send_event(evt) {
+                        unregister_mt_handler();
+                        bail!("Failed to inject multitouch event");
+                    }
+                }
+            }
+            MultiTouchEventKind::END => {
+                let evts = [
+                    InputEvent::new(EV_ABS as u16, ABS_MT_SLOT as u16, mtt_evt.slot),
+                    InputEvent::new(EV_ABS as u16, ABS_MT_TRACKING_ID as u16, -1),
+                ];
+
+                for evt in &evts {
+                    if !self.send_event(evt) {
+                        unregister_mt_handler();
+                        bail!("Failed to inject multitouch event");
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
-    false
+
+    fn send_sync(&mut self) -> Result<()> {
+        let evt = InputEvent::new(EV_SYN, SYN_REPORT, 0);
+        if self.send_event(&evt) {
+            Ok(())
+        } else {
+            unregister_mt_handler();
+            bail!("Failed to send multitouch sync event");
+        }
+    }
 }
