@@ -269,6 +269,12 @@ message = ""
 enabled = true
 
 [[events]]
+name = "oh_event_multitouch"
+args = "x: u32, y: u32, major: u32, minor: u32, tracking_id: i32, blob_id: u32, pressure: u32"
+message = "x={} y={} major={} minor={} tracking_id={} blob_id={} pressure={}"
+enabled = true
+
+[[events]]
 name = "oh_event_greet"
 args = "id: u64"
 message = "token_id={}"

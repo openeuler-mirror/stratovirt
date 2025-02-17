@@ -44,6 +44,7 @@ pub enum EventType {
     Focus = 9,
     VmCtrlInfo = 10,
     FlushFrame = 11,
+    Multitouch = 12,
     WindowInfoV2 = 14,
     #[default]
     Max,
@@ -171,6 +172,33 @@ impl FrameBufferDirtyEvent {
     }
 }
 
+// Currently we only expose 3 fingers at most to the guest.
+// The touch with more than 3 fingers is interpreted by Harmony.
+pub const MULTITOUCH_SLOT_MAX: usize = 3;
+pub const MULTITOUCH_EVENT_DOWN: u32 = 0;
+pub const MULTITOUCH_EVENT_MOVE: u32 = 1;
+pub const MULTITOUCH_EVENT_UP: u32 = 2;
+pub const MULTITOUCH_EVENT_CANCEL: u32 = 3;
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct MultiTouchEvent {
+    // 0: start(finger starts to press)
+    // 1: update(finger moves)
+    // 2: end(finger leaves)
+    // 3: cancel(lift all fingers)
+    pub event_type: u32,
+    pub tracking_id: i32,
+    pub x: u32,
+    pub y: u32,
+    pub major: u32,
+    pub minor: u32,
+    pub pressure: u32,
+    pub blob_id: u32,
+}
+
+impl ByteCode for MultiTouchEvent {}
+
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct FlushFrameEvent {
@@ -232,6 +260,7 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
         EventType::CursorDefine => size_of::<HWCursorEvent>(),
         EventType::Ledstate => size_of::<LedstateEvent>(),
         EventType::Greet => size_of::<GreetEvent>(),
+        EventType::Multitouch => size_of::<MultiTouchEvent>(),
         EventType::FlushFrame => size_of::<FlushFrameEvent>(),
         EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
         _ => 0,
