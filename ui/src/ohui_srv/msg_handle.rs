@@ -138,13 +138,20 @@ impl WindowState {
 }
 
 #[derive(Default)]
+struct InputDeviceState {
+    input_notifier_id: u64,
+    has_multitouch: bool,
+}
+
+#[derive(Default)]
 pub struct OhUiMsgHandler {
     state: Mutex<WindowState>,
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<Option<MsgReader>>,
-    writer: Mutex<Option<MsgWriter>>,
+    writer: Arc<Mutex<Option<MsgWriter>>>,
     vm_pause: Arc<RwLock<bool>>,
     pause_notifier_id: Mutex<u64>,
+    input_state: Arc<Mutex<InputDeviceState>>,
     ui_size: RwLock<(u32, u32)>,
 }
 
@@ -154,12 +161,14 @@ impl OhUiMsgHandler {
             state: Mutex::new(WindowState::default()),
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
             reader: Mutex::new(None),
-            writer: Mutex::new(None),
+            writer: Arc::new(Mutex::new(None)),
             vm_pause: Arc::new(RwLock::new(false)),
             pause_notifier_id: Mutex::new(0),
+            input_state: Arc::new(Mutex::new(InputDeviceState::default())),
             ui_size: RwLock::new((0, 0)),
         };
         handler.register_pause_notifier(handler.vm_pause.clone());
+        handler.register_input_change_notifier();
 
         handler
     }
@@ -170,6 +179,26 @@ impl OhUiMsgHandler {
             *vm_pause.write().unwrap() = paused;
         });
         *self.pause_notifier_id.lock().unwrap() = register_vm_pause_notifier(pause_notify);
+    }
+
+    fn register_input_change_notifier(&self) {
+        let writer = self.writer.clone();
+        let input_state = self.input_state.clone();
+        let notifier = Arc::new(move |reason: InputStateChangeReason| {
+            let internal_reason = match reason {
+                InputStateChangeReason::MultitouchRegister => {
+                    input_state.lock().unwrap().has_multitouch = true;
+                    INPUT_MULTITOUCH_ONLINE
+                }
+                InputStateChangeReason::MultitouchUnregister => {
+                    input_state.lock().unwrap().has_multitouch = false;
+                    INPUT_MULTITOUCH_OFFLINE
+                }
+            };
+            send_input_device_change_msg(writer.clone(), internal_reason);
+        });
+
+        self.input_state.lock().unwrap().input_notifier_id = register_input_notifier(notifier);
     }
 
     pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
@@ -445,6 +474,13 @@ impl OhUiMsgHandler {
         }
     }
 
+    pub fn send_input_device_state(&self) {
+        match self.input_state.lock().unwrap().has_multitouch {
+            true => send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_ONLINE),
+            false => send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_OFFLINE),
+        }
+    }
+
     pub fn handle_dirty_area(&self, x: u32, y: u32, w: u32, h: u32) {
         if let Some(writer) = self.writer.lock().unwrap().as_mut() {
             let body = FrameBufferDirtyEvent::new(x, y, w, h);
@@ -457,6 +493,15 @@ impl OhUiMsgHandler {
     pub fn reset(&self) {
         *self.reader.lock().unwrap() = None;
         *self.writer.lock().unwrap() = None;
+    }
+}
+
+fn send_input_device_change_msg(writer: Arc<Mutex<Option<MsgWriter>>>, reason: u64) {
+    if let Some(writer) = writer.lock().unwrap().as_mut() {
+        let body = InputDeviceChange::new(reason);
+        if let Err(e) = writer.send_message(EventType::InputDeviceChange, &body) {
+            error!("failed to send InputDeviceChange message with error {e}");
+        }
     }
 }
 
