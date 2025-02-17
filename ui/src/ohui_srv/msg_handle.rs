@@ -27,11 +27,12 @@ use crate::{
     console::{get_active_console, graphic_hardware_ui_info, set_dpy_rotation, Rotation},
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
-        release_all_btn, release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED,
-        CONSUMER_PREFIX, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT,
-        INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD,
-        INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_CAPS_LOCK,
-        KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
+        lift_all_fingers, register_input_notifier, release_all_btn, release_all_key, send_mt_event,
+        send_mt_sync, trigger_key, Axis, InputStateChangeReason, MultiTouchAbsData,
+        MultiTouchEventKind, ABS_MAX, CAPS_LOCK_LED, CONSUMER_PREFIX, INPUT_BUTTON_WHEEL_DOWN,
+        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK,
+        INPUT_POINT_FORWARD, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
+        KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
     },
     keycode::{DpyMod, KeyCode},
 };
@@ -144,6 +145,7 @@ pub struct OhUiMsgHandler {
     writer: Mutex<Option<MsgWriter>>,
     vm_pause: Arc<RwLock<bool>>,
     pause_notifier_id: Mutex<u64>,
+    ui_size: RwLock<(u32, u32)>,
 }
 
 impl OhUiMsgHandler {
@@ -155,6 +157,7 @@ impl OhUiMsgHandler {
             writer: Mutex::new(None),
             vm_pause: Arc::new(RwLock::new(false)),
             pause_notifier_id: Mutex::new(0),
+            ui_size: RwLock::new((0, 0)),
         };
         handler.register_pause_notifier(handler.vm_pause.clone());
 
@@ -238,6 +241,10 @@ impl OhUiMsgHandler {
             EventType::FlushFrame => {
                 let body = FlushFrameEvent::from_bytes(&body_bytes[..]).unwrap();
                 self.handle_flushframe(body)
+            }
+            EventType::Multitouch => {
+                let body = MultiTouchEvent::from_bytes(&body_bytes[..]).unwrap();
+                self.handle_multitouch_event(body)
             }
             EventType::WindowInfoV2 => {
                 let body = WindowInfoV2Event::from_bytes(&body_bytes[..]).unwrap();
@@ -351,6 +358,7 @@ impl OhUiMsgHandler {
                 }
             }
         }
+        *self.ui_size.write().unwrap() = (wi.width, wi.height);
         trace::oh_event_windowinfo(wi.width, wi.height);
     }
 
@@ -372,6 +380,7 @@ impl OhUiMsgHandler {
             CLIENT_FOCUSOUT_EVENT => {
                 release_all_key()?;
                 release_all_btn()?;
+                lift_all_fingers()?;
             }
             _ => warn!("focus message type error."),
         }
@@ -380,6 +389,49 @@ impl OhUiMsgHandler {
 
     fn handle_flushframe(&self, _fe: &FlushFrameEvent) -> Result<()> {
         trace::oh_event_flushframe();
+        Ok(())
+    }
+
+    fn handle_multitouch_event(&self, mtt: &MultiTouchEvent) -> Result<()> {
+        let mtt_type = mtt.event_type;
+        let slot_id = mtt.tracking_id;
+        let mut tracking_id = mtt.tracking_id;
+
+        if mtt_type == MULTITOUCH_EVENT_CANCEL {
+            return lift_all_fingers();
+        }
+
+        let evt_type = match mtt_type {
+            MULTITOUCH_EVENT_DOWN => MultiTouchEventKind::BEGIN,
+            MULTITOUCH_EVENT_MOVE => MultiTouchEventKind::UPDATE,
+            MULTITOUCH_EVENT_UP => {
+                tracking_id = -1;
+                MultiTouchEventKind::END
+            }
+            _ => bail!("unsupported multitouch event type {}", mtt_type),
+        };
+        let mut evt = MultiTouchAbsData::new(
+            evt_type,
+            mtt.x,
+            mtt.y,
+            mtt.major,
+            mtt.minor,
+            slot_id,
+            tracking_id,
+        );
+        let (w, h) = *self.ui_size.read().unwrap();
+
+        send_mt_event(&mut evt, w, h)?;
+        send_mt_sync()?;
+        trace::oh_event_multitouch(
+            mtt.x,
+            mtt.y,
+            mtt.major,
+            mtt.minor,
+            tracking_id,
+            mtt.blob_id,
+            mtt.pressure,
+        );
         Ok(())
     }
 
