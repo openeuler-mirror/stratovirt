@@ -45,6 +45,7 @@ pub enum EventType {
     VmCtrlInfo = 10,
     FlushFrame = 11,
     Multitouch = 12,
+    InputDeviceChange = 13,
     WindowInfoV2 = 14,
     #[default]
     Max,
@@ -209,6 +210,23 @@ impl ByteCode for FlushFrameEvent {}
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
+pub struct InputDeviceChange {
+    pub reason: u64,
+}
+
+impl ByteCode for InputDeviceChange {}
+
+impl InputDeviceChange {
+    pub fn new(reason: u64) -> Self {
+        Self { reason }
+    }
+}
+
+pub const INPUT_MULTITOUCH_ONLINE: u64 = 1;
+pub const INPUT_MULTITOUCH_OFFLINE: u64 = 2;
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct WindowInfoV2Event {
     pub width: u32,
     pub height: u32,
@@ -262,6 +280,7 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
         EventType::Greet => size_of::<GreetEvent>(),
         EventType::Multitouch => size_of::<MultiTouchEvent>(),
         EventType::FlushFrame => size_of::<FlushFrameEvent>(),
+        EventType::InputDeviceChange => size_of::<InputDeviceChange>(),
         EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
         _ => 0,
     }

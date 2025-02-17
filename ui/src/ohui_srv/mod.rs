@@ -291,6 +291,10 @@ impl OhUiServer {
             .send_windowinfo(locked_surface.width as u32, locked_surface.height as u32);
     }
 
+    fn send_input_device_state(&self) {
+        self.msg_handler.send_input_device_state();
+    }
+
     #[inline(always)]
     fn connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
@@ -529,6 +533,8 @@ impl OhUiListener {
         self.server.set_connect(true);
         // Send window info to the client
         self.server.send_window_info();
+        // Send input device state
+        self.server.send_input_device_state();
         Ok(())
     }
 
