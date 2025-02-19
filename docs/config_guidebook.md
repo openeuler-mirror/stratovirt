@@ -1271,6 +1271,33 @@ Sample Configuration：
 -device virtio-mem-pci,id=<viomem_id>,bus=<pcie.0>,addr=<0x4>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>][,multifunction=on|off]
 ```
 
+### 2.24 virtio-multitouch
+virtio-multitouch is a virtualized multitouch input device can be used to create human multitouch interface devices, such as mutlitouch screen, digitizer, touchpad.
+
+Five properties are supported for virtio-multitouch.
+* id: unique device id.
+* serial: the serial number(unique string) of the device.
+* x: the max value of X-axle
+* y: the max value of Y-axle
+
+For virtio-multitouch-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it. As virtio pci multitouch device is a
+single function device, the function number should be set to zero.
+
+Sample Configuration：
+```shell
+# virtio mmio multitouch device
+-device virtio-multitouch-device,id=<mt_id>,serial=<mt_serial>,x=<x>,y=<y>
+# virtio pci multitouch device
+-device virtio-multitouch-pci,id=<mt_id>,serial=<mt_serial>,x=<0x7FFF>,y=<0x7FFF>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]
+```
+
+Note:
+1. Only support used with OHUI.
+
+
 ## 3. Trace
 
 Users can specify a configuration file which lists the traces that needs to be enabled, or specify the trace type that needs to be enabled. Setting both file and type is also allowed, so that traces with the specified type and traces listed in the file will all be enabled.
