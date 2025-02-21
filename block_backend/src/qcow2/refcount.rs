@@ -500,18 +500,8 @@ impl RefCount {
 
     /// Add discard task to the list.
     fn update_discard_list(&mut self, offset: u64, nbytes: u64) -> Result<()> {
-        let mut discard_task = DiscardTask { offset, nbytes };
-        let len = self.discard_list.len();
-        let mut discard_list: Vec<DiscardTask> = Vec::with_capacity(len + 1);
-        for task in self.discard_list.iter() {
-            if discard_task.is_overlap(task) {
-                discard_task.merge_task(task);
-            } else {
-                discard_list.push(task.clone());
-            }
-        }
-        discard_list.push(discard_task);
-        self.discard_list = discard_list;
+        let discard_task = DiscardTask { offset, nbytes };
+        self.discard_list.push(discard_task);
         Ok(())
     }
 
