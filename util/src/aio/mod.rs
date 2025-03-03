@@ -835,8 +835,10 @@ pub fn iov_discard_front_direct(iovec: &mut [Iovec], mut size: u64) -> Option<&m
     None
 }
 
-// Caller should have valid buffer base/len.
-unsafe fn buffer_is_zero(base: u64, len: u64) -> bool {
+/// # Safety
+///
+/// Caller should have valid buffer base/len.
+pub unsafe fn buffer_is_zero(base: u64, len: u64) -> bool {
     let slice = std::slice::from_raw_parts(base as *const u8, len as usize);
     let (prefix, aligned, suffix) = slice.align_to::<u128>();
     prefix.iter().all(|&x| x == 0)
