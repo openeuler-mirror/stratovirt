@@ -23,12 +23,12 @@ use crate::{cmdline::ArgsParse, BINARY_NAME};
 use block_backend::{
     qcow2::{header::QcowHeader, InternalSnapshotOps, Qcow2Driver, SyncAioInfo},
     raw::RawDriver,
-    BlockDriverOps, BlockProperty, CheckResult, CreateOptions, ImageInfo, FIX_ERRORS, FIX_LEAKS,
-    NO_FIX, SECTOR_SIZE,
+    BlockAllocStatus, BlockDriverOps, BlockProperty, CheckResult, CreateOptions, ImageInfo,
+    FIX_ERRORS, FIX_LEAKS, NO_FIX, SECTOR_SIZE,
 };
 use machine_manager::config::{memory_unit_conversion, DiskFormat};
 use util::{
-    aio::{Aio, AioEngine, WriteZeroesState},
+    aio::{buffer_is_zero, Aio, AioEngine, Iovec, WriteZeroesState},
     file::{lock_file, open_file, unlock_file},
 };
 
@@ -381,6 +381,250 @@ pub(crate) fn image_resize(mut args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+// Default 4k(8 sectors) for sparse detection.
+const DEFAULT_SPARSE_SIZE: u8 = 8;
+// Default 2M buffer size for convert.
+const DEFAULT_BUF_SIZE: usize = 1 << 21;
+
+#[derive(Debug, PartialEq, Eq)]
+enum ConvertDataStatus {
+    Zero = 0,
+    Data,
+}
+
+impl ConvertDataStatus {
+    fn from_bool(is_zero: bool) -> Self {
+        if is_zero {
+            ConvertDataStatus::Zero
+        } else {
+            ConvertDataStatus::Data
+        }
+    }
+}
+
+// Describe a continuous address segment which has the same allocation status when converting.
+#[derive(PartialEq, Eq)]
+struct ConvertSeg {
+    start: u64,
+    len: u64,
+    status: ConvertDataStatus,
+}
+
+impl ConvertSeg {
+    fn new(start: u64, len: u64, is_zero: bool) -> Self {
+        Self {
+            start,
+            len,
+            status: ConvertDataStatus::from_bool(is_zero),
+        }
+    }
+}
+
+fn convert_do_read(
+    driver: &mut dyn BlockDriverOps<()>,
+    buf: &mut [u8],
+    len: u64,
+    offset: u64,
+) -> Result<()> {
+    let iov = vec![Iovec {
+        iov_base: buf.as_ptr() as u64,
+        iov_len: len,
+    }];
+    driver.read_vectored(iov, offset as usize, ())
+}
+
+fn convert_do_seg_write(
+    driver: &mut dyn BlockDriverOps<()>,
+    buf: &mut [u8],
+    data_seg: &ConvertSeg,
+) -> Result<()> {
+    match data_seg.status {
+        ConvertDataStatus::Data => {
+            let iov = vec![Iovec {
+                iov_base: buf.as_ptr() as u64,
+                iov_len: data_seg.len,
+            }];
+            driver.write_vectored(iov, data_seg.start as usize, ())
+        }
+        ConvertDataStatus::Zero => {
+            // The output image is a newly created sparse file, which defaults to all holes.
+            // Sequential writing does not require writing zeroes again. Do nothing.
+            Ok(())
+        }
+    }
+}
+
+fn convert_do_write(
+    driver: &mut dyn BlockDriverOps<()>,
+    buf: &mut [u8],
+    buf_len: u64,
+    offset: u64,
+    sparse_size: u64,
+) -> Result<()> {
+    let mut convert_seg = ConvertSeg::new(offset, 0, true);
+    let mut first_check = true;
+
+    let mut pos = 0_u64;
+    while pos < buf_len {
+        let detect_size = std::cmp::min(sparse_size, buf_len - pos);
+        let detect_buf = &buf[pos as usize..(pos + detect_size) as usize];
+
+        // SAFETY: Buffer is a local `Vec` variable in `image_convert`, its base and len are both valid values.
+        let local_zero = unsafe { buffer_is_zero(detect_buf.as_ptr() as u64, detect_size) };
+
+        if first_check {
+            convert_seg.status = ConvertDataStatus::from_bool(local_zero);
+            first_check = false;
+        }
+
+        if ConvertDataStatus::from_bool(local_zero) != convert_seg.status {
+            convert_do_seg_write(
+                driver,
+                &mut buf[(convert_seg.start - offset) as usize..pos as usize],
+                &convert_seg,
+            )?;
+
+            convert_seg.status = ConvertDataStatus::from_bool(local_zero);
+            convert_seg.start = offset + pos;
+            convert_seg.len = detect_size;
+
+            pos += detect_size;
+            continue;
+        }
+
+        convert_seg.len += detect_size;
+        pos += detect_size;
+    }
+
+    if !first_check {
+        convert_do_seg_write(
+            driver,
+            &mut buf[(convert_seg.start - offset) as usize..pos as usize],
+            &convert_seg,
+        )?;
+    }
+    Ok(())
+}
+
+fn image_create_blockdriver(
+    file: Arc<File>,
+    format: DiskFormat,
+) -> Result<Box<dyn BlockDriverOps<()>>> {
+    let conf = BlockProperty {
+        format,
+        ..Default::default()
+    };
+    let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+
+    match format {
+        DiskFormat::Qcow2 => {
+            let mut qcow2_driver = Qcow2Driver::new(file, aio, conf.clone())?;
+            qcow2_driver.load_metadata(conf)?;
+            Ok(Box::new(qcow2_driver))
+        }
+        DiskFormat::Raw => Ok(Box::new(RawDriver::new(file, aio, conf))),
+    }
+}
+
+pub(crate) fn image_convert(args: Vec<String>) -> Result<()> {
+    let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec!["f", "O", "S"], vec![]);
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    // Parse the image path. Command line should have 2 args at the end(input filename and output filename).
+    if arg_parser.free.len() != 2 {
+        bail!("Invalid input/output filenames.");
+    }
+    let input_path = arg_parser.free[0].clone();
+    let output_path = arg_parser.free[1].clone();
+
+    // Check output image filename: to avoid accidentally deleting existing files,
+    // it is prohibited to use the name of an existing file as the output image name.
+    if std::path::Path::new(&output_path).exists() {
+        bail!(
+            "The file {} already exists, please use a different name.",
+            output_path
+        );
+    }
+
+    // Parse the input image format. If not set, it will detect the corresponding image file to determine the image format.
+    let input_fmt_str = arg_parser.opt_str("f").unwrap_or_default();
+    let input_image_file = ImageFile::create(&input_path, true)?;
+    let detect_input_fmt = input_image_file.detect_img_format()?;
+    if !input_fmt_str.is_empty() {
+        let input_fmt = DiskFormat::from_str(&input_fmt_str)?;
+        if detect_input_fmt != input_fmt {
+            bail!("'{}' is not a {} file.", input_path, input_fmt_str);
+        }
+    }
+
+    // Parse the output image format. Default is "raw".
+    let output_fmt_str = arg_parser.opt_str("O").unwrap_or_else(|| "raw".to_string());
+    let output_fmt = DiskFormat::from_str(&output_fmt_str)?;
+
+    // Parse the min sparse.
+    let min_sparse_str = arg_parser
+        .opt_str("S")
+        .unwrap_or_else(|| DEFAULT_SPARSE_SIZE.to_string());
+    let min_sparse = min_sparse_str.parse::<u64>()? * SECTOR_SIZE;
+
+    // Create input image driver.
+    let mut input_driver_box =
+        image_create_blockdriver(input_image_file.file.clone(), detect_input_fmt)?;
+    let input_driver = input_driver_box.as_mut();
+    let size = input_driver.disk_size()?;
+
+    // Create new output file.
+    let mut create_options = CreateOptions {
+        path: output_path.clone(),
+        img_size: size,
+        ..Default::default()
+    };
+    create_options.conf.format = output_fmt;
+    image_do_create(&create_options, false)?;
+
+    // Create output image driver.
+    let output_image_file = ImageFile::create(&output_path, false)?;
+    let mut output_driver_box =
+        image_create_blockdriver(output_image_file.file.clone(), output_fmt)?;
+    let output_driver = output_driver_box.as_mut();
+
+    // Convert from src image to dst image.
+    let mut offset = 0;
+    let mut buf = vec![0_u8; DEFAULT_BUF_SIZE];
+    while offset < size {
+        // Get address segments with the same allocation status.
+        let (status, len) = input_driver.get_address_alloc_status(offset as u64, size - offset)?;
+        match status {
+            // `DATA` means that these data should be read from the src image and be written to the dst image.
+            BlockAllocStatus::DATA => {
+                let mut need_convert = len;
+                let mut cur_offset = offset;
+                while need_convert > 0 {
+                    let data_len = std::cmp::min(DEFAULT_BUF_SIZE as u64, need_convert);
+                    convert_do_read(input_driver, &mut buf, data_len, cur_offset)?;
+                    convert_do_write(output_driver, &mut buf, data_len, cur_offset, min_sparse)?;
+                    cur_offset += data_len;
+                    need_convert -= data_len;
+                }
+            }
+            // `ZERO` means that these data can be treated as holes.
+            BlockAllocStatus::ZERO => {
+                // The output image is a newly created sparse file, which defaults to all holes.
+                // Sequential writing does not require writing zeroes again. Do nothing.
+            }
+        };
+
+        offset += len;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
     let mut arg_parser = ArgsParse::create(
         vec!["l", "h", "help", "r"],
@@ -554,6 +798,7 @@ info filename
 check [-r [leaks | all]] [-no_print_error] [-f fmt] filename
 resize [-f fmt] filename [+]size
 snapshot [-l | -a snapshot | -c snapshot | -d snapshot | -r old_snapshot_name new_snapshot_name] filename
+convert [-f input_fmt | -O output_fmt | -S sparse_size ] input_filename output_filename
 
 Command parameters:
 'filename' is a disk image filename
@@ -575,6 +820,13 @@ Parameters to snapshot subcommand:
  '-d' deletes a snapshot
  '-l' lists all snapshots in the given image
  '-r' change the name of a snapshot
+
+Parameters to convert subcommand:
+ '-f fmt' is input image format.
+ '-O output_fmt' is output image format.
+ '-S sparse_size' is the consecutive number of bytes that must contain only zeroes to create a sparse image during conversion. Unit: sector(512 bytes). Default is 8.
+ 'input_filename' is the name of the input file using *input_fmt* image format.
+ 'output_filename' is the name of the output file using *output_fmt* image format.
 "#,
     );
 }

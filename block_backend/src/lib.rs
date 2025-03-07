@@ -349,6 +349,11 @@ impl Default for BlockProperty {
     }
 }
 
+pub enum BlockAllocStatus {
+    DATA,
+    ZERO,
+}
+
 pub trait BlockDriverOps<T: Clone>: Send {
     fn create_image(&mut self, options: &CreateOptions) -> Result<String>;
 
@@ -391,6 +396,16 @@ pub trait BlockDriverOps<T: Clone>: Send {
     fn unregister_io_event(&mut self) -> Result<()>;
 
     fn get_status(&mut self) -> Arc<Mutex<BlockStatus>>;
+
+    // Get a continuous address with the same allocation status starting from `offset`.
+    // Returns this continuous address's allocation status(data or zero) and size.
+    fn get_address_alloc_status(
+        &mut self,
+        _offset: u64,
+        _bytes: u64,
+    ) -> Result<(BlockAllocStatus, u64)> {
+        bail!("Not support!");
+    }
 }
 
 pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
