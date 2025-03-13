@@ -845,6 +845,7 @@ mod test {
     };
     use util::aio::Iovec;
 
+    const K: u64 = 1024;
     const M: u64 = 1024 * 1024;
     const G: u64 = 1024 * 1024 * 1024;
 
@@ -2369,5 +2370,181 @@ mod test {
         assert_eq!(driver.header.size, 21 * G);
         drop(driver);
         assert!(test_image.check_image(quite, fix));
+    }
+
+    /// Test image convert from qcow2 to raw.
+    ///
+    /// TestStep:
+    /// 1. Create a qcow2 image with size of 10G.
+    /// 2. Write data to this image in different position.
+    /// 3. Convert this qcow2 to raw.
+    /// 4. Read data in the same position.
+    #[test]
+    fn test_image_convert_from_qcow2_to_raw() {
+        let src_path = "/tmp/test_image_convert_src.qcow2";
+        let dst_path = "/tmp/test_image_convert_dst.raw";
+        let _ = remove_file(src_path.clone());
+        let _ = remove_file(dst_path.clone());
+
+        let test_image = TestQcow2Image::create(16, 16, src_path, "10G");
+        let mut src_driver = test_image.create_driver();
+
+        // Write 1M data(number 1) in offset 0.
+        let buf1 = vec![1_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 0, &buf1).is_ok());
+        // Write 1M data(number 2) in offset 5G.
+        let buf2 = vec![2_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 5 * G as usize, &buf2).is_ok());
+        // Write 1M data(number 3) in last 1M.
+        let buf3 = vec![3_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 10 * G as usize - 1 * M as usize, &buf3).is_ok());
+        // Write 1M data(number 0) in random offset (eg: 300M offset).
+        let buf4 = vec![0_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 300 * M as usize, &buf4).is_ok());
+
+        drop(src_driver);
+
+        assert!(image_convert(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            "-O".to_string(),
+            "raw".to_string(),
+            src_path.to_string(),
+            dst_path.to_string()
+        ])
+        .is_ok());
+
+        // Open the converted raw image.
+        let conf = BlockProperty::default();
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let file = open_file(dst_path, true, false).unwrap();
+        let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
+
+        // Read 1M data in offset 0.
+        let buf = vec![0; 1 * M as usize];
+        assert!(image_read(&mut dst_driver, 0, &buf).is_ok());
+        assert_eq!(buf, buf1);
+        // Read 1M data in offset 5G.
+        assert!(image_read(&mut dst_driver, 5 * G as usize, &buf).is_ok());
+        assert_eq!(buf, buf2);
+        // Read 1M data in last 1M.
+        assert!(image_read(&mut dst_driver, 10 * G as usize - 1 * M as usize, &buf).is_ok());
+        assert_eq!(buf, buf3);
+
+        let mut img_info = ImageInfo::default();
+        assert!(dst_driver.query_image(&mut img_info).is_ok());
+        assert_eq!(img_info.virtual_size, 10 * G);
+        // 1M data(number 0) in offset 300M will not consume space.
+        assert_eq!(img_info.actual_size, 3 * M);
+
+        // Clean.
+        assert!(remove_file(dst_path.clone()).is_ok());
+    }
+
+    /// Test image convert parameters parsing.
+    ///
+    /// TestStep:
+    /// 1. Create a qcow2 image with size of 1G.
+    /// 2. Write two continuous `4k 0 buffer + 4k 1 buffer` to this image.
+    /// 3. Test default parameters.
+    /// 4. Test existed destination file.
+    /// 5. Test min sparse.
+    #[test]
+    fn test_image_convert_parameters_parsing() {
+        let src_path = "/tmp/test_image_convert_paring_src.qcow2";
+        let dst_path = "/tmp/test_image_convert_paring_dst.raw";
+        let _ = remove_file(src_path.clone());
+        let _ = remove_file(dst_path.clone());
+
+        let test_image = TestQcow2Image::create(16, 16, src_path, "1G");
+        let mut src_driver = test_image.create_driver();
+
+        // Write 4k data(number 0) in offset 16k.
+        assert!(image_write(
+            &mut src_driver,
+            16 * K as usize,
+            &vec![0_u8; 4 * K as usize]
+        )
+        .is_ok());
+        // Write 4k data(number 1) in offset 20k.
+        assert!(image_write(
+            &mut src_driver,
+            20 * K as usize,
+            &vec![1_u8; 4 * K as usize]
+        )
+        .is_ok());
+        // Write 4k data(number 0) in offset 24k.
+        assert!(image_write(
+            &mut src_driver,
+            24 * K as usize,
+            &vec![0_u8; 4 * K as usize]
+        )
+        .is_ok());
+        // Write 4k data(number 1) in offset 28k.
+        assert!(image_write(
+            &mut src_driver,
+            28 * K as usize,
+            &vec![1_u8; 4 * K as usize]
+        )
+        .is_ok());
+
+        drop(src_driver);
+
+        // test1: The default value of the parameters.
+        // `stratovirt-img convert src_path dst_path`
+        // Eq: `stratovirt-img convert -f qcow2 -O raw -S 8 src_path dst_path`
+        assert!(image_convert(vec![src_path.to_string(), dst_path.to_string()]).is_ok());
+        // Check output format.
+        let output_image_file = ImageFile::create(&dst_path, true).unwrap();
+        let detect_output_fmt = output_image_file.detect_img_format().unwrap();
+        assert_eq!(detect_output_fmt, DiskFormat::Raw);
+        drop(output_image_file);
+        // Check sparse size by querying output file size.
+        let conf = BlockProperty::default();
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let file = open_file(dst_path, true, false).unwrap();
+        let mut img_info = ImageInfo::default();
+        let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
+        assert!(dst_driver.query_image(&mut img_info).is_ok());
+        // Raw file has allocated filled first part (sized 4k(host page size), see function `alloc_first_block`) for
+        // detecting the alignment length.
+        assert_eq!(img_info.actual_size, 4 * K + 8 * K); // 4K allocated filled first part + 8K data.
+        drop(dst_driver);
+        assert!(remove_file(dst_path.clone()).is_ok());
+
+        // test2: The destination file already exists.
+        let existed_raw = TestRawImage::create(dst_path.to_string(), "1G".to_string());
+        assert!(image_convert(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            "-O".to_string(),
+            "raw".to_string(),
+            src_path.to_string(),
+            dst_path.to_string()
+        ])
+        .is_err());
+        drop(existed_raw);
+
+        // test3: Sparse test.
+        // stratovirt-img convert -f qcow2 -O raw -S 16 src_path dst_path
+        assert!(image_convert(vec![
+            "-S".to_string(),
+            "16".to_string(), // 16 sectors.(8K)
+            src_path.to_string(),
+            dst_path.to_string()
+        ])
+        .is_ok());
+        // Query the image size.
+        let conf = BlockProperty::default();
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let file = open_file(dst_path, true, false).unwrap();
+        let mut img_info = ImageInfo::default();
+        let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
+        assert!(dst_driver.query_image(&mut img_info).is_ok());
+        // min_sparse is 16k. So, these continuous `4K 0 buffer + 4K 1 buffer` will be considered as all data buffer sized 8k.
+        // Will not create holes here.
+        assert_eq!(img_info.actual_size, 4 * K + 16 * K);
+        drop(dst_driver);
+        assert!(remove_file(dst_path.clone()).is_ok());
     }
 }
