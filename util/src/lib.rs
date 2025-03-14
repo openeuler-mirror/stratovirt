@@ -21,6 +21,7 @@ pub mod daemonize;
 pub mod device_tree;
 pub mod edid;
 pub mod error;
+pub mod evdev;
 pub mod file;
 pub mod leak_bucket;
 pub mod link_list;
