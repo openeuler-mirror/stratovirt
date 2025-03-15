@@ -595,3 +595,40 @@ impl VirtioDevice for Input {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_input_config_cmdline_parse() {
+        // Test1: virtio-input-device(mmio).
+        let input_cmd = "virtio-input-device,id=input0,evdev=/dev/input/event0";
+        let input_config =
+            InputConfig::try_parse_from(str_slip_to_clap(input_cmd, true, false)).unwrap();
+        assert_eq!(input_config.multifunction, None);
+
+        // Test2: virtio-input-pci.
+        let input_cmd = "virtio-input-pci,bus=pcie.0,addr=0x1,id=input0,evdev=/dev/input/event0";
+        let input_config =
+            InputConfig::try_parse_from(str_slip_to_clap(input_cmd, true, false)).unwrap();
+        assert_eq!(input_config.bus.unwrap(), "pcie.0");
+        assert_eq!(input_config.addr.unwrap(), (1, 0));
+        assert_eq!(input_config.evdev, "/dev/input/event0");
+    }
+
+    #[test]
+    fn test_input_init() {
+        let input_config = InputConfig {
+            classtype: "virtio-input-pci".to_string(),
+            id: "input0".to_string(),
+            evdev: "/evdev/path".to_string(),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((3, 0)),
+            ..Default::default()
+        };
+        let input = Input::new(input_config);
+        assert!(input.is_err());
+    }
+}
