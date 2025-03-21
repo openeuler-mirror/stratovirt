@@ -37,7 +37,7 @@ use anyhow::{Context, Result};
 use super::{state::State, Container};
 use crate::{linux::Process, utils::OzonecErr};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Create,
     Start,

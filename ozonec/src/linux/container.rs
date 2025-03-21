@@ -95,11 +95,11 @@ impl LinuxContainer {
     }
 
     pub fn load_from_state(state: &State, console_socket: &Option<PathBuf>) -> Result<Self> {
-        let root_path = format!("{}/{}", state.root.to_string_lossy().to_string(), &state.id);
+        let root_path = format!("{}/{}", state.root.to_string_lossy(), &state.id);
         let config = state
             .config
             .clone()
-            .ok_or(anyhow!("Can't find config in state"))?;
+            .ok_or_else(|| anyhow!("Can't find config in state"))?;
 
         Ok(Self {
             id: state.id.clone(),
@@ -145,7 +145,7 @@ impl LinuxContainer {
 
         // Spawn a child process to perform the second stage to initialize container.
         let init_pid = clone_process("ozonec:[2:INIT]", || {
-            self.do_second_stage(process, parent_channel, &notify_listener)
+            self.do_second_stage(process, parent_channel, notify_listener)
                 .with_context(|| "Second stage process encounters errors")?;
             Ok(0)
         })?;
@@ -334,14 +334,13 @@ impl LinuxContainer {
     }
 
     fn ns_controller(&self) -> Result<NsController> {
-        Ok(self
-            .config
+        self.config
             .linux
             .as_ref()
             .unwrap()
             .namespaces
             .clone()
-            .try_into()?)
+            .try_into()
     }
 
     fn set_user_namespace(
@@ -502,19 +501,17 @@ impl LinuxContainer {
                     sethostname(hostname).with_context(|| "Failed to set hostname")?;
                 }
                 if let Some(domainname) = &self.config.domainname {
-                    let errno;
-
                     // SAFETY: FFI call with valid arguments.
-                    match unsafe {
+                    let errno = match unsafe {
                         setdomainname(
                             domainname.as_bytes().as_ptr() as *const c_char,
                             domainname.len(),
                         )
                     } {
                         0 => return Ok(()),
-                        -1 => errno = nix::Error::last(),
-                        _ => errno = nix::Error::UnknownErrno,
-                    }
+                        -1 => nix::Error::last(),
+                        _ => nix::Error::UnknownErrno,
+                    };
                     bail!("Failed to set domainname: {}", errno);
                 }
             }
@@ -560,7 +557,7 @@ impl LinuxContainer {
     }
 
     fn write_id_mapping(&self, mappings: &Vec<IdMapping>, pid: &Pid, file: &str) -> Result<()> {
-        let path = format!("/proc/{}/{}", pid.as_raw().to_string(), file);
+        let path = format!("/proc/{}/{}", pid.as_raw(), file);
         let mut opened_file = OpenOptions::new()
             .write(true)
             .open(&path)
@@ -572,14 +569,14 @@ impl LinuxContainer {
             id_mappings = id_mappings + &mapping;
         }
         opened_file
-            .write_all(&id_mappings.as_bytes())
+            .write_all(id_mappings.as_bytes())
             .with_context(|| "Failed to write id mappings")?;
         Ok(())
     }
 
     fn set_groups(pid: &Pid, allow: bool) -> Result<()> {
-        let path = format!("/proc/{}/setgroups", pid.as_raw().to_string());
-        if allow == true {
+        let path = format!("/proc/{}/setgroups", pid.as_raw());
+        if allow {
             std::fs::write(&path, "allow")?
         } else {
             std::fs::write(&path, "deny")?
@@ -626,7 +623,7 @@ impl Container for LinuxContainer {
         let bundle = match rootfs.parent() {
             Some(p) => p
                 .to_str()
-                .ok_or(anyhow!("root path is not valid unicode"))?
+                .ok_or_else(|| anyhow!("root path is not valid unicode"))?
                 .to_string(),
             None => bail!("Failed to get bundle directory"),
         };

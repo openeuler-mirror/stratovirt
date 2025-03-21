@@ -77,7 +77,7 @@ impl NotifySocket {
         let root_path = self
             .path
             .parent()
-            .ok_or(anyhow!("Invalid notify socket path"))?;
+            .ok_or_else(|| anyhow!("Invalid notify socket path"))?;
         chdir(root_path).with_context(|| "Failed to chdir to root directory")?;
 
         let mut stream =

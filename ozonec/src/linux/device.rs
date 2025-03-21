@@ -94,10 +94,9 @@ impl Device {
     }
 
     fn create_device_dir(&self, path: &PathBuf) -> Result<()> {
-        let dir = Path::new(path).parent().ok_or(anyhow!(
-            "Failed to get parent directory: {}",
-            path.display()
-        ))?;
+        let dir = Path::new(path)
+            .parent()
+            .ok_or_else(|| anyhow!("Failed to get parent directory: {}", path.display()))?;
         if !dir.exists() {
             create_dir_all(dir)
                 .with_context(|| OzonecErr::CreateDir(dir.to_string_lossy().to_string()))?;
@@ -122,7 +121,7 @@ impl Device {
         let binding = dev.path.to_string_lossy().to_string();
         let stripped_path = binding
             .strip_prefix(&self.rootfs.to_string_lossy().to_string())
-            .ok_or(anyhow!("Invalid device path"))?;
+            .ok_or_else(|| anyhow!("Invalid device path"))?;
         let src_path = PathBuf::from(stripped_path);
 
         if !dev.path.exists() {
@@ -186,7 +185,7 @@ impl Device {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     pub fn delete_device(&self, dev: &OciDevice) -> Result<()> {
@@ -199,10 +198,10 @@ impl Device {
         let path = self.rootfs.join(&dev.path.clone()[1..]);
         let major = dev
             .major
-            .ok_or(anyhow!("major not set for device {}", dev.path))?;
+            .ok_or_else(|| anyhow!("major not set for device {}", dev.path))?;
         let minor = dev
             .minor
-            .ok_or(anyhow!("minor not set for device {}", dev.path))?;
+            .ok_or_else(|| anyhow!("minor not set for device {}", dev.path))?;
         let dev_info = DeviceInfo {
             path,
             dev_type: dev.dev_type.clone(),

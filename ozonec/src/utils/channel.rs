@@ -59,6 +59,7 @@ where
         let msg_vec = serde_json::to_vec(&msg).with_context(|| "Failed to load message")?;
         let msg_len = msg_vec.len() as u64;
         let iov = [
+            // SAFETY: FFI call with valid arguments.
             IoSlice::new(unsafe {
                 slice::from_raw_parts((&msg_len as *const u64) as *const u8, mem::size_of::<u64>())
             }),
@@ -110,6 +111,7 @@ where
         let mut buf = vec![0u8; msg_len as usize];
         let bytes = {
             let mut iov = [
+                // SAFETY: FFI call with valid arguments.
                 IoSliceMut::new(unsafe {
                     slice::from_raw_parts_mut(
                         (&mut received_len as *mut u64) as *mut u8,
