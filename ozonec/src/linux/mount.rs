@@ -38,9 +38,9 @@ pub struct Mount {
 }
 
 impl Mount {
-    pub fn new(rootfs: &PathBuf) -> Self {
+    pub fn new(rootfs: &Path) -> Self {
         Self {
-            rootfs: rootfs.clone(),
+            rootfs: rootfs.to_path_buf(),
         }
     }
 
@@ -114,7 +114,7 @@ impl Mount {
         let src_binding = mount
             .source
             .clone()
-            .ok_or(anyhow!("Mount source not set"))?;
+            .ok_or_else(|| anyhow!("Mount source not set"))?;
         let mut source = Path::new(&src_binding);
         let canonicalized;
         // Strip the first "/".
@@ -126,10 +126,9 @@ impl Mount {
                 .with_context(|| format!("Failed to canonicalize {}", source.display()))?;
             source = canonicalized.as_path();
             let dir = if source.is_file() {
-                target.parent().ok_or(anyhow!(
-                    "Failed to get parent directory: {}",
-                    target.display()
-                ))?
+                target.parent().ok_or_else(|| {
+                    anyhow!("Failed to get parent directory: {}", target.display())
+                })?
             } else {
                 target
             };
@@ -139,15 +138,15 @@ impl Mount {
             fs_type = Some("bind");
         } else {
             // Sysfs doesn't support duplicate mounting to one directory.
-            if self.is_mounted_sysfs_dir(&target.to_string_lossy().to_string()) {
+            if self.is_mounted_sysfs_dir(&target.to_string_lossy()) {
                 nix::mount::umount(target)
                     .with_context(|| format!("Failed to umount {}", target.display()))?;
             }
         }
 
         let target_fd = openat2_in_root(
-            &Path::new(&self.rootfs),
-            &Path::new(&mount.destination[1..]),
+            Path::new(&self.rootfs),
+            Path::new(&mount.destination[1..]),
             !source.is_file(),
         )?;
         nix::mount::mount(
@@ -196,7 +195,7 @@ impl Mount {
     fn do_cgroup_mount(&self, mount: &OciMount) -> Result<()> {
         // Strip the first "/".
         let rel_target = Path::new(&mount.destination[1..]);
-        let target_fd = openat2_in_root(&Path::new(&self.rootfs), rel_target, true)?;
+        let target_fd = openat2_in_root(Path::new(&self.rootfs), rel_target, true)?;
         nix::mount::mount(
             Some("tmpfs"),
             &proc_fd_path(target_fd),
@@ -225,12 +224,11 @@ impl Mount {
         for cg_path in host_cgroups {
             let cg = cg_path
                 .file_name()
-                .ok_or(anyhow!("Failed to get controller file"))?
+                .ok_or_else(|| anyhow!("Failed to get controller file"))?
                 .to_str()
-                .ok_or(anyhow!(
-                    "Convert {:?} to string error",
-                    cg_path.file_name().unwrap()
-                ))?;
+                .ok_or_else(|| {
+                    anyhow!("Convert {:?} to string error", cg_path.file_name().unwrap())
+                })?;
             let proc_cg_key = if cg == "systemd" {
                 String::from("systemd")
             } else {
@@ -242,7 +240,7 @@ impl Mount {
                 let rel_target = cg_path
                     .strip_prefix("/")
                     .with_context(|| format!("{} doesn't start with '/'", cg_path.display()))?;
-                let target_fd = openat2_in_root(&Path::new(&self.rootfs), rel_target, true)?;
+                let target_fd = openat2_in_root(Path::new(&self.rootfs), rel_target, true)?;
 
                 nix::mount::mount(
                     Some(&source),

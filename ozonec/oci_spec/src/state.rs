@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// Runtime state of the container.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Default, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ContainerStatus {
     Creating,
@@ -38,7 +38,7 @@ impl ToString for ContainerStatus {
 
 /// The state of a container.
 #[allow(non_snake_case)]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct State {
     /// Version of the Open Container Initiative Runtime Specification
     /// with which the state complies.

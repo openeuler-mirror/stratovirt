@@ -99,8 +99,8 @@ fn open_log_file(path: &PathBuf) -> Result<File> {
 fn formatted_time(seconds: i64) -> [i32; 6] {
     // SAFETY: an all-zero value is valid for libc::tm.
     let mut ti: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: seconds and ti are both local variables and valid.
     unsafe {
-        // SAFETY: seconds and ti are both local variables and valid.
         libc::localtime_r(&seconds, &mut ti);
     }
     [
@@ -118,8 +118,8 @@ fn wall_time() -> (i64, i64) {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: ts is a local variable and valid.
     unsafe {
-        // SAFETY: ts is a local variable and valid.
         libc::clock_gettime(libc::CLOCK_REALTIME, &mut ts);
     }
     (ts.tv_sec, ts.tv_nsec)
@@ -150,7 +150,7 @@ impl Logger {
     fn new(path: &Option<PathBuf>, level: Level) -> Result<Self> {
         let (log_file, log_size, created_day) = match path {
             Some(p) => {
-                let file = Box::new(open_log_file(&p)?);
+                let file = Box::new(open_log_file(p)?);
                 let metadata = file.metadata().with_context(|| "Failed to get metadata")?;
                 let mod_time = metadata
                     .modified()

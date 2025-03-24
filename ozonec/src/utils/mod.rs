@@ -95,9 +95,8 @@ pub fn openat2_in_root(root: &Path, target: &Path, is_dir: bool) -> Result<RawFd
         .resolve(ResolveFlag::RESOLVE_IN_ROOT);
     let dirfd = open(root, flags & !OFlag::O_CREAT, Mode::empty())
         .with_context(|| OzonecErr::OpenFile(root.to_string_lossy().to_string()))?;
-
-    // SAFETY: FFI call with valid arguments.
     let fd = target
+        // SAFETY: FFI call with valid arguments.
         .with_nix_path(|p| unsafe {
             libc::syscall(
                 libc::SYS_openat2,
