@@ -298,6 +298,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "mount may not be permitted"]
     fn test_cgroup_type() {
         let rootfs = PathBuf::from("/tmp/ozonec/test_cgroup_type");
         let mnt = Mount::new(&rootfs);
