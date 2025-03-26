@@ -248,6 +248,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "mount may not be permitted"]
     fn test_mknod_dev() {
         let rootfs = PathBuf::from("/tmp/ozonec/mknod_dev");
         create_dir_all(&rootfs).unwrap();
@@ -332,6 +333,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "mknod may not be permitted"]
     fn test_create_device() {
         let oci_dev = OciDevice {
             dev_type: "c".to_string(),
@@ -368,6 +370,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "mount may not be permitted"]
     fn test_delete_device() {
         let oci_dev = OciDevice {
             dev_type: "c".to_string(),
