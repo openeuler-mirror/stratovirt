@@ -167,8 +167,8 @@ impl VirtioDevice for Multitouch {
         )?));
         register_mt_handler(
             handler.clone(),
-            self.x_max,
-            self.y_max,
+            self.x_max as i32,
+            self.y_max as i32,
             ABS_MT_TRACKING_ID_MAX,
         )?;
 
@@ -205,18 +205,10 @@ impl MultitouchOps for InputIoHandler {
                         ABS_MT_TRACKING_ID as u16,
                         mtt_evt.tracking_id,
                     ),
-                    InputEvent::new(EV_ABS as u16, ABS_MT_POSITION_X as u16, mtt_evt.x as i32),
-                    InputEvent::new(EV_ABS as u16, ABS_MT_POSITION_Y as u16, mtt_evt.y as i32),
-                    InputEvent::new(
-                        EV_ABS as u16,
-                        ABS_MT_TOUCH_MAJOR as u16,
-                        mtt_evt.major as i32,
-                    ),
-                    InputEvent::new(
-                        EV_ABS as u16,
-                        ABS_MT_TOUCH_MINOR as u16,
-                        mtt_evt.minor as i32,
-                    ),
+                    InputEvent::new(EV_ABS as u16, ABS_MT_POSITION_X as u16, mtt_evt.x),
+                    InputEvent::new(EV_ABS as u16, ABS_MT_POSITION_Y as u16, mtt_evt.y),
+                    InputEvent::new(EV_ABS as u16, ABS_MT_TOUCH_MAJOR as u16, mtt_evt.major),
+                    InputEvent::new(EV_ABS as u16, ABS_MT_TOUCH_MINOR as u16, mtt_evt.minor),
                 ];
 
                 for evt in &evts {

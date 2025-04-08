@@ -450,7 +450,7 @@ impl OhUiMsgHandler {
         );
         let (w, h) = *self.ui_size.read().unwrap();
 
-        send_mt_event(&mut evt, w, h)?;
+        send_mt_event(&mut evt, w as i32, h as i32)?;
         send_mt_sync()?;
         trace::oh_event_multitouch(
             mtt.x,

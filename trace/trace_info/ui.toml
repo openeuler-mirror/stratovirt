@@ -270,7 +270,7 @@ enabled = true
 
 [[events]]
 name = "oh_event_multitouch"
-args = "x: u32, y: u32, major: u32, minor: u32, tracking_id: i32, blob_id: u32, pressure: u32"
+args = "x: i32, y: i32, major: i32, minor: i32, tracking_id: i32, blob_id: u32, pressure: u32"
 message = "x={} y={} major={} minor={} tracking_id={} blob_id={} pressure={}"
 enabled = true
 

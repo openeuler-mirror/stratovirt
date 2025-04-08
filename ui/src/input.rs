@@ -587,8 +587,8 @@ fn get_mt_handler() -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
 
 pub fn register_mt_handler(
     ops: Arc<Mutex<dyn MultitouchOps>>,
-    x_max: u32,
-    y_max: u32,
+    x_max: i32,
+    y_max: i32,
     slot_max: u32,
 ) -> Result<()> {
     let mt_state = MultiTouchDevice {
@@ -624,10 +624,10 @@ pub enum MultiTouchEventKind {
 #[derive(Clone)]
 pub struct MultiTouchAbsData {
     pub kind: MultiTouchEventKind,
-    pub x: u32,
-    pub y: u32,
-    pub major: u32,
-    pub minor: u32,
+    pub x: i32,
+    pub y: i32,
+    pub major: i32,
+    pub minor: i32,
     pub slot: i32,
     pub tracking_id: i32,
 }
@@ -635,10 +635,10 @@ pub struct MultiTouchAbsData {
 impl MultiTouchAbsData {
     pub fn new(
         kind: MultiTouchEventKind,
-        x: u32,
-        y: u32,
-        major: u32,
-        minor: u32,
+        x: i32,
+        y: i32,
+        major: i32,
+        minor: i32,
         slot: i32,
         tracking_id: i32,
     ) -> Self {
@@ -653,16 +653,16 @@ impl MultiTouchAbsData {
         }
     }
 
-    fn scale_axis(&mut self, ui_width: u32, ui_height: u32, x_max: u32, y_max: u32) {
+    fn scale_axis(&mut self, ui_width: i32, ui_height: i32, x_max: i32, y_max: i32) {
         self.x = Self::scale(self.x, 0, ui_width, 0, x_max);
         self.y = Self::scale(self.y, 0, ui_height, 0, y_max);
     }
 
-    fn scale(val: u32, min_in: u32, max_in: u32, min_out: u32, max_out: u32) -> u32 {
+    fn scale(val: i32, min_in: i32, max_in: i32, min_out: i32, max_out: i32) -> i32 {
         let range_in = (max_in - min_in) as i64;
         let range_out = (max_out - min_out) as i64;
 
-        ((val - min_in) as i64 * range_out / range_in + min_out as i64) as u32
+        ((val - min_in) as i64 * range_out / range_in + min_out as i64) as i32
     }
 }
 
@@ -683,8 +683,8 @@ impl Default for MultiTouchAbsData {
 #[derive(Clone)]
 struct MultiTouchDevice {
     ops: Arc<Mutex<dyn MultitouchOps>>,
-    x_max: u32,
-    y_max: u32,
+    x_max: i32,
+    y_max: i32,
     slot_max: u32,
     slots: Vec<MultiTouchAbsData>,
 }
@@ -693,8 +693,8 @@ impl MultiTouchDevice {
     fn send_event(
         &mut self,
         evt: &mut MultiTouchAbsData,
-        ui_width: u32,
-        ui_height: u32,
+        ui_width: i32,
+        ui_height: i32,
     ) -> Result<()> {
         let mut locked_ops = self.ops.lock().unwrap();
         let slot_id = evt.slot as usize;
@@ -749,7 +749,7 @@ pub trait MultitouchOps: Send {
     fn send_sync(&mut self) -> Result<()>;
 }
 
-pub fn send_mt_event(evt: &mut MultiTouchAbsData, ui_width: u32, ui_height: u32) -> Result<()> {
+pub fn send_mt_event(evt: &mut MultiTouchAbsData, ui_width: i32, ui_height: i32) -> Result<()> {
     get_mt_handler()?
         .as_mut()
         .unwrap()

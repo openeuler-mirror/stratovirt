@@ -190,10 +190,10 @@ pub struct MultiTouchEvent {
     // 3: cancel(lift all fingers)
     pub event_type: u32,
     pub tracking_id: i32,
-    pub x: u32,
-    pub y: u32,
-    pub major: u32,
-    pub minor: u32,
+    pub x: i32,
+    pub y: i32,
+    pub major: i32,
+    pub minor: i32,
     pub pressure: u32,
     pub blob_id: u32,
 }
