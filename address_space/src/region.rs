@@ -171,10 +171,18 @@ impl PartialEq for FlatRange {
 /// Implement PartialEq/Eq for comparison of Region.
 impl PartialEq for Region {
     fn eq(&self, other: &Region) -> bool {
-        Arc::as_ptr(&self.priority) == Arc::as_ptr(&other.priority)
-            && self.region_type() == other.region_type()
-            && Arc::as_ptr(&self.offset) == Arc::as_ptr(&other.offset)
-            && Arc::as_ptr(&self.size) == Arc::as_ptr(&other.size)
+        if other.region_type() == RegionType::Ram {
+            self.priority() == other.priority()
+                && self.name == other.name
+                && self.region_type == other.region_type
+                && self.offset() == other.offset()
+                && self.size() == other.size()
+        } else {
+            Arc::as_ptr(&self.priority) == Arc::as_ptr(&other.priority)
+                && self.region_type() == other.region_type()
+                && Arc::as_ptr(&self.offset) == Arc::as_ptr(&other.offset)
+                && Arc::as_ptr(&self.size) == Arc::as_ptr(&other.size)
+        }
     }
 }
 
@@ -245,11 +253,15 @@ impl Region {
         mem_mapping: Option<Arc<HostMemMapping>>,
         ops: Option<RegionOps>,
     ) -> Region {
+        let offset = match &mem_mapping {
+            Some(map) => map.start_address().0,
+            None => 0,
+        };
         Region {
             name: String::from(name),
             region_type,
             priority: Arc::new(AtomicI32::new(0)),
-            offset: Arc::new(Mutex::new(GuestAddress(0))),
+            offset: Arc::new(Mutex::new(GuestAddress(offset))),
             size: Arc::new(AtomicU64::new(size)),
             mem_mapping,
             ops,
