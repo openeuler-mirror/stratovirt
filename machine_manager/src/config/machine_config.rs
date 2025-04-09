@@ -86,7 +86,7 @@ impl From<String> for HostMemPolicy {
 
 #[derive(Parser, Clone, Debug, Serialize, Deserialize)]
 #[command(no_binary_name(true))]
-pub struct MemZoneConfig {
+pub struct MemBackendObjConfig {
     #[arg(long, alias = "classtype", value_parser = ["memory-backend-ram", "memory-backend-file", "memory-backend-memfd"])]
     pub mem_type: String,
     #[arg(long, value_parser = valid_id)]
@@ -112,7 +112,7 @@ pub struct MemZoneConfig {
     pub prealloc: bool,
 }
 
-impl MemZoneConfig {
+impl MemBackendObjConfig {
     pub fn memfd(&self) -> bool {
         self.mem_type.eq("memory-backend-memfd")
     }
@@ -126,7 +126,7 @@ pub struct MachineMemConfig {
     pub dump_guest_core: bool,
     pub mem_share: bool,
     pub mem_prealloc: bool,
-    pub mem_zones: Option<Vec<MemZoneConfig>>,
+    pub membackend_objs: Option<Vec<MemBackendObjConfig>>,
 }
 
 impl Default for MachineMemConfig {
@@ -137,7 +137,7 @@ impl Default for MachineMemConfig {
             dump_guest_core: true,
             mem_share: false,
             mem_prealloc: false,
-            mem_zones: None,
+            membackend_objs: None,
         }
     }
 }
@@ -480,43 +480,44 @@ impl VmConfig {
 }
 
 impl VmConfig {
-    /// Convert memory zone cmdline to VM config
+    /// Convert memory backend cmdline to VM config
     ///
     /// # Arguments
     ///
-    /// * `mem_zone` - The memory zone cmdline string.
-    pub fn add_mem_zone(&mut self, mem_zone: &str) -> Result<MemZoneConfig> {
-        let zone_config = MemZoneConfig::try_parse_from(str_slip_to_clap(mem_zone, true, false))?;
+    /// * `mem_backend` - The memory backend cmdline string.
+    pub fn add_mem_backend(&mut self, mem_backend: &str) -> Result<MemBackendObjConfig> {
+        let mb_config =
+            MemBackendObjConfig::try_parse_from(str_slip_to_clap(mem_backend, true, false))?;
 
-        if (zone_config.mem_path.is_none() && zone_config.mem_type.eq("memory-backend-file"))
-            || (zone_config.mem_path.is_some() && zone_config.mem_type.ne("memory-backend-file"))
+        if (mb_config.mem_path.is_none() && mb_config.mem_type.eq("memory-backend-file"))
+            || (mb_config.mem_path.is_some() && mb_config.mem_type.ne("memory-backend-file"))
         {
-            bail!("Object type: {} config path err", zone_config.mem_type);
+            bail!("Object type: {} config path err", mb_config.mem_type);
         }
 
-        if self.object.mem_object.contains_key(&zone_config.id) {
-            bail!("Object: {} has been added", zone_config.id);
+        if self.object.mem_object.contains_key(&mb_config.id) {
+            bail!("Object: {} has been added", mb_config.id);
         }
         self.object
             .mem_object
-            .insert(zone_config.id.clone(), zone_config.clone());
+            .insert(mb_config.id.clone(), mb_config.clone());
 
-        if zone_config.host_numa_nodes.is_none() {
-            return Ok(zone_config);
+        if mb_config.host_numa_nodes.is_none() {
+            return Ok(mb_config);
         }
 
-        if self.machine_config.mem_config.mem_zones.is_some() {
+        if self.machine_config.mem_config.membackend_objs.is_some() {
             self.machine_config
                 .mem_config
-                .mem_zones
+                .membackend_objs
                 .as_mut()
                 .unwrap()
-                .push(zone_config.clone());
+                .push(mb_config.clone());
         } else {
-            self.machine_config.mem_config.mem_zones = Some(vec![zone_config.clone()]);
+            self.machine_config.mem_config.membackend_objs = Some(vec![mb_config.clone()]);
         }
 
-        Ok(zone_config)
+        Ok(mb_config)
     }
 }
 
@@ -620,7 +621,7 @@ mod tests {
             mem_share: false,
             dump_guest_core: false,
             mem_prealloc: false,
-            mem_zones: None,
+            membackend_objs: None,
         };
         let mut machine_config = MachineConfig {
             mach_type: MachineType::MicroVm,
@@ -955,37 +956,37 @@ mod tests {
     }
 
     #[test]
-    fn test_add_mem_zone() {
+    fn test_add_mem_backend() {
         let mut vm_config = VmConfig::default();
-        let zone_config_1 = vm_config
-            .add_mem_zone("memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind")
+        let mb_config_1 = vm_config
+            .add_mem_backend("memory-backend-ram,size=2G,id=mem1,host-nodes=1,policy=bind")
             .unwrap();
-        assert_eq!(zone_config_1.id, "mem1");
-        assert_eq!(zone_config_1.size, 2147483648);
-        assert_eq!(zone_config_1.host_numa_nodes, Some(vec![1]));
-        assert_eq!(zone_config_1.policy, "bind");
+        assert_eq!(mb_config_1.id, "mem1");
+        assert_eq!(mb_config_1.size, 2147483648);
+        assert_eq!(mb_config_1.host_numa_nodes, Some(vec![1]));
+        assert_eq!(mb_config_1.policy, "bind");
 
-        let zone_config_2 = vm_config
-            .add_mem_zone("memory-backend-ram,size=2G,id=mem2,host-nodes=1-2,policy=default")
+        let mb_config_2 = vm_config
+            .add_mem_backend("memory-backend-ram,size=2G,id=mem2,host-nodes=1-2,policy=default")
             .unwrap();
-        assert_eq!(zone_config_2.host_numa_nodes, Some(vec![1, 2]));
+        assert_eq!(mb_config_2.host_numa_nodes, Some(vec![1, 2]));
 
-        let zone_config_3 = vm_config
-            .add_mem_zone("memory-backend-ram,size=2M,id=mem3,share=on")
+        let mb_config_3 = vm_config
+            .add_mem_backend("memory-backend-ram,size=2M,id=mem3,share=on")
             .unwrap();
-        assert_eq!(zone_config_3.size, 2 * 1024 * 1024);
-        assert!(zone_config_3.share);
+        assert_eq!(mb_config_3.size, 2 * 1024 * 1024);
+        assert!(mb_config_3.share);
 
-        let zone_config_4 = vm_config
-            .add_mem_zone("memory-backend-ram,size=2M,id=mem4")
+        let mb_config_4 = vm_config
+            .add_mem_backend("memory-backend-ram,size=2M,id=mem4")
             .unwrap();
-        assert!(!zone_config_4.share);
-        assert!(!zone_config_4.memfd());
+        assert!(!mb_config_4.share);
+        assert!(!mb_config_4.memfd());
 
-        let zone_config_5 = vm_config
-            .add_mem_zone("memory-backend-memfd,size=2M,id=mem5")
+        let mb_config_5 = vm_config
+            .add_mem_backend("memory-backend-memfd,size=2M,id=mem5")
             .unwrap();
-        assert!(zone_config_5.memfd());
+        assert!(mb_config_5.memfd());
     }
 
     #[test]

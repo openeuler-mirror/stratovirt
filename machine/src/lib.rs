@@ -409,21 +409,21 @@ pub trait MachineOps: MachineLifecycle {
         let root = self.get_vm_ram();
         let numa_nodes = self.get_numa_nodes();
 
-        if numa_nodes.is_none() || mem_config.mem_zones.is_none() {
+        if numa_nodes.is_none() || mem_config.membackend_objs.is_none() {
             let default_mem = create_default_mem(mem_config, thread_num)?;
             root.add_subregion_not_update(default_mem, 0_u64)?;
             return Ok(());
         }
-        let zones = mem_config.mem_zones.as_ref().unwrap();
+        let mb_objs = mem_config.membackend_objs.as_ref().unwrap();
         let mut offset = 0_u64;
         for node in numa_nodes.as_ref().unwrap().iter() {
-            for zone in zones.iter() {
-                if zone.id.eq(&node.1.mem_dev) {
-                    let ram = create_backend_mem(zone, thread_num)?;
+            for mb_obj in mb_objs.iter() {
+                if mb_obj.id.eq(&node.1.mem_dev) {
+                    let ram = create_backend_mem(mb_obj, thread_num)?;
                     root.add_subregion_not_update(ram, offset)?;
                     offset = offset
-                        .checked_add(zone.size)
-                        .with_context(|| "total zone size overflow")?;
+                        .checked_add(mb_obj.size)
+                        .with_context(|| "total mem backend size overflow")?;
                     break;
                 }
             }
