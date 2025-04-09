@@ -106,8 +106,8 @@ pub struct MemBackendObjConfig {
     pub mem_path: Option<String>,
     #[arg(long, default_value = "true", value_parser = parse_bool, action = ArgAction::Append)]
     pub dump_guest_core: bool,
-    #[arg(long, default_value = "off", value_parser = parse_bool, action = ArgAction::Append)]
-    pub share: bool,
+    #[arg(long,  value_parser = parse_bool, action = ArgAction::Append)]
+    pub share: Option<bool>,
     #[arg(long, alias = "mem-prealloc", default_value = "false", value_parser = parse_bool, action = ArgAction::Append)]
     pub prealloc: bool,
 }
@@ -115,6 +115,16 @@ pub struct MemBackendObjConfig {
 impl MemBackendObjConfig {
     pub fn memfd(&self) -> bool {
         self.mem_type.eq("memory-backend-memfd")
+    }
+
+    pub fn share(&self) -> bool {
+        match self.share {
+            Some(share) => share,
+            None => matches!(
+                self.mem_type.as_str(),
+                "memory-backend-file" | "memory-backend-memfd"
+            ),
+        }
     }
 }
 
@@ -975,17 +985,18 @@ mod tests {
             .add_mem_backend("memory-backend-ram,size=2M,id=mem3,share=on")
             .unwrap();
         assert_eq!(mb_config_3.size, 2 * 1024 * 1024);
-        assert!(mb_config_3.share);
+        assert!(mb_config_3.share());
 
         let mb_config_4 = vm_config
             .add_mem_backend("memory-backend-ram,size=2M,id=mem4")
             .unwrap();
-        assert!(!mb_config_4.share);
+        assert!(!mb_config_4.share());
         assert!(!mb_config_4.memfd());
 
         let mb_config_5 = vm_config
             .add_mem_backend("memory-backend-memfd,size=2M,id=mem5")
             .unwrap();
+        assert!(mb_config_5.share());
         assert!(mb_config_5.memfd());
     }
 
