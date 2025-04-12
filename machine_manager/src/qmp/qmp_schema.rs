@@ -97,6 +97,7 @@ define_qmp_command_enum!(
     blockdev_add("blockdev-add", Box<blockdev_add>),
     blockdev_del("blockdev-del", blockdev_del),
     balloon("balloon", balloon, default),
+    set_viomem("set-viomem", Box<set_viomem>),
     query_mem("query-mem", query_mem, default),
     query_mem_gpa("query-mem-gpa", query_mem_gpa, default),
     query_balloon("query-balloon", query_balloon, default),
@@ -706,6 +707,31 @@ pub struct cameradev_del {
     pub id: String,
 }
 generate_command_impl!(cameradev_del, Empty);
+
+/// set-viomem
+///
+/// # Arguments
+///
+/// * `id` - The device's ID, must be unique.
+/// * `requested-size` - new request size of the virtio-mem device.
+///
+/// # Examples
+///
+/// ```test
+/// -> { "execute" : "set-viomem" ,
+///      "arguments" : { "id" : "viomem0", "requested-size" : "1G"} }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct set_viomem {
+    pub id: String,
+    #[serde(rename = "requested-size")]
+    pub requested_size: String,
+}
+
+pub type SetViomemArgument = set_viomem;
+generate_command_impl!(set_viomem, Empty);
 
 /// query-hotpluggable-cpus
 ///
