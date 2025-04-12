@@ -738,6 +738,57 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    /// Add virtio memory device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    fn add_virtio_mem(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let option = virtio::MemoryConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let memoption = vm_config
+            .object
+            .mem_object
+            .remove(&option.memdev)
+            .with_context(|| {
+                format!(
+                    "Object for memory-backend-* {} config not found",
+                    option.memdev
+                )
+            })?;
+
+        let max_size = vm_config.machine_config.mem_config.max_size;
+        let device = virtio::Memory::new_arc(option.clone(), memoption, max_size)?;
+
+        let current_size = device.lock().unwrap().get_region_size()
+            + vm_config.machine_config.mem_config.current_size;
+        if current_size > max_size {
+            bail!("failed to add virtio-mem, current memory out of maxsize");
+        } else {
+            vm_config.machine_config.mem_config.current_size = current_size;
+        }
+
+        match option.classtype.as_str() {
+            "virtio-mem-device" => {
+                check_arg_nonexist!(
+                    ("bus", option.bus),
+                    ("addr", option.addr),
+                    ("multifunction", option.multifunction)
+                );
+                self.add_virtio_mmio_device(option.id.clone(), device)
+                    .with_context(|| "Failed to add virtio mmio mem device")?;
+            }
+            _ => {
+                check_arg_exist!(("bus", option.bus), ("addr", option.addr));
+                let bdf = PciBdf::new(option.bus.clone().unwrap(), option.addr.unwrap());
+                let multi_func = option.multifunction.unwrap_or_default();
+                self.add_virtio_pci_device(&option.id, &bdf, device, multi_func, false)
+                    .with_context(|| "Failed to add pci mem device")?;
+            }
+        }
+        Ok(())
+    }
+
     /// Add virtio serial device.
     ///
     /// # Arguments
@@ -2017,6 +2068,7 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-net-pci", add_virtio_pci_net, vm_config, cfg_args, false),
                 ("pcie-root-port", add_pci_root_port, cfg_args),
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
+                ("virtio-mem-device" | "virtio-mem-pci", add_virtio_mem, vm_config, cfg_args),
                 ("virtio-input-device" | "virtio-input-pci", add_virtio_input, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
