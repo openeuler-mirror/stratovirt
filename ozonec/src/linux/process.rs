@@ -170,9 +170,8 @@ impl Process {
                     .with_context(|| OzonecErr::GetAllCaps("Bounding".to_string()))?;
                 let caps_hash_set = to_cap_set(bounding)?;
                 for cap in all_caps.difference(&caps_hash_set) {
-                    caps::drop(None, CapSet::Bounding, *cap).with_context(|| {
-                        format!("Failed to drop {} from bonding set", cap.to_string())
-                    })?;
+                    caps::drop(None, CapSet::Bounding, *cap)
+                        .with_context(|| format!("Failed to drop {} from bonding set", cap))?;
                 }
             }
             if let Some(effective) = caps.effective.as_ref() {
@@ -363,7 +362,7 @@ fn to_cap_set(caps: &Vec<String>) -> Result<CapsHashSet> {
     let mut caps_hash_set = CapsHashSet::new();
 
     for c in caps {
-        let cap = to_cap(&c)?;
+        let cap = to_cap(c)?;
         caps_hash_set.insert(cap);
     }
     Ok(caps_hash_set)

@@ -103,17 +103,14 @@ impl Rootfs {
         let process = Process::myself().with_context(|| OzonecErr::AccessProcSelf)?;
         let mount_info = process.mountinfo().with_context(|| OzonecErr::GetMntInfo)?;
 
-        match mount_info
+        if let Some(m) = mount_info
             .into_iter()
             .filter(|m| self.path.starts_with(&m.mount_point) && m.mount_point != self.path)
             .map(|m| m.mount_point)
             .max_by_key(|m| m.len())
             .as_ref()
         {
-            Some(m) => {
-                nix::mount::mount(Some(m), m, None::<&str>, MsFlags::MS_PRIVATE, None::<&str>)?
-            }
-            None => (),
+            nix::mount::mount(Some(m), m, None::<&str>, MsFlags::MS_PRIVATE, None::<&str>)?;
         }
         Ok(())
     }
@@ -126,10 +123,10 @@ impl Rootfs {
     // dev/stderr -> /proc/self/fd/2
     fn set_default_symlinks(&self) -> Result<()> {
         let link_pairs = vec![
-            ((&self.path).join("dev/fd"), "/proc/self/fd"),
-            ((&self.path).join("dev/stdin"), "/proc/self/fd/0"),
-            ((&self.path).join("dev/stdout"), "/proc/self/fd/1"),
-            ((&self.path).join("dev/stderr"), "/proc/self/fd/2"),
+            ((self.path).join("dev/fd"), "/proc/self/fd"),
+            ((self.path).join("dev/stdin"), "/proc/self/fd/0"),
+            ((self.path).join("dev/stdout"), "/proc/self/fd/1"),
+            ((self.path).join("dev/stderr"), "/proc/self/fd/2"),
         ];
 
         for pair in link_pairs {
