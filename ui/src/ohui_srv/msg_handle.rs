@@ -215,14 +215,16 @@ impl OhUiMsgHandler {
         if !reader.recv()? {
             return Ok(());
         }
-        if *self.vm_pause.read().unwrap() {
-            reader.clear();
-            return Ok(());
-        }
 
         let hdr = &reader.header;
         let event_type = hdr.event_type;
         let body_size = hdr.size as usize;
+
+        if self.filter_message(&event_type) {
+            reader.clear();
+            return Ok(());
+        }
+
         trace::trace_scope_start!(handle_msg, args = (&event_type));
 
         let body_bytes = reader.body.as_ref().unwrap();
@@ -293,6 +295,14 @@ impl OhUiMsgHandler {
         }
         reader.clear();
         Ok(())
+    }
+
+    fn filter_message(&self, et: &EventType) -> bool {
+        if !*self.vm_pause.read().unwrap() {
+            return false;
+        }
+
+        !matches!(et, EventType::WindowInfoV2)
     }
 
     fn handle_mouse_button(&self, mb: &MouseButtonEvent) -> Result<()> {
