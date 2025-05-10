@@ -414,9 +414,10 @@ impl OhUiMsgHandler {
         trace::oh_event_focus(fe.state);
         match fe.state {
             CLIENT_FOCUSIN_EVENT => {
-                warn!("Windows on focus in.");
+                info!("received focus-in event");
             }
             CLIENT_FOCUSOUT_EVENT => {
+                info!("received focus-out event");
                 release_all_key()?;
                 release_all_btn()?;
                 lift_all_fingers()?;
