@@ -618,7 +618,7 @@ impl Container for LinuxContainer {
             0
         };
 
-        let rootfs = canonicalize(&self.config.root.path.clone())
+        let rootfs = canonicalize(self.config.root.path.clone())
             .with_context(|| "Failed to canonicalize root path")?;
         let bundle = match rootfs.parent() {
             Some(p) => p
