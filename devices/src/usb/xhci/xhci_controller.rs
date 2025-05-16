@@ -2200,9 +2200,21 @@ impl XhciDevice {
                 || trb_type == TRBType::TrNormal
                 || trb_type == TRBType::TrIsoch
             {
-                let chunk = trb.status & TRB_TR_LEN_MASK;
+                let trb_len = trb.status & TRB_TR_LEN_MASK;
+
+                // According to xHCI Spec 3.2.7/6.4.1/4.9.1, zero-length packet is required
+                // when exact multiple of max packet size is transferred, it is essential
+                // for proper stream termination in bulk/interrupt transfers, skip TRB
+                // submission for zero-byte transfers may end up in Device hanging, waiting
+                // for status phase completion. zero-length packet usually comes with the
+                // default address 0. In this case, the correct way to handle it is to skip
+                // the address translation and leave the iovec empty.
+                if trb_len == 0 {
+                    continue;
+                }
+
                 let dma_addr = if trb.control & TRB_TR_IDT == TRB_TR_IDT {
-                    if chunk > 8 && locked_xfer.in_xfer {
+                    if trb_len > 8 && locked_xfer.in_xfer {
                         bail!("Invalid immediate data TRB");
                     }
                     trb.addr
@@ -2213,7 +2225,7 @@ impl XhciDevice {
                 self.mem_space.get_address_map(
                     &None,
                     GuestAddress(dma_addr),
-                    u64::from(chunk),
+                    u64::from(trb_len),
                     &mut vec,
                 )?;
             }
