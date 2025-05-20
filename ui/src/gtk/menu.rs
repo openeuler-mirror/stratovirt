@@ -83,6 +83,7 @@ impl GtkMenu {
 
     /// 1. Setting callback function for button.
     /// 2. Set shortcut keys for buttons.
+    ///   
     /// Button                  shortcut key
     /// shutdown_item:          Ctrl + Alt + S.
     /// full_screen_item        Ctrl + Alt + F
