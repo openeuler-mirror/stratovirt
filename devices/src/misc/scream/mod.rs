@@ -367,7 +367,7 @@ impl StreamData {
 
             let mut last_end = 0_u64;
             // The recording buffer is behind the playback buffer. Thereforce, the end position of
-            // the playback buffer must be calculted to determine whether the two buffers overlap.
+            // the playback buffer must be calculated to determine whether the two buffers overlap.
             if dir == ScreamDirection::Record && header.play.is_started != 0 {
                 last_end = u64::from(header.play.offset)
                     + u64::from(header.play.chunk_size) * u64::from(header.play.max_chunks);

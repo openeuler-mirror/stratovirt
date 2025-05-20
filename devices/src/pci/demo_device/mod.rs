@@ -18,6 +18,7 @@
 /// 2. After r/w, it sends back a msix interrupt to the guest, which means that it has also
 ///    msix capability. We assume msix bar is in bar 0.
 /// 3. Finally, it supports hotplug/hotunplug.
+///
 /// As that it has device memory, it means it has a bar space, we assume the
 /// bar size is 4KB in bar 1.
 /// As that it has device memory, it means it has a bar space other than the msix one.(
