@@ -487,7 +487,7 @@ fn verify_input_data(input: &mut dyn Read, test_data: &String) {
 /// Expect:
 ///   1/2/3/4: success.
 #[test]
-fn serial_config_rw_conifg() {
+fn serial_config_rw_config() {
     let port = PortConfig {
         chardev_type: ChardevType::Pty,
         nr: 0,
