@@ -25,13 +25,13 @@ pub enum ContainerStatus {
     Stopped,
 }
 
-impl ToString for ContainerStatus {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for ContainerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            ContainerStatus::Creating => String::from("creating"),
-            ContainerStatus::Created => String::from("created"),
-            ContainerStatus::Running => String::from("running"),
-            ContainerStatus::Stopped => String::from("stopped"),
+            ContainerStatus::Creating => write!(f, "creating"),
+            ContainerStatus::Created => write!(f, "created"),
+            ContainerStatus::Running => write!(f, "running"),
+            ContainerStatus::Stopped => write!(f, "stopped"),
         }
     }
 }

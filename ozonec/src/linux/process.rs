@@ -290,7 +290,7 @@ impl Process {
         // It has been make sure that args is not None in validate_config().
         let args = &self.oci.args.as_ref().unwrap();
         // args don't have 0 byte in the middle such as "hello\0world".
-        let exec_bin = CString::new(args[0].as_str().as_bytes()).unwrap();
+        let exec_bin = CString::new(args[0].as_bytes()).unwrap();
         let args: Vec<CString> = args
             .iter()
             .map(|s| CString::new(s.as_bytes()).unwrap_or_default())
