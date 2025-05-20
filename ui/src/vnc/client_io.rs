@@ -235,6 +235,12 @@ pub struct RectInfo {
     pub rects: Vec<Rectangle>,
 }
 
+// SAFETY: Implementing Send and Sync is safe for RectInfo
+// because only locked access(r/w) is permitted
+unsafe impl Sync for RectInfo {}
+// SAFETY: Same as above
+unsafe impl Send for RectInfo {}
+
 impl RectInfo {
     pub fn new(client: &Arc<ClientState>, rects: Vec<Rectangle>) -> Self {
         RectInfo {
@@ -332,6 +338,12 @@ pub struct ConnState {
     pub client_io: Option<Weak<Mutex<ClientIoHandler>>>,
 }
 
+// SAFETY: Implementing Send and Sync is safe for ConnState
+// because only locked access(r/w) is permitted
+unsafe impl Sync for ConnState {}
+// SAFETY: Same as above
+unsafe impl Send for ConnState {}
+
 impl Default for ConnState {
     fn default() -> Self {
         ConnState {
@@ -388,6 +400,12 @@ pub struct ClientState {
     pub dirty_bitmap: Arc<Mutex<Bitmap<u64>>>,
 }
 
+// SAFETY: Implementing Send and Sync is safe for ClientState
+// because only locked access(r/w) is permitted
+unsafe impl Sync for ClientState {}
+// SAFETY: Same as above
+unsafe impl Send for ClientState {}
+
 impl ClientState {
     pub fn new(addr: String) -> Self {
         ClientState {
@@ -427,6 +445,12 @@ pub struct ClientIoHandler {
     pub server: Arc<VncServer>,
 }
 
+// SAFETY: Implementing Send and Sync is safe for ClientIoHandler
+// because only locked access(r/w) is permitted
+unsafe impl Sync for ClientIoHandler {}
+// SAFETY: Same as above
+unsafe impl Send for ClientIoHandler {}
+
 impl ClientIoHandler {
     pub fn new(
         stream: TcpStream,
@@ -449,7 +473,7 @@ impl ClientIoHandler {
 }
 
 impl ClientIoHandler {
-    /// This function interacts with the client interface, it includs several
+    /// This function interacts with the client interface, it includes several
     /// steps: Read the data stream from the fd, save the data in buffer,
     /// and then process the data by io handle function.
     fn client_handle_read(&mut self) -> Result<(), anyhow::Error> {

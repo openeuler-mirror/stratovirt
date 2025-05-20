@@ -424,7 +424,7 @@ impl MsgReader {
         }
         let buf = self.body.as_mut().unwrap();
         // SAFETY: 1. we guarantee new message has new body, so
-        // buf's capcity is equal to body_size. 2. buf has 'u8'
+        // buf's capacity is equal to body_size. 2. buf has 'u8'
         // type elements, it will be initialized by zero.
         unsafe {
             buf.set_len(body_size);
