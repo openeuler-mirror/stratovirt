@@ -29,7 +29,7 @@ impl<T: BitOps> Bitmap<T> {
     /// # Arguments
     ///
     /// * `size` - The size of bitmap is the number of bit unit. If you want
-    /// to restore a `length` with bitmap. The `size` would be `length/bit_unit_size+1`.
+    ///   to restore a `length` with bitmap. The `size` would be `length/bit_unit_size+1`.
     pub fn new(size: usize) -> Self {
         Bitmap::<T> {
             data: [T::zero()].repeat(size),
