@@ -10,52 +10,174 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::VecDeque;
 use std::os::raw::c_void;
 use std::sync::{
-    atomic::{fence, AtomicBool, AtomicI32, Ordering},
-    Arc, Mutex,
+    atomic::{fence, AtomicBool, Ordering},
+    Arc, Condvar, Mutex, RwLock,
 };
-use std::{cmp, ptr, thread, time};
+use std::{cmp, io::Read, ptr, thread, time::Duration};
 
-use log::error;
+use log::{error, info, warn};
 
-use crate::misc::scream::{AudioInterface, ScreamDirection, ShmemStreamHeader, StreamData};
+use crate::misc::ivshmem::Ivshmem;
+use crate::misc::scream::{
+    AudioExtension, AudioInterface, AudioStatus, ScreamDirection, StreamData,
+    IVSHMEM_VOLUME_SYNC_VECTOR, TARGET_LATENCY_MS,
+};
+use machine_manager::event_loop::EventLoop;
 use util::ohos_binding::audio::*;
+
+const STREAM_DATA_VEC_CAPACITY: usize = 15;
+const FLUSH_DELAY_MS: u64 = 5;
+const FLUSH_DELAY_CNT: u64 = 200;
+const SCREAM_MAX_VOLUME: u32 = 110;
+const CAPTURE_WAIT_TIMEOUT: u64 = 500;
+const RENDER_WAIT_TIMEOUT: u64 = TARGET_LATENCY_MS as u64 * 2;
+const MS_PER_SECOND: u64 = 1000;
 
 trait OhAudioProcess {
     fn init(&mut self, stream: &StreamData) -> bool;
     fn destroy(&mut self);
-    fn preprocess(&mut self, _start_addr: u64, _sh_header: &ShmemStreamHeader) {}
     fn process(&mut self, recv_data: &StreamData) -> i32;
+    fn get_status(&self) -> AudioStatus;
 }
 
 #[derive(Debug, Clone, Copy)]
 struct StreamUnit {
-    pub addr: u64,
-    pub len: u64,
+    addr: usize,
+    len: usize,
 }
 
-const STREAM_DATA_VEC_CAPACITY: usize = 30;
-const FLUSH_DELAY_THRESHOLD_MS: u64 = 100;
-const FLUSH_DELAY_MS: u64 = 5;
-const FLUSH_DELAY_CNT: u64 = 200;
+impl Read for StreamUnit {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = cmp::min(self.len, buf.len());
+        // SAFETY: all the source data are in scream BAR.
+        unsafe { ptr::copy_nonoverlapping(self.addr as *const u8, buf.as_mut_ptr(), len) };
+        self.len -= len;
+        self.addr += len;
+        Ok(len)
+    }
+}
+
+impl StreamUnit {
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn new(addr: usize, len: usize) -> Self {
+        Self { addr, len }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+struct StreamQueue {
+    queue: VecDeque<StreamUnit>,
+    data_size: usize,
+}
+
+impl Read for StreamQueue {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = buf.len();
+        let mut ret = 0_usize;
+        while ret < len {
+            if self.queue.is_empty() {
+                break;
+            }
+            let unit = match self.queue.front_mut() {
+                Some(u) => u,
+                None => break,
+            };
+            let rlen = unit.read(&mut buf[ret..len]).unwrap();
+            ret += rlen;
+            self.data_size -= rlen;
+            if unit.is_empty() {
+                self.pop_front();
+            }
+        }
+        Ok(ret)
+    }
+
+    // If there's no enough data, let's fill the whole buffer with 0.
+    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        let len = buf.len();
+        match self.read(buf) {
+            Ok(ret) => {
+                if ret < len {
+                    self.read_zero(&mut buf[ret..len]);
+                }
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl StreamQueue {
+    fn new(capacity: usize) -> Self {
+        Self {
+            queue: VecDeque::with_capacity(capacity),
+            data_size: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.queue.clear();
+    }
+
+    #[inline]
+    fn data_size(&self) -> usize {
+        self.data_size
+    }
+
+    fn pop_front(&mut self) {
+        if let Some(elem) = self.queue.pop_front() {
+            self.data_size -= elem.len();
+        }
+    }
+
+    fn push_back(&mut self, unit: StreamUnit) {
+        // When audio data is not consumed in time, this buffer
+        // might be full. So let's keep the max size by dropping
+        // the old data. This can guarantee sound playing can't
+        // be delayed too much and the buffer won't become too
+        // large.
+        if self.queue.len() == self.queue.capacity() {
+            self.pop_front();
+        }
+        self.data_size += unit.len;
+        self.queue.push_back(unit);
+    }
+
+    fn read_zero(&mut self, buf: &mut [u8]) {
+        // SAFETY: the buffer is guaranteed by the caller.
+        unsafe {
+            ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
+        }
+    }
+}
 
 struct OhAudioRender {
     ctx: Option<AudioContext>,
-    stream_data: Arc<Mutex<Vec<StreamUnit>>>,
-    data_size: AtomicI32,
-    start: bool,
+    stream_data: Arc<Mutex<StreamQueue>>,
     flushing: AtomicBool,
+    status: AudioStatus,
+    cond: Condvar,
 }
 
 impl Default for OhAudioRender {
     fn default() -> OhAudioRender {
         OhAudioRender {
             ctx: None,
-            stream_data: Arc::new(Mutex::new(Vec::with_capacity(STREAM_DATA_VEC_CAPACITY))),
-            data_size: AtomicI32::new(0),
-            start: false,
+            stream_data: Arc::new(Mutex::new(StreamQueue::new(STREAM_DATA_VEC_CAPACITY))),
             flushing: AtomicBool::new(false),
+            status: AudioStatus::default(),
+            cond: Condvar::new(),
         }
     }
 }
@@ -74,16 +196,29 @@ impl OhAudioRender {
     }
 
     fn flush(&mut self) {
-        self.flushing.store(true, Ordering::Release);
-        let mut cnt = 0;
-        while (cnt < FLUSH_DELAY_CNT) && (self.flushing.load(Ordering::Acquire)) {
-            thread::sleep(time::Duration::from_millis(FLUSH_DELAY_MS));
+        self.set_flushing(true);
+        let mut cnt = 0_u64;
+        while cnt < FLUSH_DELAY_CNT {
+            thread::sleep(Duration::from_millis(FLUSH_DELAY_MS));
             cnt += 1;
+            if self.stream_data.lock().unwrap().data_size() == 0 {
+                break;
+            }
         }
-        // We need to wait for 100ms to ensure the audio data has
-        // been flushed before stop renderer.
-        thread::sleep(time::Duration::from_millis(FLUSH_DELAY_THRESHOLD_MS));
+    }
+
+    fn flush_renderer(&self) {
         let _ = self.ctx.as_ref().unwrap().flush_renderer();
+    }
+
+    #[inline(always)]
+    fn is_flushing(&self) -> bool {
+        self.flushing.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    fn set_flushing(&mut self, flush: bool) {
+        self.flushing.store(flush, Ordering::Release);
     }
 }
 
@@ -95,7 +230,7 @@ impl OhAudioProcess for OhAudioRender {
                 stream.fmt.size,
                 stream.fmt.get_rate(),
                 stream.fmt.channels,
-                AudioProcessCb::RendererCb(Some(on_write_data_cb)),
+                AudioProcessCb::RendererCb(Some(on_write_data_cb), Some(render_on_interrupt_cb)),
                 ptr::addr_of!(*self) as *mut c_void,
             ) {
                 Ok(()) => self.ctx = Some(context),
@@ -107,27 +242,33 @@ impl OhAudioProcess for OhAudioRender {
         }
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
-                self.start = true;
+                info!("Renderer start");
+                self.status = AudioStatus::Started;
+                trace::oh_scream_render_init(&self.ctx);
             }
             Err(e) => {
                 error!("failed to start oh audio renderer: {}", e);
             }
         }
-        self.start
+        self.status == AudioStatus::Started
     }
 
     fn destroy(&mut self) {
-        if self.ctx.is_some() {
-            if self.start {
-                self.flush();
-                self.ctx.as_mut().unwrap().stop();
-                self.start = false;
+        info!("Renderer destroy");
+        match self.status {
+            AudioStatus::Error | AudioStatus::Intr => {
+                self.ctx = None;
+                self.status = AudioStatus::Ready;
+                return;
             }
-            self.ctx = None;
+            AudioStatus::Started => self.flush(),
+            _ => {}
         }
-        let mut locked_data = self.stream_data.lock().unwrap();
-        locked_data.clear();
-        self.data_size.store(0, Ordering::Relaxed);
+        self.ctx = None;
+        self.stream_data.lock().unwrap().clear();
+        self.set_flushing(false);
+        self.status = AudioStatus::Ready;
+        trace::oh_scream_render_destroy();
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
@@ -135,33 +276,93 @@ impl OhAudioProcess for OhAudioRender {
 
         fence(Ordering::Acquire);
 
-        let su = StreamUnit {
-            addr: recv_data.audio_base,
-            len: recv_data.audio_size as u64,
-        };
-        let mut locked_data = self.stream_data.lock().unwrap();
-        locked_data.push(su);
-        self.data_size
-            .fetch_add(recv_data.audio_size as i32, Ordering::Relaxed);
-        drop(locked_data);
+        trace::trace_scope_start!(ohaudio_render_process, args = (recv_data));
 
-        if !self.start && !self.init(recv_data) {
+        self.stream_data.lock().unwrap().push_back(StreamUnit::new(
+            recv_data.audio_base as usize,
+            recv_data.audio_size as usize,
+        ));
+        self.cond.notify_all();
+
+        if self.status == AudioStatus::Error || self.status == AudioStatus::Intr {
+            error!(
+                "Audio server {:?} occurred. Destroy and reconnect it.",
+                self.status
+            );
+            self.destroy();
+        }
+
+        if self.status == AudioStatus::Ready && !self.init(recv_data) {
             error!("failed to init oh audio");
             self.destroy();
         }
         0
+    }
+
+    fn get_status(&self) -> AudioStatus {
+        self.status
+    }
+}
+
+struct CaptureStream {
+    cond: Condvar,
+    data: Mutex<Vec<u8>>,
+    expected: usize,
+}
+
+impl Default for CaptureStream {
+    fn default() -> Self {
+        Self {
+            cond: Condvar::new(),
+            data: Mutex::new(Vec::with_capacity(1 << 20)),
+            expected: 0,
+        }
+    }
+}
+
+impl CaptureStream {
+    fn wait_for_data(&mut self, buf: &mut [u8]) -> bool {
+        let mut locked_data = self.data.lock().unwrap();
+        self.expected = buf.len();
+        while locked_data.len() < self.expected {
+            let ret = self
+                .cond
+                .wait_timeout(locked_data, Duration::from_millis(CAPTURE_WAIT_TIMEOUT))
+                .unwrap();
+            if ret.1.timed_out() {
+                return false;
+            }
+            locked_data = ret.0;
+        }
+        buf.copy_from_slice(&locked_data[..self.expected]);
+        *locked_data = locked_data[self.expected..].to_vec();
+        self.expected = 0;
+        true
+    }
+
+    fn append_data(&mut self, buf: &[u8]) {
+        let mut locked_data = self.data.lock().unwrap();
+        locked_data.extend_from_slice(buf);
+        if locked_data.len() > self.expected {
+            self.cond.notify_all();
+        }
+    }
+
+    fn reset(&mut self) {
+        let mut locked_data = self.data.lock().unwrap();
+        locked_data.clear();
+        self.expected = 0;
+        self.cond.notify_all();
     }
 }
 
 #[derive(Default)]
 struct OhAudioCapture {
     ctx: Option<AudioContext>,
-    align: u32,
-    new_chunks: AtomicI32,
-    shm_addr: u64,
-    shm_len: u64,
-    cur_pos: u64,
-    start: bool,
+    status: AudioStatus,
+    stream: CaptureStream,
+    timer_start: bool,
+    data_size_per_second: u64,
 }
 
 impl OhAudioCapture {
@@ -185,7 +386,7 @@ impl OhAudioProcess for OhAudioCapture {
             stream.fmt.size,
             stream.fmt.get_rate(),
             stream.fmt.channels,
-            AudioProcessCb::CapturerCb(Some(on_read_data_cb)),
+            AudioProcessCb::CapturerCb(Some(on_read_data_cb), Some(capture_on_interrupt_cb)),
             ptr::addr_of!(*self) as *mut c_void,
         ) {
             Ok(()) => self.ctx = Some(context),
@@ -194,9 +395,14 @@ impl OhAudioProcess for OhAudioCapture {
                 return false;
             }
         }
+        self.data_size_per_second = (stream.fmt.size as u64 >> 3)
+            * stream.fmt.get_rate() as u64
+            * stream.fmt.channels as u64;
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
-                self.start = true;
+                info!("Capturer start");
+                self.status = AudioStatus::Started;
+                trace::oh_scream_capture_init(&self.ctx);
                 true
             }
             Err(e) => {
@@ -207,36 +413,124 @@ impl OhAudioProcess for OhAudioCapture {
     }
 
     fn destroy(&mut self) {
-        if self.ctx.is_some() {
-            if self.start {
-                self.ctx.as_mut().unwrap().stop();
-                self.start = false;
-            }
-            self.ctx = None;
-        }
-    }
-
-    fn preprocess(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {
-        self.align = sh_header.chunk_size;
-        self.new_chunks.store(0, Ordering::Release);
-        self.shm_addr = start_addr;
-        self.shm_len = sh_header.max_chunks as u64 * sh_header.chunk_size as u64;
-        self.cur_pos = start_addr + sh_header.chunk_idx as u64 * sh_header.chunk_size as u64;
+        info!("Capturer destroy");
+        self.status = AudioStatus::Ready;
+        self.ctx = None;
+        self.stream.reset();
+        trace::oh_scream_capture_destroy();
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
         self.check_fmt_update(recv_data);
-        if !self.start && !self.init(recv_data) {
+
+        trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
+
+        // We expect capture stream can be resumed when another stream stops interrupting it,
+        // but OHOS does not resume it. We resume it manually.
+        if self.status == AudioStatus::Error || self.status == AudioStatus::IntrResume {
             self.destroy();
-            return 0;
-        }
-        self.new_chunks.store(0, Ordering::Release);
-        while self.new_chunks.load(Ordering::Acquire) == 0 {
-            thread::sleep(time::Duration::from_millis(10));
         }
 
-        self.new_chunks.load(Ordering::Acquire)
+        if self.status == AudioStatus::Ready && !self.init(recv_data) {
+            self.destroy();
+            return -1;
+        }
+        // SAFETY: the buffer is from ivshmem and the caller ensures its validation.
+        let buf = unsafe {
+            std::slice::from_raw_parts_mut(
+                recv_data.audio_base as *mut u8,
+                recv_data.audio_size as usize,
+            )
+        };
+        if self.status == AudioStatus::Intr {
+            // When capture stream is interrupted, we need to send mute data to front end. Without this,
+            // some applications may pop-up error window for no data received.
+            if !self.timer_start {
+                let period: u64 = MS_PER_SECOND * buf.len() as u64 / self.data_size_per_second;
+                mute_capture_data_gen(ptr::addr_of_mut!(*self), period, buf.len());
+                return 0;
+            }
+        }
+        if !self.stream.wait_for_data(buf) && self.status != AudioStatus::Intr {
+            warn!("timed out to wait for capture audio data");
+            self.status = AudioStatus::Error;
+            return 0;
+        }
+        1
     }
+
+    fn get_status(&self) -> AudioStatus {
+        self.status
+    }
+}
+
+fn mute_capture_data_gen(capture: *mut OhAudioCapture, period: u64, len: usize) {
+    let buffer: Vec<u8> = vec![0; len];
+    let buf = buffer.as_slice();
+
+    //SAFETY: we make sure that capture we passed is valid.
+    let capt = unsafe { capture.as_mut().unwrap_unchecked() };
+    capt.stream.append_data(buf);
+
+    let mute_capture_cb = Box::new(move || {
+        mute_capture_data_gen(capture, period, len);
+    });
+
+    if capt.status == AudioStatus::Intr {
+        EventLoop::get_ctx(None)
+            .unwrap()
+            .timer_add(mute_capture_cb, Duration::from_millis(period));
+        capt.timer_start = true;
+    } else {
+        capt.timer_start = false;
+    }
+}
+
+extern "C" fn render_on_interrupt_cb(
+    _renderer: *mut OhAudioRenderer,
+    user_data: *mut ::std::os::raw::c_void,
+    source_type: capi::OHAudioInterruptSourceType,
+    hint: capi::OHAudioInterruptHint,
+) -> i32 {
+    info!(
+        "Render interrupts, type is {}, hint is {}",
+        source_type, hint
+    );
+    // SAFETY: we make sure that it is OhAudioRender when register callback.
+    let render = unsafe {
+        (user_data as *mut OhAudioRender)
+            .as_mut()
+            .unwrap_unchecked()
+    };
+    if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
+        render.status = AudioStatus::Intr;
+    }
+    0
+}
+
+extern "C" fn capture_on_interrupt_cb(
+    _capturer: *mut OhAudioCapturer,
+    user_data: *mut ::std::os::raw::c_void,
+    source_type: capi::OHAudioInterruptSourceType,
+    hint: capi::OHAudioInterruptHint,
+) -> i32 {
+    info!(
+        "Capture interrupts, type is {}, hint is {}",
+        source_type, hint
+    );
+
+    // SAFETY: we make sure that it is OhAudioCapture when register callback.
+    let capture = unsafe {
+        (user_data as *mut OhAudioCapture)
+            .as_mut()
+            .unwrap_unchecked()
+    };
+    if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
+        capture.status = AudioStatus::Intr;
+    } else if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_RESUME {
+        capture.status = AudioStatus::IntrResume;
+    }
+    0
 }
 
 extern "C" fn on_write_data_cb(
@@ -245,6 +539,11 @@ extern "C" fn on_write_data_cb(
     buffer: *mut ::std::os::raw::c_void,
     length: i32,
 ) -> i32 {
+    if buffer.is_null() || user_data.is_null() {
+        error!("on_write_data_cb: Invalid input");
+        return 0;
+    }
+
     // SAFETY: we make sure that it is OhAudioRender when register callback.
     let render = unsafe {
         (user_data as *mut OhAudioRender)
@@ -252,45 +551,33 @@ extern "C" fn on_write_data_cb(
             .unwrap_unchecked()
     };
 
-    let data_size = render.data_size.load(Ordering::Relaxed);
-    if !render.flushing.load(Ordering::Acquire) && data_size < length {
-        // SAFETY: we checked len.
-        unsafe { ptr::write_bytes(buffer as *mut u8, 0, length as usize) };
-        return 0;
-    }
+    let len = length as usize;
+    // SAFETY: the buffer is guaranteed by OH audio framework.
+    let wbuf = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, len) };
 
-    // Copy stream data from shared memory to buffer.
-    let mut dst_addr = buffer as u64;
-    let mut left = length as u64;
-    let mut su_list = render.stream_data.lock().unwrap();
-    while left > 0 && su_list.len() > 0 {
-        let su = &mut su_list[0];
-        let len = cmp::min(left, su.len);
-
-        // SAFETY: we checked len.
-        unsafe {
-            ptr::copy_nonoverlapping(su.addr as *const u8, dst_addr as *mut u8, len as usize)
-        };
-
-        dst_addr += len;
-        left -= len;
-        su.len -= len;
-        if su.len == 0 {
-            su_list.remove(0);
-        } else {
-            su.addr += len;
+    trace::oh_scream_on_write_data_cb(len);
+    trace::trace_scope_start!(ohaudio_write_cb, args = (len));
+    let is_empty = render.stream_data.lock().unwrap().data_size() == 0;
+    let mut locked_stream_data = match is_empty {
+        true => {
+            render
+                .cond
+                .wait_timeout(
+                    render.stream_data.lock().unwrap(),
+                    Duration::from_millis(RENDER_WAIT_TIMEOUT),
+                )
+                .unwrap()
+                .0
         }
-    }
-    render
-        .data_size
-        .fetch_sub(length - left as i32, Ordering::Relaxed);
-
-    if left > 0 {
-        // SAFETY: we checked len.
-        unsafe { ptr::write_bytes(dst_addr as *mut u8, 0, left as usize) };
-    }
-    if render.flushing.load(Ordering::Acquire) && su_list.is_empty() {
-        render.flushing.store(false, Ordering::Release);
+        false => render.stream_data.lock().unwrap(),
+    };
+    match locked_stream_data.read_exact(wbuf) {
+        Ok(()) => {
+            if render.is_flushing() {
+                render.flush_renderer();
+            }
+        }
+        Err(e) => error!("Failed to read stream data {:?}", e),
     }
     0
 }
@@ -301,6 +588,11 @@ extern "C" fn on_read_data_cb(
     buffer: *mut ::std::os::raw::c_void,
     length: i32,
 ) -> i32 {
+    if buffer.is_null() || user_data.is_null() {
+        error!("on_read_data_cb: Invalid input");
+        return 0;
+    }
+
     // SAFETY: we make sure that it is OhAudioCapture when register callback.
     let capture = unsafe {
         (user_data as *mut OhAudioCapture)
@@ -308,43 +600,15 @@ extern "C" fn on_read_data_cb(
             .unwrap_unchecked()
     };
 
-    loop {
-        if !capture.start {
-            return 0;
-        }
-        if capture.new_chunks.load(Ordering::Acquire) == 0 {
-            break;
-        }
-    }
-    let old_pos = capture.cur_pos - ((capture.cur_pos - capture.shm_addr) % capture.align as u64);
-    let buf_end = capture.shm_addr + capture.shm_len;
-    let mut src_addr = buffer as u64;
-    let mut left = length as u64;
-    while left > 0 {
-        let len = cmp::min(left, buf_end - capture.cur_pos);
-        // SAFETY: we checked len.
-        unsafe {
-            ptr::copy_nonoverlapping(
-                src_addr as *const u8,
-                capture.cur_pos as *mut u8,
-                len as usize,
-            )
-        };
-        left -= len;
-        src_addr += len;
-        capture.cur_pos += len;
-        if capture.cur_pos == buf_end {
-            capture.cur_pos = capture.shm_addr;
-        }
+    trace::trace_scope_start!(ohaudio_read_cb, args = (length));
+
+    if capture.status != AudioStatus::Started {
+        return 0;
     }
 
-    let new_chunks = match capture.cur_pos <= old_pos {
-        true => (capture.shm_len - (old_pos - capture.cur_pos)) / capture.align as u64,
-        false => (capture.cur_pos - old_pos) / capture.align as u64,
-    };
-    capture
-        .new_chunks
-        .store(new_chunks as i32, Ordering::Release);
+    // SAFETY: the buffer is checked above.
+    let buf = unsafe { std::slice::from_raw_parts(buffer as *mut u8, length as usize) };
+    capture.stream.append_data(buf);
     0
 }
 
@@ -373,16 +637,80 @@ impl AudioInterface for OhAudio {
         self.processor.process(recv_data);
     }
 
-    fn pre_receive(&mut self, start_addr: u64, sh_header: &ShmemStreamHeader) {
-        self.processor.preprocess(start_addr, sh_header);
-    }
-
     fn receive(&mut self, recv_data: &StreamData) -> i32 {
         self.processor.process(recv_data)
     }
 
     fn destroy(&mut self) {
         self.processor.destroy();
+    }
+
+    fn get_status(&self) -> AudioStatus {
+        self.processor.get_status()
+    }
+}
+
+pub struct OhAudioVolume {
+    shm_dev: Arc<Mutex<Ivshmem>>,
+    ohos_vol: RwLock<u32>,
+    ohos_vol_max: u32,
+    ohos_vol_min: u32,
+}
+
+// SAFETY: all unsafe fields are protected by lock
+unsafe impl Send for OhAudioVolume {}
+// SAFETY: all unsafe fields are protected by lock
+unsafe impl Sync for OhAudioVolume {}
+
+impl GuestVolumeNotifier for OhAudioVolume {
+    fn notify(&self, vol: u32) {
+        *self.ohos_vol.write().unwrap() = self.to_guest_vol(vol);
+        self.shm_dev
+            .lock()
+            .unwrap()
+            .trigger_msix(IVSHMEM_VOLUME_SYNC_VECTOR);
+    }
+}
+
+impl AudioExtension for OhAudioVolume {
+    fn get_host_volume(&self) -> u32 {
+        *self.ohos_vol.read().unwrap()
+    }
+
+    fn set_host_volume(&self, vol: u32) {
+        set_ohos_volume(self.to_host_vol(vol));
+    }
+}
+
+impl OhAudioVolume {
+    pub fn new(shm_dev: Arc<Mutex<Ivshmem>>) -> Arc<Self> {
+        let vol = Arc::new(Self {
+            shm_dev,
+            ohos_vol: RwLock::new(0),
+            ohos_vol_max: get_ohos_volume_max(),
+            ohos_vol_min: get_ohos_volume_min(),
+        });
+        *vol.ohos_vol.write().unwrap() = vol.to_guest_vol(get_ohos_volume());
+        register_guest_volume_notifier(vol.clone());
+        vol
+    }
+
+    fn to_guest_vol(&self, h_vol: u32) -> u32 {
+        if self.ohos_vol_max > self.ohos_vol_min {
+            return SCREAM_MAX_VOLUME * h_vol / (self.ohos_vol_max - self.ohos_vol_min);
+        }
+        0
+    }
+
+    fn to_host_vol(&self, v_vol: u32) -> u32 {
+        if v_vol == 0 || self.ohos_vol_max <= self.ohos_vol_min {
+            return 0;
+        }
+        let res = (self.ohos_vol_max - self.ohos_vol_min) * v_vol / SCREAM_MAX_VOLUME + 1;
+        if res > self.ohos_vol_max {
+            return self.ohos_vol_max;
+        }
+        res
     }
 }
 

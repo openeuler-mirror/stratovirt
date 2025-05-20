@@ -16,22 +16,24 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use clap::{ArgAction, Parser};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::super::{VhostIoHandler, VhostNotify, VhostOps};
 use super::{VhostBackend, VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 use crate::{
-    check_config_space_rw, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_TYPE_VSOCK,
+    Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
+    VIRTIO_F_ACCESS_PLATFORM, VIRTIO_TYPE_VSOCK,
 };
-use address_space::AddressSpace;
-use machine_manager::config::{VsockConfig, DEFAULT_VIRTQUEUE_SIZE};
+use address_space::{AddressAttr, AddressSpace};
+use machine_manager::config::{get_pci_df, parse_bool, valid_id, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::gen_base_func;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 
 /// Number of virtqueues.
 const QUEUE_NUM_VSOCK: usize = 3;
@@ -39,6 +41,29 @@ const QUEUE_NUM_VSOCK: usize = 3;
 const VHOST_PATH: &str = "/dev/vhost-vsock";
 /// Event transport reset
 const VIRTIO_VSOCK_EVENT_TRANSPORT_RESET: u32 = 0;
+
+const MAX_GUEST_CID: u64 = 4_294_967_295;
+const MIN_GUEST_CID: u64 = 3;
+
+/// Config structure for virtio-vsock.
+#[derive(Parser, Debug, Clone, Default)]
+#[command(no_binary_name(true))]
+pub struct VsockConfig {
+    #[arg(long, value_parser = ["vhost-vsock-pci", "vhost-vsock-device"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: Option<bool>,
+    #[arg(long, alias = "guest-cid", value_parser = clap::value_parser!(u64).range(MIN_GUEST_CID..=MAX_GUEST_CID))]
+    pub guest_cid: u64,
+    #[arg(long, alias = "vhostfd")]
+    pub vhost_fd: Option<i32>,
+}
 
 trait VhostVsockBackend {
     /// Each guest should have an unique CID which is used to route data to the guest.
@@ -143,12 +168,12 @@ impl Vsock {
                 .write_object(
                     &VIRTIO_VSOCK_EVENT_TRANSPORT_RESET,
                     element.in_iovec[0].addr,
+                    AddressAttr::Ram,
                 )
                 .with_context(|| "Failed to write buf for virtio vsock event")?;
             event_queue_locked
                 .vring
                 .add_used(
-                    &self.mem_space,
                     element.index,
                     VIRTIO_VSOCK_EVENT_TRANSPORT_RESET.as_bytes().len() as u32,
                 )
@@ -169,13 +194,7 @@ impl Vsock {
 }
 
 impl VirtioDevice for Vsock {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         let vhost_fd: Option<RawFd> = self.vsock_cfg.vhost_fd;
@@ -215,10 +234,7 @@ impl VirtioDevice for Vsock {
         Ok(())
     }
 
-    fn write_config(&mut self, offset: u64, data: &[u8]) -> Result<()> {
-        check_config_space_rw(&self.config_space, offset, data)?;
-        let data_len = data.len();
-        self.config_space[(offset as usize)..(offset as usize + data_len)].copy_from_slice(data);
+    fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<()> {
         Ok(())
     }
 
@@ -287,8 +303,7 @@ impl VirtioDevice for Vsock {
             let event = if self.call_events.is_empty() {
                 let host_notify = VhostNotify {
                     notify_evt: Arc::new(
-                        EventFd::new(libc::EFD_NONBLOCK)
-                            .with_context(|| VirtioError::EventFdCreate)?,
+                        create_new_eventfd().with_context(|| VirtioError::EventFdCreate)?,
                     ),
                     queue: queue_mutex.clone(),
                 };
@@ -390,25 +405,37 @@ impl MigrationHook for Vsock {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
-    pub use super::*;
-    pub use address_space::*;
-
-    fn vsock_address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(u64::max_value(), "sysmem");
-        let sys_mem = AddressSpace::new(root, "sysmem", None).unwrap();
-        sys_mem
-    }
+    use super::*;
+    use crate::tests::address_space_init;
+    use machine_manager::config::str_slip_to_clap;
 
     fn vsock_create_instance() -> Vsock {
         let vsock_conf = VsockConfig {
             id: "test_vsock_1".to_string(),
             guest_cid: 3,
             vhost_fd: None,
+            ..Default::default()
         };
-        let sys_mem = vsock_address_space_init();
-        let vsock = Vsock::new(&vsock_conf, &sys_mem);
-        vsock
+        let sys_mem = address_space_init();
+
+        Vsock::new(&vsock_conf, &sys_mem)
+    }
+
+    #[test]
+    fn test_vsock_config_cmdline_parser() {
+        let vsock_cmd = "vhost-vsock-device,id=test_vsock,guest-cid=3";
+        let vsock_config =
+            VsockConfig::try_parse_from(str_slip_to_clap(vsock_cmd, true, false)).unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, None);
+
+        let vsock_cmd = "vhost-vsock-device,id=test_vsock,guest-cid=3,vhostfd=4";
+        let vsock_config =
+            VsockConfig::try_parse_from(str_slip_to_clap(vsock_cmd, true, false)).unwrap();
+        assert_eq!(vsock_config.id, "test_vsock");
+        assert_eq!(vsock_config.guest_cid, 3);
+        assert_eq!(vsock_config.vhost_fd, Some(4));
     }
 
     #[test]
@@ -437,32 +464,32 @@ mod tests {
         vsock.base.device_features = 0x0123_4567_89ab_cdef;
         // check for unsupported feature
         vsock.set_driver_features(0, 0x7000_0000);
-        assert_eq!(vsock.driver_features(0) as u64, 0_u64);
+        assert_eq!(u64::from(vsock.driver_features(0)), 0_u64);
         assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
         // check for supported feature
         vsock.set_driver_features(0, 0x8000_0000);
-        assert_eq!(vsock.driver_features(0) as u64, 0x8000_0000_u64);
+        assert_eq!(u64::from(vsock.driver_features(0)), 0x8000_0000_u64);
         assert_eq!(vsock.base.device_features, 0x0123_4567_89ab_cdef);
 
         // test vsock read_config
         let mut buf: [u8; 8] = [0; 8];
-        assert_eq!(vsock.read_config(0, &mut buf).is_ok(), true);
+        assert!(vsock.read_config(0, &mut buf).is_ok());
         let value = LittleEndian::read_u64(&buf);
         assert_eq!(value, vsock.vsock_cfg.guest_cid);
 
         let mut buf: [u8; 4] = [0; 4];
-        assert_eq!(vsock.read_config(0, &mut buf).is_ok(), true);
+        assert!(vsock.read_config(0, &mut buf).is_ok());
         let value = LittleEndian::read_u32(&buf);
         assert_eq!(value, vsock.vsock_cfg.guest_cid as u32);
 
         let mut buf: [u8; 4] = [0; 4];
-        assert_eq!(vsock.read_config(4, &mut buf).is_ok(), true);
+        assert!(vsock.read_config(4, &mut buf).is_ok());
         let value = LittleEndian::read_u32(&buf);
         assert_eq!(value, (vsock.vsock_cfg.guest_cid >> 32) as u32);
 
         let mut buf: [u8; 4] = [0; 4];
-        assert_eq!(vsock.read_config(5, &mut buf).is_err(), true);
-        assert_eq!(vsock.read_config(3, &mut buf).is_err(), true);
+        assert!(vsock.read_config(5, &mut buf).is_err());
+        assert!(vsock.read_config(3, &mut buf).is_err());
     }
 
     #[test]
@@ -481,12 +508,9 @@ mod tests {
 
         // test vsock set_guest_cid
         let backend = vsock.backend.unwrap();
-        assert_eq!(backend.set_guest_cid(3).is_ok(), true);
-        assert_eq!(
-            backend.set_guest_cid(u32::max_value() as u64).is_ok(),
-            false
-        );
-        assert_eq!(backend.set_guest_cid(2).is_ok(), false);
-        assert_eq!(backend.set_guest_cid(0).is_ok(), false);
+        assert!(backend.set_guest_cid(3).is_ok());
+        assert!(backend.set_guest_cid(u64::from(u32::max_value())).is_err());
+        assert!(backend.set_guest_cid(2).is_err());
+        assert!(backend.set_guest_cid(0).is_err());
     }
 }

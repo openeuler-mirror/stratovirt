@@ -31,10 +31,11 @@ use crate::{
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MQ, VIRTIO_TYPE_NET,
 };
 use address_space::AddressSpace;
-use machine_manager::config::NetworkInterfaceConfig;
+use machine_manager::config::{NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::gen_base_func;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 use util::tap::Tap;
 
 /// Number of virtqueues.
@@ -79,6 +80,8 @@ pub struct Net {
     base: VirtioBase,
     /// Configuration of the network device.
     net_cfg: NetworkInterfaceConfig,
+    /// Configuration of the backend netdev.
+    netdev_cfg: NetDevcfg,
     /// Virtio net configurations.
     config_space: Arc<Mutex<VirtioNetConfig>>,
     /// Tap device opened.
@@ -94,17 +97,22 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new(cfg: &NetworkInterfaceConfig, mem_space: &Arc<AddressSpace>) -> Self {
-        let queue_num = if cfg.mq {
-            (cfg.queues + 1) as usize
+    pub fn new(
+        net_cfg: &NetworkInterfaceConfig,
+        netdev_cfg: NetDevcfg,
+        mem_space: &Arc<AddressSpace>,
+    ) -> Self {
+        let queue_num = if net_cfg.mq {
+            (netdev_cfg.queues + 1) as usize
         } else {
             QUEUE_NUM_NET
         };
-        let queue_size = cfg.queue_size;
+        let queue_size = net_cfg.queue_size;
 
         Net {
             base: VirtioBase::new(VIRTIO_TYPE_NET, queue_num, queue_size),
-            net_cfg: cfg.clone(),
+            net_cfg: net_cfg.clone(),
+            netdev_cfg,
             config_space: Default::default(),
             taps: None,
             backends: None,
@@ -116,19 +124,13 @@ impl Net {
 }
 
 impl VirtioDevice for Net {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
-        let queue_pairs = self.net_cfg.queues / 2;
+        let queue_pairs = self.netdev_cfg.queues / 2;
         let mut backends = Vec::with_capacity(queue_pairs as usize);
         for index in 0..queue_pairs {
-            let fd = if let Some(fds) = self.net_cfg.vhost_fds.as_mut() {
+            let fd = if let Some(fds) = self.netdev_cfg.vhost_fds.as_mut() {
                 fds.get(index as usize).copied()
             } else {
                 None
@@ -142,12 +144,12 @@ impl VirtioDevice for Net {
             backends.push(backend);
         }
 
-        let host_dev_name = match self.net_cfg.host_dev_name.as_str() {
+        let host_dev_name = match self.netdev_cfg.ifname.as_str() {
             "" => None,
-            _ => Some(self.net_cfg.host_dev_name.as_str()),
+            _ => Some(self.netdev_cfg.ifname.as_str()),
         };
 
-        self.taps = create_tap(self.net_cfg.tap_fds.as_ref(), host_dev_name, queue_pairs)
+        self.taps = create_tap(self.netdev_cfg.tap_fds.as_ref(), host_dev_name, queue_pairs)
             .with_context(|| "Failed to create tap for vhost net")?;
         self.backends = Some(backends);
 
@@ -174,7 +176,7 @@ impl VirtioDevice for Net {
 
         let mut locked_config = self.config_space.lock().unwrap();
 
-        let queue_pairs = self.net_cfg.queues / 2;
+        let queue_pairs = self.netdev_cfg.queues / 2;
         if self.net_cfg.mq
             && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                 .contains(&queue_pairs)
@@ -320,8 +322,7 @@ impl VirtioDevice for Net {
                 let event = if self.call_events.is_empty() {
                     let host_notify = VhostNotify {
                         notify_evt: Arc::new(
-                            EventFd::new(libc::EFD_NONBLOCK)
-                                .with_context(|| VirtioError::EventFdCreate)?,
+                            create_new_eventfd().with_context(|| VirtioError::EventFdCreate)?,
                         ),
                         queue: queue_mutex.clone(),
                     };
@@ -385,7 +386,7 @@ impl VirtioDevice for Net {
     }
 
     fn reset(&mut self) -> Result<()> {
-        let queue_pairs = self.net_cfg.queues / 2;
+        let queue_pairs = self.netdev_cfg.queues / 2;
         for index in 0..queue_pairs as usize {
             let backend = match &self.backends {
                 None => return Err(anyhow!("Failed to get backend for vhost net")),
@@ -409,78 +410,48 @@ mod tests {
     use std::fs::File;
 
     use super::*;
-    use address_space::*;
+    use crate::tests::address_space_init;
     use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
-
-    const SYSTEM_SPACE_SIZE: u64 = (1024 * 1024) as u64;
-
-    fn vhost_address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "sysmem");
-        let sys_space = AddressSpace::new(root, "sysmem", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                SYSTEM_SPACE_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
 
     #[test]
     fn test_vhost_net_realize() {
-        let net1 = NetworkInterfaceConfig {
-            id: "eth1".to_string(),
-            host_dev_name: "tap1".to_string(),
-            mac: Some("1F:2C:3E:4A:5B:6D".to_string()),
-            vhost_type: Some("vhost-kernel".to_string()),
+        let netdev_cfg1 = NetDevcfg {
+            netdev_type: "tap".to_string(),
+            id: "net1".to_string(),
             tap_fds: Some(vec![4]),
+            vhost_kernel: true,
             vhost_fds: Some(vec![5]),
-            iothread: None,
+            ifname: "tap1".to_string(),
             queues: 2,
-            mq: false,
-            socket_path: None,
-            queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            ..Default::default()
         };
-        let conf = vec![net1];
-        let confs = Some(conf);
-        let vhost_net_confs = confs.unwrap();
-        let vhost_net_conf = vhost_net_confs[0].clone();
-        let vhost_net_space = vhost_address_space_init();
-        let mut vhost_net = Net::new(&vhost_net_conf, &vhost_net_space);
+        let vhost_net_conf = NetworkInterfaceConfig {
+            id: "eth1".to_string(),
+            mac: Some("1F:2C:3E:4A:5B:6D".to_string()),
+            iothread: None,
+            mq: false,
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            ..Default::default()
+        };
+        let vhost_net_space = address_space_init();
+        let mut vhost_net = Net::new(&vhost_net_conf, netdev_cfg1, &vhost_net_space);
         // the tap_fd and vhost_fd attribute of vhost-net can't be assigned.
-        assert_eq!(vhost_net.realize().is_ok(), false);
+        assert!(vhost_net.realize().is_err());
 
-        let net1 = NetworkInterfaceConfig {
-            id: "eth0".to_string(),
-            host_dev_name: "".to_string(),
-            mac: Some("1A:2B:3C:4D:5E:6F".to_string()),
-            vhost_type: Some("vhost-kernel".to_string()),
-            tap_fds: None,
-            vhost_fds: None,
-            iothread: None,
+        let netdev_cfg2 = NetDevcfg {
+            netdev_type: "tap".to_string(),
+            id: "net2".to_string(),
+            vhost_kernel: true,
             queues: 2,
-            mq: false,
-            socket_path: None,
-            queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            ..Default::default()
         };
-        let conf = vec![net1];
-        let confs = Some(conf);
-        let vhost_net_confs = confs.unwrap();
-        let vhost_net_conf = vhost_net_confs[0].clone();
-        let mut vhost_net = Net::new(&vhost_net_conf, &vhost_net_space);
+        let net_cfg2 = NetworkInterfaceConfig {
+            id: "eth2".to_string(),
+            mac: Some("1A:2B:3C:4D:5E:6F".to_string()),
+            queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            ..Default::default()
+        };
+        let mut vhost_net = Net::new(&net_cfg2, netdev_cfg2, &vhost_net_space);
 
         // if fail to open vhost-net device, no need to continue.
         if let Err(_e) = File::open("/dev/vhost-net") {
@@ -488,14 +459,14 @@ mod tests {
         }
         // without assigned value of tap_fd and vhost_fd,
         // vhost-net device can be realized successfully.
-        assert_eq!(vhost_net.realize().is_ok(), true);
+        assert!(vhost_net.realize().is_ok());
 
         // test for get/set_driver_features
         vhost_net.base.device_features = 0;
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
-        assert_eq!(vhost_net.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(vhost_net.driver_features(page)), 0_u64);
         let new_page = vhost_net.device_features(page);
         assert_eq!(new_page, page);
 
@@ -503,7 +474,7 @@ mod tests {
         let page: u32 = 0x0;
         let value: u32 = 0xff;
         vhost_net.set_driver_features(page, value);
-        assert_eq!(vhost_net.driver_features(page) as u64, 0xff_u64);
+        assert_eq!(u64::from(vhost_net.driver_features(page)), 0xff_u64);
         let new_page = vhost_net.device_features(page);
         assert_ne!(new_page, page);
 
@@ -511,22 +482,22 @@ mod tests {
         let len = vhost_net.config_space.lock().unwrap().as_bytes().len() as u64;
         let offset: u64 = 0;
         let data: Vec<u8> = vec![1; len as usize];
-        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), true);
+        assert!(vhost_net.write_config(offset, &data).is_ok());
 
         let mut read_data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), true);
+        assert!(vhost_net.read_config(offset, &mut read_data).is_ok());
         assert_ne!(read_data, data);
 
         let offset: u64 = 1;
         let data: Vec<u8> = vec![1; len as usize];
-        assert_eq!(vhost_net.write_config(offset, &data).is_ok(), true);
+        assert!(vhost_net.write_config(offset, &data).is_ok());
 
         let offset: u64 = len + 1;
         let mut read_data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), false);
+        assert!(vhost_net.read_config(offset, &mut read_data).is_err());
 
         let offset: u64 = len - 1;
         let mut read_data: Vec<u8> = vec![0; len as usize];
-        assert_eq!(vhost_net.read_config(offset, &mut read_data).is_ok(), false);
+        assert!(vhost_net.read_config(offset, &mut read_data).is_err());
     }
 }

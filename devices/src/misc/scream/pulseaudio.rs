@@ -22,7 +22,7 @@ use pulse::{
     time::MicroSeconds,
 };
 
-use super::{AudioInterface, AUDIO_SAMPLE_RATE_44KHZ};
+use super::{AudioInterface, AudioStatus, AUDIO_SAMPLE_RATE_44KHZ};
 use crate::misc::scream::{ScreamDirection, ShmemStreamFmt, StreamData, TARGET_LATENCY_MS};
 
 const MAX_LATENCY_MS: u32 = 100;
@@ -84,8 +84,8 @@ impl PulseStreamData {
 
         // Set buffer size for requested latency.
         let buffer_attr = BufferAttr {
-            maxlength: ss.usec_to_bytes(MicroSeconds(MAX_LATENCY_MS as u64 * 1000)) as u32,
-            tlength: ss.usec_to_bytes(MicroSeconds(TARGET_LATENCY_MS as u64 * 1000)) as u32,
+            maxlength: ss.usec_to_bytes(MicroSeconds(u64::from(MAX_LATENCY_MS) * 1000)) as u32,
+            tlength: ss.usec_to_bytes(MicroSeconds(u64::from(TARGET_LATENCY_MS) * 1000)) as u32,
             prebuf: std::u32::MAX,
             minreq: std::u32::MAX,
             fragsize: std::u32::MAX,
@@ -123,8 +123,15 @@ impl PulseStreamData {
         }
     }
 
-    fn transfer_channel_map(&mut self, format: &ShmemStreamFmt) {
+    fn transfer_channel_map(&mut self, format: &ShmemStreamFmt) -> bool {
         self.channel_map.init();
+        let channels = format.channels;
+        if channels <= Map::CHANNELS_MAX {
+            self.channel_map.set_len(channels);
+        } else {
+            error!("invalid channels {}", channels);
+            return false;
+        }
         self.channel_map.set_len(format.channels);
         let map: &mut [Position] = self.channel_map.get_mut();
         // In Windows, the channel mask shows as following figure.
@@ -149,6 +156,7 @@ impl PulseStreamData {
                 *item = Position::FrontCenter;
             }
         }
+        true
     }
 
     fn check_fmt_update(&mut self, recv_data: &StreamData) {
@@ -181,8 +189,8 @@ impl PulseStreamData {
             self.channel_map.init_mono();
         } else if recv_data.fmt.channels == 2 {
             self.channel_map.init_stereo();
-        } else {
-            self.transfer_channel_map(&recv_data.fmt);
+        } else if !self.transfer_channel_map(&recv_data.fmt) {
+            return;
         }
 
         if !self.channel_map.is_valid() {
@@ -198,9 +206,10 @@ impl PulseStreamData {
         if self.ss.rate > 0 {
             // Sample spec has changed, so the playback buffer size for the requested latency must
             // be recalculated as well.
-            self.buffer_attr.tlength =
-                self.ss
-                    .usec_to_bytes(MicroSeconds(self.latency as u64 * 1000)) as u32;
+            self.buffer_attr.tlength = self
+                .ss
+                .usec_to_bytes(MicroSeconds(u64::from(self.latency) * 1000))
+                as u32;
 
             self.simple = Simple::new(
                 None,
@@ -215,9 +224,9 @@ impl PulseStreamData {
             .map_or_else(
                 |_| {
                     warn!(
-                "Unable to open PulseAudio with sample rate {}, sample size {} and channels {}",
-                self.ss.rate, recv_data.fmt.size, recv_data.fmt.channels
-            );
+                        "Unable to open PulseAudio with sample rate {}, sample size {} and channels {}",
+                        self.ss.rate, recv_data.fmt.size, recv_data.fmt.channels
+                    );
                     None
                 },
                 Some,
@@ -289,6 +298,14 @@ impl AudioInterface for PulseStreamData {
         }
         self.simple = None;
     }
+
+    fn get_status(&self) -> AudioStatus {
+        if self.simple.is_some() {
+            AudioStatus::Started
+        } else {
+            AudioStatus::Ready
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,7 +326,8 @@ mod tests {
         // set 8: BC, 6: FLC, 4: BL, 2: FC, 0: FL
         test_data.fmt.channels = 5;
         test_data.fmt.channel_map = 0b1_0101_0101;
-        pulse.transfer_channel_map(&test_data.fmt);
+        let ret = pulse.transfer_channel_map(&test_data.fmt);
+        assert_eq!(ret, true);
 
         assert_eq!(pulse.channel_map.len(), 5);
         let map = pulse.channel_map.get_mut();
@@ -322,7 +340,8 @@ mod tests {
         // The first 12 bits are set to 1.
         test_data.fmt.channels = 12;
         test_data.fmt.channel_map = 0b1111_1111_1111;
-        pulse.transfer_channel_map(&test_data.fmt);
+        let ret = pulse.transfer_channel_map(&test_data.fmt);
+        assert_eq!(ret, true);
 
         assert_eq!(pulse.channel_map.len(), 12);
         let map = pulse.channel_map.get_mut();

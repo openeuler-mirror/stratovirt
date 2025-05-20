@@ -17,6 +17,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use clap::Parser;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 
@@ -26,15 +27,16 @@ use super::descriptor::{
 };
 use super::xhci::xhci_controller::XhciDevice;
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
-use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus};
-use crate::{
-    ScsiBus::{
-        ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS, GOOD,
-        SCSI_CMD_BUF_SIZE,
-    },
-    ScsiDisk::{ScsiDevice, SCSI_TYPE_DISK, SCSI_TYPE_ROM},
+use super::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
+use crate::ScsiBus::{
+    get_scsi_key, ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, EMULATE_SCSI_OPS,
+    GOOD, SCSI_CMD_BUF_SIZE,
 };
-use machine_manager::config::{DriveFile, UsbStorageConfig};
+use crate::ScsiDisk::{ScsiDevConfig, ScsiDevice};
+use crate::{Bus, Device};
+use machine_manager::config::{DriveConfig, DriveFile};
+use util::aio::AioEngine;
+use util::gen_base_func;
 
 // Storage device descriptor
 static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -43,7 +45,7 @@ static DESC_DEVICE_STORAGE: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bLength: USB_DT_DEVICE_SIZE,
             bDescriptorType: USB_DT_DEVICE,
             idVendor: USB_STORAGE_VENDOR_ID,
-            idProduct: 0x0001,
+            idProduct: USB_PRODUCT_ID_STORAGE,
             bcdDevice: 0,
             iManufacturer: STR_MANUFACTURER_INDEX,
             iProduct: STR_PRODUCT_STORAGE_INDEX,
@@ -82,8 +84,8 @@ static DESC_IFACE_STORAGE: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 0,
             bNumEndpoints: 2,
             bInterfaceClass: USB_CLASS_MASS_STORAGE,
-            bInterfaceSubClass: 0x06, // SCSI
-            bInterfaceProtocol: 0x50, // Bulk-only
+            bInterfaceSubClass: USB_SUBCLASS_SCSI,
+            bInterfaceProtocol: USB_IFACE_PROTOCOL_BOT,
             iInterface: 0,
         },
         other_desc: vec![],
@@ -221,6 +223,21 @@ impl UsbStorageState {
     }
 }
 
+#[derive(Parser, Clone, Debug)]
+#[command(no_binary_name(true))]
+pub struct UsbStorageConfig {
+    #[arg(long, value_parser = ["usb-storage"])]
+    pub classtype: String,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub drive: String,
+    #[arg(long)]
+    pub(super) bus: Option<String>,
+    #[arg(long)]
+    pub(super) port: Option<String>,
+}
+
 /// USB storage device.
 pub struct UsbStorage {
     base: UsbDeviceBase,
@@ -228,7 +245,9 @@ pub struct UsbStorage {
     /// USB controller used to notify controller to transfer data.
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
     /// Configuration of the USB storage device.
-    pub config: UsbStorageConfig,
+    pub dev_cfg: UsbStorageConfig,
+    /// Configuration of the USB storage device's drive.
+    pub drive_cfg: DriveConfig,
     /// Scsi bus attached to this usb-storage device.
     scsi_bus: Arc<Mutex<ScsiBus>>,
     /// Effective scsi backend.
@@ -237,7 +256,9 @@ pub struct UsbStorage {
     // (usb-storage/scsi bus/scsi device) correspond one-to-one, add scsi device member here
     // for the execution efficiency (No need to find a unique device from the hash table of the
     // unique bus).
-    scsi_dev: Arc<Mutex<ScsiDevice>>,
+    scsi_dev: Option<Arc<Mutex<ScsiDevice>>>,
+    /// Drive backend files.
+    drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
 }
 
 #[derive(Debug)]
@@ -305,29 +326,62 @@ impl UsbMsdCsw {
 
 impl UsbStorage {
     pub fn new(
-        config: UsbStorageConfig,
+        dev_cfg: UsbStorageConfig,
+        drive_cfg: DriveConfig,
         drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
-    ) -> Self {
-        let scsi_type = match &config.media as &str {
-            "disk" => SCSI_TYPE_DISK,
-            _ => SCSI_TYPE_ROM,
-        };
+    ) -> Result<Self> {
+        if drive_cfg.aio != AioEngine::Off || drive_cfg.direct {
+            bail!("USB-storage: \"aio=off,direct=false\" must be configured.");
+        }
 
-        Self {
-            base: UsbDeviceBase::new(config.id.clone().unwrap(), USB_DEVICE_BUFFER_DEFAULT_LEN),
+        Ok(Self {
+            base: UsbDeviceBase::new(dev_cfg.id.clone(), USB_DEVICE_BUFFER_DEFAULT_LEN),
             state: UsbStorageState::new(),
             cntlr: None,
-            config: config.clone(),
+            dev_cfg,
+            drive_cfg,
             scsi_bus: Arc::new(Mutex::new(ScsiBus::new("".to_string()))),
-            scsi_dev: Arc::new(Mutex::new(ScsiDevice::new(
-                config.scsi_cfg,
-                scsi_type,
-                drive_files,
-            ))),
-        }
+            scsi_dev: None,
+            drive_files,
+        })
     }
 
-    fn handle_control_packet(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
+    pub fn do_realize(&mut self) -> Result<()> {
+        self.base.reset_usb_endpoint();
+        self.base.speed = USB_SPEED_HIGH;
+        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
+        let prefix = &s[STR_SERIAL_STORAGE_INDEX as usize];
+        s[STR_SERIAL_STORAGE_INDEX as usize] = self.base.generate_serial_number(prefix);
+        self.base.init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
+
+        // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
+        // supported.
+        let scsidev_classtype = match self.drive_cfg.media.as_str() {
+            "disk" => "scsi-hd".to_string(),
+            _ => "scsi-cd".to_string(),
+        };
+        let scsi_dev_cfg = ScsiDevConfig {
+            classtype: scsidev_classtype,
+            drive: self.dev_cfg.drive.clone(),
+            ..Default::default()
+        };
+        let scsi_device = ScsiDevice::new(
+            scsi_dev_cfg,
+            self.drive_cfg.clone(),
+            self.drive_files.clone(),
+            None,
+            self.scsi_bus.clone(),
+        );
+        let realized_scsi = scsi_device.realize()?;
+        self.scsi_dev = Some(realized_scsi.clone());
+
+        self.scsi_bus
+            .lock()
+            .unwrap()
+            .attach_child(get_scsi_key(0, 0), realized_scsi)
+    }
+
+    pub fn handle_control_packet(&mut self, packet: &mut UsbPacket, device_req: &UsbDeviceRequest) {
         match device_req.request_type {
             USB_ENDPOINT_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_CLEAR_FEATURE {
@@ -363,7 +417,7 @@ impl UsbStorage {
 
         match self.state.mode {
             UsbMsdMode::Cbw => {
-                if packet.get_iovecs_size() < CBW_SIZE as u64 {
+                if packet.get_iovecs_size() < u64::from(CBW_SIZE) {
                     bail!("Bad CBW size {}", packet.get_iovecs_size());
                 }
                 self.state.check_cdb_exist(false)?;
@@ -417,7 +471,7 @@ impl UsbStorage {
                 bail!("Not supported usb packet(Token_in and data_out).");
             }
             UsbMsdMode::Csw => {
-                if packet.get_iovecs_size() < CSW_SIZE as u64 {
+                if packet.get_iovecs_size() < u64::from(CSW_SIZE) {
                     bail!("Bad CSW size {}", packet.get_iovecs_size());
                 }
                 self.state.check_cdb_exist(true)?;
@@ -449,6 +503,7 @@ impl UsbStorage {
         self.state.check_cdb_exist(true)?;
         self.state.check_iovec_empty(true)?;
 
+        // Safety: iovecs are set in `setup_usb_packet` and iovec_len is no more than TRB_TR_LEN_MASK.
         let iovec_len = packet.get_iovecs_size() as u32;
         if iovec_len < self.state.cbw.data_len {
             bail!(
@@ -480,12 +535,12 @@ impl UsbStorage {
             0,
             packet.iovecs.clone(),
             self.state.iovec_len,
-            self.scsi_dev.clone(),
+            self.scsi_dev.as_ref().unwrap().clone(),
             csw,
         )
         .with_context(|| "Error in creating scsirequest.")?;
 
-        if sreq.cmd.xfer > sreq.datalen && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
+        if sreq.cmd.xfer > u64::from(sreq.datalen) && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
             // Wrong USB packet which doesn't provide enough datain/dataout buffer.
             bail!(
                 "command {:x} requested data's length({}), provided buffer length({})",
@@ -511,36 +566,15 @@ impl UsbStorage {
 }
 
 impl UsbDevice for UsbStorage {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
-        self.base.reset_usb_endpoint();
-        self.base.speed = USB_SPEED_HIGH;
-        let mut s: Vec<String> = DESC_STRINGS.iter().map(|&s| s.to_string()).collect();
-        let prefix = &s[STR_SERIAL_STORAGE_INDEX as usize];
-        s[STR_SERIAL_STORAGE_INDEX as usize] = self.base.generate_serial_number(prefix);
-        self.base.init_descriptor(DESC_DEVICE_STORAGE.clone(), s)?;
-
-        // NOTE: "aio=off,direct=false" must be configured and other aio/direct values are not
-        // supported.
-        let mut locked_scsi_dev = self.scsi_dev.lock().unwrap();
-        locked_scsi_dev.realize(None)?;
-        drop(locked_scsi_dev);
-        self.scsi_bus
-            .lock()
-            .unwrap()
-            .devices
-            .insert((0, 0), self.scsi_dev.clone());
-
+        self.do_realize()?;
         let storage: Arc<Mutex<UsbStorage>> = Arc::new(Mutex::new(self));
         Ok(storage)
     }
+
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
 
     fn reset(&mut self) {
         info!("Storage device reset");
@@ -563,7 +597,7 @@ impl UsbDevice for UsbStorage {
                 self.handle_control_packet(&mut locked_packet, device_req)
             }
             Err(e) => {
-                warn!("Storage descriptor error {:?}", e);
+                warn!("Received incorrect USB Storage descriptor message: {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
             }
         }
@@ -599,9 +633,5 @@ impl UsbDevice for UsbStorage {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         self.cntlr.clone()
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }

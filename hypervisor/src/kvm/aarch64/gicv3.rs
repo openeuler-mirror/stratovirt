@@ -56,7 +56,7 @@ impl GICv3Access for KvmGICv3 {
             KvmDevice::kvm_device_check(
                 &self.fd,
                 kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
-                kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION as u64,
+                u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST_REGION),
             )
             .with_context(|| {
                 "Multiple redistributors are acquired while KVM does not provide support."
@@ -118,7 +118,7 @@ impl GICv3Access for KvmGICv3 {
     }
 
     fn vcpu_gicr_attr(&self, cpu: usize) -> u64 {
-        let clustersz = 16;
+        let clustersz = 16usize;
 
         let aff1 = (cpu / clustersz) as u64;
         let aff0 = (cpu % clustersz) as u64;
@@ -128,6 +128,7 @@ impl GICv3Access for KvmGICv3 {
 
         let last = u64::from((self.vcpu_count - 1) == cpu as u64);
 
+        // Allow conversion of variables from i64 to u64.
         ((cpu_affid << 32) | (1 << 24) | (1 << 8) | (last << 4))
             & kvm_bindings::KVM_DEV_ARM_VGIC_V3_MPIDR_MASK as u64
     }
@@ -196,7 +197,7 @@ impl GICv3Access for KvmGICv3 {
         KvmDevice::kvm_device_access(
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
-            kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES as u64,
+            u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES),
             0,
             true,
         )
@@ -259,7 +260,7 @@ impl GICv3ItsAccess for KvmGICv3Its {
         KvmDevice::kvm_device_access(
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ITS_REGS,
-            attr as u64,
+            u64::from(attr),
             its_value as *const u64 as u64,
             write,
         )
@@ -267,9 +268,9 @@ impl GICv3ItsAccess for KvmGICv3Its {
 
     fn access_gic_its_tables(&self, save: bool) -> Result<()> {
         let attr = if save {
-            kvm_bindings::KVM_DEV_ARM_ITS_SAVE_TABLES as u64
+            u64::from(kvm_bindings::KVM_DEV_ARM_ITS_SAVE_TABLES)
         } else {
-            kvm_bindings::KVM_DEV_ARM_ITS_RESTORE_TABLES as u64
+            u64::from(kvm_bindings::KVM_DEV_ARM_ITS_RESTORE_TABLES)
         };
         KvmDevice::kvm_device_access(
             &self.fd,

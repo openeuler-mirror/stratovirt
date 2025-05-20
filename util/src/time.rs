@@ -33,9 +33,9 @@ pub fn mktime64(year: u64, mon: u64, day: u64, hour: u64, min: u64, sec: u64) ->
 }
 
 /// Get wall time.
-pub fn gettime() -> Result<(u32, u32)> {
+pub fn gettime() -> Result<(i64, i64)> {
     match clock_gettime(ClockId::CLOCK_REALTIME) {
-        Ok(ts) => Ok((ts.tv_sec() as u32, ts.tv_nsec() as u32)),
+        Ok(ts) => Ok((ts.tv_sec(), ts.tv_nsec())),
         Err(e) => bail!("clock_gettime failed: {:?}", e),
     }
 }
@@ -50,8 +50,8 @@ pub fn get_format_time(sec: i64) -> [i32; 6] {
     }
 
     [
-        ti.tm_year + 1900,
-        ti.tm_mon + 1,
+        ti.tm_year.saturating_add(1900),
+        ti.tm_mon.saturating_add(1),
         ti.tm_mday,
         ti.tm_hour,
         ti.tm_min,

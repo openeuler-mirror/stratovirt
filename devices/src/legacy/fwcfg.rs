@@ -19,8 +19,8 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{error, warn};
 
 use crate::legacy::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlBuilder, AmlDevice, AmlInteger, AmlNameDecl, AmlResTemplate, AmlScopeBuilder, AmlString,
 };
@@ -28,10 +28,10 @@ use acpi::{
 use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
-use util::offset_of;
+use util::{gen_base_func, offset_of};
 
 #[cfg(target_arch = "x86_64")]
 const FW_CFG_IO_BASE: u64 = 0x510;
@@ -243,12 +243,14 @@ fn write_dma_memory(
     mut buf: &[u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.write(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .write(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
 
     Ok(())
 }
@@ -260,12 +262,14 @@ fn read_dma_memory(
     mut buf: &mut [u8],
     len: u64,
 ) -> Result<()> {
-    addr_space.read(&mut buf, addr, len).with_context(|| {
-        format!(
-            "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-            addr.0, len
-        )
-    })?;
+    addr_space
+        .read(&mut buf, addr, len, AddressAttr::Ram)
+        .with_context(|| {
+            format!(
+                "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
+                addr.0, len
+            )
+        })?;
     Ok(())
 }
 
@@ -361,11 +365,14 @@ impl FwCfgCommon {
 
     /// Select the entry by the key specified
     fn select_entry(&mut self, key: u16) {
+        let ret;
         self.cur_offset = 0;
         if (key & FW_CFG_ENTRY_MASK) >= self.max_entry() {
             self.cur_entry = FW_CFG_INVALID;
+            ret = 0;
         } else {
             self.cur_entry = key;
+            ret = 1;
 
             // unwrap() is safe because we have checked the range of `key`.
             let selected_entry = self.get_entry_mut().unwrap();
@@ -373,6 +380,8 @@ impl FwCfgCommon {
                 cb.select_callback();
             }
         }
+
+        trace::fwcfg_select_entry(key, get_key_name(key as usize), ret);
     }
 
     fn add_entry(
@@ -404,11 +413,12 @@ impl FwCfgCommon {
             warn!("Entry not empty, will override");
         }
 
-        entry.data = data;
+        entry.data = data.clone();
         entry.select_cb = select_cb;
         entry.allow_write = allow_write;
         entry.write_cb = write_cb;
 
+        trace::fwcfg_add_entry(key, get_key_name(key as usize), data);
         Ok(())
     }
 
@@ -467,11 +477,8 @@ impl FwCfgCommon {
             }
         }
 
-        let file = FwCfgFile::new(
-            data.len() as u32,
-            FW_CFG_FILE_FIRST + index as u16,
-            filename,
-        );
+        let data_len = data.len();
+        let file = FwCfgFile::new(data_len as u32, FW_CFG_FILE_FIRST + index as u16, filename);
         self.files.insert(index, file);
         self.files.iter_mut().skip(index + 1).for_each(|f| {
             f.select += 1;
@@ -489,6 +496,8 @@ impl FwCfgCommon {
             FW_CFG_FILE_FIRST as usize + index,
             FwCfgEntry::new(data, select_cb, write_cb, allow_write),
         );
+
+        trace::fwcfg_add_file(index, filename, data_len);
         Ok(())
     }
 
@@ -591,7 +600,7 @@ impl FwCfgCommon {
                         &mem_space,
                         GuestAddress(dma.address),
                         data.as_slice(),
-                        len as u64,
+                        u64::from(len),
                     )
                     .is_err()
                     {
@@ -614,7 +623,7 @@ impl FwCfgCommon {
                         &mem_space,
                         GuestAddress(dma.address),
                         &entry.data[offset as usize..],
-                        len as u64,
+                        u64::from(len),
                     )
                     .is_err()
                 {
@@ -624,7 +633,7 @@ impl FwCfgCommon {
                 if is_write {
                     let mut dma_read_error = false;
                     let data = &mut entry.data[offset as usize..];
-                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data, len as u64)
+                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data, u64::from(len))
                         .is_err()
                     {
                         dma_read_error = true;
@@ -636,7 +645,7 @@ impl FwCfgCommon {
                         if let Some(cb) = &entry.write_cb {
                             cb.lock().unwrap().write_callback(
                                 data.to_vec(),
-                                offset as u64,
+                                u64::from(offset),
                                 len as usize,
                             );
                         }
@@ -645,11 +654,13 @@ impl FwCfgCommon {
                 offset += len;
             }
             dma.length -= len;
-            dma.address += len as u64
+            dma.address += u64::from(len)
         }
 
         self.cur_offset = offset;
         write_dma_result(&self.mem_space, dma_addr, dma.control)?;
+
+        trace::fwcfg_read_data(0);
         Ok(())
     }
 
@@ -698,7 +709,7 @@ impl FwCfgCommon {
     fn dma_mem_read(&self, addr: u64, size: u32) -> Result<u64> {
         extract_u64(
             FW_CFG_DMA_SIGNATURE as u64,
-            ((8 - addr - size as u64) * 8) as u32,
+            ((8 - addr - u64::from(size)) * 8) as u32,
             size * 8,
         )
         .with_context(|| "Failed to extract bits from u64")
@@ -732,7 +743,7 @@ impl FwCfgCommon {
             && cur_offset < entry.data.len() as u32
         {
             loop {
-                value = (value << 8) | entry.data[cur_offset as usize] as u64;
+                value = (value << 8) | u64::from(entry.data[cur_offset as usize]);
                 cur_offset += 1;
                 size -= 1;
 
@@ -740,9 +751,11 @@ impl FwCfgCommon {
                     break;
                 }
             }
-            value <<= 8 * size as u64;
+            value <<= 8 * u64::from(size);
         }
         self.cur_offset = cur_offset;
+
+        trace::fwcfg_read_data(value);
         Ok(value)
     }
 
@@ -833,28 +846,22 @@ pub struct FwCfgMem {
 
 #[cfg(target_arch = "aarch64")]
 impl FwCfgMem {
-    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
-        FwCfgMem {
-            base: SysBusDevBase::new(SysBusDevType::FwCfg),
-            fwcfg: FwCfgCommon::new(sys_mem),
-        }
-    }
-
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
+    pub fn new(
+        sys_mem: Arc<AddressSpace>,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
-    ) -> Result<Arc<Mutex<Self>>> {
-        self.fwcfg.common_realize()?;
-        self.set_sys_resource(sysbus, region_base, region_size)
+    ) -> Result<Self> {
+        let mut fwcfgmem = FwCfgMem {
+            base: SysBusDevBase::new(SysBusDevType::FwCfg),
+            fwcfg: FwCfgCommon::new(sys_mem),
+        };
+        fwcfgmem
+            .set_sys_resource(sysbus, region_base, region_size, "FwCfgMem")
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
+        fwcfgmem.set_parent_bus(sysbus.clone());
 
-        let dev = Arc::new(Mutex::new(self));
-        sysbus
-            .attach_device(&dev, region_base, region_size, "FwCfgMem")
-            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
-        Ok(dev)
+        Ok(fwcfgmem)
     }
 }
 
@@ -922,24 +929,28 @@ impl FwCfgOps for FwCfgMem {
 
 #[cfg(target_arch = "aarch64")]
 impl Device for FwCfgMem {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        Ok(())
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        self.fwcfg.common_realize()?;
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev)
+            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
+        Ok(dev)
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 impl SysBusDevOps for FwCfgMem {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
@@ -948,9 +959,9 @@ impl SysBusDevOps for FwCfgMem {
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
         let size = data.len() as u32;
         let value = match size {
-            1 => data[0] as u64,
-            2 => BigEndian::read_u16(data) as u64,
-            4 => BigEndian::read_u32(data) as u64,
+            1 => u64::from(data[0]),
+            2 => u64::from(BigEndian::read_u16(data)),
+            4 => u64::from(BigEndian::read_u32(data)),
             8 => BigEndian::read_u64(data),
             _ => 0,
         };
@@ -963,12 +974,8 @@ impl SysBusDevOps for FwCfgMem {
                 self.fwcfg.select_entry(value as u16);
             }
             16..=23 => {
-                if self
-                    .fwcfg
-                    .dma_mem_write(offset - 0x10, value, size)
-                    .is_err()
-                {
-                    error!("Failed to write dma at offset=0x{:x}.", offset);
+                if let Err(e) = self.fwcfg.dma_mem_write(offset - 0x10, value, size) {
+                    error!("Failed to write dma at offset=0x{:x} {:?}.", offset, e);
                     return false;
                 }
             }
@@ -980,24 +987,15 @@ impl SysBusDevOps for FwCfgMem {
         true
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
-
     fn set_sys_resource(
         &mut self,
-        _sysbus: &mut SysBus,
+        _sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
-        let res = self.get_sys_resource_mut().unwrap();
-        res.region_base = region_base;
-        res.region_size = region_size;
-        Ok(())
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        self.sysbusdev_base_mut()
+            .set_sys(-1, region_base, region_size, region_name);
         Ok(())
     }
 }
@@ -1011,34 +1009,17 @@ pub struct FwCfgIO {
 
 #[cfg(target_arch = "x86_64")]
 impl FwCfgIO {
-    pub fn new(sys_mem: Arc<AddressSpace>) -> Self {
-        FwCfgIO {
-            base: SysBusDevBase {
-                base: DeviceBase::default(),
-                dev_type: SysBusDevType::FwCfg,
-                res: SysRes {
-                    region_base: FW_CFG_IO_BASE,
-                    region_size: FW_CFG_IO_SIZE,
-                    irq: -1,
-                },
-                ..Default::default()
-            },
+    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &Arc<Mutex<SysBus>>) -> Result<Self> {
+        let mut fwcfg = FwCfgIO {
+            base: SysBusDevBase::new(SysBusDevType::FwCfg),
             fwcfg: FwCfgCommon::new(sys_mem),
-        }
-    }
-
-    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<Arc<Mutex<Self>>> {
-        self.fwcfg.common_realize()?;
-        let region_base = self.base.res.region_base;
-        let region_size = self.base.res.region_size;
-        self.set_sys_resource(sysbus, region_base, region_size)
+        };
+        fwcfg
+            .set_sys_resource(sysbus, FW_CFG_IO_BASE, FW_CFG_IO_SIZE, "FwCfgIO")
             .with_context(|| "Failed to allocate system resource for FwCfg.")?;
+        fwcfg.set_parent_bus(sysbus.clone());
 
-        let dev = Arc::new(Mutex::new(self));
-        sysbus
-            .attach_device(&dev, region_base, region_size, "FwCfgIO")
-            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
-        Ok(dev)
+        Ok(fwcfg)
     }
 }
 
@@ -1104,24 +1085,28 @@ impl FwCfgOps for FwCfgIO {
 
 #[cfg(target_arch = "x86_64")]
 impl Device for FwCfgIO {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        Ok(())
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        self.fwcfg.common_realize()?;
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev)
+            .with_context(|| "Failed to attach FwCfg device to system bus.")?;
+        Ok(dev)
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 impl SysBusDevOps for FwCfgIO {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         common_read(self, data, base, offset)
@@ -1142,9 +1127,9 @@ impl SysBusDevOps for FwCfgIO {
             }
             4..=11 => {
                 let value = match size {
-                    1 => data[0] as u64,
-                    2 => BigEndian::read_u16(data) as u64,
-                    4 => BigEndian::read_u32(data) as u64,
+                    1 => u64::from(data[0]),
+                    2 => u64::from(BigEndian::read_u16(data)),
+                    4 => u64::from(BigEndian::read_u32(data)),
                     8 => BigEndian::read_u64(data),
                     _ => 0,
                 };
@@ -1165,24 +1150,15 @@ impl SysBusDevOps for FwCfgIO {
         true
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
-
     fn set_sys_resource(
         &mut self,
-        _sysbus: &mut SysBus,
+        _sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
-        let res = self.get_sys_resource_mut().unwrap();
-        res.region_base = region_base;
-        res.region_size = region_size;
-        Ok(())
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        self.sysbusdev_base_mut()
+            .set_sys(-1, region_base, region_size, region_name);
         Ok(())
     }
 }
@@ -1302,58 +1278,8 @@ impl AmlBuilder for FwCfgIO {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
-    use address_space::{AddressSpace, HostMemMapping, Region};
-
-    fn sysbus_init() -> SysBus {
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sys_mem"),
-            "sys_mem",
-            None,
-        )
-        .unwrap();
-        #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(
-            Region::init_container_region(1 << 16, "sys_io"),
-            "sys_io",
-            None,
-        )
-        .unwrap();
-        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
-        let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
-        SysBus::new(
-            #[cfg(target_arch = "x86_64")]
-            &sys_io,
-            &sys_mem,
-            free_irqs,
-            mmio_region,
-        )
-    }
-
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "root");
-        let sys_space = AddressSpace::new(root, "sys_space", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                0x1000_0000,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "region_1"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
+    use crate::sysbus::sysbus_init;
+    use crate::test::address_space_init;
 
     #[test]
     fn test_entry_functions() {
@@ -1506,7 +1432,12 @@ mod test {
         let addr = GuestAddress(0x0000);
         fwcfg_common
             .mem_space
-            .write(&mut dma_request.as_ref(), addr, dma_request.len() as u64)
+            .write(
+                &mut dma_request.as_ref(),
+                addr,
+                dma_request.len() as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         // [2]set dma addr.
@@ -1516,7 +1447,13 @@ mod test {
         assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
 
         // [4]check dma response.
-        assert_eq!(fwcfg_common.mem_space.read_object::<u32>(addr).unwrap(), 0);
+        assert_eq!(
+            fwcfg_common
+                .mem_space
+                .read_object::<u32>(addr, AddressAttr::Ram)
+                .unwrap(),
+            0
+        );
 
         // [5]check dma write result.
         let mut read_dma_buf = Vec::new();
@@ -1524,7 +1461,12 @@ mod test {
         let len = sig_entry_data.len();
         fwcfg_common
             .mem_space
-            .read(&mut read_dma_buf, GuestAddress(0xffff), len as u64)
+            .read(
+                &mut read_dma_buf,
+                GuestAddress(0xffff),
+                len as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
         assert_eq!(read_dma_buf, sig_entry_data);
 
@@ -1537,7 +1479,12 @@ mod test {
         let addr = GuestAddress(0x0000);
         fwcfg_common
             .mem_space
-            .write(&mut dma_request.as_ref(), addr, dma_request.len() as u64)
+            .write(
+                &mut dma_request.as_ref(),
+                addr,
+                dma_request.len() as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         fwcfg_common.dma_addr = addr;
@@ -1545,14 +1492,25 @@ mod test {
         assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
 
         // Result should be all zero.
-        assert_eq!(fwcfg_common.mem_space.read_object::<u32>(addr).unwrap(), 0);
+        assert_eq!(
+            fwcfg_common
+                .mem_space
+                .read_object::<u32>(addr, AddressAttr::Ram)
+                .unwrap(),
+            0
+        );
 
         let mut read_dma_buf = Vec::new();
         let all_zero = vec![0x0_u8; 4];
         let len = all_zero.len();
         fwcfg_common
             .mem_space
-            .read(&mut read_dma_buf, GuestAddress(0xffff), len as u64)
+            .read(
+                &mut read_dma_buf,
+                GuestAddress(0xffff),
+                len as u64,
+                AddressAttr::Ram,
+            )
             .unwrap();
         assert_eq!(read_dma_buf, all_zero);
     }
@@ -1562,9 +1520,9 @@ mod test {
     fn test_read_write_aarch64() {
         let mut sys_bus = sysbus_init();
         let sys_mem = address_space_init();
-        let fwcfg = FwCfgMem::new(sys_mem);
+        let fwcfg = FwCfgMem::new(sys_mem, &mut sys_bus, 0x0902_0000, 0x0000_0018).unwrap();
 
-        let fwcfg_dev = FwCfgMem::realize(fwcfg, &mut sys_bus, 0x0902_0000, 0x0000_0018).unwrap();
+        let fwcfg_dev = fwcfg.realize().unwrap();
         // Read FW_CFG_DMA_SIGNATURE entry.
         let base = GuestAddress(0x0000);
         let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];
@@ -1602,9 +1560,9 @@ mod test {
     fn test_read_write_x86_64() {
         let mut sys_bus = sysbus_init();
         let sys_mem = address_space_init();
-        let fwcfg = FwCfgIO::new(sys_mem);
+        let fwcfg = FwCfgIO::new(sys_mem, &mut sys_bus).unwrap();
 
-        let fwcfg_dev = FwCfgIO::realize(fwcfg, &mut sys_bus).unwrap();
+        let fwcfg_dev = fwcfg.realize().unwrap();
         // Read FW_CFG_DMA_SIGNATURE entry.
         let base = GuestAddress(0x0000);
         let mut read_data = vec![0xff_u8, 0xff, 0xff, 0xff];

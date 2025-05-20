@@ -14,16 +14,31 @@ pub mod error;
 
 pub use error::SysBusError;
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::{Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};
+#[cfg(target_arch = "x86_64")]
+use crate::acpi::cpu_controller::CpuController;
+use crate::acpi::ged::Ged;
+#[cfg(target_arch = "aarch64")]
+use crate::acpi::power::PowerDev;
+#[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
+use crate::legacy::Ramfb;
+#[cfg(target_arch = "x86_64")]
+use crate::legacy::{FwCfgIO, RTC};
+#[cfg(target_arch = "aarch64")]
+use crate::legacy::{FwCfgMem, PL011, PL031};
+use crate::legacy::{PFlash, Serial};
+use crate::pci::PciHost;
+use crate::{Bus, BusBase, Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};
 use acpi::{AmlBuilder, AmlScope};
 use address_space::{AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
-use util::AsAny;
+use util::gen_base_func;
 
 // Now that the serial device use a hardcoded IRQ number (4), and the starting
 // free IRQ number can be 5.
@@ -39,10 +54,12 @@ pub const IRQ_BASE: i32 = 32;
 pub const IRQ_MAX: i32 = 191;
 
 pub struct SysBus {
+    pub base: BusBase,
+    // Record the largest key used in the BTreemap of the busbase(children field).
+    max_key: u64,
     #[cfg(target_arch = "x86_64")]
     pub sys_io: Arc<AddressSpace>,
     pub sys_mem: Arc<AddressSpace>,
-    pub devices: Vec<Arc<Mutex<dyn SysBusDevOps>>>,
     pub free_irqs: (i32, i32),
     pub min_free_irq: i32,
     pub mmio_region: (u64, u64),
@@ -75,10 +92,11 @@ impl SysBus {
         mmio_region: (u64, u64),
     ) -> Self {
         Self {
+            base: BusBase::new("sysbus".to_string()),
+            max_key: 0,
             #[cfg(target_arch = "x86_64")]
             sys_io: sys_io.clone(),
             sys_mem: sys_mem.clone(),
-            devices: Vec::new(),
             free_irqs,
             min_free_irq: free_irqs.0,
             mmio_region,
@@ -104,84 +122,74 @@ impl SysBus {
         }
     }
 
-    pub fn attach_device<T: 'static + SysBusDevOps>(
-        &mut self,
-        dev: &Arc<Mutex<T>>,
-        region_base: u64,
-        region_size: u64,
-        region_name: &str,
-    ) -> Result<()> {
-        let region_ops = self.build_region_ops(dev);
-        let region = Region::init_io_region(region_size, region_ops, region_name);
-        let locked_dev = dev.lock().unwrap();
+    pub fn attach_device<T: 'static + SysBusDevOps>(&mut self, dev: &Arc<Mutex<T>>) -> Result<()> {
+        let res = dev.lock().unwrap().get_sys_resource().clone();
+        let region_base = res.region_base;
+        let region_size = res.region_size;
+        let region_name = res.region_name;
 
-        region.set_ioeventfds(&locked_dev.ioeventfds());
-        match locked_dev.sysbusdev_base().dev_type {
-            SysBusDevType::Serial if cfg!(target_arch = "x86_64") => {
+        // region_base/region_size are both 0 means this device doesn't have its own memory layout.
+        // The normally allocated device region_base is above the `MEM_LAYOUT[LayoutEntryType::Mmio as usize].0`.
+        if region_base != 0 && region_size != 0 {
+            let region_ops = self.build_region_ops(dev);
+            let region = Region::init_io_region(region_size, region_ops, &region_name);
+            let locked_dev = dev.lock().unwrap();
+
+            region.set_ioeventfds(&locked_dev.ioeventfds());
+            match locked_dev.sysbusdev_base().dev_type {
                 #[cfg(target_arch = "x86_64")]
-                self.sys_io
+                SysBusDevType::Serial | SysBusDevType::FwCfg | SysBusDevType::Rtc => {
+                    self.sys_io
+                        .root()
+                        .add_subregion(region, region_base)
+                        .with_context(|| {
+                            SysBusError::AddRegionErr("I/O", region_base, region_size)
+                        })?;
+                }
+                _ => self
+                    .sys_mem
                     .root()
                     .add_subregion(region, region_base)
                     .with_context(|| {
-                        format!(
-                            "Failed to register region in I/O space: offset={},size={}",
-                            region_base, region_size
-                        )
-                    })?;
+                        SysBusError::AddRegionErr("memory", region_base, region_size)
+                    })?,
             }
-            SysBusDevType::FwCfg if cfg!(target_arch = "x86_64") => {
-                #[cfg(target_arch = "x86_64")]
-                self.sys_io
-                    .root()
-                    .add_subregion(region, region_base)
-                    .with_context(|| {
-                        format!(
-                            "Failed to register region in I/O space: offset 0x{:x}, size {}",
-                            region_base, region_size
-                        )
-                    })?;
-            }
-            SysBusDevType::Rtc if cfg!(target_arch = "x86_64") => {
-                #[cfg(target_arch = "x86_64")]
-                self.sys_io
-                    .root()
-                    .add_subregion(region, region_base)
-                    .with_context(|| {
-                        format!(
-                            "Failed to register region in I/O space: offset 0x{:x}, size {}",
-                            region_base, region_size
-                        )
-                    })?;
-            }
-            _ => self
-                .sys_mem
-                .root()
-                .add_subregion(region, region_base)
-                .with_context(|| {
-                    format!(
-                        "Failed to register region in memory space: offset={},size={}",
-                        region_base, region_size
-                    )
-                })?,
         }
 
-        self.devices.push(dev.clone());
+        self.sysbus_attach_child(dev.clone())?;
         Ok(())
     }
 
-    pub fn attach_dynamic_device<T: 'static + SysBusDevOps>(
-        &mut self,
-        dev: &Arc<Mutex<T>>,
-    ) -> Result<()> {
-        self.devices.push(dev.clone());
+    pub fn sysbus_attach_child(&mut self, dev: Arc<Mutex<dyn Device>>) -> Result<()> {
+        self.attach_child(self.max_key, dev.clone())?;
+        // Note: Incrementally generate a number that has no substantive effect, and is only used for the
+        // key of Btreemap in the busbase(children field).
+        // The number of system-bus devices is limited, and it is also difficult to reach the `u64` range for
+        // hot-plug times. So, `u64` is currently sufficient for using and don't consider overflow issues for now.
+        self.max_key += 1;
         Ok(())
     }
 }
 
-#[derive(Copy, Clone)]
+impl Bus for SysBus {
+    gen_base_func!(bus_base, bus_base_mut, BusBase, base);
+}
+
+/// Convert from Arc<Mutex<dyn Bus>> to &mut SysBus.
+#[macro_export]
+macro_rules! MUT_SYS_BUS {
+    ($trait_bus:expr, $lock_bus: ident, $struct_bus: ident) => {
+        convert_bus_mut!($trait_bus, $lock_bus, $struct_bus, SysBus);
+    };
+}
+
+#[derive(Clone)]
 pub struct SysRes {
+    // Note: region_base/region_size are both 0 means that this device doesn't have its own memory layout.
+    // The normally allocated device memory region is above the `MEM_LAYOUT[LayoutEntryType::Mmio as usize].0`.
     pub region_base: u64,
     pub region_size: u64,
+    pub region_name: String,
     pub irq: i32,
 }
 
@@ -190,6 +198,7 @@ impl Default for SysRes {
         Self {
             region_base: 0,
             region_size: 0,
+            region_name: "".to_string(),
             irq: -1,
         }
     }
@@ -243,15 +252,16 @@ impl SysBusDevBase {
         }
     }
 
-    pub fn set_sys(&mut self, irq: i32, region_base: u64, region_size: u64) {
+    pub fn set_sys(&mut self, irq: i32, region_base: u64, region_size: u64, region_name: &str) {
         self.res.irq = irq;
         self.res.region_base = region_base;
         self.res.region_size = region_size;
+        self.res.region_name = region_name.to_string();
     }
 }
 
 /// Operations for sysbus devices.
-pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
+pub trait SysBusDevOps: Device + Send + AmlBuilder {
     fn sysbusdev_base(&self) -> &SysBusDevBase;
 
     fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase;
@@ -292,19 +302,22 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
         Ok(irq)
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        None
+    fn get_sys_resource(&mut self) -> &mut SysRes {
+        &mut self.sysbusdev_base_mut().res
     }
 
     fn set_sys_resource(
         &mut self,
-        sysbus: &mut SysBus,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
-        let irq = self.get_irq(sysbus)?;
+        let mut locked_sysbus = sysbus.lock().unwrap();
+        let irq = self.get_irq(&mut locked_sysbus)?;
         let interrupt_evt = self.sysbusdev_base().interrupt_evt.clone();
-        let irq_manager = sysbus.irq_manager.clone();
+        let irq_manager = locked_sysbus.irq_manager.clone();
+        drop(locked_sysbus);
 
         self.sysbusdev_base_mut().irq_state =
             IrqState::new(irq as u32, interrupt_evt, irq_manager, TriggerMode::Edge);
@@ -312,7 +325,7 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
         irq_state.register_irq()?;
 
         self.sysbusdev_base_mut()
-            .set_sys(irq, region_base, region_size);
+            .set_sys(irq, region_base, region_size, region_name);
         Ok(())
     }
 
@@ -326,19 +339,113 @@ pub trait SysBusDevOps: Device + Send + AmlBuilder + AsAny {
             )
         });
     }
+}
 
-    fn reset(&mut self) -> Result<()> {
-        Ok(())
-    }
+/// Convert from Arc<Mutex<dyn Device>> to &mut dyn SysBusDevOps.
+#[macro_export]
+macro_rules! SYS_BUS_DEVICE {
+    ($trait_device:expr, $lock_device: ident, $trait_sysbusdevops: ident) => {
+        let mut $lock_device = $trait_device.lock().unwrap();
+        let $trait_sysbusdevops = to_sysbusdevops(&mut *$lock_device).unwrap();
+    };
 }
 
 impl AmlBuilder for SysBus {
     fn aml_bytes(&self) -> Vec<u8> {
         let mut scope = AmlScope::new("_SB");
-        self.devices.iter().for_each(|dev| {
-            scope.append(&dev.lock().unwrap().aml_bytes());
-        });
+        let child_devices = self.base.children.clone();
+        for dev in child_devices.values() {
+            SYS_BUS_DEVICE!(dev, locked_dev, sysbusdev);
+            scope.append(&sysbusdev.aml_bytes());
+        }
 
         scope.aml_bytes()
     }
+}
+
+pub type ToSysBusDevOpsFunc = fn(&mut dyn Any) -> &mut dyn SysBusDevOps;
+
+static mut SYSBUSDEVTYPE_HASHMAP: Option<HashMap<TypeId, ToSysBusDevOpsFunc>> = None;
+
+pub fn convert_to_sysbusdevops<T: SysBusDevOps>(item: &mut dyn Any) -> &mut dyn SysBusDevOps {
+    // SAFETY: The typeid of `T` is the typeid recorded in the hashmap. The target structure type of
+    // the conversion is its own structure type, so the conversion result will definitely not be `None`.
+    let t = item.downcast_mut::<T>().unwrap();
+    t as &mut dyn SysBusDevOps
+}
+
+pub fn register_sysbusdevops_type<T: SysBusDevOps>() -> Result<()> {
+    let type_id = TypeId::of::<T>();
+    // SAFETY: SYSBUSDEVTYPE_HASHMAP will be built in `type_init` function sequentially in the main thread.
+    // And will not be changed after `type_init`.
+    unsafe {
+        if SYSBUSDEVTYPE_HASHMAP.is_none() {
+            SYSBUSDEVTYPE_HASHMAP = Some(HashMap::new());
+        }
+        let types = SYSBUSDEVTYPE_HASHMAP.as_mut().unwrap();
+        if types.get(&type_id).is_some() {
+            bail!("Type Id {:?} has been registered.", type_id);
+        }
+        types.insert(type_id, convert_to_sysbusdevops::<T>);
+    }
+
+    Ok(())
+}
+
+pub fn devices_register_sysbusdevops_type() -> Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        register_sysbusdevops_type::<FwCfgIO>()?;
+        register_sysbusdevops_type::<CpuController>()?;
+        register_sysbusdevops_type::<RTC>()?;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        register_sysbusdevops_type::<FwCfgMem>()?;
+        #[cfg(all(feature = "ramfb"))]
+        register_sysbusdevops_type::<Ramfb>()?;
+        register_sysbusdevops_type::<PL011>()?;
+        register_sysbusdevops_type::<PL031>()?;
+        register_sysbusdevops_type::<PowerDev>()?;
+    }
+    register_sysbusdevops_type::<Ged>()?;
+    register_sysbusdevops_type::<PFlash>()?;
+    register_sysbusdevops_type::<Serial>()?;
+    register_sysbusdevops_type::<PciHost>()
+}
+
+pub fn to_sysbusdevops(dev: &mut dyn Device) -> Option<&mut dyn SysBusDevOps> {
+    // SAFETY: SYSBUSDEVTYPE_HASHMAP has been built. And this function is called without changing hashmap.
+    unsafe {
+        let types = SYSBUSDEVTYPE_HASHMAP.as_mut().unwrap();
+        let func = types.get(&dev.device_type_id())?;
+        let sysbusdev = func(dev.as_any_mut());
+        Some(sysbusdev)
+    }
+}
+
+#[cfg(test)]
+pub fn sysbus_init() -> Arc<Mutex<SysBus>> {
+    let sys_mem = AddressSpace::new(
+        Region::init_container_region(u64::max_value(), "sys_mem"),
+        "sys_mem",
+        None,
+    )
+    .unwrap();
+    #[cfg(target_arch = "x86_64")]
+    let sys_io = AddressSpace::new(
+        Region::init_container_region(1 << 16, "sys_io"),
+        "sys_io",
+        None,
+    )
+    .unwrap();
+    let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
+    let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
+    Arc::new(Mutex::new(SysBus::new(
+        #[cfg(target_arch = "x86_64")]
+        &sys_io,
+        &sys_mem,
+        free_irqs,
+        mmio_region,
+    )))
 }

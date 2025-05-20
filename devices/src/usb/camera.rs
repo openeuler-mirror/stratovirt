@@ -32,22 +32,18 @@ use crate::camera_backend::{
 };
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
-use crate::usb::{
-    UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
-};
+use crate::usb::{UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus};
 use machine_manager::config::camera::CameraDevConfig;
 use machine_manager::config::valid_id;
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use util::aio::{iov_discard_front_direct, Iovec};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
 };
-
-// CRC16 of "STRATOVIRT"
-const UVC_VENDOR_ID: u16 = 0xB74C;
-// The first 4 chars of "VIDEO", 5 substitutes V.
-const UVC_PRODUCT_ID: u16 = 0x51DE;
 
 const INTERFACE_ID_CONTROL: u8 = 0;
 const INTERFACE_ID_STREAMING: u8 = 1;
@@ -95,8 +91,10 @@ const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "usb_camera")]
+#[command(no_binary_name(true))]
 pub struct UsbCameraConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     pub id: String,
     #[arg(long)]
@@ -116,6 +114,7 @@ pub struct UsbCamera {
     broken: Arc<AtomicBool>,                       // if the device broken or not
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
+    notifier_id: u64,
 }
 
 #[derive(Debug)]
@@ -433,8 +432,8 @@ fn gen_desc_device_camera(fmt_list: Vec<CameraFormatList>) -> Result<Arc<UsbDesc
         device_desc: UsbDeviceDescriptor {
             bLength: USB_DT_DEVICE_SIZE,
             bDescriptorType: USB_DT_DEVICE,
-            idVendor: UVC_VENDOR_ID,
-            idProduct: UVC_PRODUCT_ID,
+            idVendor: USB_VENDOR_ID_STRATOVIRT,
+            idProduct: USB_PRODUCT_ID_UVC,
             bcdDevice: 0,
             iManufacturer: UsbCameraStringIDs::Manufacture as u8,
             iProduct: UsbCameraStringIDs::Product as u8,
@@ -503,12 +502,12 @@ impl VideoStreamingControl {
 }
 
 impl UsbCamera {
-    pub fn new(config: UsbCameraConfig, cameradev: CameraDevConfig) -> Result<Self> {
-        let camera = create_cam_backend(config.clone(), cameradev)?;
+    pub fn new(config: UsbCameraConfig, cameradev: CameraDevConfig, tokenid: u64) -> Result<Self> {
+        let camera = create_cam_backend(config.clone(), cameradev, tokenid)?;
         Ok(Self {
             base: UsbDeviceBase::new(config.id, USB_CAMERA_BUFFER_LEN),
             vs_control: VideoStreamingControl::default(),
-            camera_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK)?),
+            camera_fd: Arc::new(create_new_eventfd()?),
             camera_backend: camera,
             packet_list: Arc::new(Mutex::new(LinkedList::new())),
             payload: Arc::new(Mutex::new(UvcPayload::new())),
@@ -516,6 +515,7 @@ impl UsbCamera {
             broken: Arc::new(AtomicBool::new(false)),
             iothread: config.iothread,
             delete_evts: Vec::new(),
+            notifier_id: 0,
         })
     }
 
@@ -752,13 +752,7 @@ impl UsbCamera {
 }
 
 impl UsbDevice for UsbCamera {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         let fmt_list = self.camera_backend.lock().unwrap().list_format()?;
@@ -774,14 +768,26 @@ impl UsbDevice for UsbCamera {
         self.register_cb();
 
         let camera = Arc::new(Mutex::new(self));
+        let cloned_camera = camera.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            let locked_cam = cloned_camera.lock().unwrap();
+            locked_cam.camera_backend.lock().unwrap().pause(paused);
+        });
+        camera.lock().unwrap().notifier_id = register_vm_pause_notifier(pause_notify);
+
         Ok(camera)
     }
 
     fn unrealize(&mut self) -> Result<()> {
         info!("Camera {} unrealize", self.device_id());
+        self.unregister_camera_fd()?;
         self.camera_backend.lock().unwrap().reset();
+        unregister_vm_pause_notifier(self.notifier_id);
+        self.notifier_id = 0;
         Ok(())
     }
+
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
 
     fn reset(&mut self) {
         info!("Camera {} device reset", self.device_id());
@@ -809,7 +815,7 @@ impl UsbDevice for UsbCamera {
                 }
             }
             Err(e) => {
-                warn!("Camera descriptor error {:?}", e);
+                warn!("Received incorrect USB Camera descriptor message: {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
@@ -851,10 +857,6 @@ impl UsbDevice for UsbCamera {
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         None
     }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
-    }
 }
 
 /// UVC payload
@@ -884,7 +886,12 @@ impl UvcPayload {
         let mut frame_data_size = iov_size;
         let header_len = self.header.len();
         // Within the scope of the frame.
-        if self.frame_offset + frame_data_size as usize >= current_frame_size {
+        if self
+            .frame_offset
+            .checked_add(frame_data_size as usize)
+            .with_context(|| "get_frame_data_size: invalid frame data")?
+            >= current_frame_size
+        {
             if self.frame_offset > current_frame_size {
                 bail!(
                     "Invalid frame offset {} {}",
@@ -895,7 +902,12 @@ impl UvcPayload {
             frame_data_size = (current_frame_size - self.frame_offset) as u64;
         }
         // Within the scope of the payload.
-        if self.payload_offset + frame_data_size as usize >= MAX_PAYLOAD as usize {
+        if self
+            .payload_offset
+            .checked_add(frame_data_size as usize)
+            .with_context(|| "get_frame_data_size: invalid payload data")?
+            >= MAX_PAYLOAD as usize
+        {
             if self.payload_offset > MAX_PAYLOAD as usize {
                 bail!(
                     "Invalid payload offset {} {}",
@@ -903,10 +915,15 @@ impl UvcPayload {
                     MAX_PAYLOAD
                 );
             }
-            frame_data_size = MAX_PAYLOAD as u64 - self.payload_offset as u64;
+            frame_data_size = u64::from(MAX_PAYLOAD) - self.payload_offset as u64;
         }
         // payload start, reserve the header.
-        if self.payload_offset == 0 && frame_data_size + header_len as u64 > iov_size {
+        if self.payload_offset == 0
+            && frame_data_size
+                .checked_add(header_len as u64)
+                .with_context(|| "get_frame_data_size: invalid header_len")?
+                > iov_size
+        {
             if iov_size <= header_len as u64 {
                 bail!("Invalid iov size {}", iov_size);
             }
@@ -996,7 +1013,7 @@ impl CameraIoHandler {
             // Payload start, add header.
             pkt.transfer_packet(&mut locked_payload.header, header_len);
             locked_payload.payload_offset += header_len;
-            iovecs = iov_discard_front_direct(&mut pkt.iovecs, pkt.actual_length as u64)
+            iovecs = iov_discard_front_direct(&mut pkt.iovecs, u64::from(pkt.actual_length))
                 .with_context(|| format!("Invalid iov size {}", pkt_size))?;
         }
         let copied = locked_camera.get_frame(
@@ -1076,7 +1093,7 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
         body.push(Arc::new(UsbDescOther { data }));
     }
 
-    header_struct.wTotalLength = header_struct.bLength as u16
+    header_struct.wTotalLength = u16::from(header_struct.bLength)
         + body.clone().iter().fold(0, |len, x| len + x.data.len()) as u16;
 
     let mut vec = header_struct.as_bytes().to_vec();
@@ -1090,7 +1107,10 @@ fn gen_fmt_desc(fmt_list: Vec<CameraFormatList>) -> Result<Vec<Arc<UsbDescOther>
 
 fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
     VsDescInputHeader {
-        bLength: 0xd + fmt_num,
+        bLength: 0xd_u8.checked_add(fmt_num).unwrap_or_else(|| {
+            error!("gen_intface_header_desc: too large fmt num");
+            u8::MAX
+        }),
         bDescriptorType: CS_INTERFACE,
         bDescriptorSubtype: VS_INPUT_HEADER,
         bNumFormats: fmt_num,
@@ -1107,8 +1127,8 @@ fn gen_intface_header_desc(fmt_num: u8) -> VsDescInputHeader {
 
 fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
     let bits_per_pixel = match fmt.format {
-        FmtType::Yuy2 | FmtType::Rgb565 => 0x10,
-        FmtType::Nv12 => 0xc,
+        FmtType::Yuy2 | FmtType::Rgb565 => 0x10_u8,
+        FmtType::Nv12 => 0xc_u8,
         _ => 0,
     };
     let header = match fmt.format {

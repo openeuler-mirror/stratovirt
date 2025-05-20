@@ -10,44 +10,33 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    ConfigError, {CmdParser, VmConfig},
-};
+use crate::config::{str_slip_to_clap, valid_id, ConfigError, VmConfig};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct SaslAuthObjConfig {
-    /// Object Id.
+    #[arg(long, value_parser = ["authz-simple"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
     pub id: String,
     /// Authentication User Name.
+    #[arg(long, default_value = "")]
     pub identity: String,
 }
 
 impl VmConfig {
     pub fn add_saslauth(&mut self, saslauth_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("authz-simple");
-        cmd_parser.push("").push("id").push("identity");
-        cmd_parser.parse(saslauth_config)?;
-
-        let mut saslauth = SaslAuthObjConfig {
-            id: cmd_parser.get_value::<String>("id")?.with_context(|| {
-                ConfigError::FieldIsMissing("id".to_string(), "vnc sasl_auth".to_string())
-            })?,
-            ..Default::default()
-        };
-
-        if let Some(identity) = cmd_parser.get_value::<String>("identity")? {
-            saslauth.identity = identity;
-        }
-
+        let saslauth =
+            SaslAuthObjConfig::try_parse_from(str_slip_to_clap(saslauth_config, true, false))?;
         let id = saslauth.id.clone();
-        if self.object.sasl_object.get(&id).is_none() {
-            self.object.sasl_object.insert(id, saslauth);
-        } else {
+        if self.object.sasl_object.contains_key(&id) {
             return Err(anyhow!(ConfigError::IdRepeat("saslauth".to_string(), id)));
         }
+        self.object.sasl_object.insert(id, saslauth);
 
         Ok(())
     }
@@ -73,7 +62,7 @@ mod tests {
         assert!(vm_config.add_object("authz-simple,id=authz0").is_ok());
         assert!(vm_config.object.sasl_object.get(&id).is_some());
         if let Some(obj_cfg) = vm_config.object.sasl_object.get(&id) {
-            assert!(obj_cfg.identity == "".to_string());
+            assert!(obj_cfg.identity == *"");
         }
     }
 }

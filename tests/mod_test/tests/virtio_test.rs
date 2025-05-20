@@ -78,17 +78,12 @@ fn send_one_request(
     alloc: Rc<RefCell<GuestAllocator>>,
     vq: Rc<RefCell<TestVirtQueue>>,
 ) {
-    let (free_head, req_addr) = add_request(
-        test_state.clone(),
-        alloc.clone(),
-        vq.clone(),
-        VIRTIO_BLK_T_OUT,
-        0,
-    );
+    let (free_head, req_addr) =
+        add_request(test_state.clone(), alloc, vq.clone(), VIRTIO_BLK_T_OUT, 0);
     blk.borrow().virtqueue_notify(vq.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        vq.clone(),
+        vq,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -128,7 +123,6 @@ fn init_device_step(
                     vqs = blk
                         .borrow_mut()
                         .init_virtqueue(test_state.clone(), alloc.clone(), 1);
-                    ()
                 }
                 8 => {
                     blk.borrow().set_driver_ok();
@@ -140,7 +134,7 @@ fn init_device_step(
 
         // Try to send write and read request to StratoVirt, ignore
         // the interrupt from device.
-        if vqs.len() > 0 {
+        if !vqs.is_empty() {
             let (_, _) = add_request(
                 test_state.clone(),
                 alloc.clone(),
@@ -171,16 +165,14 @@ fn check_req_result(
     addr: u64,
     timeout_us: u64,
 ) {
-    let status = blk
-        .borrow()
-        .req_result(test_state.clone(), addr, timeout_us);
+    let status = blk.borrow().req_result(test_state, addr, timeout_us);
     assert!(!blk.borrow().queue_was_notified(vq));
     assert_eq!(status, VIRTIO_BLK_S_OK);
 }
 
 fn check_queue(blk: Rc<RefCell<TestVirtioPciDev>>, desc: u64, avail: u64, used: u64) {
     let bar = blk.borrow().bar;
-    let common_base = blk.borrow().common_base as u64;
+    let common_base = u64::from(blk.borrow().common_base);
     let reqs = [
         (offset_of!(VirtioPciCommonCfg, queue_desc_lo), desc),
         (offset_of!(VirtioPciCommonCfg, queue_desc_hi), desc >> 32),
@@ -193,7 +185,7 @@ fn check_queue(blk: Rc<RefCell<TestVirtioPciDev>>, desc: u64, avail: u64, used: 
         let addr = blk
             .borrow()
             .pci_dev
-            .io_readl(bar, common_base as u64 + offset as u64);
+            .io_readl(bar, common_base + offset as u64);
         assert_eq!(addr, value as u32);
     }
 }
@@ -289,13 +281,7 @@ fn do_event_idx_with_flag(flag: u16) {
         DEFAULT_IO_REQS * 2 - 1,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Feature Test.
@@ -333,13 +319,7 @@ fn virtio_feature_none() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Feature Test.
@@ -415,13 +395,7 @@ fn virtio_feature_vertion_1() {
         DEFAULT_IO_REQS,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Driver just enable VIRTIO_F_VERSION_1|VIRTIO_RING_F_INDIRECT_DESC feature,
@@ -452,14 +426,13 @@ fn virtio_feature_indirect() {
         free_head = vqs[0]
             .borrow_mut()
             .add(test_state.clone(), req_addr, 8, false);
-        let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+        let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
         test_state
             .borrow()
-            .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-        test_state.borrow().writew(
-            vqs[0].borrow().desc + offset as u64 + 2,
-            free_head as u16 + 1,
-        );
+            .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+        test_state
+            .borrow()
+            .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
         let mut indirect_req = TestVringIndirectDesc::new();
         indirect_req.setup(alloc.clone(), test_state.clone(), 2);
         indirect_req.add_desc(test_state.clone(), req_addr + 8, 520, false);
@@ -485,20 +458,19 @@ fn virtio_feature_indirect() {
     free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, 8, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
     indirect_req.add_desc(test_state.clone(), req_addr + 8, 8, false);
     indirect_req.add_desc(
         test_state.clone(),
-        req_addr + REQ_ADDR_LEN as u64,
+        req_addr + u64::from(REQ_ADDR_LEN),
         513,
         true,
     );
@@ -523,19 +495,13 @@ fn virtio_feature_indirect() {
         String::from_utf8(
             test_state
                 .borrow()
-                .memread(req_addr + REQ_ADDR_LEN as u64, 4)
+                .memread(req_addr + u64::from(REQ_ADDR_LEN), 4)
         )
         .unwrap(),
         "TEST"
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Driver just enable VIRTIO_F_VERSION_1|VIRTIO_RING_F_EVENT_IDX feature,
@@ -595,20 +561,19 @@ fn virtio_feature_indirect_and_event_idx() {
     let free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, REQ_ADDR_LEN, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     // 2 desc elems in indirect desc table.
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
     indirect_req.add_desc(
         test_state.clone(),
-        req_addr + REQ_ADDR_LEN as u64,
+        req_addr + u64::from(REQ_ADDR_LEN),
         REQ_DATA_LEN,
         false,
     );
@@ -678,13 +643,7 @@ fn virtio_feature_indirect_and_event_idx() {
         DEFAULT_IO_REQS * 2 - 1,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal status in device initialization.
@@ -763,13 +722,7 @@ fn virtio_init_device_abnormal_status() {
     check_stratovirt_status(test_state.clone());
 
     // 4. Destroy device.
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal feature in device initialization.
@@ -874,12 +827,12 @@ fn virtio_init_device_abnormal_features() {
 fn virtio_init_device_abnormal_vring_info() {
     // (err_type, value, ack, device_status)
     let reqs = [
-        (0, u16::MAX as u64, 0, 0),
+        (0, u64::from(u16::MAX), 0, 0),
         (0, 2, 0, 0),
         (1, 0_u64, 0xff, 0),
         (1, 255, 0xff, 0),
         (1, 1 << 15, 0xff, 0),
-        (1, u16::MAX as u64, 0xff, 0),
+        (1, u64::from(u16::MAX), 0xff, 0),
         (2, 0, 0xff, 0),
         (3, 0, 0xff, 0),
         (4, 0, 0xff, 0),
@@ -921,7 +874,7 @@ fn virtio_init_device_abnormal_vring_info() {
             blk.borrow().queue_select(value as u16);
         }
 
-        let queue_size = blk.borrow().get_queue_size() as u32;
+        let queue_size = u32::from(blk.borrow().get_queue_size());
 
         // Set invalid queue size.
         if err_type == 1 {
@@ -937,18 +890,19 @@ fn virtio_init_device_abnormal_vring_info() {
         vq.borrow_mut().indirect = (features & (1 << VIRTIO_RING_F_INDIRECT_DESC)) != 0;
         vq.borrow_mut().event = (features & (1 << VIRTIO_RING_F_EVENT_IDX)) != 0;
 
-        let addr = alloc
-            .borrow_mut()
-            .alloc(get_vring_size(queue_size, VIRTIO_PCI_VRING_ALIGN) as u64);
+        let addr = alloc.borrow_mut().alloc(u64::from(get_vring_size(
+            queue_size,
+            VIRTIO_PCI_VRING_ALIGN,
+        )));
 
         vq.borrow_mut().desc = addr;
-        let avail = addr + (queue_size * size_of::<VringDesc>() as u32) as u64 + 16;
+        let avail = addr + u64::from(queue_size * size_of::<VringDesc>() as u32) + 16;
         vq.borrow_mut().avail = avail;
         let used = (avail
-            + (size_of::<u16>() as u32 * (3 + queue_size)) as u64
-            + VIRTIO_PCI_VRING_ALIGN as u64
+            + u64::from(size_of::<u16>() as u32 * (3 + queue_size))
+            + u64::from(VIRTIO_PCI_VRING_ALIGN)
             - 1)
-            & !(VIRTIO_PCI_VRING_ALIGN as u64 - 1) + 16;
+            & (!(u64::from(VIRTIO_PCI_VRING_ALIGN) - 1) + 16);
         vq.borrow_mut().used = used + 16;
 
         match err_type {
@@ -1015,32 +969,32 @@ fn virtio_init_device_abnormal_vring_info() {
 
         let notify_off = blk.borrow().pci_dev.io_readw(
             blk.borrow().bar,
-            blk.borrow().common_base as u64
+            u64::from(blk.borrow().common_base)
                 + offset_of!(VirtioPciCommonCfg, queue_notify_off) as u64,
         );
-        vq.borrow_mut().queue_notify_off = blk.borrow().notify_base as u64
-            + notify_off as u64 * blk.borrow().notify_off_multiplier as u64;
+        vq.borrow_mut().queue_notify_off = u64::from(blk.borrow().notify_base)
+            + u64::from(notify_off) * u64::from(blk.borrow().notify_off_multiplier);
 
         let offset = offset_of!(VirtioPciCommonCfg, queue_enable) as u64;
         // TEST enable vq with 0
         if err_type == 9 {
             blk.borrow().pci_dev.io_writew(
                 blk.borrow().bar,
-                blk.borrow().common_base as u64 + offset,
+                u64::from(blk.borrow().common_base) + offset,
                 0,
             );
         } else {
             blk.borrow().pci_dev.io_writew(
                 blk.borrow().bar,
-                blk.borrow().common_base as u64
+                u64::from(blk.borrow().common_base)
                     + offset_of!(VirtioPciCommonCfg, queue_enable) as u64,
                 1,
             );
             if err_type == 10 {
-                let status = blk
-                    .borrow()
-                    .pci_dev
-                    .io_readw(blk.borrow().bar, blk.borrow().common_base as u64 + offset);
+                let status = blk.borrow().pci_dev.io_readw(
+                    blk.borrow().bar,
+                    u64::from(blk.borrow().common_base) + offset,
+                );
                 assert_eq!(status, 1);
             }
         }
@@ -1136,13 +1090,7 @@ fn virtio_init_device_out_of_order_1() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Init device out of order test 2.
@@ -1195,13 +1143,7 @@ fn virtio_init_device_out_of_order_2() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Init device out of order test 3.
@@ -1256,13 +1198,7 @@ fn virtio_init_device_out_of_order_3() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Repeat the initialization operation.
@@ -1326,13 +1262,7 @@ fn virtio_init_device_repeat() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal desc addr in IO request.
@@ -1481,11 +1411,11 @@ fn virtio_io_abnormal_desc_len() {
             if length == 16 {
                 test_state.borrow().writel(
                     indirect_desc + offset_of!(VringDesc, len) as u64,
-                    u16::MAX as u32 * (VRING_DESC_SIZE as u32 + 1),
+                    u32::from(u16::MAX) * (VRING_DESC_SIZE as u32 + 1),
                 );
                 test_state.borrow().writel(
                     indirect_desc + offset_of!(VringDesc, flags) as u64,
-                    (VRING_DESC_F_INDIRECT | VRING_DESC_F_NEXT) as u32,
+                    u32::from(VRING_DESC_F_INDIRECT | VRING_DESC_F_NEXT),
                 );
             }
         }
@@ -1595,19 +1525,18 @@ fn virtio_io_abnormal_desc_flags_2() {
     let free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, REQ_ADDR_LEN, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), 2);
     indirect_req.add_desc(
         test_state.clone(),
-        req_addr + REQ_ADDR_LEN as u64,
+        req_addr + u64::from(REQ_ADDR_LEN),
         REQ_DATA_LEN,
         false,
     );
@@ -1626,13 +1555,7 @@ fn virtio_io_abnormal_desc_flags_2() {
     assert!(blk.borrow().get_status() & VIRTIO_CONFIG_S_NEEDS_RESET > 0);
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting abnormal desc flag in IO request, testcase 3.
@@ -1670,14 +1593,13 @@ fn virtio_io_abnormal_desc_flags_3() {
             .borrow_mut()
             .add(test_state.clone(), req_addr, 8, false);
 
-        let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+        let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
         test_state
             .borrow()
-            .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-        test_state.borrow().writew(
-            vqs[0].borrow().desc + offset as u64 + 2,
-            free_head as u16 + 1,
-        );
+            .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+        test_state
+            .borrow()
+            .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
         let mut indirect_req = TestVringIndirectDesc::new();
         indirect_req.setup(alloc.clone(), test_state.clone(), 2);
         indirect_req.add_desc(test_state.clone(), req_addr + 8, 520, false);
@@ -1687,7 +1609,7 @@ fn virtio_io_abnormal_desc_flags_3() {
             .add_indirect(test_state.clone(), indirect_req, true);
 
         // Add VRING_DESC_F_WRITE or VRING_DESC_F_NEXT to desc[0]->flags;
-        let addr = vqs[0].borrow().desc + 16_u64 * (free_head + 1) as u64 + 12;
+        let addr = vqs[0].borrow().desc + 16_u64 * u64::from(free_head + 1) + 12;
         let flags = test_state.borrow().readw(addr) | flag;
         test_state.borrow().writew(addr, flags);
         blk.borrow().virtqueue_notify(vqs[0].clone());
@@ -1834,13 +1756,7 @@ fn virtio_io_abnormal_desc_elem_place() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting (queue_size + 1) indirect desc elems in IO request.
@@ -1871,14 +1787,13 @@ fn virtio_io_abnormal_indirect_desc_elem_num() {
     let free_head = vqs[0]
         .borrow_mut()
         .add(test_state.clone(), req_addr, REQ_ADDR_LEN, false);
-    let offset = free_head as u64 * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
+    let offset = u64::from(free_head) * VRING_DESC_SIZE + offset_of!(VringDesc, flags) as u64;
     test_state
         .borrow()
-        .writew(vqs[0].borrow().desc + offset as u64, VRING_DESC_F_NEXT);
-    test_state.borrow().writew(
-        vqs[0].borrow().desc + offset as u64 + 2,
-        free_head as u16 + 1,
-    );
+        .writew(vqs[0].borrow().desc + offset, VRING_DESC_F_NEXT);
+    test_state
+        .borrow()
+        .writew(vqs[0].borrow().desc + offset + 2, free_head as u16 + 1);
     let mut indirect_req = TestVringIndirectDesc::new();
     indirect_req.setup(alloc.clone(), test_state.clone(), queue_size as u16 + 1);
     for i in 0..queue_size {
@@ -1910,13 +1825,7 @@ fn virtio_io_abnormal_indirect_desc_elem_num() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Setting invalid flags to avail->flag in IO request.
@@ -2186,13 +2095,7 @@ fn virtio_io_abnormal_used_idx() {
         true,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Virtio test step out of order, testcase 1.
@@ -2256,13 +2159,7 @@ fn virtio_test_out_of_order_1() {
 
     check_stratovirt_status(test_state.clone());
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Virtio test step out of order, testcase 2.
@@ -2284,13 +2181,7 @@ fn virtio_test_out_of_order_2() {
         1,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 
     let (blk, test_state, alloc, image_path) = set_up(&ImageType::Raw);
     let vqs = blk.borrow_mut().init_device(
@@ -2315,13 +2206,7 @@ fn virtio_test_out_of_order_2() {
         0,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }
 
 /// Virtio test step repeat.
@@ -2386,11 +2271,5 @@ fn virtio_test_repeat() {
 
     blk.borrow_mut().destroy_device(alloc.clone(), vqs.clone());
     blk.borrow_mut().destroy_device(alloc.clone(), vqs.clone());
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        vqs.clone(),
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, vqs, image_path);
 }

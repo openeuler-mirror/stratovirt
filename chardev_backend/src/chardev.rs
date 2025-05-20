@@ -10,8 +10,9 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::VecDeque;
 use std::fs::{read_link, File, OpenOptions};
-use std::io::{Stdin, Stdout};
+use std::io::{ErrorKind, Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -24,11 +25,12 @@ use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::pty::openpty;
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg, Termios};
 use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{PathInfo, PTY_PATH};
 use machine_manager::{
-    config::{ChardevConfig, ChardevType},
+    config::{ChardevConfig, ChardevType, SocketType},
     temp_cleaner::TempCleaner,
 };
 use util::file::clear_file;
@@ -38,6 +40,8 @@ use util::loop_context::{
 use util::set_termi_raw_mode;
 use util::socket::{SocketListener, SocketStream};
 use util::unix::limit_permission;
+
+const BUF_QUEUE_SIZE: usize = 128;
 
 /// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {
@@ -85,13 +89,17 @@ pub struct Chardev {
     /// Scheduled DPC to unpause input stream.
     /// Unpause must be done inside event-loop
     unpause_timer: Option<u64>,
+    /// output listener to notify when output stream fd can be written
+    output_listener_fd: Option<Arc<EventFd>>,
+    /// output buffer queue
+    outbuf: VecDeque<Vec<u8>>,
 }
 
 impl Chardev {
     pub fn new(chardev_cfg: ChardevConfig) -> Self {
         Chardev {
-            id: chardev_cfg.id,
-            backend: chardev_cfg.backend,
+            id: chardev_cfg.id(),
+            backend: chardev_cfg.classtype,
             listener: None,
             input: None,
             output: None,
@@ -100,17 +108,19 @@ impl Chardev {
             dev: None,
             wait_port: false,
             unpause_timer: None,
+            output_listener_fd: None,
+            outbuf: VecDeque::with_capacity(BUF_QUEUE_SIZE),
         }
     }
 
     pub fn realize(&mut self) -> Result<()> {
         match &self.backend {
-            ChardevType::Stdio => {
+            ChardevType::Stdio { .. } => {
                 set_termi_raw_mode().with_context(|| "Failed to set terminal to raw mode")?;
                 self.input = Some(Arc::new(Mutex::new(std::io::stdin())));
                 self.output = Some(Arc::new(Mutex::new(std::io::stdout())));
             }
-            ChardevType::Pty => {
+            ChardevType::Pty { .. } => {
                 let (master, path) =
                     set_pty_raw_mode().with_context(|| "Failed to set pty to raw mode")?;
                 info!("Pty path is: {:?}", path);
@@ -125,58 +135,43 @@ impl Chardev {
                 self.input = Some(master_arc.clone());
                 self.output = Some(master_arc);
             }
-            ChardevType::UnixSocket {
-                path,
-                server,
-                nowait,
-            } => {
+            ChardevType::Socket { server, nowait, .. } => {
                 if !*server || !*nowait {
                     bail!(
                         "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
                         &self.id
                     );
                 }
+                let socket_type = self.backend.socket_type()?;
+                if let SocketType::Tcp { host, port } = socket_type {
+                    let listener = SocketListener::bind_by_tcp(&host, port).with_context(|| {
+                        format!(
+                            "Failed to bind socket for chardev \'{}\', address: {}:{}",
+                            &self.id, host, port
+                        )
+                    })?;
+                    self.listener = Some(listener);
+                } else if let SocketType::Unix { path } = socket_type {
+                    clear_file(path.clone())?;
+                    let listener = SocketListener::bind_by_uds(&path).with_context(|| {
+                        format!(
+                            "Failed to bind socket for chardev \'{}\', path: {}",
+                            &self.id, path
+                        )
+                    })?;
+                    self.listener = Some(listener);
 
-                clear_file(path.clone())?;
-                let listener = SocketListener::bind_by_uds(path).with_context(|| {
-                    format!(
-                        "Failed to bind socket for chardev \'{}\', path: {}",
-                        &self.id, path
-                    )
-                })?;
-                self.listener = Some(listener);
-
-                // add file to temporary pool, so it could be cleaned when vm exit.
-                TempCleaner::add_path(path.clone());
-                limit_permission(path).with_context(|| {
-                    format!(
-                        "Failed to change file permission for chardev \'{}\', path: {}",
-                        &self.id, path
-                    )
-                })?;
-            }
-            ChardevType::TcpSocket {
-                host,
-                port,
-                server,
-                nowait,
-            } => {
-                if !*server || !*nowait {
-                    bail!(
-                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
-                        &self.id
-                    );
+                    // add file to temporary pool, so it could be cleaned when vm exit.
+                    TempCleaner::add_path(path.clone());
+                    limit_permission(&path).with_context(|| {
+                        format!(
+                            "Failed to change file permission for chardev \'{}\', path: {}",
+                            &self.id, path
+                        )
+                    })?;
                 }
-
-                let listener = SocketListener::bind_by_tcp(host, *port).with_context(|| {
-                    format!(
-                        "Failed to bind socket for chardev \'{}\', address: {}:{}",
-                        &self.id, host, port
-                    )
-                })?;
-                self.listener = Some(listener);
             }
-            ChardevType::File(path) => {
+            ChardevType::File { path, .. } => {
                 let file = Arc::new(Mutex::new(
                     OpenOptions::new()
                         .read(true)
@@ -237,7 +232,7 @@ impl Chardev {
         let unpause_fn = Box::new(move || {
             let res = EventLoop::update_event(
                 vec![EventNotifier::new(
-                    NotifierOperation::Modify,
+                    NotifierOperation::AddEvents,
                     input_fd,
                     None,
                     EventSet::IN | EventSet::HANG_UP,
@@ -261,6 +256,113 @@ impl Chardev {
             self.unpause_timer = None;
         }
     }
+
+    fn clear_outbuf(&mut self) {
+        self.outbuf.clear();
+    }
+
+    pub fn outbuf_is_full(&self) -> bool {
+        self.outbuf.len() == self.outbuf.capacity()
+    }
+
+    pub fn fill_outbuf(&mut self, buf: Vec<u8>, listener_fd: Option<Arc<EventFd>>) -> Result<()> {
+        match self.backend {
+            ChardevType::File { .. } | ChardevType::Pty { .. } | ChardevType::Stdio { .. } => {
+                if self.output.is_none() {
+                    bail!("chardev has no output");
+                }
+                return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
+            }
+            ChardevType::Socket { .. } => {
+                if self.output.is_none() {
+                    return Ok(());
+                }
+                if listener_fd.is_none() {
+                    return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
+                }
+            }
+        }
+
+        if self.outbuf_is_full() {
+            bail!("Failed to append buffer because output buffer queue is full");
+        }
+        self.outbuf.push_back(buf);
+        self.output_listener_fd = listener_fd;
+
+        let event_notifier = EventNotifier::new(
+            NotifierOperation::AddEvents,
+            self.stream_fd.unwrap(),
+            None,
+            EventSet::OUT,
+            Vec::new(),
+        );
+        EventLoop::update_event(vec![event_notifier], None)?;
+        Ok(())
+    }
+
+    fn consume_outbuf(&mut self) -> Result<()> {
+        if self.output.is_none() {
+            bail!("no output interface");
+        }
+        let output = self.output.as_ref().unwrap();
+        while !self.outbuf.is_empty() {
+            if write_buffer_async(output.clone(), self.outbuf.front_mut().unwrap())? {
+                break;
+            }
+            self.outbuf.pop_front();
+        }
+        Ok(())
+    }
+}
+
+fn write_buffer_sync(writer: Arc<Mutex<dyn CommunicatOutInterface>>, buf: Vec<u8>) -> Result<()> {
+    let len = buf.len();
+    let mut written = 0_usize;
+    let mut locked_writer = writer.lock().unwrap();
+
+    while written < len {
+        match locked_writer.write(&buf[written..len]) {
+            Ok(n) => written += n,
+            Err(e) => bail!("chardev failed to write file with error {:?}", e),
+        }
+    }
+    locked_writer
+        .flush()
+        .with_context(|| "chardev failed to flush")?;
+    Ok(())
+}
+
+// If write is blocked, return true. Otherwise return false.
+fn write_buffer_async(
+    writer: Arc<Mutex<dyn CommunicatOutInterface>>,
+    buf: &mut Vec<u8>,
+) -> Result<bool> {
+    let len = buf.len();
+    let mut locked_writer = writer.lock().unwrap();
+    let mut written = 0_usize;
+
+    while written < len {
+        match locked_writer.write(&buf[written..len]) {
+            Ok(0) => break,
+            Ok(n) => written += n,
+            Err(e) => {
+                let err_type = e.kind();
+                if err_type != ErrorKind::WouldBlock && err_type != ErrorKind::Interrupted {
+                    bail!("chardev failed to write data with error {:?}", e);
+                }
+                break;
+            }
+        }
+    }
+    locked_writer
+        .flush()
+        .with_context(|| "chardev failed to flush")?;
+
+    if written == len {
+        return Ok(false);
+    }
+    buf.drain(0..written);
+    Ok(true)
 }
 
 fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
@@ -453,10 +555,10 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
                     locked_receiver.set_paused();
 
                     return Some(vec![EventNotifier::new(
-                        NotifierOperation::Modify,
+                        NotifierOperation::DeleteEvents,
                         stream_fd,
                         None,
-                        EventSet::HANG_UP,
+                        EventSet::IN,
                         vec![],
                     )]);
                 }
@@ -486,12 +588,53 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             None
         });
 
+        let handling_chardev = cloned_chardev.clone();
+        let output_handler = Rc::new(move |event, fd| {
+            if event & EventSet::OUT != EventSet::OUT {
+                return None;
+            }
+
+            let mut locked_cdev = handling_chardev.lock().unwrap();
+            if let Err(e) = locked_cdev.consume_outbuf() {
+                error!("Failed to consume outbuf with error {:?}", e);
+                locked_cdev.clear_outbuf();
+                return Some(vec![EventNotifier::new(
+                    NotifierOperation::DeleteEvents,
+                    fd,
+                    None,
+                    EventSet::OUT,
+                    Vec::new(),
+                )]);
+            }
+
+            if locked_cdev.output_listener_fd.is_some() {
+                let fd = locked_cdev.output_listener_fd.as_ref().unwrap();
+                if let Err(e) = fd.write(1) {
+                    error!("Failed to write eventfd with error {:?}", e);
+                    return None;
+                }
+                locked_cdev.output_listener_fd = None;
+            }
+
+            if locked_cdev.outbuf.is_empty() {
+                Some(vec![EventNotifier::new(
+                    NotifierOperation::DeleteEvents,
+                    fd,
+                    None,
+                    EventSet::OUT,
+                    Vec::new(),
+                )])
+            } else {
+                None
+            }
+        });
+
         Some(vec![EventNotifier::new(
             NotifierOperation::AddShared,
             stream_fd,
             Some(listener_fd),
             EventSet::IN | EventSet::HANG_UP,
-            vec![input_handler],
+            vec![input_handler, output_handler],
         )])
     });
 
@@ -510,11 +653,10 @@ impl EventNotifierHelper for Chardev {
         let notifier = {
             let backend = chardev.lock().unwrap().backend.clone();
             match backend {
-                ChardevType::Stdio => get_terminal_notifier(chardev),
-                ChardevType::Pty => get_terminal_notifier(chardev),
-                ChardevType::UnixSocket { .. } => get_socket_notifier(chardev),
-                ChardevType::TcpSocket { .. } => get_socket_notifier(chardev),
-                ChardevType::File(_) => None,
+                ChardevType::Stdio { .. } => get_terminal_notifier(chardev),
+                ChardevType::Pty { .. } => get_terminal_notifier(chardev),
+                ChardevType::Socket { .. } => get_socket_notifier(chardev),
+                ChardevType::File { .. } => None,
             }
         };
         notifier.map_or(Vec::new(), |value| vec![value])

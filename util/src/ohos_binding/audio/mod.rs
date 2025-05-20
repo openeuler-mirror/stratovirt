@@ -10,17 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-mod sys;
+pub mod sys;
 
 use std::os::raw::c_void;
 use std::ptr;
+use std::sync::{Arc, RwLock};
 
 use log::error;
+use once_cell::sync::Lazy;
 
-use sys as capi;
+use super::hwf_adapter::{hwf_adapter_volume_api, volume::VolumeFuncTable};
+pub use sys as capi;
 
 const AUDIO_SAMPLE_RATE_44KHZ: u32 = 44100;
 const AUDIO_SAMPLE_RATE_48KHZ: u32 = 48000;
+const RENDER_CB_FREQUENCY: i32 = 50;
 
 macro_rules! call_capi {
     ( $f: ident ( $($x: expr),* ) ) => {
@@ -184,6 +188,14 @@ pub enum AudioProcessCb {
                 length: i32,
             ) -> i32,
         >,
+        Option<
+            extern "C" fn(
+                capturer: *mut capi::OhAudioCapturer,
+                userData: *mut c_void,
+                source_type: capi::OHAudioInterruptSourceType,
+                hint: capi::OHAudioInterruptHint,
+            ) -> i32,
+        >,
     ),
     RendererCb(
         Option<
@@ -194,9 +206,18 @@ pub enum AudioProcessCb {
                 length: i32,
             ) -> i32,
         >,
+        Option<
+            extern "C" fn(
+                capturer: *mut capi::OhAudioRenderer,
+                userData: *mut c_void,
+                source_type: capi::OHAudioInterruptSourceType,
+                hint: capi::OHAudioInterruptHint,
+            ) -> i32,
+        >,
     ),
 }
 
+#[derive(Debug)]
 pub struct AudioContext {
     stream_type: AudioStreamType,
     spec: AudioSpec,
@@ -253,10 +274,18 @@ impl AudioContext {
         ))
     }
 
+    pub fn set_frame_size(&self, size: i32) -> Result<(), OAErr> {
+        call_capi!(OH_AudioStreamBuilder_SetFrameSizeInCallback(
+            self.builder,
+            size
+        ))
+    }
+
     fn create_renderer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioRendererCallbacks::default();
-        if let AudioProcessCb::RendererCb(f) = cb {
-            cbs.oh_audio_renderer_on_write_data = f;
+        if let AudioProcessCb::RendererCb(data_cb, interrupt_cb) = cb {
+            cbs.oh_audio_renderer_on_write_data = data_cb;
+            cbs.oh_audio_renderer_on_interrupt_event = interrupt_cb;
         }
         call_capi!(OH_AudioStreamBuilder_SetRendererCallback(
             self.builder,
@@ -271,13 +300,18 @@ impl AudioContext {
 
     fn create_capturer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioCapturerCallbacks::default();
-        if let AudioProcessCb::CapturerCb(v) = cb {
-            cbs.oh_audio_capturer_on_read_data = v;
+        if let AudioProcessCb::CapturerCb(data_cb, interrupt_cb) = cb {
+            cbs.oh_audio_capturer_on_read_data = data_cb;
+            cbs.oh_audio_capturer_on_interrupt_event = interrupt_cb;
         }
         call_capi!(OH_AudioStreamBuilder_SetCapturerCallback(
             self.builder,
             cbs,
             self.userdata
+        ))?;
+        call_capi!(OH_AudioStreamBuilder_SetCapturerInfo(
+            self.builder,
+            capi::OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATION
         ))?;
         call_capi!(OH_AudioStreamBuilder_GenerateCapturer(
             self.builder,
@@ -328,6 +362,9 @@ impl AudioContext {
         self.set_fmt(size, rate, channels)?;
         self.set_sample_rate()?;
         self.set_sample_format()?;
+        if capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_RERNDERER == self.stream_type.into() {
+            self.set_frame_size(rate as i32 / RENDER_CB_FREQUENCY)?;
+        }
         self.create_processor(cb)
     }
 
@@ -363,6 +400,94 @@ impl AudioContext {
             .set(size, rate, channels)
             .map_or(false, |_| (self.spec == other))
     }
+}
+
+// From here, the code is related to ohaudio volume.
+static OH_VOLUME_ADAPTER: Lazy<RwLock<OhVolume>> = Lazy::new(|| RwLock::new(OhVolume::new()));
+
+pub trait GuestVolumeNotifier: Send + Sync {
+    fn notify(&self, vol: u32);
+}
+
+struct OhVolume {
+    capi: Arc<VolumeFuncTable>,
+    notifiers: Vec<Arc<dyn GuestVolumeNotifier>>,
+}
+
+impl OhVolume {
+    fn new() -> Self {
+        let capi = hwf_adapter_volume_api();
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
+        Self {
+            capi,
+            notifiers: Vec::new(),
+        }
+    }
+
+    fn get_ohos_volume(&self) -> u32 {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_volume)() as u32 }
+    }
+
+    fn get_max_volume(&self) -> u32 {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_max_volume)() as u32 }
+    }
+
+    fn get_min_volume(&self) -> u32 {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_min_volume)() as u32 }
+    }
+
+    fn set_ohos_volume(&self, volume: i32) {
+        // SAFETY: We call related API sequentially for specified ctx.
+        unsafe { (self.capi.set_volume)(volume) };
+    }
+
+    fn notify_volume_change(&self, volume: i32) {
+        for notifier in self.notifiers.iter() {
+            notifier.notify(volume as u32);
+        }
+    }
+
+    fn register_guest_notifier(&mut self, notifier: Arc<dyn GuestVolumeNotifier>) {
+        self.notifiers.push(notifier);
+    }
+}
+
+// SAFETY: use RW lock to ensure the security of resources.
+unsafe extern "C" fn on_ohos_volume_changed(volume: i32) {
+    OH_VOLUME_ADAPTER
+        .read()
+        .unwrap()
+        .notify_volume_change(volume);
+}
+
+pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) {
+    OH_VOLUME_ADAPTER
+        .write()
+        .unwrap()
+        .register_guest_notifier(notifier);
+}
+
+pub fn get_ohos_volume_max() -> u32 {
+    OH_VOLUME_ADAPTER.read().unwrap().get_max_volume()
+}
+
+pub fn get_ohos_volume_min() -> u32 {
+    OH_VOLUME_ADAPTER.read().unwrap().get_min_volume()
+}
+
+pub fn get_ohos_volume() -> u32 {
+    OH_VOLUME_ADAPTER.read().unwrap().get_ohos_volume()
+}
+
+pub fn set_ohos_volume(vol: u32) {
+    OH_VOLUME_ADAPTER
+        .read()
+        .unwrap()
+        .set_ohos_volume(vol as i32);
 }
 
 #[cfg(test)]

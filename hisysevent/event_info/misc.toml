@@ -1,0 +1,5 @@
+[[events]]
+name = "STRATOVIRT_PVPANIC"
+event_type = "Fault"
+args = "event: String"
+enabled = true

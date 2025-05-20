@@ -10,64 +10,36 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::path::Path;
-
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
+use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    ConfigError, {CmdParser, VmConfig},
-};
+use crate::config::{str_slip_to_clap, valid_dir, valid_id, ConfigError, VmConfig};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct TlsCredObjConfig {
+    #[arg(long)]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
     pub id: String,
+    #[arg(long, value_parser = valid_dir)]
     pub dir: String,
-    pub cred_type: String,
+    #[arg(long)]
     pub endpoint: Option<String>,
+    #[arg(long, alias = "verify-peer", default_value= "false", action = ArgAction::Append)]
     pub verifypeer: bool,
 }
 
 impl VmConfig {
     pub fn add_tlscred(&mut self, tlscred_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("tls-creds-x509");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("dir")
-            .push("endpoint")
-            .push("verify-peer");
-        cmd_parser.parse(tlscred_config)?;
-
-        let mut tlscred = TlsCredObjConfig {
-            id: cmd_parser.get_value::<String>("id")?.with_context(|| {
-                ConfigError::FieldIsMissing("id".to_string(), "vnc tls_creds".to_string())
-            })?,
-            ..Default::default()
-        };
-
-        if let Some(dir) = cmd_parser.get_value::<String>("dir")? {
-            if Path::new(&dir).is_dir() {
-                tlscred.dir = dir;
-            } else {
-                return Err(anyhow!(ConfigError::DirNotExist(dir)));
-            }
-        }
-        if let Some(endpoint) = cmd_parser.get_value::<String>("endpoint")? {
-            tlscred.endpoint = Some(endpoint);
-        }
-        if let Some(verifypeer) = cmd_parser.get_value::<String>("verify-peer")? {
-            tlscred.verifypeer = verifypeer == *"true";
-        }
-        tlscred.cred_type = "x509".to_string();
-
+        let tlscred =
+            TlsCredObjConfig::try_parse_from(str_slip_to_clap(tlscred_config, true, false))?;
         let id = tlscred.id.clone();
-        if self.object.tls_object.get(&id).is_none() {
-            self.object.tls_object.insert(id, tlscred);
-        } else {
+        if self.object.tls_object.contains_key(&id) {
             return Err(anyhow!(ConfigError::IdRepeat("tlscred".to_string(), id)));
         }
-
+        self.object.tls_object.insert(id, tlscred);
         Ok(())
     }
 }
@@ -86,7 +58,7 @@ mod tests {
         if !dir.is_dir() {
             fs::create_dir(dir.clone()).unwrap();
         }
-        assert_eq!(dir.is_dir(), true);
+        assert!(dir.is_dir());
 
         // Certificate directory is exist.
         let tls_config: String = format!(
@@ -100,12 +72,12 @@ mod tests {
         if let Some(tls_cred_cfg) = vm_config.object.tls_object.get(&id) {
             assert_eq!(tls_cred_cfg.dir, dir.to_str().unwrap());
             assert_eq!(tls_cred_cfg.endpoint, Some("server".to_string()));
-            assert_eq!(tls_cred_cfg.verifypeer, false);
+            assert!(!tls_cred_cfg.verifypeer);
         }
 
         // Delete file.
         fs::remove_dir(dir.clone()).unwrap();
-        assert_eq!(dir.is_dir(), false);
+        assert!(!dir.is_dir());
         // Certificate directory does not exist.
         let mut vm_config = VmConfig::default();
         assert!(vm_config.add_object(tls_config.as_str()).is_err());

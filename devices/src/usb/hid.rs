@@ -264,7 +264,7 @@ impl Hid {
         self.num -= 1;
         let keycode = self.keyboard.keycodes[slot as usize];
         let key = keycode & 0x7f;
-        let index = key | ((self.keyboard.modifiers as u32 & (1 << 8)) >> 1);
+        let index = key | ((u32::from(self.keyboard.modifiers) & (1 << 8)) >> 1);
         let hid_code = HID_CODE[index as usize];
         self.keyboard.modifiers &= !(1 << 8);
         trace::usb_convert_to_hid_code(&hid_code, &index, &key);

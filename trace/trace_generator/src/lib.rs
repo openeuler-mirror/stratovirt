@@ -56,24 +56,24 @@ fn get_trace_desc() -> TraceConf {
 #[proc_macro]
 pub fn add_trace_state_to(input: TokenStream) -> TokenStream {
     let trace_conf = get_trace_desc();
-    let mut state_name = Vec::new();
+    let mut state = Vec::new();
     for desc in trace_conf.events.unwrap_or_default() {
         if desc.enabled {
-            state_name.push(desc.name.trim().to_string());
+            state.push((desc.name.trim().to_string(), "event"));
         }
     }
     for desc in trace_conf.scopes.unwrap_or_default() {
         if desc.enabled {
-            state_name.push(desc.name.trim().to_string());
+            state.push((desc.name.trim().to_string(), "scope"));
         }
     }
 
     let set = parse_macro_input!(input as Ident);
-    let init_code = state_name.iter().map(|name| {
+    let init_code = state.iter().map(|(name, type_str)| {
         let get_func = parse_str::<Ident>(format!("get_{}_state", name).as_str()).unwrap();
         let set_func = parse_str::<Ident>(format!("set_{}_state", name).as_str()).unwrap();
         quote!(
-            #set.add_trace_state(TraceState::new(#name.to_string(), #get_func, #set_func));
+            #set.add_trace_state(TraceState::new(#name.to_string(), #type_str, #get_func, #set_func));
         )
     });
     TokenStream::from(quote! { #( #init_code )* })
@@ -216,6 +216,11 @@ pub fn gen_trace_scope_func(_input: TokenStream) -> TokenStream {
             }
         };
 
+        let func_decl = match desc.enabled {
+            true => quote!(pub fn #func_name(asyn: bool, #func_args) -> trace_scope::Scope),
+            false => quote!(pub fn #func_name(asyn: bool, #func_args)),
+        };
+
         let message_args = match desc.args.is_empty() {
             true => quote!(),
             false => {
@@ -258,7 +263,7 @@ pub fn gen_trace_scope_func(_input: TokenStream) -> TokenStream {
                 all(target_env = "ohos", feature = "trace_to_hitrace")
             ))]
             #[inline(always)]
-            pub fn #func_name(asyn: bool, #func_args) -> trace_scope::Scope {
+            #func_decl {
                 #func_body
             }
 

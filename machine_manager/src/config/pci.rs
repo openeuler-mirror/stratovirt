@@ -13,9 +13,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::error::ConfigError;
-use super::{CmdParser, ConfigCheck, UnsignedInteger};
-use crate::config::{check_arg_too_long, ExBool};
+use super::get_value_of_parameter;
 use util::num_ops::str_to_num;
 
 /// Basic information of pci devices such as bus number,
@@ -39,30 +37,6 @@ impl Default for PciBdf {
         PciBdf {
             bus: "pcie.0".to_string(),
             addr: (0, 0),
-        }
-    }
-}
-
-/// Basic information of RootPort like port number.
-#[derive(Debug, Clone)]
-pub struct RootPortConfig {
-    pub port: u8,
-    pub id: String,
-    pub multifunction: bool,
-}
-
-impl ConfigCheck for RootPortConfig {
-    fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "root_port id")
-    }
-}
-
-impl Default for RootPortConfig {
-    fn default() -> Self {
-        RootPortConfig {
-            port: 0,
-            id: "".to_string(),
-            multifunction: false,
         }
     }
 }
@@ -96,89 +70,15 @@ pub fn get_pci_df(addr: &str) -> Result<(u8, u8)> {
 }
 
 pub fn get_pci_bdf(pci_cfg: &str) -> Result<PciBdf> {
-    let mut cmd_parser = CmdParser::new("bdf");
-    cmd_parser.push("").push("bus").push("addr");
-    cmd_parser.get_parameters(pci_cfg)?;
-
-    let mut pci_bdf = PciBdf {
-        bus: cmd_parser
-            .get_value::<String>("bus")?
-            .with_context(|| "Bus not specified for pci device")?,
-        ..Default::default()
-    };
-    if let Some(addr) = cmd_parser.get_value::<String>("addr")? {
-        pci_bdf.addr = get_pci_df(&addr).with_context(|| "Failed to get addr")?;
-    } else {
-        bail!("No addr found for pci device");
+    let bus = get_value_of_parameter("bus", pci_cfg)?;
+    let addr_str = get_value_of_parameter("addr", pci_cfg)?;
+    if addr_str.is_empty() {
+        bail!("Invalid addr.");
     }
+    let addr = get_pci_df(&addr_str).with_context(|| "Failed to get addr")?;
+    let pci_bdf = PciBdf::new(bus, addr);
+
     Ok(pci_bdf)
-}
-
-pub fn get_multi_function(pci_cfg: &str) -> Result<bool> {
-    let mut cmd_parser = CmdParser::new("multifunction");
-    cmd_parser.push("").push("multifunction");
-    cmd_parser.get_parameters(pci_cfg)?;
-
-    if let Some(multi_func) = cmd_parser
-        .get_value::<ExBool>("multifunction")
-        .with_context(|| "Failed to get multifunction parameter, please set on or off (default).")?
-    {
-        return Ok(multi_func.inner);
-    }
-
-    Ok(false)
-}
-
-pub fn parse_root_port(rootport_cfg: &str) -> Result<RootPortConfig> {
-    let mut cmd_parser = CmdParser::new("pcie-root-port");
-    cmd_parser
-        .push("")
-        .push("bus")
-        .push("addr")
-        .push("port")
-        .push("chassis")
-        .push("multifunction")
-        .push("id");
-    cmd_parser.parse(rootport_cfg)?;
-
-    let root_port = RootPortConfig {
-        port: cmd_parser
-            .get_value::<UnsignedInteger>("port")?
-            .with_context(|| {
-                ConfigError::FieldIsMissing("port".to_string(), "rootport".to_string())
-            })?
-            .0 as u8,
-        id: cmd_parser.get_value::<String>("id")?.with_context(|| {
-            ConfigError::FieldIsMissing("id".to_string(), "rootport".to_string())
-        })?,
-        multifunction: cmd_parser
-            .get_value::<ExBool>("multifunction")?
-            .map_or(false, bool::from),
-    };
-
-    let _ = cmd_parser.get_value::<u8>("chassis")?;
-
-    root_port.check()?;
-    Ok(root_port)
-}
-
-pub fn pci_args_check(cmd_parser: &CmdParser) -> Result<()> {
-    let device_type = cmd_parser.get_value::<String>("")?;
-    let dev_type = device_type.unwrap();
-    // Safe, because this function only be called when certain
-    // devices type are added.
-    if dev_type.ends_with("-device") {
-        if cmd_parser.get_value::<String>("bus")?.is_some() {
-            bail!("virtio mmio device does not support bus arguments");
-        }
-        if cmd_parser.get_value::<String>("addr")?.is_some() {
-            bail!("virtio mmio device does not support addr arguments");
-        }
-        if cmd_parser.get_value::<ExBool>("multifunction")?.is_some() {
-            bail!("virtio mmio device does not support multifunction arguments");
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -240,27 +140,5 @@ mod tests {
 
         let pci_bdf = get_pci_bdf("virtio-balloon-device,addr=0x1.0x2");
         assert!(pci_bdf.is_err());
-    }
-
-    #[test]
-    fn test_get_multi_function() {
-        assert_eq!(
-            get_multi_function("virtio-balloon-device,bus=pcie.0,addr=0x1.0x2").unwrap(),
-            false
-        );
-        assert_eq!(
-            get_multi_function("virtio-balloon-device,bus=pcie.0,addr=0x1.0x2,multifunction=on")
-                .unwrap(),
-            true
-        );
-        assert_eq!(
-            get_multi_function("virtio-balloon-device,bus=pcie.0,addr=0x1.0x2,multifunction=off")
-                .unwrap(),
-            false
-        );
-        assert!(get_multi_function(
-            "virtio-balloon-device,bus=pcie.0,addr=0x1.0x2,multifunction=close"
-        )
-        .is_err());
     }
 }

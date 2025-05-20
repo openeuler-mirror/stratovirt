@@ -18,6 +18,8 @@ RTC_MIS = "RTC_MIS"
 SECCOMP_FILETER_FLAG_TSYNC = "SECCOMP_FILETER_FLAG_TSYNC"
 test_ths = "test_ths"
 UART_LSR_THRE = "UART_LSR_THRE"
+closID = "closID"
+CLOS = "CLOS"
 
 [default.extend-words]
 ba = "ba"

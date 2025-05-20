@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
 
 use crate::UtilError;
@@ -142,6 +142,9 @@ impl FdtBuilder {
         let off_dt_strings = FDT_HEADER_SIZE + self.mem_reserve.len() + self.structure_blk.len();
         let off_mem_rsvmap = FDT_HEADER_SIZE;
 
+        if self.fdt_header.len() < FDT_HEADER_SIZE {
+            bail!("fdt header size too small");
+        }
         BigEndian::write_u32(&mut self.fdt_header[0..4], FDT_MAGIC);
         BigEndian::write_u32(&mut self.fdt_header[4..8], total_size as u32);
         BigEndian::write_u32(&mut self.fdt_header[8..12], off_dt_struct as u32);

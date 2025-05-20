@@ -15,11 +15,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use vmm_sys_util::eventfd::EventFd;
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
 use address_space::GuestAddress;
 use migration::{
@@ -28,6 +27,8 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
+use util::loop_context::create_new_eventfd;
 use util::num_ops::write_data_u32;
 
 /// Registers for pl031 from ARM PrimeCell Real Time Clock Technical Reference Manual.
@@ -78,9 +79,9 @@ pub struct PL031 {
     base_time: Instant,
 }
 
-impl Default for PL031 {
-    fn default() -> Self {
-        Self {
+impl PL031 {
+    pub fn new(sysbus: &Arc<Mutex<SysBus>>, region_base: u64, region_size: u64) -> Result<Self> {
+        let mut pl031 = Self {
             base: SysBusDevBase::new(SysBusDevType::Rtc),
             state: PL031State::default(),
             // since 1970-01-01 00:00:00,it never cause overflow.
@@ -89,57 +90,43 @@ impl Default for PL031 {
                 .expect("time wrong")
                 .as_secs() as u32,
             base_time: Instant::now(),
-        }
-    }
-}
-
-impl PL031 {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-    ) -> Result<()> {
-        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
-        self.set_sys_resource(sysbus, region_base, region_size)
+        };
+        pl031.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
+        pl031
+            .set_sys_resource(sysbus, region_base, region_size, "PL031")
             .with_context(|| LegacyError::SetSysResErr)?;
+        pl031.set_parent_bus(sysbus.clone());
 
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "PL031")?;
-
-        MigrationManager::register_device_instance(
-            PL031State::descriptor(),
-            dev,
-            PL031_SNAPSHOT_ID,
-        );
-
-        Ok(())
+        Ok(pl031)
     }
 
     /// Get current clock value.
     fn get_current_value(&self) -> u32 {
-        (self.base_time.elapsed().as_secs() as u128 + self.tick_offset as u128) as u32
+        (u128::from(self.base_time.elapsed().as_secs()) + u128::from(self.tick_offset)) as u32
     }
 }
 
 impl Device for PL031 {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        MigrationManager::register_device_instance(
+            PL031State::descriptor(),
+            dev.clone(),
+            PL031_SNAPSHOT_ID,
+        );
+
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for PL031 {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     /// Read data from registers by guest.
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
@@ -198,10 +185,6 @@ impl SysBusDevOps for PL031 {
 
         true
     }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
 }
 
 impl AmlBuilder for PL031 {
@@ -234,13 +217,15 @@ impl MigrationHook for PL031 {}
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::sysbus_init;
     use util::time::mktime64;
 
     const WIGGLE: u32 = 2;
 
     #[test]
     fn test_set_year_20xx() {
-        let mut rtc = PL031::default();
+        let sysbus = sysbus_init();
+        let mut rtc = PL031::new(&sysbus, 0x0901_0000, 0x0000_1000).unwrap();
         // Set rtc time: 2013-11-13 02:04:56.
         let mut wtick = mktime64(2013, 11, 13, 2, 4, 56) as u32;
         let mut data = [0; 4];
@@ -266,7 +251,8 @@ mod test {
 
     #[test]
     fn test_set_year_1970() {
-        let mut rtc = PL031::default();
+        let sysbus = sysbus_init();
+        let mut rtc = PL031::new(&sysbus, 0x0901_0000, 0x0000_1000).unwrap();
         // Set rtc time (min): 1970-01-01 00:00:00.
         let wtick = mktime64(1970, 1, 1, 0, 0, 0) as u32;
         let mut data = [0; 4];

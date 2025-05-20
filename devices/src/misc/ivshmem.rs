@@ -11,21 +11,22 @@
 // See the Mulan PSL v2 for more details.
 
 use std::sync::{
-    atomic::{AtomicU16, Ordering},
-    Arc, Mutex, Weak,
+    atomic::{AtomicBool, AtomicU16, Ordering},
+    Arc, Mutex, RwLock, Weak,
 };
 
-use anyhow::{bail, Result};
+use anyhow::Result;
+use log::error;
 
-use crate::pci::{
-    config::{
-        PciConfig, RegionType, DEVICE_ID, PCI_CLASS_MEMORY_RAM, PCI_CONFIG_SPACE_SIZE,
-        PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
-    },
-    le_write_u16, PciBus, PciDevBase, PciDevOps,
+use crate::pci::config::{
+    PciConfig, RegionType, DEVICE_ID, PCI_CLASS_MEMORY_RAM, PCI_CONFIG_SPACE_SIZE,
+    PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use crate::{Device, DeviceBase};
+use crate::pci::msix::init_msix;
+use crate::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
+use util::gen_base_func;
 
 const PCI_VENDOR_ID_IVSHMEM: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 const PCI_DEVICE_ID_IVSHMEM: u16 = 0x1110;
@@ -35,50 +36,115 @@ const PCI_BAR_MAX_IVSHMEM: u8 = 3;
 
 const IVSHMEM_REG_BAR_SIZE: u64 = 0x100;
 
+const IVSHMEM_BAR0_IRQ_MASK: u64 = 0;
+const IVSHMEM_BAR0_IRQ_STATUS: u64 = 4;
+const IVSHMEM_BAR0_IVPOSITION: u64 = 8;
+const IVSHMEM_BAR0_DOORBELL: u64 = 12;
+
+type Bar0Write = dyn Fn(&[u8], u64) -> bool + Send + Sync;
+type Bar0Read = dyn Fn(&mut [u8], u64) -> bool + Send + Sync;
+
+#[derive(Default)]
+struct Bar0Ops {
+    write: Option<Arc<Bar0Write>>,
+    read: Option<Arc<Bar0Read>>,
+}
+
 /// Intel-VM shared memory device structure.
 pub struct Ivshmem {
     base: PciDevBase,
     dev_id: Arc<AtomicU16>,
     ram_mem_region: Region,
+    vector_nr: u32,
+    bar0_ops: Arc<RwLock<Bar0Ops>>,
+    reset_cb: Option<Box<dyn Fn() + Sync + Send>>,
 }
 
 impl Ivshmem {
     pub fn new(
         name: String,
         devfn: u8,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         ram_mem_region: Region,
+        vector_nr: u32,
     ) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new(name, false),
-                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
+                base: DeviceBase::new(name, false, Some(parent_bus)),
+                config: PciConfig::new(devfn, PCI_CONFIG_SPACE_SIZE, PCI_BAR_MAX_IVSHMEM),
                 devfn,
-                parent_bus,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             dev_id: Arc::new(AtomicU16::new(0)),
             ram_mem_region,
+            vector_nr,
+            bar0_ops: Arc::new(RwLock::new(Bar0Ops::default())),
+            reset_cb: None,
         }
     }
 
     fn register_bars(&mut self) -> Result<()> {
-        // Currently, ivshmem uses only the shared memory and does not use interrupt.
-        // Therefore, bar0 read and write callback is not implemented.
-        let reg_read = move |_: &mut [u8], _: GuestAddress, _: u64| -> bool { true };
-        let reg_write = move |_: &[u8], _: GuestAddress, _: u64| -> bool { true };
+        // Currently, ivshmem does not support intx interrupt, ivposition and doorbell.
+        let bar0_ops = self.bar0_ops.clone();
+        let reg_read = move |data: &mut [u8], _: GuestAddress, offset: u64| -> bool {
+            if offset >= IVSHMEM_REG_BAR_SIZE {
+                error!("ivshmem: read offset {} exceeds bar0 size", offset);
+                return true;
+            }
+            match offset {
+                IVSHMEM_BAR0_IRQ_MASK | IVSHMEM_BAR0_IRQ_STATUS | IVSHMEM_BAR0_IVPOSITION => {}
+                _ => {
+                    if let Some(rcb) = bar0_ops.read().unwrap().read.as_ref() {
+                        return rcb(data, offset);
+                    }
+                }
+            }
+            true
+        };
+        let bar0_ops = self.bar0_ops.clone();
+        let reg_write = move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
+            if offset >= IVSHMEM_REG_BAR_SIZE {
+                error!("ivshmem: write offset {} exceeds bar0 size", offset);
+                return true;
+            }
+            match offset {
+                IVSHMEM_BAR0_IRQ_MASK | IVSHMEM_BAR0_IRQ_STATUS | IVSHMEM_BAR0_DOORBELL => {}
+                _ => {
+                    if let Some(wcb) = bar0_ops.read().unwrap().write.as_ref() {
+                        return wcb(data, offset);
+                    }
+                }
+            }
+            true
+        };
         let reg_region_ops = RegionOps {
             read: Arc::new(reg_read),
             write: Arc::new(reg_write),
         };
 
         // bar0: mmio register
+        let mut bar0_region =
+            Region::init_io_region(IVSHMEM_REG_BAR_SIZE, reg_region_ops, "IvshmemIo");
+        bar0_region.set_access_size(4);
         self.base.config.register_bar(
             0,
-            Region::init_io_region(IVSHMEM_REG_BAR_SIZE, reg_region_ops, "IvshmemIo"),
-            RegionType::Mem64Bit,
+            bar0_region,
+            RegionType::Mem32Bit,
             false,
             IVSHMEM_REG_BAR_SIZE,
         )?;
+
+        // bar1: msix
+        if self.vector_nr > 0 {
+            init_msix(
+                &mut self.base,
+                1,
+                self.vector_nr,
+                self.dev_id.clone(),
+                None,
+                None,
+            )?;
+        }
 
         // bar2: ram
         self.base.config.register_bar(
@@ -89,28 +155,32 @@ impl Ivshmem {
             self.ram_mem_region.size(),
         )
     }
+
+    pub fn trigger_msix(&self, vector: u16) {
+        if self.vector_nr == 0 {
+            return;
+        }
+        if let Some(msix) = self.base.config.msix.as_ref() {
+            msix.lock()
+                .unwrap()
+                .notify(vector, self.dev_id.load(Ordering::Acquire));
+        }
+    }
+
+    pub fn set_bar0_ops(&mut self, bar0_ops: (Arc<Bar0Write>, Arc<Bar0Read>)) {
+        self.bar0_ops.write().unwrap().write = Some(bar0_ops.0);
+        self.bar0_ops.write().unwrap().read = Some(bar0_ops.1);
+    }
+
+    pub fn register_reset_callback(&mut self, cb: Box<dyn Fn() + Sync + Send>) {
+        self.reset_cb = Some(cb);
+    }
 }
 
 impl Device for Ivshmem {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
-}
-
-impl PciDevOps for Ivshmem {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
         le_write_u16(
@@ -134,33 +204,37 @@ impl PciDevOps for Ivshmem {
         self.register_bars()?;
 
         // Attach to the PCI bus.
-        let pci_bus = self.base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let pci_device = locked_pci_bus.devices.get(&self.base.devfn);
-        match pci_device {
-            Some(device) => bail!(
-                "Devfn {:?} has been used by {:?}",
-                &self.base.devfn,
-                device.lock().unwrap().name()
-            ),
-            None => locked_pci_bus
-                .devices
-                .insert(self.base.devfn, Arc::new(Mutex::new(self))),
-        };
-        Ok(())
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(bus, locked_bus, pci_bus);
+        self.dev_id
+            .store(pci_bus.generate_dev_id(self.base.devfn), Ordering::Release);
+        let dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(u64::from(dev.lock().unwrap().base.devfn), dev.clone())?;
+        Ok(dev)
     }
 
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        if let Some(cb) = &self.reset_cb {
+            cb();
+        }
+        Ok(())
+    }
+}
+
+impl PciDevOps for Ivshmem {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
+
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
 
         self.base.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
     }
 }

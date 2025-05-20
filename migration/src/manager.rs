@@ -266,7 +266,7 @@ impl MigrationManager {
         let name = cpu_desc.name.clone() + "/" + &id.to_string();
         let mut copied_cpu_desc = cpu_desc.clone();
         copied_cpu_desc.name = name.clone();
-        copied_cpu_desc.alias = cpu_desc.alias + id as u64;
+        copied_cpu_desc.alias = cpu_desc.alias + u64::from(id);
         Self::register_device_desc(copied_cpu_desc);
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();

@@ -22,14 +22,14 @@ use super::descriptor::{
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
 use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
-use super::xhci::xhci_controller::XhciDevice;
+use super::xhci::xhci_controller::{endpoint_number_to_id, XhciDevice};
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{
-    notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket,
-    UsbPacketStatus,
+    notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
 };
 use machine_manager::config::valid_id;
 use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
+use util::gen_base_func;
 
 /// Keyboard device descriptor
 static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
@@ -38,7 +38,7 @@ static DESC_DEVICE_KEYBOARD: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bLength: USB_DT_DEVICE_SIZE,
             bDescriptorType: USB_DT_DEVICE,
             idVendor: 0x0627,
-            idProduct: 0x0001,
+            idProduct: USB_PRODUCT_ID_KEYBOARD,
             bcdDevice: 0,
             iManufacturer: STR_MANUFACTURER_INDEX,
             iProduct: STR_PRODUCT_KEYBOARD_INDEX,
@@ -76,8 +76,8 @@ static DESC_IFACE_KEYBOARD: Lazy<Arc<UsbDescIface>> = Lazy::new(|| {
             bAlternateSetting: 0,
             bNumEndpoints: 1,
             bInterfaceClass: USB_CLASS_HID,
-            bInterfaceSubClass: 1,
-            bInterfaceProtocol: 1,
+            bInterfaceSubClass: USB_SUBCLASS_BOOT,
+            bInterfaceProtocol: USB_IFACE_PROTOCOL_KEYBOARD,
             iInterface: 0,
         },
         other_desc: vec![Arc::new(UsbDescOther {
@@ -121,8 +121,10 @@ const DESC_STRINGS: [&str; 5] = [
 ];
 
 #[derive(Parser, Clone, Debug, Default)]
-#[command(name = "usb_keyboard")]
+#[command(no_binary_name(true))]
 pub struct UsbKeyboardConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     id: String,
     #[arg(long)]
@@ -150,14 +152,14 @@ impl KeyboardOpts for UsbKeyboardAdapter {
         let mut scan_codes = Vec::new();
         let mut keycode = keycode;
         if keycode & SCANCODE_GREY != 0 {
-            scan_codes.push(SCANCODE_EMUL0 as u32);
+            scan_codes.push(u32::from(SCANCODE_EMUL0));
             keycode &= !SCANCODE_GREY;
         }
 
         if !down {
             keycode |= SCANCODE_UP;
         }
-        scan_codes.push(keycode as u32);
+        scan_codes.push(u32::from(keycode));
 
         let mut locked_kbd = self.usb_kbd.lock().unwrap();
         if scan_codes.len() as u32 + locked_kbd.hid.num > QUEUE_LENGTH {
@@ -172,7 +174,9 @@ impl KeyboardOpts for UsbKeyboardAdapter {
         }
         drop(locked_kbd);
         let clone_kbd = self.usb_kbd.clone();
-        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDevice>>))
+        // Wakeup endpoint.
+        let ep_id = endpoint_number_to_id(true, 1);
+        notify_controller(&(clone_kbd as Arc<Mutex<dyn UsbDevice>>), ep_id)
     }
 }
 
@@ -187,13 +191,7 @@ impl UsbKeyboard {
 }
 
 impl UsbDevice for UsbKeyboard {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         self.base.reset_usb_endpoint();
@@ -217,6 +215,8 @@ impl UsbDevice for UsbKeyboard {
         Ok(())
     }
 
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+
     fn reset(&mut self) {
         info!("Keyboard device reset");
         self.base.remote_wakeup = 0;
@@ -237,7 +237,10 @@ impl UsbDevice for UsbKeyboard {
                 }
             }
             Err(e) => {
-                warn!("Keyboard descriptor error {:?}", e);
+                warn!(
+                    "Received incorrect USB Keyboard descriptor message: {:?}",
+                    e
+                );
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
@@ -257,9 +260,5 @@ impl UsbDevice for UsbKeyboard {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         self.cntlr.clone()
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }

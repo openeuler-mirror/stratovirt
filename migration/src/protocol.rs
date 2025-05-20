@@ -920,12 +920,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v1.get_state_vec().unwrap();
-        assert_eq!(
-            state_2_desc
-                .add_padding(&state_1_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_2_desc
+            .add_padding(&state_1_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v2 = DeviceV2 {
             state: DeviceV2State::default(),
@@ -964,12 +961,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v2.get_state_vec().unwrap();
-        assert_eq!(
-            state_3_desc
-                .add_padding(&state_2_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_3_desc
+            .add_padding(&state_2_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v3 = DeviceV3 {
             state: DeviceV3State::default(),
@@ -977,10 +971,10 @@ pub mod tests {
         device_v3.set_state_mut(&current_slice).unwrap();
         assert!(state_3_desc.current_version > state_2_desc.current_version);
 
-        assert_eq!(device_v3.state.ier, device_v2.state.ier as u64);
-        assert_eq!(device_v3.state.iir, device_v2.state.iir as u64);
-        assert_eq!(device_v3.state.lcr, device_v2.state.lcr as u64);
-        assert_eq!(device_v3.state.mcr, device_v2.state.mcr as u64);
+        assert_eq!(device_v3.state.ier, u64::from(device_v2.state.ier));
+        assert_eq!(device_v3.state.iir, u64::from(device_v2.state.iir));
+        assert_eq!(device_v3.state.lcr, u64::from(device_v2.state.lcr));
+        assert_eq!(device_v3.state.mcr, u64::from(device_v2.state.mcr));
     }
 
     #[test]
@@ -1007,12 +1001,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v3.get_state_vec().unwrap();
-        assert_eq!(
-            state_4_desc
-                .add_padding(&state_3_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_4_desc
+            .add_padding(&state_3_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v4 = DeviceV4 {
             state: DeviceV4State::default(),
@@ -1050,12 +1041,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v4.get_state_vec().unwrap();
-        assert_eq!(
-            state_5_desc
-                .add_padding(&state_4_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_5_desc
+            .add_padding(&state_4_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v5 = DeviceV5 {
             state: DeviceV5State::default(),
@@ -1089,12 +1077,9 @@ pub mod tests {
         );
 
         let mut current_slice = device_v2.get_state_vec().unwrap();
-        assert_eq!(
-            state_5_desc
-                .add_padding(&state_2_desc, &mut current_slice)
-                .is_ok(),
-            true
-        );
+        assert!(state_5_desc
+            .add_padding(&state_2_desc, &mut current_slice)
+            .is_ok());
 
         let mut device_v5 = DeviceV5 {
             state: DeviceV5State::default(),
@@ -1102,16 +1087,16 @@ pub mod tests {
         device_v5.set_state_mut(&current_slice).unwrap();
         assert!(state_5_desc.current_version > state_2_desc.current_version);
 
-        assert_eq!(device_v5.state.rii, device_v2.state.iir as u64);
+        assert_eq!(device_v5.state.rii, u64::from(device_v2.state.iir));
     }
 
     #[test]
     fn test_check_header() {
-        if !Kvm::new().is_ok() {
+        if Kvm::new().is_err() {
             return;
         }
 
         let header = MigrationHeader::default();
-        assert_eq!(header.check_header().is_ok(), true);
+        assert!(header.check_header().is_ok());
     }
 }

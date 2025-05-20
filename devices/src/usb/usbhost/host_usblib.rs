@@ -11,11 +11,16 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
+    iter::Iterator,
+    os::unix::io::{AsRawFd, RawFd},
     rc::Rc,
+    slice,
     sync::{Arc, Mutex},
 };
 
-use libc::{c_int, c_uint, c_void, EPOLLIN, EPOLLOUT};
+use libc::{c_int, c_short, c_uint, c_void, EPOLLIN, EPOLLOUT};
+#[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+use libusb1_sys::{constants::LIBUSB_SUCCESS, libusb_context, libusb_set_option};
 use libusb1_sys::{
     constants::{
         LIBUSB_ERROR_ACCESS, LIBUSB_ERROR_BUSY, LIBUSB_ERROR_INTERRUPTED,
@@ -25,7 +30,8 @@ use libusb1_sys::{
         LIBUSB_TRANSFER_COMPLETED, LIBUSB_TRANSFER_ERROR, LIBUSB_TRANSFER_NO_DEVICE,
         LIBUSB_TRANSFER_STALL, LIBUSB_TRANSFER_TIMED_OUT, LIBUSB_TRANSFER_TYPE_ISOCHRONOUS,
     },
-    libusb_get_pollfds, libusb_iso_packet_descriptor, libusb_pollfd, libusb_transfer,
+    libusb_free_pollfds, libusb_get_pollfds, libusb_iso_packet_descriptor, libusb_pollfd,
+    libusb_transfer,
 };
 use log::error;
 use rusb::{Context, DeviceHandle, Error, Result, TransferType, UsbContext};
@@ -114,41 +120,28 @@ pub fn map_packet_status(status: i32) -> UsbPacketStatus {
     }
 }
 
-pub fn get_libusb_pollfds(usbhost: Arc<Mutex<UsbHost>>) -> *const *mut libusb_pollfd {
-    // SAFETY: call C library of libusb to get pointer of poll fd.
-    unsafe { libusb_get_pollfds(usbhost.lock().unwrap().context.as_raw()) }
-}
-
 pub fn set_pollfd_notifiers(
-    poll: *const *mut libusb_pollfd,
+    pollfds: PollFds,
     notifiers: &mut Vec<EventNotifier>,
     handler: Rc<NotifierCallback>,
 ) {
-    let mut i = 0;
-    // SAFETY: have checked whether the pointer is null before dereference it.
-    unsafe {
-        loop {
-            if (*poll.offset(i)).is_null() {
-                break;
-            };
-            if (*(*poll.offset(i))).events as c_int == EPOLLIN {
-                notifiers.push(EventNotifier::new(
-                    NotifierOperation::AddShared,
-                    (*(*poll.offset(i))).fd,
-                    None,
-                    EventSet::IN,
-                    vec![handler.clone()],
-                ));
-            } else if (*(*poll.offset(i))).events as c_int == EPOLLOUT {
-                notifiers.push(EventNotifier::new(
-                    NotifierOperation::AddShared,
-                    (*(*poll.offset(i))).fd,
-                    None,
-                    EventSet::OUT,
-                    vec![handler.clone()],
-                ));
-            }
-            i += 1;
+    for pollfd in pollfds.iter() {
+        if i32::from(pollfd.events()) == EPOLLIN {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::AddShared,
+                pollfd.as_raw_fd(),
+                None,
+                EventSet::IN,
+                vec![handler.clone()],
+            ));
+        } else if i32::from(pollfd.events()) == EPOLLOUT {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::AddShared,
+                pollfd.as_raw_fd(),
+                None,
+                EventSet::OUT,
+                vec![handler.clone()],
+            ));
         }
     }
 }
@@ -379,4 +372,104 @@ pub fn free_host_transfer(transfer: *mut libusb_transfer) {
 
     // SAFETY: have checked the validity of transfer before call libusb_free_transfer.
     unsafe { libusb1_sys::libusb_free_transfer(transfer) };
+}
+
+#[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
+pub fn set_option(opt: u32) -> Result<()> {
+    // SAFETY: This function will only configure a specific option within libusb, null for ctx is valid.
+    let err = unsafe {
+        libusb_set_option(
+            std::ptr::null_mut() as *mut libusb_context,
+            opt,
+            std::ptr::null_mut() as *mut c_void,
+        )
+    };
+    if err != LIBUSB_SUCCESS {
+        return Err(from_libusb(err));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct PollFd {
+    fd: c_int,
+    events: c_short,
+}
+
+impl PollFd {
+    unsafe fn from_raw(raw: *mut libusb_pollfd) -> Self {
+        Self {
+            fd: (*raw).fd,
+            events: (*raw).events,
+        }
+    }
+
+    pub fn events(&self) -> c_short {
+        self.events
+    }
+}
+
+impl AsRawFd for PollFd {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+}
+
+pub struct PollFds {
+    poll_fds: *const *mut libusb_pollfd,
+}
+
+impl PollFds {
+    pub unsafe fn new(usbhost: Arc<Mutex<UsbHost>>) -> Result<Self> {
+        let poll_fds = libusb_get_pollfds(usbhost.lock().unwrap().context.as_raw());
+        if poll_fds.is_null() {
+            Err(Error::NotFound)
+        } else {
+            Ok(Self { poll_fds })
+        }
+    }
+
+    pub fn iter(&self) -> PollFdIter {
+        let mut len: usize = 0;
+        // SAFETY: self.poll_fds is acquired from libusb_get_pollfds which is guaranteed to be valid.
+        unsafe {
+            while !(*self.poll_fds.add(len)).is_null() {
+                len += 1;
+            }
+            PollFdIter {
+                fds: slice::from_raw_parts(self.poll_fds, len),
+                index: 0,
+            }
+        }
+    }
+}
+
+impl Drop for PollFds {
+    fn drop(&mut self) {
+        // SAFETY: self.poll_fds is acquired from libusb_get_pollfds which is guaranteed to be valid.
+        unsafe {
+            libusb_free_pollfds(self.poll_fds);
+        }
+    }
+}
+
+pub struct PollFdIter<'a> {
+    fds: &'a [*mut libusb_pollfd],
+    index: usize,
+}
+
+impl<'a> Iterator for PollFdIter<'a> {
+    type Item = PollFd;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.fds.len() {
+            // SAFETY: self.fds is guaranteed to be valid.
+            let poll_fd = unsafe { PollFd::from_raw(self.fds[self.index]) };
+            self.index += 1;
+            Some(poll_fd)
+        } else {
+            None
+        }
+    }
 }

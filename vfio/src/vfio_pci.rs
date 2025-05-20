@@ -12,11 +12,12 @@
 
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use clap::{ArgAction, Parser};
 use log::error;
 use vfio_bindings::bindings::vfio;
 use vmm_sys_util::eventfd::EventFd;
@@ -40,14 +41,37 @@ use devices::pci::msix::{
 };
 use devices::pci::{
     init_multifunction, le_read_u16, le_read_u32, le_write_u16, le_write_u32, pci_ext_cap_id,
-    pci_ext_cap_next, pci_ext_cap_ver, PciBus, PciDevBase, PciDevOps,
+    pci_ext_cap_next, pci_ext_cap_ver, MsiVector, PciBus, PciDevBase, PciDevOps,
 };
-use devices::{pci::MsiVector, Device, DeviceBase};
+use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
+use machine_manager::config::{get_pci_df, parse_bool, valid_id};
+use util::gen_base_func;
+use util::loop_context::create_new_eventfd;
 use util::num_ops::ranges_overlap;
 use util::unix::host_page_size;
 
 const PCI_NUM_BARS: u8 = 6;
 const PCI_ROM_SLOT: u8 = 6;
+
+#[derive(Parser, Default, Debug)]
+#[command(no_binary_name(true))]
+#[clap(group = clap::ArgGroup::new("path").args(&["host", "sysfsdev"]).multiple(false).required(true))]
+pub struct VfioConfig {
+    #[arg(long, value_parser = ["vfio-pci"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long, value_parser = valid_id)]
+    pub host: Option<String>,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long)]
+    pub sysfsdev: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: Option<bool>,
+}
 
 struct MsixTable {
     table_bar: u8,
@@ -101,17 +125,17 @@ impl VfioPciDevice {
         vfio_device: Arc<Mutex<VfioDevice>>,
         devfn: u8,
         name: String,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         multi_func: bool,
         mem_as: Arc<AddressSpace>,
     ) -> Self {
         Self {
             // Unknown PCI or PCIe type here, allocate enough space to match the two types.
             base: PciDevBase {
-                base: DeviceBase::new(name, true),
-                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
+                base: DeviceBase::new(name, true, Some(parent_bus)),
+                config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS),
                 devfn,
-                parent_bus,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             config_size: 0,
             config_offset: 0,
@@ -162,7 +186,7 @@ impl VfioPciDevice {
         // Cache the pci config space to avoid overwriting the original config space. Because we
         // will parse the chain of extended caps in cache config and insert them into original
         // config space.
-        let mut config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS);
+        let mut config = PciConfig::new(self.base.devfn, PCIE_CONFIG_SPACE_SIZE, PCI_NUM_BARS);
         config.config = config_data;
         let mut next = PCI_CONFIG_SPACE_SIZE;
         while (PCI_CONFIG_SPACE_SIZE..PCIE_CONFIG_SPACE_SIZE).contains(&next) {
@@ -207,13 +231,13 @@ impl VfioPciDevice {
         self.vfio_device.lock().unwrap().write_region(
             data.as_slice(),
             self.config_offset,
-            COMMAND as u64,
+            u64::from(COMMAND),
         )?;
 
         for i in 0..PCI_ROM_SLOT {
             let offset = BAR_0 as usize + REG_SIZE * i as usize;
             let v = le_read_u32(&self.base.config.config, offset)?;
-            if v & BAR_IO_SPACE as u32 != 0 {
+            if v & u32::from(BAR_IO_SPACE) != 0 {
                 le_write_u32(&mut self.base.config.config, offset, v & !IO_BASE_ADDR_MASK)?;
             } else {
                 le_write_u32(
@@ -251,8 +275,8 @@ impl VfioPciDevice {
         Ok(VfioMsixInfo {
             table: MsixTable {
                 table_bar: (table as u16 & MSIX_TABLE_BIR) as u8,
-                table_offset: (table & MSIX_TABLE_OFFSET) as u64,
-                table_size: (entries * MSIX_TABLE_ENTRY_SIZE) as u64,
+                table_offset: u64::from(table & MSIX_TABLE_OFFSET),
+                table_size: u64::from(entries * MSIX_TABLE_ENTRY_SIZE),
             },
             entries,
         })
@@ -272,13 +296,13 @@ impl VfioPciDevice {
             locked_dev.read_region(
                 data.as_mut_slice(),
                 self.config_offset,
-                (BAR_0 + (REG_SIZE as u8) * i) as u64,
+                u64::from(BAR_0 + (REG_SIZE as u8) * i),
             )?;
             let mut region_type = RegionType::Mem32Bit;
             let pci_bar = LittleEndian::read_u32(&data);
-            if pci_bar & BAR_IO_SPACE as u32 != 0 {
+            if pci_bar & u32::from(BAR_IO_SPACE) != 0 {
                 region_type = RegionType::Io;
-            } else if pci_bar & BAR_MEM_64BIT as u32 != 0 {
+            } else if pci_bar & u32::from(BAR_MEM_64BIT) != 0 {
                 region_type = RegionType::Mem64Bit;
             }
             let vfio_region = infos.remove(0);
@@ -429,7 +453,7 @@ impl VfioPciDevice {
     }
 
     fn unregister_bars(&mut self) -> Result<()> {
-        let bus = self.base.parent_bus.upgrade().unwrap();
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
         self.base.config.unregister_bars(&bus)?;
         Ok(())
     }
@@ -450,9 +474,9 @@ impl VfioPciDevice {
             MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
         )?;
 
-        let msi_irq_manager = if let Some(pci_bus) = self.base.parent_bus.upgrade() {
-            let locked_pci_bus = pci_bus.lock().unwrap();
-            locked_pci_bus.get_msi_irq_manager()
+        let msi_irq_manager = if let Some(bus) = self.parent_bus().unwrap().upgrade() {
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            pci_bus.get_msi_irq_manager()
         } else {
             None
         };
@@ -484,7 +508,7 @@ impl VfioPciDevice {
 
         let cloned_dev = self.vfio_device.clone();
         let cloned_gsi_routes = self.gsi_msi_routes.clone();
-        let parent_bus = self.base.parent_bus.clone();
+        let parent_bus = self.parent_bus().unwrap().clone();
         let dev_id = self.dev_id.clone();
         let devfn = self.base.devfn;
         let cloned_msix = msix.clone();
@@ -492,27 +516,28 @@ impl VfioPciDevice {
             let mut locked_msix = msix.lock().unwrap();
             locked_msix.table[offset as usize..(offset as usize + data.len())]
                 .copy_from_slice(data);
-            let vector = offset / MSIX_TABLE_ENTRY_SIZE as u64;
+            let vector = offset / u64::from(MSIX_TABLE_ENTRY_SIZE);
             if locked_msix.is_vector_masked(vector as u16) {
                 return true;
             }
             let entry = locked_msix.get_message(vector as u16);
 
-            let parent_bus = parent_bus.upgrade().unwrap();
-            parent_bus.lock().unwrap().update_dev_id(devfn, &dev_id);
+            let bus = parent_bus.upgrade().unwrap();
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            pci_bus.update_dev_id(devfn, &dev_id);
             let msix_vector = MsiVector {
                 msg_addr_lo: entry.address_lo,
                 msg_addr_hi: entry.address_hi,
                 msg_data: entry.data,
                 masked: false,
                 #[cfg(target_arch = "aarch64")]
-                dev_id: dev_id.load(Ordering::Acquire) as u32,
+                dev_id: u32::from(dev_id.load(Ordering::Acquire)),
             };
 
             let mut locked_gsi_routes = cloned_gsi_routes.lock().unwrap();
             let gsi_route = locked_gsi_routes.get_mut(vector as usize).unwrap();
             if gsi_route.irq_fd.is_none() {
-                let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+                let irq_fd = create_new_eventfd().unwrap();
                 gsi_route.irq_fd = Some(Arc::new(irq_fd));
             }
             let irq_fd = gsi_route.irq_fd.clone();
@@ -699,8 +724,8 @@ impl VfioPciDevice {
 
     fn vfio_enable_msix(&mut self) -> Result<()> {
         let mut gsi_routes = self.gsi_msi_routes.lock().unwrap();
-        if gsi_routes.len() == 0 {
-            let irq_fd = EventFd::new(libc::EFD_NONBLOCK).unwrap();
+        if gsi_routes.is_empty() {
+            let irq_fd = create_new_eventfd().unwrap();
             let gsi_route = GsiMsiRoute {
                 irq_fd: Some(Arc::new(irq_fd)),
                 gsi: -1,
@@ -713,7 +738,7 @@ impl VfioPciDevice {
                 let gsi_route = GsiMsiRoute {
                     irq_fd: None,
                     gsi: -1,
-                    nr: i as u32,
+                    nr: u32::from(i),
                 };
                 gsi_routes.push(gsi_route);
             }
@@ -790,25 +815,16 @@ impl VfioPciDevice {
 }
 
 impl Device for VfioPciDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
+            "Fail to reset vfio dev"
+        })
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
-}
-
-impl PciDevOps for VfioPciDevice {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
         Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
@@ -826,21 +842,17 @@ impl PciDevOps for VfioPciDevice {
                 self.multi_func,
                 &mut self.base.config.config,
                 self.base.devfn,
-                self.base.parent_bus.clone(),
+                parent_bus.clone(),
             ),
             || "Failed to init vfio device multifunction.",
         )?;
 
         #[cfg(target_arch = "aarch64")]
         {
-            let bus_num = self
-                .base
-                .parent_bus
-                .upgrade()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .number(SECONDARY_BUS_NUM as usize);
+            let bus = parent_bus.upgrade().unwrap();
+            PCI_BUS!(bus, locked_bus, pci_bus);
+            let bus_num = pci_bus.number(SECONDARY_BUS_NUM as usize);
+            drop(locked_bus);
             self.dev_id = Arc::new(AtomicU16::new(self.set_dev_id(bus_num, self.base.devfn)));
         }
 
@@ -853,22 +865,13 @@ impl PciDevOps for VfioPciDevice {
         )?));
         Result::with_context(self.register_bars(), || "Failed to register bars")?;
 
-        let devfn = self.base.devfn;
+        let devfn = u64::from(self.base.devfn);
         let dev = Arc::new(Mutex::new(self));
-        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let pci_device = locked_pci_bus.devices.get(&devfn);
-        if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev);
-        } else {
-            bail!(
-                "Devfn {:?} has been used by {:?}",
-                &devfn,
-                pci_device.unwrap().lock().unwrap().name()
-            );
-        }
+        let parent_bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        locked_bus.attach_child(devfn, dev.clone())?;
 
-        Ok(())
+        Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
@@ -878,6 +881,10 @@ impl PciDevOps for VfioPciDevice {
         }
         Ok(())
     }
+}
+
+impl PciDevOps for VfioPciDevice {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     /// Read pci data from pci config if it emulate, otherwise read from vfio device.
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
@@ -953,19 +960,20 @@ impl PciDevOps for VfioPciDevice {
         let was_enable = self.base.config.msix.as_ref().map_or(false, |m| {
             m.lock().unwrap().is_enabled(&self.base.config.config)
         });
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
         self.base.config.write(
             offset,
             data,
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
 
         if ranges_overlap(offset, size, COMMAND as usize, REG_SIZE).unwrap() {
-            if le_read_u32(&self.base.config.config, offset).unwrap() & COMMAND_MEMORY_SPACE as u32
+            if le_read_u32(&self.base.config.config, offset).unwrap()
+                & u32::from(COMMAND_MEMORY_SPACE)
                 != 0
             {
                 if let Err(e) = self.setup_bars_mmap() {
@@ -988,12 +996,6 @@ impl PciDevOps for VfioPciDevice {
             }
         }
     }
-
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        Result::with_context(self.vfio_device.lock().unwrap().reset(), || {
-            "Fail to reset vfio dev"
-        })
-    }
 }
 
 fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute], start: u32, count: u32) -> Vec<RawFd> {
@@ -1008,4 +1010,39 @@ fn get_irq_rawfds(gsi_msi_routes: &[GsiMsiRoute], start: u32, count: u32) -> Vec
         }
     }
     rawfds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_vfio_config_cmdline_parser() {
+        // Test1: right.
+        let vfio_cmd1 = "vfio-pci,host=0000:1a:00.3,id=net,bus=pcie.0,addr=0x5,multifunction=on";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd1, true, false));
+        assert!(result.is_ok());
+        let vfio_config = result.unwrap();
+        assert_eq!(vfio_config.host, Some("0000:1a:00.3".to_string()));
+        assert_eq!(vfio_config.id, "net");
+        assert_eq!(vfio_config.bus, "pcie.0");
+        assert_eq!(vfio_config.addr, (5, 0));
+        assert_eq!(vfio_config.multifunction, Some(true));
+
+        // Test2: Missing bus/addr.
+        let vfio_cmd2 = "vfio-pci,host=0000:1a:00.3,id=net";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd2, true, false));
+        assert!(result.is_err());
+
+        // Test3: `host` conflicts with `sysfsdev`.
+        let vfio_cmd3 = "vfio-pci,host=0000:1a:00.3,sysfsdev=/sys/bus/pci/devices/0000:00:02.0,id=net,bus=pcie.0,addr=0x5";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd3, true, false));
+        assert!(result.is_err());
+
+        // Test4: Missing host/sysfsdev.
+        let vfio_cmd4 = "vfio-pci,id=net,bus=pcie.0,addr=0x1.0x2";
+        let result = VfioConfig::try_parse_from(str_slip_to_clap(vfio_cmd4, true, false));
+        assert!(result.is_err());
+    }
 }

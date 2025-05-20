@@ -96,7 +96,7 @@ impl SocketRWHandler {
     fn parse_fd(&mut self, mhdr: &msghdr) {
         // At least it should has one RawFd.
         // SAFETY: The input parameter is constant.
-        let min_cmsg_len = unsafe { CMSG_LEN(size_of::<RawFd>() as u32) as u64 };
+        let min_cmsg_len = unsafe { u64::from(CMSG_LEN(size_of::<RawFd>() as u32)) };
         if (mhdr.msg_controllen as u64) < min_cmsg_len {
             return;
         }
@@ -111,8 +111,8 @@ impl SocketRWHandler {
             {
                 // SAFETY: The pointer of scm can be guaranteed not null.
                 let fds = unsafe {
-                    let fd_num =
-                        (scm.cmsg_len as u64 - CMSG_LEN(0) as u64) as usize / size_of::<RawFd>();
+                    let fd_num = (scm.cmsg_len as u64 - u64::from(CMSG_LEN(0))) as usize
+                        / size_of::<RawFd>();
                     std::slice::from_raw_parts(CMSG_DATA(scm) as *const RawFd, fd_num)
                 };
                 self.scm_fd.append(&mut fds.to_vec());
@@ -406,7 +406,7 @@ mod tests {
     // Environment Recovery for UnixSocket
     fn recover_unix_socket_environment(socket_id: &str) {
         let socket_name: String = format!("test_{}.sock", socket_id);
-        std::fs::remove_file(&socket_name).unwrap();
+        std::fs::remove_file(socket_name).unwrap();
     }
 
     fn socket_basic_rw(client_fd: RawFd, server_fd: RawFd) -> bool {

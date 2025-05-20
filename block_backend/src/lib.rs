@@ -15,6 +15,7 @@ pub mod qcow2;
 pub mod raw;
 
 use std::{
+    fmt,
     fs::File,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -148,6 +149,66 @@ impl CreateOptions {
         };
 
         Ok(options_qcow2)
+    }
+}
+
+// Transform size into string with storage units.
+fn size_to_string(size: f64) -> Result<String> {
+    let units = ["", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+
+    // Switch to higher power if the integer part is >= 1000,
+    // For example: 1000 * 2^30 bytes
+    // It's better to output 0.978 TiB, rather than 1000 GiB.
+    let n = (size / 1000.0 * 1024.0).log2() as u64;
+    let idx = n / 10;
+    if idx >= units.len() as u64 {
+        bail!("Input value {} is too large", size);
+    }
+    let div = 1_u64 << (idx * 10);
+
+    // Keep three significant digits and do not output any extra zeros,
+    // For example: 512 * 2^20 bytes
+    // It's better to output 512 MiB, rather than 512.000 MiB.
+    let num_str = format!("{:.3}", size / div as f64);
+    let num_str = num_str.trim_end_matches('0').trim_end_matches('.');
+
+    let res = format!("{} {}", num_str, units[idx as usize]);
+    Ok(res)
+}
+
+#[derive(Default)]
+pub struct ImageInfo {
+    pub path: String,
+    pub format: String,
+    pub actual_size: u64,
+    pub virtual_size: u64,
+    pub cluster_size: Option<u64>,
+    pub snap_lists: Option<String>,
+}
+
+impl fmt::Display for ImageInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "image: {}\n\
+            file format: {}\n\
+            virtual size: {} ({} bytes)\n\
+            disk size: {}",
+            self.path,
+            self.format,
+            size_to_string(self.virtual_size as f64).unwrap_or_else(|e| format!("{:?}", e)),
+            self.virtual_size,
+            size_to_string(self.actual_size as f64).unwrap_or_else(|e| format!("{:?}", e))
+        )?;
+
+        if let Some(cluster_size) = self.cluster_size {
+            writeln!(f, "cluster_size: {}", cluster_size)?;
+        }
+
+        if let Some(snap_lists) = &self.snap_lists {
+            write!(f, "Snapshot list:\n{}", snap_lists)?;
+        }
+        Ok(())
     }
 }
 
@@ -288,8 +349,15 @@ impl Default for BlockProperty {
     }
 }
 
+pub enum BlockAllocStatus {
+    DATA,
+    ZERO,
+}
+
 pub trait BlockDriverOps<T: Clone>: Send {
     fn create_image(&mut self, options: &CreateOptions) -> Result<String>;
+
+    fn query_image(&mut self, image_info: &mut ImageInfo) -> Result<()>;
 
     fn check_image(&mut self, res: &mut CheckResult, quite: bool, fix: u64) -> Result<()>;
 
@@ -328,21 +396,55 @@ pub trait BlockDriverOps<T: Clone>: Send {
     fn unregister_io_event(&mut self) -> Result<()>;
 
     fn get_status(&mut self) -> Arc<Mutex<BlockStatus>>;
+
+    // Get a continuous address with the same allocation status starting from `offset`.
+    // Returns this continuous address's allocation status(data or zero) and size.
+    fn get_address_alloc_status(
+        &mut self,
+        _offset: u64,
+        _bytes: u64,
+    ) -> Result<(BlockAllocStatus, u64)> {
+        bail!("Not support!");
+    }
 }
 
 pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
-    file: File,
+    file: Arc<File>,
     aio: Aio<T>,
     prop: BlockProperty,
 ) -> Result<Arc<Mutex<dyn BlockDriverOps<T>>>> {
+    let cloned_drive_id = prop.id.clone();
+    // NOTE: we can drain request when request in io thread.
+    let drain = prop.iothread.is_some();
     match prop.format {
         DiskFormat::Raw => {
             let mut raw_file = RawDriver::new(file, aio, prop.clone());
             let file_size = raw_file.disk_size()?;
-            if file_size & (prop.req_align as u64 - 1) != 0 {
+            if file_size & (u64::from(prop.req_align) - 1) != 0 {
                 bail!("The size of raw file is not aligned to {}.", prop.req_align);
             }
-            Ok(Arc::new(Mutex::new(raw_file)))
+            let new_raw = Arc::new(Mutex::new(raw_file));
+
+            let cloned_raw = Arc::downgrade(&new_raw);
+            let exit_notifier = Arc::new(move || {
+                if let Some(raw) = cloned_raw.upgrade() {
+                    info!("clean up raw {:?} resources.", cloned_drive_id);
+                    if drain {
+                        info!("Drain the inflight IO for drive \"{}\"", cloned_drive_id);
+                        let incomplete = raw.lock().unwrap().get_inflight();
+                        while incomplete.load(Ordering::SeqCst) != 0 {
+                            yield_now();
+                        }
+                    }
+                    info!(
+                        "Drain the inflight IO for drive \"{}\" ends.",
+                        cloned_drive_id
+                    );
+                }
+            }) as Arc<ExitNotifier>;
+            TempCleaner::add_exit_notifier(prop.id, exit_notifier);
+
+            Ok(new_raw)
         }
         DiskFormat::Qcow2 => {
             let mut qcow2 = Qcow2Driver::new(file, aio, prop.clone())
@@ -352,7 +454,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                 .with_context(|| "Failed to load metadata")?;
 
             let file_size = qcow2.disk_size()?;
-            if file_size & (prop.req_align as u64 - 1) != 0 {
+            if file_size & (u64::from(prop.req_align) - 1) != 0 {
                 bail!(
                     "The size of qcow2 file is not aligned to {}.",
                     prop.req_align
@@ -363,11 +465,8 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                 .lock()
                 .unwrap()
                 .insert(prop.id.clone(), new_qcow2.clone());
-            let cloned_qcow2 = Arc::downgrade(&new_qcow2);
-            // NOTE: we can drain request when request in io thread.
-            let drain = prop.iothread.is_some();
-            let cloned_drive_id = prop.id.clone();
 
+            let cloned_qcow2 = Arc::downgrade(&new_qcow2);
             let exit_notifier = Arc::new(move || {
                 if let Some(qcow2) = cloned_qcow2.upgrade() {
                     info!("clean up qcow2 {:?} resources.", cloned_drive_id);
@@ -381,6 +480,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     if let Err(e) = qcow2.lock().unwrap().flush() {
                         error!("Failed to flush qcow2 {:?}", e);
                     }
+                    info!("Flush qcow2 {} metadata success.", cloned_drive_id);
                 }
             }) as Arc<ExitNotifier>;
             TempCleaner::add_exit_notifier(prop.id.clone(), exit_notifier);

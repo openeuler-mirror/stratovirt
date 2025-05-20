@@ -19,8 +19,8 @@ use anyhow::{Context, Result};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AcpiError, AmlActiveLevel, AmlAddressSpaceType, AmlAnd, AmlBuilder, AmlDevice, AmlEdgeLevel,
     AmlEqual, AmlExtendedInterrupt, AmlField, AmlFieldAccessType, AmlFieldLockRule, AmlFieldUnit,
@@ -35,8 +35,11 @@ use address_space::GuestAddress;
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_channel::QmpChannel;
-use util::loop_context::{read_fd, EventNotifier, NotifierOperation};
-use util::{loop_context::NotifierCallback, num_ops::write_data_u32};
+use util::gen_base_func;
+use util::loop_context::{
+    create_new_eventfd, read_fd, EventNotifier, NotifierCallback, NotifierOperation,
+};
+use util::num_ops::write_data_u32;
 
 #[derive(Clone, Copy)]
 pub enum AcpiEvent {
@@ -51,6 +54,7 @@ pub enum AcpiEvent {
 const AML_GED_EVT_REG: &str = "EREG";
 const AML_GED_EVT_SEL: &str = "ESEL";
 
+#[derive(Clone)]
 pub struct GedEvent {
     power_button: Arc<EventFd>,
     #[cfg(target_arch = "x86_64")]
@@ -75,42 +79,29 @@ pub struct Ged {
     base: SysBusDevBase,
     notification_type: Arc<AtomicU32>,
     battery_present: bool,
-}
-
-impl Default for Ged {
-    fn default() -> Self {
-        Self {
-            base: SysBusDevBase::default(),
-            notification_type: Arc::new(AtomicU32::new(AcpiEvent::Nothing as u32)),
-            battery_present: false,
-        }
-    }
+    ged_event: GedEvent,
 }
 
 impl Ged {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        ged_event: GedEvent,
+    pub fn new(
         battery_present: bool,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
-    ) -> Result<Arc<Mutex<Ged>>> {
-        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
-        self.set_sys_resource(sysbus, region_base, region_size)
+        ged_event: GedEvent,
+    ) -> Result<Self> {
+        let mut ged = Self {
+            base: SysBusDevBase::default(),
+            notification_type: Arc::new(AtomicU32::new(AcpiEvent::Nothing as u32)),
+            battery_present,
+            ged_event,
+        };
+        ged.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
+        ged.set_sys_resource(sysbus, region_base, region_size, "Ged")
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
-        self.battery_present = battery_present;
+        ged.set_parent_bus(sysbus.clone());
 
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "Ged")?;
-
-        let ged = dev.lock().unwrap();
-        ged.register_acpi_powerdown_event(ged_event.power_button)
-            .with_context(|| "Failed to register ACPI powerdown event.")?;
-        #[cfg(target_arch = "x86_64")]
-        ged.register_acpi_cpu_resize_event(ged_event.cpu_resize)
-            .with_context(|| "Failed to register ACPI cpu resize event.")?;
-        Ok(dev.clone())
+        Ok(ged)
     }
 
     fn register_acpi_powerdown_event(&self, power_button: Arc<EventFd>) -> Result<()> {
@@ -120,8 +111,9 @@ impl Ged {
             read_fd(power_down_fd);
             ged_clone
                 .notification_type
-                .store(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
+                .fetch_or(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
             ged_clone.inject_interrupt();
+            trace::ged_inject_acpi_event(AcpiEvent::PowerDown as u32);
             if QmpChannel::is_connected() {
                 event!(Powerdown);
             }
@@ -149,8 +141,9 @@ impl Ged {
             read_fd(cpu_resize_fd);
             clone_ged
                 .notification_type
-                .store(AcpiEvent::CpuResize as u32, Ordering::SeqCst);
+                .fetch_or(AcpiEvent::CpuResize as u32, Ordering::SeqCst);
             clone_ged.inject_interrupt();
+            trace::ged_inject_acpi_event(AcpiEvent::CpuResize as u32);
             if QmpChannel::is_connected() {
                 event!(CpuResize);
             }
@@ -174,27 +167,32 @@ impl Ged {
         self.notification_type
             .fetch_or(evt as u32, Ordering::SeqCst);
         self.inject_interrupt();
+        trace::ged_inject_acpi_event(evt as u32);
     }
 }
 
 impl Device for Ged {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let ged_event = self.ged_event.clone();
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        let ged = dev.lock().unwrap();
+        ged.register_acpi_powerdown_event(ged_event.power_button)
+            .with_context(|| "Failed to register ACPI powerdown event.")?;
+        #[cfg(target_arch = "x86_64")]
+        ged.register_acpi_cpu_resize_event(ged_event.cpu_resize)
+            .with_context(|| "Failed to register ACPI cpu resize event.")?;
+        Ok(dev.clone())
     }
 }
 
 impl SysBusDevOps for Ged {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if offset != 0 {
@@ -203,15 +201,12 @@ impl SysBusDevOps for Ged {
         let value = self
             .notification_type
             .swap(AcpiEvent::Nothing as u32, Ordering::SeqCst);
+        trace::ged_read(value);
         write_data_u32(data, value)
     }
 
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         true
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 

@@ -12,7 +12,7 @@
 
 use std::cmp::{max, min};
 use std::mem::size_of;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -31,11 +31,13 @@ use crate::{
     CONFIG_STATUS_FEATURES_OK, CONFIG_STATUS_NEEDS_RESET, INVALID_VECTOR_NUM,
     QUEUE_TYPE_PACKED_VRING, QUEUE_TYPE_SPLIT_VRING, VIRTIO_F_RING_PACKED, VIRTIO_F_VERSION_1,
     VIRTIO_MMIO_INT_CONFIG, VIRTIO_MMIO_INT_VRING, VIRTIO_TYPE_BLOCK, VIRTIO_TYPE_CONSOLE,
-    VIRTIO_TYPE_FS, VIRTIO_TYPE_GPU, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI,
+    VIRTIO_TYPE_FS, VIRTIO_TYPE_GPU, VIRTIO_TYPE_NET, VIRTIO_TYPE_SCSI, VIRTIO_TYPE_VSOCK,
 };
 #[cfg(feature = "virtio_gpu")]
 use address_space::HostMemMapping;
-use address_space::{AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps};
+use address_space::{
+    AddressAttr, AddressRange, AddressSpace, GuestAddress, Region, RegionIoEventFd, RegionOps,
+};
 use devices::pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
     PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
@@ -46,15 +48,14 @@ use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
     PciBus, PciDevBase, PciDevOps, PciError,
 };
-use devices::{Device, DeviceBase};
+use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::num_ops::ranges_overlap;
-use util::num_ops::{read_data_u32, write_data_u32};
-use util::offset_of;
+use util::num_ops::{ranges_overlap, read_data_u32, write_data_u32};
+use util::{gen_base_func, offset_of};
 
 const VIRTIO_QUEUE_MAX: u32 = 1024;
 
@@ -171,7 +172,7 @@ fn get_virtio_class_id(device_type: u32, _device_quirk: Option<VirtioDeviceQuirk
         VIRTIO_TYPE_SCSI => VIRTIO_PCI_CLASS_ID_BLOCK,
         VIRTIO_TYPE_FS => VIRTIO_PCI_CLASS_ID_STORAGE_OTHER,
         VIRTIO_TYPE_NET => VIRTIO_PCI_CLASS_ID_NET,
-        VIRTIO_TYPE_CONSOLE => VIRTIO_PCI_CLASS_ID_COMMUNICATION_OTHER,
+        VIRTIO_TYPE_CONSOLE | VIRTIO_TYPE_VSOCK => VIRTIO_PCI_CLASS_ID_COMMUNICATION_OTHER,
         #[cfg(target_arch = "x86_64")]
         VIRTIO_TYPE_GPU => VIRTIO_PCI_CLASS_ID_DISPLAY_VGA,
         #[cfg(target_arch = "aarch64")]
@@ -326,17 +327,17 @@ impl VirtioPciDevice {
         devfn: u8,
         sys_mem: Arc<AddressSpace>,
         device: Arc<Mutex<dyn VirtioDevice>>,
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         multi_func: bool,
         need_irqfd: bool,
     ) -> Self {
         let queue_num = device.lock().unwrap().queue_num();
         VirtioPciDevice {
             base: PciDevBase {
-                base: DeviceBase::new(name, true),
-                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
+                base: DeviceBase::new(name, true, Some(parent_bus)),
+                config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, VIRTIO_PCI_BAR_MAX),
                 devfn,
-                parent_bus,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             device,
             dev_id: Arc::new(AtomicU16::new(0)),
@@ -390,7 +391,9 @@ impl VirtioPciDevice {
 
                 let mut locked_msix = cloned_msix.lock().unwrap();
                 if locked_msix.enabled {
-                    locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
+                    if vector != INVALID_VECTOR_NUM {
+                        locked_msix.notify(vector, dev_id.load(Ordering::Acquire));
+                    }
                 } else {
                     cloned_intx.lock().unwrap().notify(1);
                 }
@@ -468,11 +471,9 @@ impl VirtioPciDevice {
         }
         locked_dev.virtio_base_mut().queues = queues;
 
-        let parent = self.base.parent_bus.upgrade().unwrap();
-        parent
-            .lock()
-            .unwrap()
-            .update_dev_id(self.base.devfn, &self.dev_id);
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(bus, locked_bus, pci_bus);
+        pci_bus.update_dev_id(self.base.devfn, &self.dev_id);
         if self.need_irqfd {
             let mut queue_num = locked_dev.queue_num();
             // No need to create call event for control queue.
@@ -576,11 +577,11 @@ impl VirtioPciDevice {
                     0
                 }
             }
-            COMMON_MSIX_REG => locked_device.config_vector() as u32,
+            COMMON_MSIX_REG => u32::from(locked_device.config_vector()),
             COMMON_NUMQ_REG => locked_device.virtio_base().queues_config.len() as u32,
             COMMON_STATUS_REG => locked_device.device_status(),
-            COMMON_CFGGENERATION_REG => locked_device.config_generation() as u32,
-            COMMON_Q_SELECT_REG => locked_device.queue_select() as u32,
+            COMMON_CFGGENERATION_REG => u32::from(locked_device.config_generation()),
+            COMMON_Q_SELECT_REG => u32::from(locked_device.queue_select()),
             COMMON_Q_SIZE_REG => locked_device
                 .queue_config()
                 .map(|config| u32::from(config.size))?,
@@ -590,7 +591,7 @@ impl VirtioPciDevice {
             COMMON_Q_ENABLE_REG => locked_device
                 .queue_config()
                 .map(|config| u32::from(config.ready))?,
-            COMMON_Q_NOFF_REG => locked_device.queue_select() as u32,
+            COMMON_Q_NOFF_REG => u32::from(locked_device.queue_select()),
             COMMON_Q_DESCLO_REG => locked_device
                 .queue_config()
                 .map(|config| config.desc_table.0 as u32)?,
@@ -647,7 +648,7 @@ impl VirtioPciDevice {
                 locked_device.set_driver_features(gfeatures_sel, value);
 
                 if gfeatures_sel == 1 {
-                    let features = (locked_device.driver_features(1) as u64) << 32;
+                    let features = u64::from(locked_device.driver_features(1)) << 32;
                     if virtio_has_feature(features, VIRTIO_F_RING_PACKED) {
                         locked_device.set_queue_type(QUEUE_TYPE_PACKED_VRING);
                     } else {
@@ -665,7 +666,7 @@ impl VirtioPciDevice {
             }
             COMMON_STATUS_REG => {
                 if value & CONFIG_STATUS_FEATURES_OK != 0 && value & CONFIG_STATUS_DRIVER_OK == 0 {
-                    let features = (locked_device.driver_features(1) as u64) << 32;
+                    let features = u64::from(locked_device.driver_features(1)) << 32;
                     if !virtio_has_feature(features, VIRTIO_F_VERSION_1) {
                         error!(
                             "Device {} is modern only, but the driver not support VIRTIO_F_VERSION_1", self.base.base.id
@@ -774,7 +775,7 @@ impl VirtioPciDevice {
         };
 
         let common_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
-            let mut value = 0;
+            let mut value: u32 = 0;
             if !read_data_u32(data, &mut value) {
                 return false;
             }
@@ -926,8 +927,8 @@ impl VirtioPciDevice {
             warn!("The offset {} of VirtioPciCfgAccessCap is not aligned", off);
             return;
         }
-        if (off as u64)
-            .checked_add(len as u64)
+        if u64::from(off)
+            .checked_add(u64::from(len))
             .filter(|&end| end <= self.base.config.bars[bar as usize].size)
             .is_none()
         {
@@ -937,12 +938,20 @@ impl VirtioPciDevice {
 
         let result = if is_write {
             let mut data = self.base.config.config[pci_cfg_data_offset..].as_ref();
-            self.sys_mem
-                .write(&mut data, GuestAddress(bar_base + off as u64), len as u64)
+            self.sys_mem.write(
+                &mut data,
+                GuestAddress(bar_base + u64::from(off)),
+                u64::from(len),
+                AddressAttr::MMIO,
+            )
         } else {
             let mut data = self.base.config.config[pci_cfg_data_offset..].as_mut();
-            self.sys_mem
-                .read(&mut data, GuestAddress(bar_base + off as u64), len as u64)
+            self.sys_mem.read(
+                &mut data,
+                GuestAddress(bar_base + u64::from(off)),
+                u64::from(len),
+                AddressAttr::MMIO,
+            )
         };
         if let Err(e) = result {
             error!(
@@ -957,7 +966,7 @@ impl VirtioPciDevice {
         // its own request completion. i.e, If the vq is not enough, vcpu A will
         // receive completion of request that submitted by vcpu B, then A needs
         // to IPI B.
-        min(queues_max as u16 - queues_fixed, nr_cpus as u16)
+        min(queues_max as u16 - queues_fixed, u16::from(nr_cpus))
     }
 
     fn queues_register_irqfd(&self, call_fds: &[Arc<EventFd>]) -> bool {
@@ -1003,26 +1012,24 @@ impl VirtioPciDevice {
 }
 
 impl Device for VirtioPciDevice {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        info!("func: reset, id: {:?}", &self.base.base.id);
+        self.deactivate_device();
+        self.device
+            .lock()
+            .unwrap()
+            .reset()
+            .with_context(|| "Failed to reset virtio device")?;
+        self.base.config.reset()?;
+
+        Ok(())
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
-}
-
-impl PciDevOps for VirtioPciDevice {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         info!("func: realize, id: {:?}", &self.base.base.id);
+        let parent_bus = self.parent_bus().unwrap();
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -1062,7 +1069,7 @@ impl PciDevOps for VirtioPciDevice {
             self.multi_func,
             &mut self.base.config.config,
             self.base.devfn,
-            self.base.parent_bus.clone(),
+            parent_bus.clone(),
         )?;
         #[cfg(target_arch = "aarch64")]
         self.base.config.set_interrupt_pin();
@@ -1134,7 +1141,7 @@ impl PciDevOps for VirtioPciDevice {
         init_intx(
             self.name(),
             &mut self.base.config,
-            self.base.parent_bus.clone(),
+            parent_bus.clone(),
             self.base.devfn,
         )?;
 
@@ -1152,11 +1159,11 @@ impl PciDevOps for VirtioPciDevice {
             .with_context(|| "Failed to realize virtio device")?;
 
         let name = self.name();
-        let devfn = self.base.devfn;
+        let devfn = u64::from(self.base.devfn);
         let dev = Arc::new(Mutex::new(self));
-        let mut mem_region_size = ((VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
-            as u64)
-            .next_power_of_two();
+        let mut mem_region_size =
+            u64::from(VIRTIO_PCI_CAP_NOTIFY_OFFSET + VIRTIO_PCI_CAP_NOTIFY_LENGTH)
+                .next_power_of_two();
         mem_region_size = max(mem_region_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         let modern_mem_region =
             Region::init_container_region(mem_region_size, "VirtioPciModernMem");
@@ -1171,22 +1178,16 @@ impl PciDevOps for VirtioPciDevice {
         )?;
 
         // Register device to pci bus.
-        let pci_bus = dev.lock().unwrap().base.parent_bus.upgrade().unwrap();
-        let mut locked_pci_bus = pci_bus.lock().unwrap();
-        let pci_device = locked_pci_bus.devices.get(&devfn);
-        if pci_device.is_none() {
-            locked_pci_bus.devices.insert(devfn, dev.clone());
-        } else {
-            bail!(
-                "Devfn {:?} has been used by {:?}",
-                &devfn,
-                pci_device.unwrap().lock().unwrap().name()
-            );
-        }
+        let bus = parent_bus.upgrade().unwrap();
+        bus.lock().unwrap().attach_child(devfn, dev.clone())?;
 
-        MigrationManager::register_transport_instance(VirtioPciState::descriptor(), dev, &name);
+        MigrationManager::register_transport_instance(
+            VirtioPciState::descriptor(),
+            dev.clone(),
+            &name,
+        );
 
-        Ok(())
+        Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
@@ -1197,7 +1198,7 @@ impl PciDevOps for VirtioPciDevice {
             .unrealize()
             .with_context(|| "Failed to unrealize the virtio device")?;
 
-        let bus = self.base.parent_bus.upgrade().unwrap();
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
         self.base.config.unregister_bars(&bus)?;
 
         MigrationManager::unregister_device_instance(MsixState::descriptor(), &self.name());
@@ -1205,6 +1206,10 @@ impl PciDevOps for VirtioPciDevice {
 
         Ok(())
     }
+}
+
+impl PciDevOps for VirtioPciDevice {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn read_config(&mut self, offset: usize, data: &mut [u8]) {
         trace::virtio_tpt_read_config(&self.base.base.id, offset as u64, data.len());
@@ -1224,34 +1229,21 @@ impl PciDevOps for VirtioPciDevice {
         }
         trace::virtio_tpt_write_config(&self.base.base.id, offset as u64, data);
 
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(bus, locked_bus, pci_bus);
         self.base.config.write(
             offset,
             data,
             self.dev_id.clone().load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         );
         self.do_cfg_access(offset, end, true);
     }
 
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        info!("func: reset, id: {:?}", &self.base.base.id);
-        self.deactivate_device();
-        self.device
-            .lock()
-            .unwrap()
-            .reset()
-            .with_context(|| "Failed to reset virtio device")?;
-        self.base.config.reset()?;
-
-        Ok(())
-    }
-
     fn get_dev_path(&self) -> Option<String> {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         match self.device.lock().unwrap().device_type() {
             VIRTIO_TYPE_BLOCK => {
                 // The virtio blk device is identified as a single-channel SCSI device,
@@ -1341,12 +1333,12 @@ impl MigrationHook for VirtioPciDevice {
         }
 
         // Reregister ioevents for notifies.
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let locked_parent_bus = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
         if let Err(e) = self.base.config.update_bar_mapping(
             #[cfg(target_arch = "x86_64")]
-            Some(&locked_parent_bus.io_region),
-            Some(&locked_parent_bus.mem_region),
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
         ) {
             bail!("Failed to update bar, error is {:?}", e);
         }
@@ -1383,8 +1375,9 @@ mod tests {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
+    use crate::tests::address_space_init;
     use crate::VirtioBase;
-    use address_space::{AddressSpace, GuestAddress, HostMemMapping};
+    use address_space::{AddressSpace, GuestAddress};
     use devices::pci::{
         config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC},
         le_read_u16,
@@ -1394,13 +1387,13 @@ mod tests {
     const VIRTIO_DEVICE_QUEUE_NUM: usize = 2;
     const VIRTIO_DEVICE_QUEUE_SIZE: u16 = 256;
 
-    pub struct VirtioDeviceTest {
+    struct VirtioDeviceTest {
         base: VirtioBase,
-        pub is_activated: bool,
+        is_activated: bool,
     }
 
     impl VirtioDeviceTest {
-        pub fn new() -> Self {
+        fn new() -> Self {
             let mut base = VirtioBase::new(
                 VIRTIO_DEVICE_TEST_TYPE,
                 VIRTIO_DEVICE_QUEUE_NUM,
@@ -1415,13 +1408,7 @@ mod tests {
     }
 
     impl VirtioDevice for VirtioDeviceTest {
-        fn virtio_base(&self) -> &VirtioBase {
-            &self.base
-        }
-
-        fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-            &mut self.base
-        }
+        gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
         fn realize(&mut self) -> Result<()> {
             self.init_config_features()?;
@@ -1466,30 +1453,39 @@ mod tests {
         };
     }
 
-    #[test]
-    fn test_common_config_dev_feature() {
+    fn virtio_pci_test_init(
+        multi_func: bool,
+    ) -> (
+        Arc<Mutex<VirtioDeviceTest>>,
+        Arc<Mutex<PciBus>>,
+        VirtioPciDevice,
+    ) {
         let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
+        let sys_mem = address_space_init();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(
             String::from("test bus"),
             #[cfg(target_arch = "x86_64")]
             Region::init_container_region(1 << 16, "parent_bus"),
             sys_mem.root().clone(),
         )));
-        let mut virtio_pci = VirtioPciDevice::new(
+        let virtio_pci = VirtioPciDevice::new(
             String::from("test device"),
             0,
             sys_mem,
             virtio_dev.clone(),
-            Arc::downgrade(&parent_bus),
-            false,
+            Arc::downgrade(&(parent_bus.clone() as Arc<Mutex<dyn Bus>>)),
+            multi_func,
             false,
         );
+
+        // Note: if parent_bus is used in the code execution during the testing process, a variable needs to
+        // be used to maintain the count and avoid rust from automatically releasing this `Arc<Mutex<PciBus>`.
+        (virtio_dev, parent_bus, virtio_pci)
+    }
+
+    #[test]
+    fn test_common_config_dev_feature() {
+        let (virtio_dev, _, mut virtio_pci) = virtio_pci_test_init(false);
 
         // Read virtio device features
         virtio_dev.lock().unwrap().set_hfeatures_sel(0_u32);
@@ -1526,28 +1522,7 @@ mod tests {
 
     #[test]
     fn test_common_config_queue() {
-        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev.clone(),
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (virtio_dev, _, virtio_pci) = virtio_pci_test_init(false);
 
         // Read Queue's Descriptor Table address
         virtio_dev
@@ -1556,50 +1531,28 @@ mod tests {
             .set_queue_select(VIRTIO_DEVICE_QUEUE_NUM as u16 - 1);
         let queue_select = virtio_dev.lock().unwrap().queue_select();
         virtio_dev.lock().unwrap().virtio_base_mut().queues_config[queue_select as usize]
-            .desc_table = GuestAddress(0xAABBCCDD_FFEEDDAA);
+            .desc_table = GuestAddress(0xAABB_CCDD_FFEE_DDAA);
         com_cfg_read_test!(virtio_pci, COMMON_Q_DESCLO_REG, 0xFFEEDDAA_u32);
         com_cfg_read_test!(virtio_pci, COMMON_Q_DESCHI_REG, 0xAABBCCDD_u32);
 
         // Read Queue's Available Ring address
         virtio_dev.lock().unwrap().set_queue_select(0);
         virtio_dev.lock().unwrap().virtio_base_mut().queues_config[0].avail_ring =
-            GuestAddress(0x11223344_55667788);
+            GuestAddress(0x1122_3344_5566_7788);
         com_cfg_read_test!(virtio_pci, COMMON_Q_AVAILLO_REG, 0x55667788_u32);
         com_cfg_read_test!(virtio_pci, COMMON_Q_AVAILHI_REG, 0x11223344_u32);
 
         // Read Queue's Used Ring address
         virtio_dev.lock().unwrap().set_queue_select(0);
         virtio_dev.lock().unwrap().virtio_base_mut().queues_config[0].used_ring =
-            GuestAddress(0x55667788_99AABBCC);
+            GuestAddress(0x5566_7788_99AA_BBCC);
         com_cfg_read_test!(virtio_pci, COMMON_Q_USEDLO_REG, 0x99AABBCC_u32);
         com_cfg_read_test!(virtio_pci, COMMON_Q_USEDHI_REG, 0x55667788_u32);
     }
 
     #[test]
     fn test_common_config_queue_error() {
-        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let cloned_virtio_dev = virtio_dev.clone();
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            cloned_virtio_dev,
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (virtio_dev, _, mut virtio_pci) = virtio_pci_test_init(false);
 
         assert!(init_msix(
             &mut virtio_pci.base,
@@ -1634,7 +1587,7 @@ mod tests {
                 .unwrap()
                 .virtio_base()
                 .queues_config
-                .get(0)
+                .first()
                 .unwrap()
                 .ready
         );
@@ -1652,29 +1605,8 @@ mod tests {
 
     #[test]
     fn test_virtio_pci_config_access() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev,
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (_, _parent_bus, mut virtio_pci) = virtio_pci_test_init(false);
+
         virtio_pci.init_write_mask(false).unwrap();
         virtio_pci.init_write_clear_mask(false).unwrap();
 
@@ -1693,69 +1625,14 @@ mod tests {
 
     #[test]
     fn test_virtio_pci_realize() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev,
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
+        let (_, _parent_bus, virtio_pci) = virtio_pci_test_init(false);
         assert!(virtio_pci.realize().is_ok());
     }
 
     #[test]
     fn test_device_activate() {
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let mem_size: u64 = 1024 * 1024;
-        let host_mmap = Arc::new(
-            HostMemMapping::new(GuestAddress(0), None, mem_size, None, false, false, false)
-                .unwrap(),
-        );
-        sys_mem
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "sysmem"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
+        let (virtio_dev, _parent_bus, mut virtio_pci) = virtio_pci_test_init(false);
 
-        let virtio_dev = Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            0,
-            sys_mem,
-            virtio_dev.clone(),
-            Arc::downgrade(&parent_bus),
-            false,
-            false,
-        );
         #[cfg(target_arch = "aarch64")]
         virtio_pci.base.config.set_interrupt_pin();
 
@@ -1769,10 +1646,11 @@ mod tests {
         )
         .unwrap();
 
+        let parent_bus = virtio_pci.parent_bus().unwrap();
         init_intx(
             virtio_pci.name(),
             &mut virtio_pci.base.config,
-            virtio_pci.base.parent_bus.clone(),
+            parent_bus.clone(),
             virtio_pci.base.devfn,
         )
         .unwrap();
@@ -1788,7 +1666,7 @@ mod tests {
             .iter_mut()
         {
             queue_cfg.desc_table = GuestAddress(0);
-            queue_cfg.avail_ring = GuestAddress((VIRTIO_DEVICE_QUEUE_SIZE as u64) * 16);
+            queue_cfg.avail_ring = GuestAddress(u64::from(VIRTIO_DEVICE_QUEUE_SIZE) * 16);
             queue_cfg.used_ring = GuestAddress(2 * 4096);
             queue_cfg.ready = true;
             queue_cfg.size = VIRTIO_DEVICE_QUEUE_SIZE;
@@ -1800,7 +1678,7 @@ mod tests {
         let status = (CONFIG_STATUS_ACKNOWLEDGE | CONFIG_STATUS_DRIVER | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
+        assert!(!virtio_dev.lock().unwrap().device_activated());
         // Device status is not ok, failed to activate virtio device
         let status = (CONFIG_STATUS_ACKNOWLEDGE
             | CONFIG_STATUS_DRIVER
@@ -1808,7 +1686,7 @@ mod tests {
             | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
+        assert!(!virtio_dev.lock().unwrap().device_activated());
         // Status is ok, virtio device is activated.
         let status = (CONFIG_STATUS_ACKNOWLEDGE
             | CONFIG_STATUS_DRIVER
@@ -1816,48 +1694,27 @@ mod tests {
             | CONFIG_STATUS_FEATURES_OK)
             .as_bytes();
         (common_cfg_ops.write)(status, GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), true);
+        assert!(virtio_dev.lock().unwrap().device_activated());
 
         // If device status(not zero) is set to zero, reset the device
         (common_cfg_ops.write)(0_u32.as_bytes(), GuestAddress(0), COMMON_STATUS_REG);
-        assert_eq!(virtio_dev.lock().unwrap().device_activated(), false);
+        assert!(!virtio_dev.lock().unwrap().device_activated());
     }
 
     #[test]
     fn test_multifunction() {
-        let virtio_dev: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioDeviceTest::new()));
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sysmem"),
-            "sysmem",
-            None,
-        )
-        .unwrap();
-        let parent_bus = Arc::new(Mutex::new(PciBus::new(
-            String::from("test bus"),
-            #[cfg(target_arch = "x86_64")]
-            Region::init_container_region(1 << 16, "parent_bus"),
-            sys_mem.root().clone(),
-        )));
-        let mut virtio_pci = VirtioPciDevice::new(
-            String::from("test device"),
-            24,
-            sys_mem,
-            virtio_dev,
-            Arc::downgrade(&parent_bus),
-            true,
-            false,
-        );
+        let (_, _parent_bus, mut virtio_pci) = virtio_pci_test_init(true);
 
+        let parent_bus = virtio_pci.parent_bus().unwrap();
         assert!(init_multifunction(
             virtio_pci.multi_func,
             &mut virtio_pci.base.config.config,
             virtio_pci.base.devfn,
-            virtio_pci.base.parent_bus.clone()
+            parent_bus,
         )
         .is_ok());
         let header_type =
             le_read_u16(&virtio_pci.base.config.config, HEADER_TYPE as usize).unwrap();
-        assert_eq!(header_type, HEADER_TYPE_MULTIFUNC as u16);
+        assert_eq!(header_type, u16::from(HEADER_TYPE_MULTIFUNC));
     }
 }

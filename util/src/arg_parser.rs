@@ -608,6 +608,9 @@ impl<'a> ArgMatches<'a> {
 
     fn split_arg(args: &[String]) -> (&[String], &[String]) {
         if let Some(index) = args.iter().position(|arg| arg == ARG_SEPARATOR) {
+            if index == args.len() - 1 {
+                return (&args[..index], &[]);
+            }
             return (&args[..index], &args[index + 1..]);
         }
         (args, &[])
@@ -626,8 +629,8 @@ fn parse_cmdline(
     let mut arg_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut multi_vec: Vec<String> = Vec::new();
 
-    let mut i = (0, "");
-    let mut j = 1;
+    let mut i: (usize, &str) = (0, "");
+    let mut j: usize = 1;
     for cmd_arg in &cmd_args[1..] {
         if !allow_list.contains(cmd_arg)
             && cmd_arg.starts_with(PREFIX_CHARS_SHORT)
@@ -800,7 +803,7 @@ mod tests {
         arg_parser.output_help(&mut buffer.inner);
 
         let help_str = buffer.get_msg_vec();
-        let help_msg = help_str.split("\n").collect::<Vec<&str>>();
+        let help_msg = help_str.split('\n').collect::<Vec<&str>>();
         assert_eq!(help_msg[0], "StratoVirt 1.0.0");
         assert_eq!(help_msg[1], "Huawei Technologies Co., Ltd");
         assert_eq!(help_msg[2], "A light kvm-based hypervisor.");
@@ -832,10 +835,10 @@ mod tests {
             arg.possible_values.as_ref().unwrap(),
             &vec!["vm1", "vm2", "vm3"]
         );
-        assert_eq!(arg.required, false);
-        assert_eq!(arg.presented, true);
-        assert_eq!(arg.hiddable, false);
-        assert_eq!(arg.can_no_value, false);
+        assert!(!arg.required);
+        assert!(arg.presented);
+        assert!(!arg.hiddable);
+        assert!(!arg.can_no_value);
         assert_eq!(arg.value.as_ref().unwrap(), "vm1");
 
         let (help_msg, help_type) = arg.help_message();

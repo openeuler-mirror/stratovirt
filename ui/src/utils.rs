@@ -182,12 +182,12 @@ mod tests {
     fn test_buffpool_base() {
         let mut buffpool = BuffPool::new();
         buffpool.set_limit(Some(7));
-        buffpool.append_limit((0x12345678 as u32).to_be_bytes().to_vec());
-        buffpool.append_limit((0x12 as u8).to_be_bytes().to_vec());
-        buffpool.append_limit((0x1234 as u16).to_be_bytes().to_vec());
-        assert!(buffpool.len() == 7 as usize);
+        buffpool.append_limit(0x12345678_u32.to_be_bytes().to_vec());
+        buffpool.append_limit(0x12_u8.to_be_bytes().to_vec());
+        buffpool.append_limit(0x1234_u16.to_be_bytes().to_vec());
+        assert!(buffpool.len() == 7_usize);
         buffpool.remove_front(1);
-        assert!(buffpool.len() == 6 as usize);
+        assert!(buffpool.len() == 6_usize);
         let mut buf: Vec<u8> = vec![0_u8; 4];
         buffpool.read_front(&mut buf, 4);
         assert!(buf == vec![52, 86, 120, 18]);

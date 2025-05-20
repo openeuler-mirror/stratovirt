@@ -15,11 +15,11 @@ use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 
+use devices::misc::pvpanic::{PVPANIC_CRASHLOADED, PVPANIC_PANICKED};
 use devices::pci::config::{
     PCI_CLASS_SYSTEM_OTHER, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
     PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET,
 };
-use machine_manager::config::{PVPANIC_CRASHLOADED, PVPANIC_PANICKED};
 use mod_test::{
     libdriver::{machine::TestStdMachine, pci::*},
     libtest::{test_init, TestState, MACHINE_TYPE_ARG},
@@ -59,14 +59,14 @@ impl PvPanicDevCfg {
             test_machine_args.append(&mut args);
         }
 
-        let pvpanic_str = fmt_pvpanic_deves(self.clone());
+        let pvpanic_str = fmt_pvpanic_deves(*self);
         args = pvpanic_str[..].split(' ').collect();
         test_machine_args.append(&mut args);
 
         let test_state = Rc::new(RefCell::new(test_init(test_machine_args)));
         let machine = Rc::new(RefCell::new(TestStdMachine::new(test_state.clone())));
 
-        let mut pvpanic_pci_dev = TestPciDev::new(machine.clone().borrow().pci_bus.clone());
+        let mut pvpanic_pci_dev = TestPciDev::new(machine.borrow().pci_bus.clone());
         let devfn = self.addr << 3;
         pvpanic_pci_dev.devfn = devfn;
 

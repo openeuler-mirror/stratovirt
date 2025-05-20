@@ -10,7 +10,7 @@ description = "Emulation machines"
 log = "0.4"
 libc = "0.2"
 serde_json = "1.0"
-vmm-sys-util = "0.11.1"
+vmm-sys-util = "0.12.1"
 thiserror = "1.0"
 anyhow = "1.0"
 acpi = { path = "../acpi" }
@@ -24,7 +24,7 @@ migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
 virtio = { path = "../virtio" }
-vfio = { path = "../vfio" }
+vfio = { path = "../vfio" , optional = true }
 block_backend = { path = "../block_backend" }
 ui = { path = "../ui" }
 trace = { path = "../trace" }
@@ -32,7 +32,7 @@ clap = { version = "=4.1.4", default-features = false, features = ["std", "deriv
 
 [features]
 default = []
-boot_time = ["cpu/boot_time"]
+boot_time = ["cpu/boot_time", "hypervisor/boot_time"]
 scream = ["devices/scream", "machine_manager/scream"]
 scream_alsa = ["scream", "devices/scream_alsa", "machine_manager/scream_alsa"]
 scream_pulseaudio = ["scream", "devices/scream_pulseaudio","machine_manager/scream_pulseaudio"]
@@ -50,3 +50,14 @@ vnc_auth = ["vnc"]
 ohui_srv = ["windows_emu_pid", "ui/ohui_srv", "machine_manager/ohui_srv", "virtio/ohui_srv"]
 ramfb = ["devices/ramfb", "machine_manager/ramfb"]
 virtio_gpu = ["virtio/virtio_gpu", "machine_manager/virtio_gpu"]
+vfio_device = ["vfio", "hypervisor/vfio_device"]
+usb_uas = ["devices/usb_uas"]
+virtio_rng = ["virtio/virtio_rng"]
+virtio_scsi = ["virtio/virtio_scsi"]
+vhost_vsock = ["virtio/vhost_vsock"]
+vhostuser_block = ["virtio/vhostuser_block"]
+vhostuser_net = ["virtio/vhostuser_net"]
+vhost_net = ["virtio/vhost_net"]
+trace_to_logger = ["devices/trace_to_logger"]
+trace_to_ftrace = ["devices/trace_to_ftrace"]
+trace_to_hitrace = ["devices/trace_to_hitrace"]

@@ -75,7 +75,7 @@ pub enum X86RegsIndex {
 
 /// X86 CPU booting configure information
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Copy)]
 pub struct X86CPUBootConfig {
     pub prot64_mode: bool,
     /// Register %rip value
@@ -120,14 +120,14 @@ impl X86CPUTopology {
 /// The state of vCPU's register.
 #[allow(clippy::upper_case_acronyms)]
 #[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
+#[derive(Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
 pub struct X86CPUState {
-    max_vcpus: u32,
-    nr_threads: u32,
-    nr_cores: u32,
-    nr_dies: u32,
-    nr_sockets: u32,
+    max_vcpus: u8,
+    nr_threads: u8,
+    nr_cores: u8,
+    nr_dies: u8,
+    nr_sockets: u8,
     pub apic_id: u32,
     pub regs: Regs,
     pub sregs: Sregs,
@@ -142,6 +142,34 @@ pub struct X86CPUState {
     pub debugregs: DebugRegs,
 }
 
+impl Clone for X86CPUState {
+    fn clone(&self) -> Self {
+        let mut xsave: Xsave = Default::default();
+        // we just clone xsave.region, because xsave.extra does not save
+        // valid values and it is not allowed to be cloned.
+        xsave.region = self.xsave.region;
+        Self {
+            max_vcpus: self.max_vcpus,
+            nr_threads: self.nr_threads,
+            nr_cores: self.nr_cores,
+            nr_dies: self.nr_dies,
+            nr_sockets: self.nr_sockets,
+            apic_id: self.apic_id,
+            regs: self.regs,
+            sregs: self.sregs,
+            fpu: self.fpu,
+            mp_state: self.mp_state,
+            lapic: self.lapic,
+            msr_len: self.msr_len,
+            msr_list: self.msr_list,
+            cpu_events: self.cpu_events,
+            xsave,
+            xcrs: self.xcrs,
+            debugregs: self.debugregs,
+        }
+    }
+}
+
 impl X86CPUState {
     /// Allocates a new `X86CPUState`.
     ///
@@ -149,7 +177,7 @@ impl X86CPUState {
     ///
     /// * `vcpu_id` - ID of this `CPU`.
     /// * `max_vcpus` - Number of vcpus.
-    pub fn new(vcpu_id: u32, max_vcpus: u32) -> Self {
+    pub fn new(vcpu_id: u32, max_vcpus: u8) -> Self {
         let mp_state = MpState {
             mp_state: if vcpu_id == 0 {
                 MP_STATE_RUNNABLE
@@ -181,7 +209,8 @@ impl X86CPUState {
         self.msr_len = locked_cpu_state.msr_len;
         self.msr_list = locked_cpu_state.msr_list;
         self.cpu_events = locked_cpu_state.cpu_events;
-        self.xsave = locked_cpu_state.xsave;
+        self.xsave = Default::default();
+        self.xsave.region = locked_cpu_state.xsave.region;
         self.xcrs = locked_cpu_state.xcrs;
         self.debugregs = locked_cpu_state.debugregs;
     }
@@ -192,9 +221,9 @@ impl X86CPUState {
     ///
     /// * `topology` - X86 CPU Topology
     pub fn set_cpu_topology(&mut self, topology: &X86CPUTopology) -> Result<()> {
-        self.nr_threads = topology.threads as u32;
-        self.nr_cores = topology.cores as u32;
-        self.nr_dies = topology.dies as u32;
+        self.nr_threads = topology.threads;
+        self.nr_cores = topology.cores;
+        self.nr_dies = topology.dies;
         Ok(())
     }
 
@@ -210,19 +239,19 @@ impl X86CPUState {
         self.lapic = lapic;
 
         // SAFETY: The member regs in struct LapicState is a u8 array with 1024 entries,
-        // so it's saft to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
+        // so it's safe to cast u8 pointer to u32 at position APIC_LVT0 and APIC_LVT1.
         // Safe because all value in this unsafe block is certain.
         unsafe {
             let apic_lvt_lint0 = &mut self.lapic.regs[APIC_LVT0..] as *mut [i8] as *mut u32;
-            *apic_lvt_lint0 &= !0x700;
-            *apic_lvt_lint0 |= APIC_MODE_EXTINT << 8;
+            let modified = (apic_lvt_lint0.read_unaligned() & !0x700) | (APIC_MODE_EXTINT << 8);
+            apic_lvt_lint0.write_unaligned(modified);
 
             let apic_lvt_lint1 = &mut self.lapic.regs[APIC_LVT1..] as *mut [i8] as *mut u32;
-            *apic_lvt_lint1 &= !0x700;
-            *apic_lvt_lint1 |= APIC_MODE_NMI << 8;
+            let modified = (apic_lvt_lint1.read_unaligned() & !0x700) | (APIC_MODE_NMI << 8);
+            apic_lvt_lint1.write_unaligned(modified);
 
             let apic_id = &mut self.lapic.regs[APIC_ID..] as *mut [i8] as *mut u32;
-            *apic_id = self.apic_id << 24;
+            apic_id.write_unaligned(self.apic_id << 24);
         }
 
         Ok(())
@@ -242,17 +271,17 @@ impl X86CPUState {
     pub fn setup_sregs(&mut self, sregs: Sregs, boot_config: &X86CPUBootConfig) -> Result<()> {
         self.sregs = sregs;
 
-        self.sregs.cs.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.cs.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.cs.selector = boot_config.boot_selector;
-        self.sregs.ds.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.ds.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.ds.selector = boot_config.boot_selector;
-        self.sregs.es.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.es.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.es.selector = boot_config.boot_selector;
-        self.sregs.fs.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.fs.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.fs.selector = boot_config.boot_selector;
-        self.sregs.gs.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.gs.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.gs.selector = boot_config.boot_selector;
-        self.sregs.ss.base = (boot_config.boot_selector as u64) << 4;
+        self.sregs.ss.base = u64::from(boot_config.boot_selector) << 4;
         self.sregs.ss.selector = boot_config.boot_selector;
 
         if boot_config.prot64_mode {
@@ -330,6 +359,7 @@ impl X86CPUState {
                 data,
                 ..Default::default()
             };
+            // usize is enough for storing msr len.
             self.msr_len += 1;
         }
     }
@@ -363,6 +393,7 @@ impl X86CPUState {
     }
 
     pub fn setup_cpuid(&self, cpuid: &mut CpuId) -> Result<()> {
+        // nr_xx is no less than 1.
         let core_offset = 32u32 - (self.nr_threads - 1).leading_zeros();
         let die_offset = (32u32 - (self.nr_cores - 1).leading_zeros()) + core_offset;
         let pkg_offset = (32u32 - (self.nr_dies - 1).leading_zeros()) + die_offset;
@@ -379,29 +410,36 @@ impl X86CPUState {
                     }
                 }
                 2 => {
-                    host_cpuid(
-                        2,
-                        0,
-                        &mut entry.eax,
-                        &mut entry.ebx,
-                        &mut entry.ecx,
-                        &mut entry.edx,
-                    );
+                    // SAFETY: entry is from KVM_GET_SUPPORTED_CPUID.
+                    unsafe {
+                        host_cpuid(
+                            2,
+                            0,
+                            &mut entry.eax,
+                            &mut entry.ebx,
+                            &mut entry.ecx,
+                            &mut entry.edx,
+                        );
+                    }
                 }
                 4 => {
                     // cache info: needed for Pentium Pro compatibility
                     // Passthrough host cache info directly to guest
-                    host_cpuid(
-                        4,
-                        entry.index,
-                        &mut entry.eax,
-                        &mut entry.ebx,
-                        &mut entry.ecx,
-                        &mut entry.edx,
-                    );
+                    // SAFETY: entry is from KVM_GET_SUPPORTED_CPUID.
+                    unsafe {
+                        host_cpuid(
+                            4,
+                            entry.index,
+                            &mut entry.eax,
+                            &mut entry.ebx,
+                            &mut entry.ecx,
+                            &mut entry.edx,
+                        );
+                    }
                     entry.eax &= !0xfc00_0000;
                     if entry.eax & 0x0001_ffff != 0 && self.max_vcpus > 1 {
-                        entry.eax |= (self.max_vcpus - 1) << 26;
+                        // max_vcpus is no less than 1.
+                        entry.eax |= (u32::from(self.max_vcpus) - 1) << 26;
                     }
                 }
                 6 => {
@@ -423,12 +461,13 @@ impl X86CPUState {
                     match entry.index {
                         0 => {
                             entry.eax = core_offset;
-                            entry.ebx = self.nr_threads;
+                            entry.ebx = u32::from(self.nr_threads);
                             entry.ecx |= ECX_THREAD;
                         }
                         1 => {
                             entry.eax = pkg_offset;
-                            entry.ebx = self.nr_threads * self.nr_cores;
+                            // nr_cpus is no more than u8::MAX, multiply will not overflow.
+                            entry.ebx = u32::from(self.nr_threads * self.nr_cores);
                             entry.ecx |= ECX_CORE;
                         }
                         _ => {
@@ -454,17 +493,19 @@ impl X86CPUState {
                     match entry.index {
                         0 => {
                             entry.eax = core_offset;
-                            entry.ebx = self.nr_threads;
+                            entry.ebx = u32::from(self.nr_threads);
                             entry.ecx |= ECX_THREAD;
                         }
                         1 => {
                             entry.eax = die_offset;
-                            entry.ebx = self.nr_cores * self.nr_threads;
+                            // nr_cpus is no more than u8::MAX, multiply will not overflow.
+                            entry.ebx = u32::from(self.nr_cores * self.nr_threads);
                             entry.ecx |= ECX_CORE;
                         }
                         2 => {
                             entry.eax = pkg_offset;
-                            entry.ebx = self.nr_dies * self.nr_cores * self.nr_threads;
+                            // nr_cpus is no more than u8::MAX, multiply will not overflow.
+                            entry.ebx = u32::from(self.nr_dies * self.nr_cores * self.nr_threads);
                             entry.ecx |= ECX_DIE;
                         }
                         _ => {
@@ -476,14 +517,17 @@ impl X86CPUState {
                 }
                 0x8000_0002..=0x8000_0004 => {
                     // Passthrough host cpu model name directly to guest
-                    host_cpuid(
-                        entry.function,
-                        entry.index,
-                        &mut entry.eax,
-                        &mut entry.ebx,
-                        &mut entry.ecx,
-                        &mut entry.edx,
-                    );
+                    // SAFETY: entry is from KVM_GET_SUPPORTED_CPUID.
+                    unsafe {
+                        host_cpuid(
+                            entry.function,
+                            entry.index,
+                            &mut entry.eax,
+                            &mut entry.ebx,
+                            &mut entry.ecx,
+                            &mut entry.edx,
+                        );
+                    }
                 }
                 _ => (),
             }
@@ -512,11 +556,11 @@ impl StateTransfer for CPU {
     }
 
     fn set_state(&self, state: &[u8]) -> Result<()> {
-        let cpu_state = *X86CPUState::from_bytes(state)
+        let cpu_state = X86CPUState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("CPU"))?;
 
         let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
-        *cpu_state_locked = cpu_state;
+        *cpu_state_locked = cpu_state.clone();
 
         Ok(())
     }

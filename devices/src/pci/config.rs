@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use log::{error, warn};
+use log::{error, info, warn};
 
 use crate::pci::intx::Intx;
 use crate::pci::msix::{Msix, MSIX_TABLE_ENTRY_SIZE};
@@ -22,6 +22,7 @@ use crate::pci::{
     le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64,
     pci_ext_cap_next, PciBus, PciError, BDF_FUNC_SHIFT,
 };
+use crate::{convert_bus_ref, Bus, PCI_BUS};
 use address_space::Region;
 use util::num_ops::ranges_overlap;
 
@@ -382,6 +383,8 @@ pub enum PcieDevType {
 /// Configuration space of PCI/PCIe device.
 #[derive(Clone)]
 pub struct PciConfig {
+    /// Device number and function number.
+    pub devfn: u8,
     /// Configuration space data.
     pub config: Vec<u8>,
     /// Mask of writable bits.
@@ -411,7 +414,7 @@ impl PciConfig {
     ///
     /// * `config_size` - Configuration size in bytes.
     /// * `nr_bar` - Number of BARs.
-    pub fn new(config_size: usize, nr_bar: u8) -> Self {
+    pub fn new(devfn: u8, config_size: usize, nr_bar: u8) -> Self {
         let mut bars = Vec::new();
         for _ in 0..nr_bar as usize {
             bars.push(Bar {
@@ -425,15 +428,16 @@ impl PciConfig {
         }
 
         PciConfig {
+            devfn,
             config: vec![0; config_size],
             write_mask: vec![0; config_size],
             write_clear_mask: vec![0; config_size],
             bars,
-            last_cap_end: PCI_CONFIG_HEAD_END as u16,
+            last_cap_end: u16::from(PCI_CONFIG_HEAD_END),
             last_ext_cap_offset: 0,
             last_ext_cap_end: PCI_CONFIG_SPACE_SIZE as u16,
             msix: None,
-            pci_express_cap_offset: PCI_CONFIG_HEAD_END as u16,
+            pci_express_cap_offset: u16::from(PCI_CONFIG_HEAD_END),
             intx: None,
         }
     }
@@ -733,7 +737,7 @@ impl PciConfig {
                 return BAR_SPACE_UNMAPPED;
             }
             let bar_val = le_read_u32(&self.config, offset).unwrap();
-            return (bar_val & IO_BASE_ADDR_MASK) as u64;
+            return u64::from(bar_val & IO_BASE_ADDR_MASK);
         }
 
         if command & COMMAND_MEMORY_SPACE == 0 {
@@ -743,7 +747,7 @@ impl PciConfig {
             RegionType::Io => BAR_SPACE_UNMAPPED,
             RegionType::Mem32Bit => {
                 let bar_val = le_read_u32(&self.config, offset).unwrap();
-                (bar_val & MEM_BASE_ADDR_MASK as u32) as u64
+                u64::from(bar_val & MEM_BASE_ADDR_MASK as u32)
             }
             RegionType::Mem64Bit => {
                 let bar_val = le_read_u64(&self.config, offset).unwrap();
@@ -804,8 +808,8 @@ impl PciConfig {
     /// # Arguments
     ///
     /// * `bus` - The bus which region registered.
-    pub fn unregister_bars(&mut self, bus: &Arc<Mutex<PciBus>>) -> Result<()> {
-        let locked_bus = bus.lock().unwrap();
+    pub fn unregister_bars(&mut self, bus: &Arc<Mutex<dyn Bus>>) -> Result<()> {
+        PCI_BUS!(bus, locked_bus, pci_bus);
         for bar in self.bars.iter_mut() {
             if bar.address == BAR_SPACE_UNMAPPED || bar.size == 0 {
                 continue;
@@ -815,7 +819,7 @@ impl PciConfig {
                 {
                     #[cfg(target_arch = "x86_64")]
                     if let Some(region) = bar.region.as_ref() {
-                        locked_bus
+                        pci_bus
                             .io_region
                             .delete_subregion(region)
                             .with_context(|| "Failed to unregister io bar")?;
@@ -823,7 +827,7 @@ impl PciConfig {
                 }
                 _ => {
                     if let Some(region) = bar.region.as_ref() {
-                        locked_bus
+                        pci_bus
                             .mem_region
                             .delete_subregion(region)
                             .with_context(|| "Failed to unregister mem bar")?;
@@ -904,7 +908,11 @@ impl PciConfig {
                     }
                 }
 
-                trace::pci_update_mappings_del(id, self.bars[id].address, self.bars[id].size);
+                info!(
+                    "pci dev {} delete bar {} mapping: addr 0x{:X} size {}",
+                    self.devfn, id, self.bars[id].address, self.bars[id].size
+                );
+
                 self.bars[id].address = BAR_SPACE_UNMAPPED;
             }
 
@@ -938,7 +946,11 @@ impl PciConfig {
                     }
                 }
 
-                trace::pci_update_mappings_add(id, self.bars[id].address, self.bars[id].size);
+                info!(
+                    "pci dev {} update bar {} mapping: addr 0x{:X} size {}",
+                    self.devfn, id, new_addr, self.bars[id].size
+                );
+
                 self.bars[id].address = new_addr;
             }
         }
@@ -1001,7 +1013,7 @@ impl PciConfig {
         le_write_u32(
             &mut self.config,
             offset,
-            id as u32 | (version << PCI_EXT_CAP_VER_SHIFT),
+            u32::from(id) | (version << PCI_EXT_CAP_VER_SHIFT),
         )?;
         if self.last_ext_cap_offset != 0 {
             let old_value = le_read_u32(&self.config, self.last_ext_cap_offset as usize)?;
@@ -1028,7 +1040,7 @@ impl PciConfig {
             self.add_pci_cap(CapId::Pcie as u8, PCI_EXP_VER2_SIZEOF as usize)?;
         self.pci_express_cap_offset = cap_offset as u16;
         let mut offset: usize = cap_offset + PcieCap::CapReg as usize;
-        let pci_type = (dev_type << PCI_EXP_FLAGS_TYPE_SHIFT) as u16 & PCI_EXP_FLAGS_TYPE;
+        let pci_type = u16::from(dev_type << PCI_EXP_FLAGS_TYPE_SHIFT) & PCI_EXP_FLAGS_TYPE;
         le_write_u16(
             &mut self.config,
             offset,
@@ -1053,7 +1065,7 @@ impl PciConfig {
                 | PCI_EXP_LNKCAP_ASPMS_0S
                 | PCI_EXP_LNKCAP_LBNC
                 | PCI_EXP_LNKCAP_DLLLARC
-                | ((port_num as u32) << PCI_EXP_LNKCAP_PN_SHIFT),
+                | (u32::from(port_num) << PCI_EXP_LNKCAP_PN_SHIFT),
         )?;
         offset = cap_offset + PcieCap::LinkStat as usize;
         le_write_u16(
@@ -1073,7 +1085,7 @@ impl PciConfig {
                 | PCI_EXP_SLTCAP_PIP
                 | PCI_EXP_SLTCAP_HPS
                 | PCI_EXP_SLTCAP_HPC
-                | ((slot as u32) << PCI_EXP_SLTCAP_PSN_SHIFT),
+                | (u32::from(slot) << PCI_EXP_SLTCAP_PSN_SHIFT),
         )?;
         offset = cap_offset + PcieCap::SlotCtl as usize;
         le_write_u16(
@@ -1172,8 +1184,8 @@ impl PciConfig {
     fn validate_bar_size(&self, bar_type: RegionType, size: u64) -> Result<()> {
         if !size.is_power_of_two()
             || (bar_type == RegionType::Io && size < MINIMUM_BAR_SIZE_FOR_PIO as u64)
-            || (bar_type == RegionType::Mem32Bit && size > u32::MAX as u64)
-            || (bar_type == RegionType::Io && size > u16::MAX as u64)
+            || (bar_type == RegionType::Mem32Bit && size > u64::from(u32::MAX))
+            || (bar_type == RegionType::Io && size > u64::from(u16::MAX))
         {
             return Err(anyhow!(PciError::InvalidConf(
                 "Bar size of type ".to_string() + &bar_type.to_string(),
@@ -1196,6 +1208,10 @@ impl PciConfig {
         let max_vector = table_len / MSIX_TABLE_ENTRY_SIZE as usize;
         vector_nr < max_vector as u32
     }
+
+    pub fn bus_maser_enable(&self) -> bool {
+        self.config[COMMAND as usize] as u16 & COMMAND_BUS_MASTER != 0
+    }
 }
 
 #[cfg(test)]
@@ -1208,7 +1224,7 @@ mod tests {
 
     #[test]
     fn test_find_pci_cap() {
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 3);
         let offset = pci_config.find_pci_cap(MSIX_CAP_ID);
         assert_eq!(offset, 0xff);
 
@@ -1238,7 +1254,7 @@ mod tests {
             write: Arc::new(write_ops),
         };
         let region = Region::init_io_region(8192, region_ops.clone(), "io");
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 3);
 
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
@@ -1264,7 +1280,7 @@ mod tests {
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize,
-            IO_BASE_ADDR_MASK | BAR_IO_SPACE as u32,
+            IO_BASE_ADDR_MASK | u32::from(BAR_IO_SPACE),
         )
         .unwrap();
         le_write_u32(
@@ -1276,7 +1292,7 @@ mod tests {
         le_write_u64(
             &mut pci_config.config,
             BAR_0 as usize + 2 * REG_SIZE,
-            MEM_BASE_ADDR_MASK | (BAR_MEM_64BIT | BAR_PREFETCH) as u64,
+            MEM_BASE_ADDR_MASK | u64::from(BAR_MEM_64BIT | BAR_PREFETCH),
         )
         .unwrap();
 
@@ -1286,7 +1302,7 @@ mod tests {
         {
             // I/O space access is enabled.
             le_write_u16(&mut pci_config.config, COMMAND as usize, COMMAND_IO_SPACE).unwrap();
-            assert_eq!(pci_config.get_bar_address(0), IO_BASE_ADDR_MASK as u64);
+            assert_eq!(pci_config.get_bar_address(0), u64::from(IO_BASE_ADDR_MASK));
         }
         assert_eq!(pci_config.get_bar_address(1), BAR_SPACE_UNMAPPED);
         assert_eq!(pci_config.get_bar_address(2), BAR_SPACE_UNMAPPED);
@@ -1301,7 +1317,7 @@ mod tests {
         assert_eq!(pci_config.get_bar_address(0), BAR_SPACE_UNMAPPED);
         assert_eq!(
             pci_config.get_bar_address(1),
-            (MEM_BASE_ADDR_MASK as u32) as u64
+            u64::from(MEM_BASE_ADDR_MASK as u32)
         );
         assert_eq!(pci_config.get_bar_address(2), MEM_BASE_ADDR_MASK);
     }
@@ -1315,7 +1331,7 @@ mod tests {
             write: Arc::new(write_ops),
         };
         let region = Region::init_io_region(8192, region_ops, "io");
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 6);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 6);
 
         #[cfg(target_arch = "x86_64")]
         assert!(pci_config
@@ -1332,14 +1348,14 @@ mod tests {
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize,
-            2048_u32 | BAR_IO_SPACE as u32,
+            2048_u32 | u32::from(BAR_IO_SPACE),
         )
         .unwrap();
         le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 2048).unwrap();
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize + 2 * REG_SIZE,
-            2048_u32 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+            2048_u32 | u32::from(BAR_MEM_64BIT) | u32::from(BAR_PREFETCH),
         )
         .unwrap();
         le_write_u16(
@@ -1389,14 +1405,14 @@ mod tests {
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize,
-            4096_u32 | BAR_IO_SPACE as u32,
+            4096_u32 | u32::from(BAR_IO_SPACE),
         )
         .unwrap();
         le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 4096).unwrap();
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize + 2 * REG_SIZE,
-            4096_u32 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+            4096_u32 | u32::from(BAR_MEM_64BIT) | u32::from(BAR_PREFETCH),
         )
         .unwrap();
         pci_config
@@ -1412,7 +1428,7 @@ mod tests {
 
     #[test]
     fn test_add_pci_cap() {
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 2);
 
         // Overflow.
         assert!(pci_config
@@ -1424,12 +1440,12 @@ mod tests {
 
         // Capbility size is not multiple of DWORD.
         pci_config.add_pci_cap(0x12, 10).unwrap();
-        assert_eq!(pci_config.last_cap_end, PCI_CONFIG_HEAD_END as u16 + 12);
+        assert_eq!(pci_config.last_cap_end, u16::from(PCI_CONFIG_HEAD_END) + 12);
     }
 
     #[test]
     fn test_add_pcie_ext_cap() {
-        let mut pci_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 2);
+        let mut pci_config = PciConfig::new(0, PCIE_CONFIG_SPACE_SIZE, 2);
 
         // Overflow.
         assert!(pci_config
@@ -1450,7 +1466,7 @@ mod tests {
 
     #[test]
     fn test_get_ext_cap_size() {
-        let mut pcie_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 3);
+        let mut pcie_config = PciConfig::new(0, PCIE_CONFIG_SPACE_SIZE, 3);
         let offset1 = pcie_config.add_pcie_ext_cap(1, 0x10, 1).unwrap();
         let offset2 = pcie_config.add_pcie_ext_cap(1, 0x40, 1).unwrap();
         pcie_config.add_pcie_ext_cap(1, 0x20, 1).unwrap();
@@ -1463,7 +1479,7 @@ mod tests {
 
     #[test]
     fn test_reset_common_regs() {
-        let mut pcie_config = PciConfig::new(PCIE_CONFIG_SPACE_SIZE, 3);
+        let mut pcie_config = PciConfig::new(0, PCIE_CONFIG_SPACE_SIZE, 3);
         pcie_config.init_common_write_mask().unwrap();
         pcie_config.init_common_write_clear_mask().unwrap();
 
@@ -1488,7 +1504,7 @@ mod tests {
             write: Arc::new(write_ops),
         };
         let region = Region::init_io_region(4096, region_ops, "io");
-        let mut pci_config = PciConfig::new(PCI_CONFIG_SPACE_SIZE, 3);
+        let mut pci_config = PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 3);
 
         // bar is unmapped
         #[cfg(target_arch = "x86_64")]
@@ -1510,7 +1526,7 @@ mod tests {
             #[cfg(target_arch = "x86_64")]
             io_region.clone(),
             mem_region.clone(),
-        )));
+        ))) as Arc<Mutex<dyn Bus>>;
 
         assert!(pci_config.unregister_bars(&bus).is_ok());
 
@@ -1530,14 +1546,14 @@ mod tests {
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize,
-            2048 | BAR_IO_SPACE as u32,
+            2048 | u32::from(BAR_IO_SPACE),
         )
         .unwrap();
         le_write_u32(&mut pci_config.config, BAR_0 as usize + REG_SIZE, 2048).unwrap();
         le_write_u32(
             &mut pci_config.config,
             BAR_0 as usize + 2 * REG_SIZE,
-            2048 | BAR_MEM_64BIT as u32 | BAR_PREFETCH as u32,
+            2048 | u32::from(BAR_MEM_64BIT) | u32::from(BAR_PREFETCH),
         )
         .unwrap();
         le_write_u16(

@@ -18,6 +18,7 @@ use std::{
     cmp,
     collections::HashMap,
     env, fs,
+    os::unix::fs::OpenOptionsExt,
     path::Path,
     ptr,
     rc::Rc,
@@ -304,14 +305,17 @@ impl GtkDisplay {
         }));
         self.gtk_menu.view_menu.append(&gs_show_menu);
 
-        if !self.gtk_menu.radio_group.is_empty() {
-            let first_radio = &self.gtk_menu.radio_group[0];
+        if !self.gtk_menu.radio_group.borrow().is_empty() {
+            let first_radio = &self.gtk_menu.radio_group.borrow()[0];
             gs_show_menu.join_group(Some(first_radio));
         } else {
             note_book.set_current_page(Some(page_num));
         }
 
-        self.gtk_menu.radio_group.push(gs_show_menu.clone());
+        self.gtk_menu
+            .radio_group
+            .borrow_mut()
+            .push(gs_show_menu.clone());
         gs.borrow_mut().show_menu = gs_show_menu;
         gs.borrow_mut().draw_area = draw_area;
 
@@ -426,8 +430,8 @@ impl GtkDisplayScreen {
 
     fn get_window_size(&self) -> Option<(f64, f64)> {
         if let Some(win) = self.draw_area.window() {
-            let w_width = win.width() as f64;
-            let w_height = win.height() as f64;
+            let w_width = f64::from(win.width());
+            let w_height = f64::from(win.height());
 
             if w_width.ne(&0.0) && w_height.ne(&0.0) {
                 return Some((w_width, w_height));
@@ -449,8 +453,8 @@ impl GtkDisplayScreen {
             None => bail!("No display image."),
         };
         let (scale_width, scale_height) = (
-            (surface_width as f64) * self.scale_x,
-            (surface_height as f64) * self.scale_y,
+            f64::from(surface_width) * self.scale_x,
+            f64::from(surface_height) * self.scale_y,
         );
 
         let (mut window_width, mut window_height) = (0.0, 0.0);
@@ -458,7 +462,7 @@ impl GtkDisplayScreen {
             (window_width, window_height) = (w, h);
         };
         let scale_factor = match self.draw_area.window() {
-            Some(window) => window.scale_factor() as f64,
+            Some(window) => f64::from(window.scale_factor()),
             None => bail!("No display window."),
         };
 
@@ -813,13 +817,13 @@ fn do_update_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: DisplayChangeEvent
     drop(locked_con);
 
     // Image scalling.
-    let x1 = ((x as f64) * borrowed_gs.scale_x).floor();
-    let y1 = ((y as f64) * borrowed_gs.scale_y).floor();
-    let x2 = ((x as f64) * borrowed_gs.scale_x + (w as f64) * borrowed_gs.scale_x).ceil();
-    let y2 = ((y as f64) * borrowed_gs.scale_y + (h as f64) * borrowed_gs.scale_y).ceil();
+    let x1 = (f64::from(x) * borrowed_gs.scale_x).floor();
+    let y1 = (f64::from(y) * borrowed_gs.scale_y).floor();
+    let x2 = (f64::from(x) * borrowed_gs.scale_x + f64::from(w) * borrowed_gs.scale_x).ceil();
+    let y2 = (f64::from(y) * borrowed_gs.scale_y + f64::from(h) * borrowed_gs.scale_y).ceil();
 
-    let scale_width = (surface_width as f64) * borrowed_gs.scale_x;
-    let scale_height = (surface_height as f64) * borrowed_gs.scale_y;
+    let scale_width = f64::from(surface_width) * borrowed_gs.scale_x;
+    let scale_height = f64::from(surface_height) * borrowed_gs.scale_y;
     let (window_width, window_height);
     match borrowed_gs.get_window_size() {
         Some((w, h)) => (window_width, window_height) = (w, h),
@@ -961,8 +965,8 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         None => return Ok(()),
     };
     if scale_mode.borrow().is_full_screen() || scale_mode.borrow().is_free_scale() {
-        borrowed_gs.scale_x = window_width / surface_width as f64;
-        borrowed_gs.scale_y = window_height / surface_height as f64;
+        borrowed_gs.scale_x = window_width / f64::from(surface_width);
+        borrowed_gs.scale_y = window_height / f64::from(surface_height);
     }
 
     // Vm desktop manage its own cursor, gtk cursor need to be trsp firstly.
@@ -998,7 +1002,7 @@ pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<(
     let borrowed_gs = gs.borrow();
     let scale_mode = borrowed_gs.scale_mode.borrow().clone();
     let (width, height) = match &borrowed_gs.cairo_image {
-        Some(image) => (image.width() as f64, image.height() as f64),
+        Some(image) => (f64::from(image.width()), f64::from(image.height())),
         None => (0.0, 0.0),
     };
     let (mut scale_width, mut scale_height) = if scale_mode.is_free_scale() {
@@ -1006,8 +1010,8 @@ pub(crate) fn update_window_size(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<(
     } else {
         (width * borrowed_gs.scale_x, height * borrowed_gs.scale_y)
     };
-    scale_width = scale_width.max(DEFAULT_SURFACE_WIDTH as f64);
-    scale_height = scale_height.max(DEFAULT_SURFACE_HEIGHT as f64);
+    scale_width = scale_width.max(f64::from(DEFAULT_SURFACE_WIDTH));
+    scale_height = scale_height.max(f64::from(DEFAULT_SURFACE_HEIGHT));
 
     let geo: Geometry = Geometry::new(
         scale_width as i32,
@@ -1101,6 +1105,10 @@ fn create_file(gpu_info: &mut GpuInfo, dev_name: &String) -> Result<fs::File> {
     gpu_info.fileDir = file_dir.clone();
     let nsec = gettime()?.1;
     let file_name = file_dir + "/stratovirt-display-" + dev_name + "-" + &nsec.to_string() + ".png";
-    let file = fs::File::create(file_name)?;
+    let file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(file_name)?;
     Ok(file)
 }

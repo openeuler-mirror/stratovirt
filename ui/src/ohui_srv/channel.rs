@@ -10,119 +10,98 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::raw::c_void;
+use std::io::{ErrorKind, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
-use std::sync::RwLock;
 
-use anyhow::Result;
-use libc::iovec;
+use anyhow::{bail, Result};
 use log::error;
 
 use util::byte_code::ByteCode;
-use util::unix::UnixSock;
+use util::socket::{SocketListener, SocketStream};
+use util::unix::limit_permission;
 
 pub struct OhUiChannel {
-    pub sock: RwLock<UnixSock>,
-    pub path: String,
+    listener: SocketListener,
+    stream: Option<SocketStream>,
 }
 
 impl OhUiChannel {
-    pub fn new(path: &str) -> Self {
-        OhUiChannel {
-            sock: RwLock::new(UnixSock::new(path)),
-            path: String::from(path),
-        }
-    }
+    pub fn new(path: &str) -> Result<Self> {
+        let listener = match SocketListener::bind_by_uds(path) {
+            Ok(l) => l,
+            Err(e) => bail!("Failed to create listener with path {}, {:?}", path, e),
+        };
+        limit_permission(path).unwrap_or_else(|e| {
+            error!(
+                "Failed to limit permission for ohui-sock {}, err: {:?}",
+                path, e
+            );
+        });
 
-    pub fn bind(&self) -> Result<()> {
-        self.sock.write().unwrap().bind(true)
+        Ok(OhUiChannel {
+            listener,
+            stream: None,
+        })
     }
 
     pub fn get_listener_raw_fd(&self) -> RawFd {
-        self.sock.read().unwrap().get_listener_raw_fd()
+        self.listener.as_raw_fd()
     }
 
-    pub fn get_stream_raw_fd(&self) -> RawFd {
-        self.sock.read().unwrap().get_stream_raw_fd()
+    pub fn get_stream_raw_fd(&self) -> Option<RawFd> {
+        self.stream.as_ref().map(|s| s.as_raw_fd())
     }
 
-    pub fn set_nonblocking(&self, nb: bool) -> Result<()> {
-        self.sock.read().unwrap().set_nonblocking(nb)
-    }
-
-    pub fn set_listener_nonblocking(&self, nb: bool) -> Result<()> {
-        self.sock.read().unwrap().listen_set_nonblocking(nb)
-    }
-
-    pub fn accept(&self) -> Result<()> {
-        self.sock.write().unwrap().accept()
-    }
-
-    pub fn send(&self, data: *const u8, len: usize) -> Result<usize> {
-        let mut iovs = Vec::with_capacity(1);
-        iovs.push(iovec {
-            iov_base: data as *mut c_void,
-            iov_len: len,
-        });
-        let ret = self.sock.read().unwrap().send_msg(&mut iovs, &[])?;
-        Ok(ret)
-    }
-
-    pub fn send_by_obj<T: Sized + Default + ByteCode>(&self, obj: &T) -> Result<()> {
-        let slice = obj.as_bytes();
-        let mut left = slice.len();
-        let mut count = 0_usize;
-
-        while left > 0 {
-            let buf = &slice[count..];
-            match self.send(buf.as_ptr(), left) {
-                Ok(n) => {
-                    left -= n;
-                    count += n;
-                }
-                Err(e) => {
-                    if std::io::Error::last_os_error().raw_os_error().unwrap() == libc::EAGAIN {
-                        continue;
-                    }
-                    return Err(e);
-                }
-            }
-        }
+    pub fn accept(&mut self) -> Result<()> {
+        self.stream = Some(self.listener.accept()?);
         Ok(())
     }
 
-    pub fn recv_slice(&self, data: &mut [u8]) -> Result<usize> {
-        let len = data.len();
-        if len == 0 {
-            return Ok(0);
-        }
-        let ret = self.recv(data.as_mut_ptr(), len);
-        match ret {
-            Ok(n) => Ok(n),
+    pub fn disconnect(&mut self) {
+        self.stream = None;
+    }
+}
+
+pub fn recv_slice(stream: &mut dyn Read, data: &mut [u8]) -> Result<usize> {
+    let len = data.len();
+    let mut ret = 0_usize;
+
+    while ret < len {
+        match stream.read(&mut data[ret..len]) {
+            Ok(0) => break,
+            Ok(n) => ret += n,
             Err(e) => {
-                if std::io::Error::last_os_error()
-                    .raw_os_error()
-                    .unwrap_or(libc::EIO)
-                    != libc::EAGAIN
-                {
-                    error!("recv_slice(): error occurred: {}", e);
+                let ek = e.kind();
+                if ek != ErrorKind::WouldBlock && ek != ErrorKind::Interrupted {
+                    bail!("recv_slice: error occurred: {:?}", e);
                 }
-                Ok(0)
+                break;
             }
         }
     }
+    Ok(ret)
+}
 
-    pub fn recv(&self, data: *mut u8, len: usize) -> Result<usize> {
-        let mut iovs = Vec::with_capacity(1);
-        iovs.push(iovec {
-            iov_base: data as *mut c_void,
-            iov_len: len,
-        });
+pub fn send_obj<T: Sized + Default + ByteCode>(stream: &mut dyn Write, obj: &T) -> Result<()> {
+    let slice = obj.as_bytes();
+    let mut left = slice.len();
+    let mut count = 0_usize;
 
-        let ret = self.sock.read().unwrap().recv_msg(&mut iovs, &mut []);
-        match ret {
-            Ok((n, _)) => Ok(n),
-            Err(e) => Err(e.into()),
+    while left > 0 {
+        match stream.write(&slice[count..]) {
+            Ok(n) => {
+                left -= n;
+                count += n;
+            }
+            Err(e) => {
+                let ek = e.kind();
+                if ek == ErrorKind::WouldBlock || ek == ErrorKind::Interrupted {
+                    continue;
+                }
+                bail!(e);
+            }
         }
     }
+    Ok(())
 }

@@ -77,7 +77,7 @@ fn test_set_area_dirty() {
     let pf = RfbPixelFormat::new(32, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
     assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
-        .test_update_request(UpdateState::Incremental, 0, 0, 640 as u16, 480 as u16,)
+        .test_update_request(UpdateState::Incremental, 0, 0, 640_u16, 480_u16,)
         .is_ok());
     demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 64, 64);
@@ -93,7 +93,7 @@ fn test_set_area_dirty() {
     demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 64, 64);
     assert!(vnc_client
-        .test_update_request(UpdateState::Incremental, 0, 0, 640 as u16, 480 as u16,)
+        .test_update_request(UpdateState::Incremental, 0, 0, 640_u16, 480_u16,)
         .is_ok());
 
     let res = vnc_client.test_recv_server_data(pf);
@@ -110,7 +110,7 @@ fn test_set_area_dirty() {
     let pf = RfbPixelFormat::new(32, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
     assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
-        .test_update_request(UpdateState::Incremental, 0, 0, 640 as u16, 480 as u16,)
+        .test_update_request(UpdateState::Incremental, 0, 0, 640_u16, 480_u16,)
         .is_ok());
     demo_gpu.borrow_mut().update_image_area(0, 0, 64, 64);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 64, 64);
@@ -171,7 +171,7 @@ fn test_set_multiple_area_dirty() {
     demo_gpu.borrow_mut().update_image_area(119, 120, 160, 160);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 640, 480);
     assert!(vnc_client
-        .test_update_request(UpdateState::NotIncremental, 0, 0, 640 as u16, 480 as u16,)
+        .test_update_request(UpdateState::NotIncremental, 0, 0, 640_u16, 480_u16,)
         .is_ok());
 
     let res = vnc_client.test_recv_server_data(pf);
@@ -193,7 +193,7 @@ fn test_set_multiple_area_dirty() {
     demo_gpu.borrow_mut().update_image_area(119, 120, 160, 160);
     demo_gpu.borrow_mut().set_area_dirty(0, 0, 640, 480);
     assert!(vnc_client
-        .test_update_request(UpdateState::NotIncremental, 0, 0, 640 as u16, 480 as u16,)
+        .test_update_request(UpdateState::NotIncremental, 0, 0, 640_u16, 480_u16,)
         .is_ok());
 
     let res = vnc_client.test_recv_server_data(pf);
@@ -418,7 +418,7 @@ fn test_set_pixel_format() {
 
     // Raw + bit_per_pixel=32 + true_color_flag=1.
     let pf = RfbPixelFormat::new(32, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
-    assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
@@ -430,7 +430,7 @@ fn test_set_pixel_format() {
 
     // Raw + bit_per_pixel=16 + true_color_flag=1.
     let pf = RfbPixelFormat::new(16, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
-    assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
@@ -443,12 +443,12 @@ fn test_set_pixel_format() {
 
     // Raw + bit_per_pixel=8 + true_color_flag=0.
     let pf = RfbPixelFormat::new(8, 8, 0_u8, 0_u8, 255, 255, 255, 16, 8, 0);
-    assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
 
-    let res = vnc_client.test_recv_server_data(pf.clone());
+    let res = vnc_client.test_recv_server_data(pf);
     assert!(res.is_ok());
     let res = res.unwrap();
     assert!(res.contains(&(RfbServerMsg::FramebufferUpdate, EncodingType::EncodingRaw)));
@@ -463,7 +463,7 @@ fn test_set_pixel_format() {
         .is_ok());
     assert!(vnc_client.stream_read_to_end().is_ok());
     let pf = RfbPixelFormat::new(32, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
-    assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
@@ -481,7 +481,7 @@ fn test_set_pixel_format() {
         .is_ok());
     assert!(vnc_client.stream_read_to_end().is_ok());
     let pf = RfbPixelFormat::new(8, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
-    assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
@@ -498,7 +498,7 @@ fn test_set_pixel_format() {
         .is_ok());
     assert!(vnc_client.stream_read_to_end().is_ok());
     let pf = RfbPixelFormat::new(8, 8, 0_u8, 0_u8, 255, 255, 255, 16, 8, 0);
-    assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
     assert!(vnc_client
         .test_update_request(UpdateState::NotIncremental, 0, 0, 2560, 2048)
         .is_ok());
@@ -554,12 +554,12 @@ fn test_vnc_kbd_mouse() {
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     // Key event.
     for &(name, keysym, keycode) in KEYEVENTLIST.iter() {
-        assert!(vnc_client.test_key_event(0, keysym as u32).is_ok());
+        assert!(vnc_client.test_key_event(0, u32::from(keysym)).is_ok());
         let msg = input.borrow_mut().read_input_event();
         println!("key {:?}: {:?}", name, msg);
         assert_eq!(msg.keycode, keycode);
         assert_eq!(msg.down, 0);
-        assert!(vnc_client.test_key_event(1, keysym as u32).is_ok());
+        assert!(vnc_client.test_key_event(1, u32::from(keysym)).is_ok());
 
         let msg = input.borrow_mut().read_input_event();
         println!("key {:?}: {:?}", name, msg);
@@ -715,9 +715,7 @@ fn test_rfb_version_abnormal(test_state: Rc<RefCell<TestState>>, port: u16) -> R
     assert!(vnc_client.read_msg(&mut buf, 12).is_ok());
     assert_eq!(buf[..12].to_vec(), "RFB 003.008\n".as_bytes().to_vec());
     println!("Client Rfb version: RFB 003.010");
-    assert!(vnc_client
-        .write_msg(&"RFB 003.010\n".as_bytes().to_vec())
-        .is_ok());
+    assert!(vnc_client.write_msg("RFB 003.010\n".as_bytes()).is_ok());
     buf.drain(..12);
     // VNC server closed connection.
     let res = vnc_client.epoll_wait(EventSet::READ_HANG_UP);
@@ -738,9 +736,7 @@ fn test_unsupported_sec_type(test_state: Rc<RefCell<TestState>>, port: u16) -> R
     println!("Connect to server.");
     assert!(vnc_client.read_msg(&mut buf, 12).is_ok());
     assert_eq!(buf[..12].to_vec(), "RFB 003.008\n".as_bytes().to_vec());
-    assert!(vnc_client
-        .write_msg(&"RFB 003.008\n".as_bytes().to_vec())
-        .is_ok());
+    assert!(vnc_client.write_msg("RFB 003.008\n".as_bytes()).is_ok());
     buf.drain(..12);
 
     // Step 2: Auth num is 1.
@@ -751,7 +747,7 @@ fn test_unsupported_sec_type(test_state: Rc<RefCell<TestState>>, port: u16) -> R
     assert!(vnc_client.read_msg(&mut buf, auth_num as usize).is_ok());
     buf.drain(..auth_num as usize);
     assert!(vnc_client
-        .write_msg(&(TestAuthType::Invalid as u8).to_be_bytes().to_vec())
+        .write_msg((TestAuthType::Invalid as u8).to_be_bytes().as_ref())
         .is_ok());
     // VNC server close the connection.
     let res = vnc_client.epoll_wait(EventSet::READ_HANG_UP);
@@ -770,7 +766,7 @@ fn test_set_pixel_format_abnormal(test_state: Rc<RefCell<TestState>>, port: u16)
     let mut vnc_client = create_new_client(test_state, port).unwrap();
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     let pf = RfbPixelFormat::new(17, 8, 0_u8, 1_u8, 255, 255, 255, 16, 8, 0);
-    assert!(vnc_client.test_set_pixel_format(pf.clone()).is_ok());
+    assert!(vnc_client.test_set_pixel_format(pf).is_ok());
 
     // VNC server close the connection.
     let res = vnc_client.epoll_wait(EventSet::READ_HANG_UP)?;
@@ -789,7 +785,7 @@ fn test_set_encoding_abnormal(test_state: Rc<RefCell<TestState>>, port: u16) -> 
     assert!(vnc_client.connect(TestAuthType::VncAuthNone).is_ok());
     assert!(vnc_client.test_setup_encodings(Some(100), None).is_ok());
     // Send a qmp to query vnc client state.
-    let value = qmp_query_vnc(test_state.clone());
+    let value = qmp_query_vnc(test_state);
     let client_num = value["return"]["clients"].as_array().unwrap().len();
     assert_eq!(client_num, 1);
     assert!(vnc_client.disconnect().is_ok());
@@ -809,7 +805,7 @@ fn test_client_cut_event(test_state: Rc<RefCell<TestState>>, port: u16) -> Resul
     };
     assert!(vnc_client.test_send_client_cut(client_cut).is_ok());
     // Send a qmp to query vnc client state.
-    let value = qmp_query_vnc(test_state.clone());
+    let value = qmp_query_vnc(test_state);
     let client_num = value["return"]["clients"].as_array().unwrap().len();
     assert_eq!(client_num, 1);
     assert!(vnc_client.disconnect().is_ok());

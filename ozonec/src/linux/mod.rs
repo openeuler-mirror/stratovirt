@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
+// Copyright (c) 2024 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
@@ -10,15 +10,20 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::Result;
+pub mod container;
 
-use crate::config::CmdParser;
+mod apparmor;
+mod device;
+mod mount;
+mod namespace;
+mod notify_socket;
+mod process;
+mod rootfs;
+mod seccomp;
+mod terminal;
 
-pub fn parse_ramfb(cfg_args: &str) -> Result<bool> {
-    let mut cmd_parser = CmdParser::new("ramfb");
-    cmd_parser.push("").push("install").push("id");
-    cmd_parser.parse(cfg_args)?;
-
-    let install = cmd_parser.get_value::<bool>("install")?.unwrap_or(false);
-    Ok(install)
-}
+pub use container::LinuxContainer;
+pub use notify_socket::NotifyListener;
+#[allow(unused_imports)]
+pub use process::clone_process;
+pub use process::Process;

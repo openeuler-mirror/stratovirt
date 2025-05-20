@@ -22,8 +22,10 @@ use crate::{
 };
 
 #[derive(Parser, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[command(name = "camera device")]
+#[command(no_binary_name(true))]
 pub struct CameraDevConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     pub id: String,
     #[arg(long)]
@@ -59,7 +61,7 @@ impl FromStr for CamBackendType {
 impl VmConfig {
     pub fn add_camera_backend(&mut self, camera_config: &str) -> Result<()> {
         let cfg = format!("cameradev,backend={}", camera_config);
-        let config = CameraDevConfig::try_parse_from(str_slip_to_clap(&cfg))?;
+        let config = CameraDevConfig::try_parse_from(str_slip_to_clap(&cfg, true, false))?;
 
         self.add_cameradev_with_config(config)
     }
@@ -91,10 +93,10 @@ impl VmConfig {
     }
 
     pub fn del_cameradev_by_id(&mut self, id: &str) -> Result<()> {
-        if self.camera_backend.get(&id.to_string()).is_none() {
+        if !self.camera_backend.contains_key(id) {
             bail!("no cameradev with id {}", id);
         }
-        self.camera_backend.remove(&id.to_string());
+        self.camera_backend.remove(id);
 
         Ok(())
     }
@@ -103,6 +105,7 @@ impl VmConfig {
 pub fn get_cameradev_config(args: qmp_schema::CameraDevAddArgument) -> Result<CameraDevConfig> {
     let path = args.path.with_context(|| "cameradev config path is null")?;
     let config = CameraDevConfig {
+        classtype: "cameradev".to_string(),
         id: args.id,
         path,
         backend: CamBackendType::from_str(&args.driver)?,

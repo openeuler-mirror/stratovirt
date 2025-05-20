@@ -137,7 +137,8 @@ define_qmp_command_enum!(
     blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal, FALSE),
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg, FALSE),
     trace_get_state("trace-get-state", trace_get_state, FALSE),
-    trace_set_state("trace-set-state", trace_set_state, FALSE)
+    trace_set_state("trace-set-state", trace_set_state, FALSE),
+    query_workloads("query-workloads", query_workloads, FALSE)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -1797,7 +1798,8 @@ define_qmp_event_enum!(
     Powerdown("POWERDOWN", Powerdown, default),
     CpuResize("CPU_RESIZE", CpuResize, default),
     DeviceDeleted("DEVICE_DELETED", DeviceDeleted),
-    BalloonChanged("BALLOON_CHANGED", BalloonInfo)
+    BalloonChanged("BALLOON_CHANGED", BalloonInfo),
+    UsbHostAddRes("USB_HOST_ADD_RES", UsbHostAddRes)
 );
 
 /// Shutdown
@@ -1909,6 +1911,28 @@ pub struct Powerdown {}
 #[serde(deny_unknown_fields)]
 pub struct CpuResize {}
 
+/// UsbHostAddRes
+///
+/// Emitted whenever the usb host device add completion is acknowledged.
+/// At this point, it's safe to reuse the specified device ID.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "USB_HOST_ADD_RES",
+///      "data": { "device": "hw_vid_pid" },
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct UsbHostAddRes {
+    /// Device name.
+    #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(rename = "state_msg", default, skip_serializing_if = "Option::is_none")]
+    pub state_msg: Option<String>,
+}
+
 /// DeviceDeleted
 ///
 /// Emitted whenever the device removal completion is acknowledged by the guest.
@@ -1986,6 +2010,21 @@ pub struct trace_set_state {
 }
 pub type TraceSetArgument = trace_set_state;
 
+/// query_workloads
+///
+/// Query the current workloads of the running VM.
+///
+/// # Examples
+///
+/// ```text
+/// -> {"execute": "query-workloads", "arguments": {}}
+/// <- {"return":[{"module":"scream-play","state":"Off"},{"module":"tap-0","state":"upload: 0 download: 0"}]}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_workloads {}
+generate_command_impl!(query_workloads, Empty);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1994,7 +2033,7 @@ mod tests {
     fn test_qmp_event_msg() {
         let event_json =
             r#"{"event":"STOP","data":{},"timestamp":{"seconds":1575531524,"microseconds":91519}}"#;
-        let qmp_event: QmpEvent = serde_json::from_str(&event_json).unwrap();
+        let qmp_event: QmpEvent = serde_json::from_str(event_json).unwrap();
         match qmp_event {
             QmpEvent::Stop {
                 data: _,

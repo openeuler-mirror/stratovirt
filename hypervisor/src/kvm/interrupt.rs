@@ -46,7 +46,7 @@ fn get_maximum_gsi_cnt(kvmfd: &Kvm) -> u32 {
         gsi_count = 0;
     }
 
-    gsi_count as u32
+    u32::try_from(gsi_count).unwrap_or_default()
 }
 
 /// Return `IrqRouteEntry` according to gsi, irqchip kind and pin.
@@ -180,7 +180,7 @@ impl IrqRouteTable {
             .find_next_zero(0)
             .with_context(|| "Failed to get new free gsi")?;
         self.gsi_bitmap.set(free_gsi)?;
-        Ok(free_gsi as u32)
+        Ok(u32::try_from(free_gsi)?)
     }
 
     /// Release gsi number to free.
@@ -208,11 +208,12 @@ impl IrqRouteTable {
         trace::kvm_commit_irq_routing();
         // SAFETY: data in `routes` is reliable.
         unsafe {
+            // layout is aligned, so casting of ptr is allowed.
             let irq_routing = std::alloc::alloc(layout) as *mut IrqRoute;
             if irq_routing.is_null() {
                 bail!("Failed to alloc irq routing");
             }
-            (*irq_routing).nr = routes.len() as u32;
+            (*irq_routing).nr = u32::try_from(routes.len())?;
             (*irq_routing).flags = 0;
             let entries: &mut [IrqRouteEntry] = (*irq_routing).entries.as_mut_slice(routes.len());
             entries.copy_from_slice(&routes);
@@ -236,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_get_maximum_gsi_cnt() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -245,14 +246,14 @@ mod tests {
 
     #[test]
     fn test_alloc_and_release_gsi() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
-        let irq_route_table = Mutex::new(IrqRouteTable::new(&kvm_hyp.fd.as_ref().unwrap()));
+        let irq_route_table = Mutex::new(IrqRouteTable::new(kvm_hyp.fd.as_ref().unwrap()));
         let irq_manager = Arc::new(KVMInterruptManager::new(
             true,
-            kvm_hyp.vm_fd.clone().unwrap(),
+            kvm_hyp.vm_fd.unwrap(),
             irq_route_table,
         ));
         let mut irq_route_table = irq_manager.irq_route_table.lock().unwrap();

@@ -55,6 +55,10 @@ pub const DISPLAY_UPDATE_INTERVAL_INC: u64 = 50;
 /// Maximum refresh interval in ms.
 pub const DISPLAY_UPDATE_INTERVAL_MAX: u64 = 3_000;
 
+pub const DEFAULT_CURSOR_WIDTH: usize = 32;
+pub const DEFAULT_CURSOR_HEIGHT: usize = 32;
+pub const DEFAULT_CURSOR_BPP: usize = 4;
+
 pub enum ConsoleType {
     Graphic,
     Text,
@@ -777,8 +781,8 @@ pub fn console_select(con_id: Option<usize>) -> Result<()> {
 /// * `height` - height of image.
 /// * `msg` - test messages showed in display.
 pub fn create_msg_surface(width: i32, height: i32, msg: String) -> Option<DisplaySurface> {
-    if !(0..MAX_WINDOW_WIDTH as i32).contains(&width)
-        || !(0..MAX_WINDOW_HEIGHT as i32).contains(&height)
+    if !(0..i32::from(MAX_WINDOW_WIDTH)).contains(&width)
+        || !(0..i32::from(MAX_WINDOW_HEIGHT)).contains(&height)
     {
         error!("The size of image is invalid!");
         return None;
@@ -844,23 +848,23 @@ mod tests {
     #[test]
     fn test_console_select() {
         let con_opts = Arc::new(HwOpts {});
-        let dev_name0 = format!("test_device0");
+        let dev_name0 = "test_device0".to_string();
         let con_0 = console_init(dev_name0, ConsoleType::Graphic, con_opts.clone());
         let clone_con = con_0.clone();
         assert_eq!(
             clone_con.unwrap().upgrade().unwrap().lock().unwrap().con_id,
             0
         );
-        let dev_name1 = format!("test_device1");
+        let dev_name1 = "test_device1".to_string();
         let con_1 = console_init(dev_name1, ConsoleType::Graphic, con_opts.clone());
         assert_eq!(con_1.unwrap().upgrade().unwrap().lock().unwrap().con_id, 1);
-        let dev_name2 = format!("test_device2");
+        let dev_name2 = "test_device2".to_string();
         let con_2 = console_init(dev_name2, ConsoleType::Graphic, con_opts.clone());
         assert_eq!(con_2.unwrap().upgrade().unwrap().lock().unwrap().con_id, 2);
         assert!(console_close(&con_0).is_ok());
         assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(1));
-        let dev_name3 = format!("test_device3");
-        let con_3 = console_init(dev_name3, ConsoleType::Graphic, con_opts.clone());
+        let dev_name3 = "test_device3".to_string();
+        let con_3 = console_init(dev_name3, ConsoleType::Graphic, con_opts);
         assert_eq!(con_3.unwrap().upgrade().unwrap().lock().unwrap().con_id, 3);
         assert!(console_select(Some(0)).is_ok());
         assert_eq!(CONSOLES.lock().unwrap().activate_id, Some(0));
@@ -891,10 +895,7 @@ mod tests {
             None,
             dcl_opts.clone(),
         )));
-        let dcl_3 = Arc::new(Mutex::new(DisplayChangeListener::new(
-            None,
-            dcl_opts.clone(),
-        )));
+        let dcl_3 = Arc::new(Mutex::new(DisplayChangeListener::new(None, dcl_opts)));
 
         assert!(register_display(&dcl_0).is_ok());
         assert_eq!(dcl_0.lock().unwrap().dcl_id, Some(0));

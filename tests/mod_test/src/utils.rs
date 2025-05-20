@@ -56,18 +56,18 @@ pub fn read_le_u64(input: &mut &[u8]) -> u64 {
 }
 
 pub fn swap_u16(value: u16) -> u16 {
-    return value << 8 | value >> 8;
+    value << 8 | value >> 8
 }
 
 pub fn swap_u32(value: u32) -> u32 {
-    let lower_u16 = swap_u16(value as u16) as u32;
-    let higher_u16 = swap_u16((value >> 16) as u16) as u32;
+    let lower_u16 = u32::from(swap_u16(value as u16));
+    let higher_u16 = u32::from(swap_u16((value >> 16) as u16));
     lower_u16 << 16 | higher_u16
 }
 
 pub fn swap_u64(value: u64) -> u64 {
-    let lower_u32 = swap_u32(value as u32) as u64;
-    let higher_u32 = swap_u32((value >> 32) as u32) as u64;
+    let lower_u32 = u64::from(swap_u32(value as u32));
+    let higher_u32 = u64::from(swap_u32((value >> 32) as u32));
     lower_u32 << 32 | higher_u32
 }
 
@@ -126,4 +126,28 @@ pub fn cleanup_img(image_path: String) {
     assert!(file_type.is_file());
 
     fs::remove_file(img_path).expect("lack permissions to remove the file");
+}
+
+pub fn support_numa() -> bool {
+    let numa_nodes_path = "/sys/devices/system/node/";
+
+    if Path::new(numa_nodes_path).exists() {
+        match fs::read_dir(numa_nodes_path) {
+            Ok(entries) => {
+                let mut has_nodes = false;
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        if entry.file_name().to_str().unwrap_or("").starts_with("node") {
+                            has_nodes = true;
+                            break;
+                        }
+                    }
+                }
+                has_nodes
+            }
+            Err(_) => false,
+        }
+    } else {
+        false
+    }
 }

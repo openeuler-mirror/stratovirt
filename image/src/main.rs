@@ -21,7 +21,8 @@ use std::{
 use anyhow::{bail, Result};
 
 use crate::img::{
-    image_check, image_create, image_resize, image_snapshot, print_help, print_version,
+    image_check, image_convert, image_create, image_info, image_resize, image_snapshot, print_help,
+    print_version,
 };
 
 const BINARY_NAME: &str = "stratovirt-img";
@@ -83,8 +84,10 @@ fn run(args: Vec<String>) -> Result<()> {
     image_operation_matches!(
         opt.as_str();
         ("create", image_create, cmd_args),
+        ("info", image_info, cmd_args),
         ("check", image_check, cmd_args),
         ("resize", image_resize, cmd_args),
+        ("convert", image_convert, cmd_args),
         ("snapshot", image_snapshot, cmd_args);
         ("-v" | "--version", print_version),
         ("-h" | "--help", print_help)

@@ -13,40 +13,95 @@
 use std::os::unix::io::RawFd;
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{ArgAction, Parser};
 use serde::{Deserialize, Serialize};
 
-use super::{error::ConfigError, pci_args_check};
-use crate::config::get_chardev_socket_path;
-use crate::config::{
-    check_arg_too_long, CmdParser, ConfigCheck, ExBool, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
-    MAX_PATH_LENGTH, MAX_VIRTIO_QUEUE,
-};
+use super::error::ConfigError;
+use super::{get_pci_df, parse_bool, str_slip_to_clap, valid_id, valid_virtqueue_size};
+use crate::config::{ConfigCheck, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE};
 use crate::qmp::{qmp_channel::QmpChannel, qmp_schema};
 
 const MAC_ADDRESS_LENGTH: usize = 17;
 
 /// Max virtqueue size of each virtqueue.
-pub const MAX_QUEUE_SIZE_NET: u16 = 4096;
+const MAX_QUEUE_SIZE_NET: u64 = 4096;
 /// Max num of virtqueues.
 const MAX_QUEUE_PAIRS: usize = MAX_VIRTIO_QUEUE / 2;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
+#[command(no_binary_name(true))]
 pub struct NetDevcfg {
+    #[arg(long, alias="classtype", value_parser = ["tap", "vhost-user"])]
+    pub netdev_type: String,
+    #[arg(long, value_parser = valid_id)]
     pub id: String,
+    #[arg(long, aliases = ["fds", "fd"], use_value_delimiter = true, value_delimiter = ':')]
     pub tap_fds: Option<Vec<i32>>,
-    pub vhost_type: Option<String>,
+    #[arg(long, alias = "vhost", default_value = "off", value_parser = parse_bool, action = ArgAction::Append)]
+    pub vhost_kernel: bool,
+    #[arg(long, aliases = ["vhostfds", "vhostfd"], use_value_delimiter = true, value_delimiter = ':')]
     pub vhost_fds: Option<Vec<i32>>,
+    #[arg(long, default_value = "", value_parser = valid_id)]
     pub ifname: String,
+    #[arg(long, default_value = "1", value_parser = parse_queues)]
     pub queues: u16,
+    #[arg(long)]
     pub chardev: Option<String>,
+}
+
+impl NetDevcfg {
+    pub fn vhost_type(&self) -> Option<String> {
+        if self.vhost_kernel {
+            return Some("vhost-kernel".to_string());
+        }
+        if self.netdev_type == "vhost-user" {
+            return Some("vhost-user".to_string());
+        }
+        // Default: virtio net.
+        None
+    }
+
+    fn auto_queues(&mut self) -> Result<()> {
+        if let Some(fds) = &self.tap_fds {
+            let fds_num = fds
+                .len()
+                .checked_mul(2)
+                .with_context(|| format!("Invalid fds number {}", fds.len()))?
+                as u16;
+            if fds_num > self.queues {
+                self.queues = fds_num;
+            }
+        }
+        if let Some(fds) = &self.vhost_fds {
+            let fds_num = fds
+                .len()
+                .checked_mul(2)
+                .with_context(|| format!("Invalid vhostfds number {}", fds.len()))?
+                as u16;
+            if fds_num > self.queues {
+                self.queues = fds_num;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_queues(q: &str) -> Result<u16> {
+    let queues = q
+        .parse::<u16>()?
+        .checked_mul(2)
+        .with_context(|| "Invalid 'queues' value")?;
+    is_netdev_queues_valid(queues)?;
+    Ok(queues)
 }
 
 impl Default for NetDevcfg {
     fn default() -> Self {
         NetDevcfg {
+            netdev_type: "".to_string(),
             id: "".to_string(),
             tap_fds: None,
-            vhost_type: None,
+            vhost_kernel: false,
             vhost_fds: None,
             ifname: "".to_string(),
             queues: 2,
@@ -57,24 +112,18 @@ impl Default for NetDevcfg {
 
 impl ConfigCheck for NetDevcfg {
     fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "id")?;
-        check_arg_too_long(&self.ifname, "ifname")?;
-
-        if let Some(vhost_type) = self.vhost_type.as_ref() {
-            if vhost_type != "vhost-kernel" && vhost_type != "vhost-user" {
-                return Err(anyhow!(ConfigError::UnknownVhostType));
-            }
+        if self.vhost_kernel && self.netdev_type == "vhost-user" {
+            bail!("vhost-user netdev does not support 'vhost' option");
         }
 
-        if !is_netdev_queues_valid(self.queues) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "number queues of net device".to_string(),
-                1,
-                true,
-                MAX_VIRTIO_QUEUE as u64 / 2,
-                true,
-            )));
+        if self.vhost_fds.is_some() && self.vhost_type().is_none() {
+            bail!("Argument 'vhostfd' or 'vhostfds' are not needed for virtio-net device");
         }
+        if self.tap_fds.is_none() && self.ifname.eq("") && self.netdev_type.ne("vhost-user") {
+            bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
+        }
+
+        is_netdev_queues_valid(self.queues)?;
 
         Ok(())
     }
@@ -82,225 +131,89 @@ impl ConfigCheck for NetDevcfg {
 
 /// Config struct for network
 /// Contains network device config, such as `host_dev_name`, `mac`...
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 #[serde(deny_unknown_fields)]
+#[command(no_binary_name(true))]
 pub struct NetworkInterfaceConfig {
+    #[arg(long, value_parser = ["virtio-net-pci", "virtio-net-device"])]
+    pub classtype: String,
+    #[arg(long, default_value = "", value_parser = valid_id)]
     pub id: String,
-    pub host_dev_name: String,
+    #[arg(long)]
+    pub netdev: String,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub multifunction: Option<bool>,
+    #[arg(long, value_parser = valid_mac)]
     pub mac: Option<String>,
-    pub tap_fds: Option<Vec<i32>>,
-    pub vhost_type: Option<String>,
-    pub vhost_fds: Option<Vec<i32>>,
+    #[arg(long)]
     pub iothread: Option<String>,
-    pub queues: u16,
+    #[arg(long)]
+    pub rx_iothread: Option<String>,
+    #[arg(long)]
+    pub tx_iothread: Option<String>,
+    #[arg(long, default_value="off", value_parser = parse_bool, action = ArgAction::Append)]
     pub mq: bool,
-    pub socket_path: Option<String>,
-    /// All queues of a net device have the same queue size now.
+    // All queues of a net device have the same queue size now.
+    #[arg(long, default_value = "256", alias = "queue-size", value_parser = valid_network_queue_size)]
     pub queue_size: u16,
+    // MSI-X vectors the this network device has. This member isn't used now in stratovirt.
+    #[arg(long, default_value = "0")]
+    pub vectors: u16,
 }
 
 impl Default for NetworkInterfaceConfig {
     fn default() -> Self {
         NetworkInterfaceConfig {
+            classtype: "".to_string(),
             id: "".to_string(),
-            host_dev_name: "".to_string(),
+            netdev: "".to_string(),
+            bus: None,
+            addr: None,
+            multifunction: None,
             mac: None,
-            tap_fds: None,
-            vhost_type: None,
-            vhost_fds: None,
             iothread: None,
-            queues: 2,
+            rx_iothread: None,
+            tx_iothread: None,
             mq: false,
-            socket_path: None,
             queue_size: DEFAULT_VIRTQUEUE_SIZE,
+            vectors: 0,
         }
     }
+}
+
+impl NetworkInterfaceConfig {
+    pub fn auto_iothread(&mut self) {
+        // If rx_iothread or tx_iothread is not configured, the default iothread will be used.
+        if self.rx_iothread.is_none() {
+            self.rx_iothread.clone_from(&self.iothread);
+        }
+        if self.tx_iothread.is_none() {
+            self.tx_iothread.clone_from(&self.iothread);
+        }
+    }
+}
+
+fn valid_network_queue_size(s: &str) -> Result<u16> {
+    let size: u64 = s.parse()?;
+    valid_virtqueue_size(size, u64::from(DEFAULT_VIRTQUEUE_SIZE), MAX_QUEUE_SIZE_NET)?;
+
+    Ok(size as u16)
 }
 
 impl ConfigCheck for NetworkInterfaceConfig {
     fn check(&self) -> Result<()> {
-        check_arg_too_long(&self.id, "id")?;
-        check_arg_too_long(&self.host_dev_name, "host dev name")?;
-
         if self.mac.is_some() && !check_mac_address(self.mac.as_ref().unwrap()) {
             return Err(anyhow!(ConfigError::MacFormatError));
         }
 
-        if self.iothread.is_some() {
-            check_arg_too_long(self.iothread.as_ref().unwrap(), "iothread name")?;
-        }
-
-        if self.socket_path.is_some() && self.socket_path.as_ref().unwrap().len() > MAX_PATH_LENGTH
-        {
-            return Err(anyhow!(ConfigError::StringLengthTooLong(
-                "socket path".to_string(),
-                MAX_PATH_LENGTH
-            )));
-        }
-
-        if self.queue_size < DEFAULT_VIRTQUEUE_SIZE || self.queue_size > MAX_QUEUE_SIZE_NET {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "queue size of net device".to_string(),
-                DEFAULT_VIRTQUEUE_SIZE as u64,
-                true,
-                MAX_QUEUE_SIZE_NET as u64,
-                true
-            )));
-        }
-
-        if self.queue_size & (self.queue_size - 1) != 0 {
-            bail!("queue size of net device should be power of 2!");
-        }
+        valid_network_queue_size(&self.queue_size.to_string())?;
 
         Ok(())
     }
-}
-
-fn parse_fds(cmd_parser: &CmdParser, name: &str) -> Result<Option<Vec<i32>>> {
-    if let Some(fds) = cmd_parser.get_value::<String>(name)? {
-        let mut raw_fds = Vec::new();
-        for fd in fds.split(':').collect::<Vec<&str>>().iter() {
-            raw_fds.push(
-                (*fd)
-                    .parse::<i32>()
-                    .with_context(|| "Failed to parse fds")?,
-            );
-        }
-        Ok(Some(raw_fds))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_netdev(cmd_parser: CmdParser) -> Result<NetDevcfg> {
-    let mut net = NetDevcfg::default();
-    let netdev_type = cmd_parser.get_value::<String>("")?.unwrap_or_default();
-    if netdev_type.ne("tap") && netdev_type.ne("vhost-user") {
-        bail!("Unsupported netdev type: {:?}", &netdev_type);
-    }
-    net.id = cmd_parser
-        .get_value::<String>("id")?
-        .with_context(|| ConfigError::FieldIsMissing("id".to_string(), "netdev".to_string()))?;
-    if let Some(ifname) = cmd_parser.get_value::<String>("ifname")? {
-        net.ifname = ifname;
-    }
-    if let Some(queue_pairs) = cmd_parser.get_value::<u16>("queues")? {
-        let queues = queue_pairs.checked_mul(2);
-        if queues.is_none() || !is_netdev_queues_valid(queues.unwrap()) {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "number queues of net device".to_string(),
-                1,
-                true,
-                MAX_VIRTIO_QUEUE as u64 / 2,
-                true,
-            )));
-        }
-
-        net.queues = queues.unwrap();
-    }
-
-    if let Some(tap_fd) = parse_fds(&cmd_parser, "fd")? {
-        net.tap_fds = Some(tap_fd);
-    } else if let Some(tap_fds) = parse_fds(&cmd_parser, "fds")? {
-        net.tap_fds = Some(tap_fds);
-    }
-    if let Some(fds) = &net.tap_fds {
-        let fds_num =
-            fds.len()
-                .checked_mul(2)
-                .with_context(|| format!("Invalid fds number {}", fds.len()))? as u16;
-        if fds_num > net.queues {
-            net.queues = fds_num;
-        }
-    }
-
-    if let Some(vhost) = cmd_parser.get_value::<ExBool>("vhost")? {
-        if vhost.into() {
-            net.vhost_type = Some(String::from("vhost-kernel"));
-        }
-    } else if netdev_type.eq("vhost-user") {
-        net.vhost_type = Some(String::from("vhost-user"));
-    }
-    if let Some(chardev) = cmd_parser.get_value::<String>("chardev")? {
-        net.chardev = Some(chardev);
-    }
-    if let Some(vhost_fd) = parse_fds(&cmd_parser, "vhostfd")? {
-        net.vhost_fds = Some(vhost_fd);
-    } else if let Some(vhost_fds) = parse_fds(&cmd_parser, "vhostfds")? {
-        net.vhost_fds = Some(vhost_fds);
-    }
-    if let Some(fds) = &net.vhost_fds {
-        let fds_num = fds
-            .len()
-            .checked_mul(2)
-            .with_context(|| format!("Invalid vhostfds number {}", fds.len()))?
-            as u16;
-        if fds_num > net.queues {
-            net.queues = fds_num;
-        }
-    }
-
-    if net.vhost_fds.is_some() && net.vhost_type.is_none() {
-        bail!("Argument \'vhostfd\' is not needed for virtio-net device");
-    }
-    if net.tap_fds.is_none() && net.ifname.eq("") && netdev_type.ne("vhost-user") {
-        bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
-    }
-
-    net.check()?;
-
-    Ok(net)
-}
-
-pub fn parse_net(vm_config: &mut VmConfig, net_config: &str) -> Result<NetworkInterfaceConfig> {
-    let mut cmd_parser = CmdParser::new("virtio-net");
-    cmd_parser
-        .push("")
-        .push("id")
-        .push("netdev")
-        .push("mq")
-        .push("vectors")
-        .push("bus")
-        .push("addr")
-        .push("multifunction")
-        .push("mac")
-        .push("iothread")
-        .push("queue-size");
-
-    cmd_parser.parse(net_config)?;
-    pci_args_check(&cmd_parser)?;
-    let mut netdevinterfacecfg = NetworkInterfaceConfig::default();
-
-    let netdev = cmd_parser
-        .get_value::<String>("netdev")?
-        .with_context(|| ConfigError::FieldIsMissing("netdev".to_string(), "net".to_string()))?;
-    let netid = cmd_parser.get_value::<String>("id")?.unwrap_or_default();
-
-    if let Some(mq) = cmd_parser.get_value::<ExBool>("mq")? {
-        netdevinterfacecfg.mq = mq.inner;
-    }
-    netdevinterfacecfg.iothread = cmd_parser.get_value::<String>("iothread")?;
-    netdevinterfacecfg.mac = cmd_parser.get_value::<String>("mac")?;
-    if let Some(queue_size) = cmd_parser.get_value::<u16>("queue-size")? {
-        netdevinterfacecfg.queue_size = queue_size;
-    }
-
-    let netcfg = &vm_config
-        .netdevs
-        .remove(&netdev)
-        .with_context(|| format!("Netdev: {:?} not found for net device", &netdev))?;
-    netdevinterfacecfg.id = netid;
-    netdevinterfacecfg.host_dev_name = netcfg.ifname.clone();
-    netdevinterfacecfg.tap_fds = netcfg.tap_fds.clone();
-    netdevinterfacecfg.vhost_fds = netcfg.vhost_fds.clone();
-    netdevinterfacecfg.vhost_type = netcfg.vhost_type.clone();
-    netdevinterfacecfg.queues = netcfg.queues;
-    if let Some(chardev) = &netcfg.chardev {
-        netdevinterfacecfg.socket_path = Some(get_chardev_socket_path(chardev, vm_config)?);
-    }
-
-    netdevinterfacecfg.check()?;
-    Ok(netdevinterfacecfg)
 }
 
 fn get_netdev_fd(fd_name: &str) -> Result<RawFd> {
@@ -337,17 +250,12 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         .unwrap_or(1)
         .checked_mul(2)
         .with_context(|| "Invalid 'queues' value")?;
-    if !is_netdev_queues_valid(queues) {
-        bail!(
-            "The 'queues' {} is bigger than max queue num {}",
-            queues / 2,
-            MAX_QUEUE_PAIRS
-        );
-    }
+    is_netdev_queues_valid(queues)?;
     let mut config = NetDevcfg {
+        netdev_type: args.net_type.unwrap_or_default(),
         id: args.id,
         tap_fds: None,
-        vhost_type: None,
+        vhost_kernel: args.vhost.unwrap_or_default(),
         vhost_fds: None,
         ifname: String::new(),
         queues,
@@ -393,67 +301,43 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         config.ifname = if_name;
     }
 
-    // Get net device type.
-    let netdev_type = args.net_type.unwrap_or_default();
-    let vhost = args.vhost.unwrap_or_default();
-    if vhost {
-        if netdev_type.ne("vhost-user") {
-            config.vhost_type = Some(String::from("vhost-kernel"));
-        } else {
-            bail!("vhost-user netdev does not support 'vhost' option");
-        }
-    } else if netdev_type.eq("vhost-user") {
-        config.vhost_type = Some(netdev_type.clone());
-    }
-
-    if config.vhost_fds.is_some() && config.vhost_type.is_none() {
-        bail!("Argument 'vhostfd' or 'vhostfds' are not needed for virtio-net device");
-    }
-    if config.tap_fds.is_none() && config.ifname.eq("") && netdev_type.ne("vhost-user") {
-        bail!("Tap device is missing, use 'ifname' or 'fd' to configure a tap device");
-    }
+    config.check()?;
 
     Ok(config)
 }
 
 impl VmConfig {
     pub fn add_netdev(&mut self, netdev_config: &str) -> Result<()> {
-        let mut cmd_parser = CmdParser::new("netdev");
-        cmd_parser
-            .push("")
-            .push("id")
-            .push("fd")
-            .push("fds")
-            .push("vhost")
-            .push("ifname")
-            .push("vhostfd")
-            .push("vhostfds")
-            .push("queues")
-            .push("chardev");
-
-        cmd_parser.parse(netdev_config)?;
-        let drive_cfg = parse_netdev(cmd_parser)?;
-        self.add_netdev_with_config(drive_cfg)
+        let mut netdev_cfg =
+            NetDevcfg::try_parse_from(str_slip_to_clap(netdev_config, true, false))?;
+        netdev_cfg.auto_queues()?;
+        netdev_cfg.check()?;
+        self.add_netdev_with_config(netdev_cfg)
     }
 
     pub fn add_netdev_with_config(&mut self, conf: NetDevcfg) -> Result<()> {
         let netdev_id = conf.id.clone();
-        if self.netdevs.get(&netdev_id).is_none() {
-            self.netdevs.insert(netdev_id, conf);
-        } else {
+        if self.netdevs.contains_key(&netdev_id) {
             bail!("Netdev {:?} has been added", netdev_id);
         }
+        self.netdevs.insert(netdev_id, conf);
         Ok(())
     }
 
     pub fn del_netdev_by_id(&mut self, id: &str) -> Result<()> {
-        if self.netdevs.get(id).is_some() {
-            self.netdevs.remove(id);
-        } else {
-            bail!("Netdev {} not found", id);
-        }
+        self.netdevs
+            .remove(id)
+            .with_context(|| format!("Netdev {} not found", id))?;
+
         Ok(())
     }
+}
+
+fn valid_mac(mac: &str) -> Result<String> {
+    if !check_mac_address(mac) {
+        return Err(anyhow!(ConfigError::MacFormatError));
+    }
+    Ok(mac.to_string())
 }
 
 fn check_mac_address(mac: &str) -> bool {
@@ -485,207 +369,136 @@ fn check_mac_address(mac: &str) -> bool {
     true
 }
 
-fn is_netdev_queues_valid(queues: u16) -> bool {
-    queues >= 1 && queues <= MAX_VIRTIO_QUEUE as u16
+fn is_netdev_queues_valid(queues: u16) -> Result<()> {
+    if !(queues >= 2 && queues <= MAX_VIRTIO_QUEUE as u16) {
+        return Err(anyhow!(ConfigError::IllegalValue(
+            "number queues of net device".to_string(),
+            1,
+            true,
+            MAX_QUEUE_PAIRS as u64,
+            true,
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{get_pci_bdf, MAX_STRING_LENGTH};
 
     #[test]
-    fn test_network_config_cmdline_parser() {
+    fn test_netdev_config_cmdline_parser() {
         let mut vm_config = VmConfig::default();
+
+        // Test1: Right.
         assert!(vm_config.add_netdev("tap,id=eth0,ifname=tap0").is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net0");
-        assert_eq!(network_configs.host_dev_name, "tap0");
-        assert_eq!(network_configs.iothread, Some("iothread0".to_string()));
-        assert!(network_configs.mac.is_none());
-        assert!(network_configs.tap_fds.is_none());
-        assert!(network_configs.vhost_type.is_none());
-        assert!(network_configs.vhost_fds.is_none());
+        assert!(vm_config.add_netdev("tap,id=eth0,ifname=tap0").is_err());
+        let netdev_cfg = vm_config.netdevs.get("eth0").unwrap();
+        assert_eq!(netdev_cfg.id, "eth0");
+        assert_eq!(netdev_cfg.ifname, "tap0");
+        assert!(netdev_cfg.tap_fds.is_none());
+        assert!(!netdev_cfg.vhost_kernel);
+        assert!(netdev_cfg.vhost_fds.is_none());
+        assert_eq!(netdev_cfg.queues, 2);
+        assert!(netdev_cfg.vhost_type().is_none());
 
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
             .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net1,netdev=eth1,mac=12:34:56:78:9A:BC",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net1");
-        assert_eq!(network_configs.host_dev_name, "tap1");
-        assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
-        assert!(network_configs.tap_fds.is_none());
-        assert_eq!(
-            network_configs.vhost_type,
-            Some(String::from("vhost-kernel"))
-        );
-        assert_eq!(network_configs.vhost_fds, Some(vec![4]));
+        let netdev_cfg = vm_config.netdevs.get("eth1").unwrap();
+        assert_eq!(netdev_cfg.ifname, "tap1");
+        assert_eq!(netdev_cfg.vhost_type().unwrap(), "vhost-kernel");
+        assert_eq!(netdev_cfg.vhost_fds, Some(vec![4]));
 
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
-        let net_cfg_res = parse_net(&mut vm_config, "virtio-net-device,id=net1,netdev=eth1");
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net1");
-        assert_eq!(network_configs.host_dev_name, "");
-        assert_eq!(network_configs.tap_fds, Some(vec![35]));
+        assert!(vm_config.add_netdev("tap,id=eth2,fd=35").is_ok());
+        let netdev_cfg = vm_config.netdevs.get("eth2").unwrap();
+        assert_eq!(netdev_cfg.tap_fds, Some(vec![35]));
 
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
+            .add_netdev("tap,id=eth3,ifname=tap0,queues=4")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net1,netdev=eth2,mac=12:34:56:78:9A:BC",
-        );
-        assert!(net_cfg_res.is_err());
+        let netdev_cfg = vm_config.netdevs.get("eth3").unwrap();
+        assert_eq!(netdev_cfg.queues, 8);
 
-        let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_netdev("tap,id=eth1,fd=35").is_ok());
-        let net_cfg_res = parse_net(&mut vm_config, "virtio-net-device,id=net1,netdev=eth3");
-        assert!(net_cfg_res.is_err());
-
-        // multi queue testcases
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_netdev("tap,id=eth0,ifname=tap0,queues=4")
+            .add_netdev("tap,id=eth4,fds=34:35:36:37:38")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=on,vectors=6",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.queues, 8);
-        assert_eq!(network_configs.mq, true);
+        let netdev_cfg = vm_config.netdevs.get("eth4").unwrap();
+        assert_eq!(netdev_cfg.queues, 10);
+        assert_eq!(netdev_cfg.tap_fds, Some(vec![34, 35, 36, 37, 38]));
 
-        let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_netdev("tap,id=eth0,fds=34:35:36:37:38")
+            .add_netdev("tap,id=eth5,fds=34:35:36:37:38,vhost=on,vhostfds=39:40:41:42:43")
             .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=off,vectors=12",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.queues, 10);
-        assert_eq!(network_configs.tap_fds, Some(vec![34, 35, 36, 37, 38]));
-        assert_eq!(network_configs.mq, false);
+        let netdev_cfg = vm_config.netdevs.get("eth5").unwrap();
+        assert_eq!(netdev_cfg.queues, 10);
+        assert_eq!(netdev_cfg.vhost_fds, Some(vec![39, 40, 41, 42, 43]));
 
-        let mut vm_config = VmConfig::default();
+        // Test2: Missing values
         assert!(vm_config
-            .add_netdev("tap,id=eth0,fds=34:35:36:37:38,vhost=on,vhostfds=39:40:41:42:43")
-            .is_ok());
-        let net_cfg_res = parse_net(
-            &mut vm_config,
-            "virtio-net-device,id=net0,netdev=eth0,iothread=iothread0,mq=off,vectors=12",
-        );
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.queues, 10);
-        assert_eq!(network_configs.vhost_fds, Some(vec![39, 40, 41, 42, 43]));
-        assert_eq!(network_configs.mq, false);
+            .add_netdev("tap,fds=34:35:36:37:38,vhost=on")
+            .is_err());
+
+        // Test3: Illegal values.
+        assert!(vm_config
+            .add_netdev("tap,id=eth10,fds=34:35:36:37:38,vhost=on,vhostfds=39,40,41,42,43")
+            .is_err());
+        assert!(vm_config.add_netdev("tap,id=eth10,queues=0").is_err());
+        assert!(vm_config.add_netdev("tap,id=eth10,queues=17").is_err());
     }
 
     #[test]
-    fn test_pci_network_config_cmdline_parser() {
-        let mut vm_config = VmConfig::default();
-
-        assert!(vm_config
-            .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
-            .is_ok());
-        let net_cfg =
-            "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC";
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "net1");
-        assert_eq!(network_configs.host_dev_name, "tap1");
-        assert_eq!(network_configs.mac, Some(String::from("12:34:56:78:9A:BC")));
-        assert!(network_configs.tap_fds.is_none());
-        assert_eq!(
-            network_configs.vhost_type,
-            Some(String::from("vhost-kernel"))
-        );
-        assert_eq!(network_configs.vhost_fds.unwrap()[0], 4);
-        let pci_bdf = get_pci_bdf(net_cfg);
-        assert!(pci_bdf.is_ok());
-        let pci = pci_bdf.unwrap();
-        assert_eq!(pci.bus, "pcie.0".to_string());
-        assert_eq!(pci.addr, (1, 2));
-
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_err());
-
+    fn test_networkinterface_config_cmdline_parser() {
+        // Test1: Right.
         let mut vm_config = VmConfig::default();
         assert!(vm_config
             .add_netdev("tap,id=eth1,ifname=tap1,vhost=on,vhostfd=4")
             .is_ok());
+        let net_cmd =
+            "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,mq=on,vectors=6,queue-size=2048,multifunction=on";
         let net_cfg =
-            "virtio-net-pci,id=net1,netdev=eth1,bus=pcie.0,addr=0x1.0x2,mac=12:34:56:78:9A:BC,multifunction=on";
-        assert!(parse_net(&mut vm_config, net_cfg).is_ok());
+            NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false)).unwrap();
+        assert_eq!(net_cfg.id, "net1");
+        assert_eq!(net_cfg.netdev, "eth1");
+        assert_eq!(net_cfg.bus.unwrap(), "pcie.0");
+        assert_eq!(net_cfg.addr.unwrap(), (1, 2));
+        assert_eq!(net_cfg.mac.unwrap(), "12:34:56:78:9A:BC");
+        assert_eq!(net_cfg.vectors, 6);
+        assert!(net_cfg.mq);
+        assert_eq!(net_cfg.queue_size, 2048);
+        assert_eq!(net_cfg.multifunction, Some(true));
+        let netdev_cfg = vm_config.netdevs.get(&net_cfg.netdev).unwrap();
+        assert_eq!(netdev_cfg.vhost_type().unwrap(), "vhost-kernel");
 
-        // For vhost-user net
+        // Test2: Default values.
+        let mut vm_config = VmConfig::default();
         assert!(vm_config.add_netdev("vhost-user,id=netdevid").is_ok());
-        let net_cfg =
+        let net_cmd =
             "virtio-net-pci,id=netid,netdev=netdevid,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_ok());
-        let network_configs = net_cfg_res.unwrap();
-        assert_eq!(network_configs.id, "netid");
-        assert_eq!(network_configs.vhost_type, Some("vhost-user".to_string()));
-        assert_eq!(network_configs.mac, Some("12:34:56:78:9A:BC".to_string()));
-
-        assert!(vm_config
-            .add_netdev("vhost-user,id=netdevid2,chardev=chardevid2")
-            .is_ok());
         let net_cfg =
-            "virtio-net-pci,id=netid2,netdev=netdevid2,bus=pcie.0,addr=0x2.0x0,mac=12:34:56:78:9A:BC";
-        let net_cfg_res = parse_net(&mut vm_config, net_cfg);
-        assert!(net_cfg_res.is_err());
-    }
+            NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false)).unwrap();
+        assert_eq!(net_cfg.queue_size, 256);
+        assert!(!net_cfg.mq);
+        assert_eq!(net_cfg.vectors, 0);
+        let netdev_cfg = vm_config.netdevs.get(&net_cfg.netdev).unwrap();
+        assert_eq!(netdev_cfg.vhost_type().unwrap(), "vhost-user");
 
-    #[test]
-    fn test_netdev_config_check() {
-        let mut netdev_conf = NetDevcfg::default();
-        for _ in 0..MAX_STRING_LENGTH {
-            netdev_conf.id += "A";
-        }
-        assert!(netdev_conf.check().is_ok());
+        // Test3: Missing Parameters.
+        let net_cmd = "virtio-net-pci,id=netid";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
 
-        // Overflow
-        netdev_conf.id += "A";
-        assert!(netdev_conf.check().is_err());
-
-        let mut netdev_conf = NetDevcfg::default();
-        for _ in 0..MAX_STRING_LENGTH {
-            netdev_conf.ifname += "A";
-        }
-        assert!(netdev_conf.check().is_ok());
-
-        // Overflow
-        netdev_conf.ifname += "A";
-        assert!(netdev_conf.check().is_err());
-
-        let mut netdev_conf = NetDevcfg::default();
-        netdev_conf.vhost_type = None;
-        assert!(netdev_conf.check().is_ok());
-        netdev_conf.vhost_type = Some(String::from("vhost-kernel"));
-        assert!(netdev_conf.check().is_ok());
-        netdev_conf.vhost_type = Some(String::from("vhost-"));
-        assert!(netdev_conf.check().is_err());
+        // Test4: Illegal Parameters.
+        let net_cmd = "virtio-net-pci,id=netid,netdev=netdevid,mac=1:1:1";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
+        let net_cmd = "virtio-net-pci,id=netid,netdev=netdevid,queue-size=128";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
+        let net_cmd = "virtio-net-pci,id=netid,netdev=netdevid,queue-size=10240";
+        let result = NetworkInterfaceConfig::try_parse_from(str_slip_to_clap(net_cmd, true, false));
+        assert!(result.is_err());
     }
 
     #[test]
@@ -748,7 +561,7 @@ mod tests {
             let mut net_conf = NetDevcfg::default();
             net_conf.id = String::from(*id);
             assert!(vm_config.netdevs.get(*id).is_some());
-            assert!(vm_config.del_netdev_by_id(*id).is_ok());
+            assert!(vm_config.del_netdev_by_id(id).is_ok());
             assert!(vm_config.netdevs.get(*id).is_none());
         }
     }
@@ -811,9 +624,9 @@ mod tests {
                 ..qmp_schema::NetDevAddArgument::default()
             });
             let net_cfg = get_netdev_config(netdev).unwrap();
+            assert_eq!(net_cfg.vhost_type().unwrap(), "vhost-kernel");
             assert_eq!(net_cfg.tap_fds.unwrap()[0], 11);
             assert_eq!(net_cfg.vhost_fds.unwrap()[0], 21);
-            assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
         }
 
         // Normal test with 'vhostfds'.
@@ -831,9 +644,9 @@ mod tests {
                 ..qmp_schema::NetDevAddArgument::default()
             });
             let net_cfg = get_netdev_config(netdev).unwrap();
-            assert_eq!(net_cfg.tap_fds.unwrap(), [11, 12, 13, 14]);
-            assert_eq!(net_cfg.vhost_fds.unwrap(), [21, 22, 23, 24]);
-            assert_eq!(net_cfg.vhost_type.unwrap(), "vhost-kernel");
+            assert_eq!(net_cfg.vhost_type().unwrap(), "vhost-kernel");
+            assert_eq!(net_cfg.tap_fds.unwrap(), vec![11, 12, 13, 14]);
+            assert_eq!(net_cfg.vhost_fds.unwrap(), vec![21, 22, 23, 24]);
         }
 
         let err_msgs = [
@@ -851,7 +664,7 @@ mod tests {
             queues: Some(u16::MAX),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[0]);
+        check_err_msg(netdev, err_msgs[0]);
 
         // Abnornal test with invalid 'queues': MAX_QUEUE_PAIRS + 1.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -859,8 +672,7 @@ mod tests {
             ..qmp_schema::NetDevAddArgument::default()
         });
         let err_msg = format!(
-            "The 'queues' {} is bigger than max queue num {}",
-            MAX_QUEUE_PAIRS + 1,
+            "number queues of net device must >= 1 and <= {}.",
             MAX_QUEUE_PAIRS
         );
         check_err_msg(netdev, &err_msg);
@@ -871,7 +683,7 @@ mod tests {
             vhostfds: Some("21:22:23:24".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[1]);
+        check_err_msg(netdev, err_msgs[1]);
 
         // Abnornal test with 'fds' and 'vhostfd'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -879,7 +691,7 @@ mod tests {
             vhostfd: Some("21".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[2]);
+        check_err_msg(netdev, err_msgs[2]);
 
         // Abnornal test with different num of 'fds' and 'vhostfds'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -887,7 +699,7 @@ mod tests {
             vhostfds: Some("21:22:23".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[3]);
+        check_err_msg(netdev, err_msgs[3]);
 
         // Abnornal test with 'net_type=vhost-user'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -897,7 +709,7 @@ mod tests {
             net_type: Some("vhost-user".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[4]);
+        check_err_msg(netdev, err_msgs[4]);
 
         // Abnornal test with 'fds/vhostfds' and no 'vhost'.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -905,13 +717,13 @@ mod tests {
             vhostfds: Some("21:22:23:24".to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[5]);
+        check_err_msg(netdev, err_msgs[5]);
 
         // Abnornal test with all default value.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
             ..qmp_schema::NetDevAddArgument::default()
         });
-        check_err_msg(netdev, &err_msgs[6]);
+        check_err_msg(netdev, err_msgs[6]);
 
         // Abnornal test with invalid fd value.
         let netdev = Box::new(qmp_schema::NetDevAddArgument {
@@ -929,6 +741,7 @@ mod tests {
             fds: Some(fds.to_string()),
             ..qmp_schema::NetDevAddArgument::default()
         });
+        // number queues of net device
         let err_msg = format!(
             "The num of fd {} is bigger than max queue num {}",
             MAX_QUEUE_PAIRS + 1,

@@ -27,6 +27,7 @@ use mod_test::libdriver::virtio::{
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::{test_init, TestState, MACHINE_TYPE_ARG};
 use mod_test::utils::{cleanup_img, create_img, ImageType, TEST_IMAGE_SIZE};
+#[cfg(not(target_env = "ohos"))]
 use util::aio::{aio_probe, AioEngine};
 use util::byte_code::ByteCode;
 use util::offset_of;
@@ -133,15 +134,11 @@ impl VirtioScsiTest {
             use_iothread: iothread,
         };
 
-        let readonly = if scsi_type == ScsiDeviceType::ScsiHd {
-            false
-        } else {
-            true
-        };
+        let readonly = scsi_type != ScsiDeviceType::ScsiHd;
         let scsi_devices: Vec<ScsiDeviceConfig> = vec![ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: scsi_type,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: readonly,
@@ -201,7 +198,7 @@ impl VirtioScsiTest {
         if let Some(data) = data_out {
             let out_len = data.len() as u32;
             let out_bytes = data.as_bytes().to_vec();
-            let out_addr = self.alloc.borrow_mut().alloc(out_len as u64);
+            let out_addr = self.alloc.borrow_mut().alloc(u64::from(out_len));
             self.state.borrow().memwrite(out_addr, out_bytes.as_slice());
             data_entries.push(TestVringDescEntry {
                 data: out_addr,
@@ -215,7 +212,7 @@ impl VirtioScsiTest {
         let resp_addr = self
             .alloc
             .borrow_mut()
-            .alloc(cmdresp_len + data_in_len as u64);
+            .alloc(cmdresp_len + u64::from(data_in_len));
         let resp_bytes = resp.as_bytes();
         self.state.borrow().memwrite(resp_addr, resp_bytes);
 
@@ -257,13 +254,13 @@ impl VirtioScsiTest {
                 size_of::<TestVirtioScsiCmdResp>(),
             )
         };
-        *resp = slice[0].clone();
+        *resp = slice[0];
 
         if data_in_len > 0 {
             data_in.append(
                 self.state
                     .borrow()
-                    .memread(resp_addr + cmdresp_len, data_in_len as u64)
+                    .memread(resp_addr + cmdresp_len, u64::from(data_in_len))
                     .as_mut(),
             );
         }
@@ -439,8 +436,8 @@ impl TestVirtioScsiCmdReq {
         let mut target_lun = [0_u8; 8];
         target_lun[0] = 1;
         target_lun[1] = target;
-        target_lun[2] = (lun >> 8) as u8 & 0xff;
-        target_lun[3] = lun as u8 & 0xff;
+        target_lun[2] = (lun >> 8) as u8;
+        target_lun[3] = lun as u8;
 
         req.lun = target_lun;
         req.cdb = cdb;
@@ -505,6 +502,7 @@ impl std::fmt::Display for ScsiDeviceType {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Copy)]
 enum TestAioType {
     AioOff = 0,
@@ -623,7 +621,7 @@ fn scsi_test_init(
     let machine = TestStdMachine::new(test_state.clone());
     let allocator = machine.allocator.clone();
 
-    let virtio_scsi = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let virtio_scsi = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
     virtio_scsi.borrow_mut().init(pci_slot, pci_fn);
 
     (virtio_scsi, test_state, allocator)
@@ -665,7 +663,7 @@ fn scsi_hd_basic_test() {
     for i in 0..32 {
         // Test 1 Result: Only response 0 for target == 31. Otherwise response
         //                VIRTIO_SCSI_S_BAD_TARGET.
-        let expect_result = if i == target as u16 {
+        let expect_result = if i == u16::from(target) {
             VIRTIO_SCSI_S_OK
         } else {
             VIRTIO_SCSI_S_BAD_TARGET
@@ -675,7 +673,7 @@ fn scsi_hd_basic_test() {
             target: i as u8,
             lun: 0,
             data_out: None,
-            data_in_length: INQUIRY_DATA_LEN as u32,
+            data_in_length: u32::from(INQUIRY_DATA_LEN),
             expect_response: expect_result,
             expect_status: GOOD,
             expect_result_data: None,
@@ -705,7 +703,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: REPORT_LUNS_DATA_LEN as u32,
+        data_in_length: u32::from(REPORT_LUNS_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -740,7 +738,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: READ_CAPACITY_10_DATA_LEN as u32,
+        data_in_length: u32::from(READ_CAPACITY_10_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -753,8 +751,12 @@ fn scsi_hd_basic_test() {
     // Bytes[4-7]: Logical Block Length In Bytes.
     // Total size = (last logical block address + 1) * block length.
     assert_eq!(
-        (u32::from_be_bytes(data_in.as_ref().unwrap()[0..4].try_into().unwrap()) as u64 + 1)
-            * (u32::from_be_bytes(data_in.as_ref().unwrap()[4..8].try_into().unwrap()) as u64),
+        (u64::from(u32::from_be_bytes(
+            data_in.as_ref().unwrap()[0..4].try_into().unwrap()
+        )) + 1)
+            * u64::from(u32::from_be_bytes(
+                data_in.as_ref().unwrap()[4..8].try_into().unwrap()
+            )),
         TEST_IMAGE_SIZE
     );
 
@@ -793,7 +795,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: MODE_SENSE_PAGE_CACHE_LEN_DATA_LEN as u32,
+        data_in_length: u32::from(MODE_SENSE_PAGE_CACHE_LEN_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -838,7 +840,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: MODE_SENSE_PAGE_ALL_DATA_LEN as u32,
+        data_in_length: u32::from(MODE_SENSE_PAGE_ALL_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -861,7 +863,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -885,7 +887,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_SUPPORTED_VPD_PAGES_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_SUPPORTED_VPD_PAGES_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -906,7 +908,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_UNIT_SERIAL_NUMBER_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_UNIT_SERIAL_NUMBER_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -931,7 +933,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_DEVICE_IDENTIFICATION_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_DEVICE_IDENTIFICATION_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -953,7 +955,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_BLOCK_LIMITS_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_BLOCK_LIMITS_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -981,7 +983,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_BLOCK_DEVICE_CHARACTERISTICS_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_BLOCK_DEVICE_CHARACTERISTICS_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1010,7 +1012,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_LOGICAL_BLOCK_PROVISIONING_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_LOGICAL_BLOCK_PROVISIONING_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1031,7 +1033,7 @@ fn scsi_hd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: INQUIRY_REFERRALS_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_REFERRALS_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -1110,7 +1112,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: MODE_SENSE_LEN_DATA_LEN as u32,
+        data_in_length: u32::from(MODE_SENSE_LEN_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1129,7 +1131,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: TEST_SCSI_SENSE_LEN as u32,
+        data_in_length: TEST_SCSI_SENSE_LEN,
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -1172,7 +1174,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: READ_TOC_DATA_LEN as u32,
+        data_in_length: u32::from(READ_TOC_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1205,7 +1207,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: READ_TOC_MSF_DATA_LEN as u32,
+        data_in_length: u32::from(READ_TOC_MSF_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1229,7 +1231,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: READ_TOC_FORMAT_DATA_LEN as u32,
+        data_in_length: u32::from(READ_TOC_FORMAT_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1270,7 +1272,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: READ_DISC_INFORMATION_DATA_LEN as u32,
+        data_in_length: u32::from(READ_DISC_INFORMATION_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1339,7 +1341,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: GET_CONFIGURATION_DATA_LEN as u32,
+        data_in_length: u32::from(GET_CONFIGURATION_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1375,7 +1377,7 @@ fn scsi_cd_basic_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: GET_EVENT_STATUS_NOTIFICATION_DATA_LEN as u32,
+        data_in_length: u32::from(GET_EVENT_STATUS_NOTIFICATION_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1423,7 +1425,7 @@ fn scsi_target_cdb_test() {
         target,
         lun: req_lun,
         data_out: None,
-        data_in_length: REPORT_LUNS_DATA_LEN as u32,
+        data_in_length: u32::from(REPORT_LUNS_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1447,7 +1449,7 @@ fn scsi_target_cdb_test() {
         target,
         lun: req_lun,
         data_out: None,
-        data_in_length: INQUIRY_TARGET_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_TARGET_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1480,7 +1482,7 @@ fn scsi_target_cdb_test() {
         target,
         lun: 0,
         data_out: None,
-        data_in_length: INQUIRY_TARGET_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_TARGET_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: Some(expect_result_vec),
@@ -1503,7 +1505,7 @@ fn scsi_target_cdb_test() {
         target,
         lun: req_lun,
         data_out: None,
-        data_in_length: INQUIRY_TARGET_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_TARGET_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: GOOD,
         expect_result_data: None,
@@ -1524,7 +1526,7 @@ fn scsi_target_cdb_test() {
         target,
         lun: 0,
         data_out: None,
-        data_in_length: INQUIRY_TARGET_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_TARGET_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -1545,7 +1547,7 @@ fn scsi_target_cdb_test() {
         target,
         lun: req_lun,
         data_out: None,
-        data_in_length: INQUIRY_TARGET_DATA_LEN as u32,
+        data_in_length: u32::from(INQUIRY_TARGET_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -1619,7 +1621,7 @@ fn scsi_target_cdb_test() {
         target,
         lun: req_lun,
         data_out: None,
-        data_in_length: READ_CAPACITY_10_DATA_LEN as u32,
+        data_in_length: u32::from(READ_CAPACITY_10_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -1865,13 +1867,14 @@ fn aio_model_test() {
     let mut lun = 0x2;
     let mut device_vec: Vec<ScsiDeviceConfig> = Vec::new();
 
+    #[cfg(not(target_env = "ohos"))]
     if aio_probe(AioEngine::IoUring).is_ok() {
         // Scsi Disk 1. AIO io_uring. Direct false.
         let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0, &ImageType::Raw));
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: false,
@@ -1886,7 +1889,7 @@ fn aio_model_test() {
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: false,
@@ -1905,7 +1908,7 @@ fn aio_model_test() {
     device_vec.push(ScsiDeviceConfig {
         cntlr_id: 0,
         device_type: ScsiDeviceType::ScsiHd,
-        image_path: image_path.clone(),
+        image_path,
         target,
         lun,
         read_only: false,
@@ -1916,6 +1919,7 @@ fn aio_model_test() {
     // Scsi Disk 5. AIO native. Direct false. This is not allowed.
     // Stratovirt will report "native aio type should be used with direct on"
 
+    #[cfg(not(target_env = "ohos"))]
     if aio_probe(AioEngine::Native).is_ok() {
         // Scsi Disk 6. AIO native. Direct true.
         lun += 1;
@@ -1923,7 +1927,7 @@ fn aio_model_test() {
         device_vec.push(ScsiDeviceConfig {
             cntlr_id: 0,
             device_type: ScsiDeviceType::ScsiHd,
-            image_path: image_path.clone(),
+            image_path,
             target,
             lun,
             read_only: false,
@@ -2246,7 +2250,7 @@ fn send_cd_command_to_hd_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: MODE_SENSE_LEN_DATA_LEN as u32,
+        data_in_length: u32::from(MODE_SENSE_LEN_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -2265,7 +2269,7 @@ fn send_cd_command_to_hd_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: READ_DISC_INFORMATION_DATA_LEN as u32,
+        data_in_length: u32::from(READ_DISC_INFORMATION_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -2283,7 +2287,7 @@ fn send_cd_command_to_hd_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: GET_CONFIGURATION_DATA_LEN as u32,
+        data_in_length: u32::from(GET_CONFIGURATION_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -2305,7 +2309,7 @@ fn send_cd_command_to_hd_test() {
         target,
         lun,
         data_out: None,
-        data_in_length: GET_EVENT_STATUS_NOTIFICATION_DATA_LEN as u32,
+        data_in_length: u32::from(GET_EVENT_STATUS_NOTIFICATION_DATA_LEN),
         expect_response: VIRTIO_SCSI_S_OK,
         expect_status: CHECK_CONDITION,
         expect_result_data: None,
@@ -2332,7 +2336,7 @@ fn send_cd_command_to_hd_test() {
 fn wrong_io_test() {
     let target = 0xff;
     let lun = 0xff;
-    let size = 1 * 1024; // Disk size: 1K.
+    let size = 1024; // Disk size: 1K.
 
     let mut vst =
         VirtioScsiTest::testcase_start_with_config(ScsiDeviceType::ScsiHd, target, lun, size, true);

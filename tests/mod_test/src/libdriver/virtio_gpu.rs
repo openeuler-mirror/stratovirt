@@ -430,8 +430,8 @@ impl TestVirtioGpu {
             .borrow_mut()
             .setup_virtqueue_intr(2, self.allocator.clone(), cursor_q.clone());
 
-        self.ctrl_q = ctrl_q.clone();
-        self.cursor_q = cursor_q.clone();
+        self.ctrl_q = ctrl_q;
+        self.cursor_q = cursor_q;
 
         self.device.borrow_mut().set_driver_ok();
     }
@@ -648,9 +648,9 @@ pub fn set_up(
     demo_dpy.borrow_mut().init(dpy_pci_slot);
 
     let virtgpu = Rc::new(RefCell::new(TestVirtioGpu::new(
-        machine.pci_bus.clone(),
-        allocator.clone(),
-        test_state.clone(),
+        machine.pci_bus,
+        allocator,
+        test_state,
     )));
     virtgpu.borrow_mut().init(gpu_pci_slot, gpu_pci_fn);
 
@@ -671,7 +671,7 @@ pub fn get_display_info(gpu: &Rc<RefCell<TestVirtioGpu>>) -> VirtioGpuDisplayInf
 
     gpu.borrow_mut()
         .request_complete(true, hdr.as_bytes(), None, None, Some(&mut resp));
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_GET_EDID
@@ -689,7 +689,7 @@ pub fn get_edid(gpu: &Rc<RefCell<TestVirtioGpu>>, hdr_ctx: VirtioGpuGetEdid) -> 
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 pub fn current_curosr_check(dpy: &Rc<RefCell<TestDemoDpyDevice>>, local: &Vec<u8>) -> bool {
@@ -697,7 +697,7 @@ pub fn current_curosr_check(dpy: &Rc<RefCell<TestDemoDpyDevice>>, local: &Vec<u8
     if size as usize != local.len() {
         return false;
     }
-    let remote = dpy.borrow_mut().get_cursor(size as u64);
+    let remote = dpy.borrow_mut().get_cursor(u64::from(size));
 
     for (i, v) in remote.iter().enumerate() {
         if v != local.get(i).unwrap() {
@@ -712,7 +712,7 @@ pub fn current_surface_check(dpy: &Rc<RefCell<TestDemoDpyDevice>>, local: &Vec<u
     if size as usize != local.len() {
         return false;
     }
-    let remote = dpy.borrow_mut().get_surface(size as u64);
+    let remote = dpy.borrow_mut().get_surface(u64::from(size));
 
     for (i, v) in remote.iter().enumerate() {
         if v != local.get(i).unwrap() {
@@ -740,7 +740,7 @@ pub fn resource_create(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_RESOURCE_UNREF
@@ -761,7 +761,7 @@ pub fn resource_unref(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_RESOURCE_FLUSH
@@ -782,7 +782,7 @@ pub fn resource_flush(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_UPDATE_CURSOR
@@ -831,7 +831,7 @@ pub fn resource_attach_backing(
         Some(&ctx),
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 pub fn resource_attach_backing_with_invalid_ctx_len(
@@ -851,7 +851,7 @@ pub fn resource_attach_backing_with_invalid_ctx_len(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING
@@ -872,7 +872,7 @@ pub fn resource_detach_backing(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D
@@ -892,7 +892,7 @@ pub fn transfer_to_host(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 // VIRTIO_GPU_CMD_SET_SCANOUT
@@ -913,7 +913,7 @@ pub fn set_scanout(
         None,
         Some(&mut resp),
     );
-    return resp;
+    resp
 }
 
 pub fn invalid_cmd_test(gpu: &Rc<RefCell<TestVirtioGpu>>) -> VirtioGpuCtrlHdr {
@@ -924,5 +924,5 @@ pub fn invalid_cmd_test(gpu: &Rc<RefCell<TestVirtioGpu>>) -> VirtioGpuCtrlHdr {
 
     gpu.borrow_mut()
         .request_complete(true, hdr.as_bytes(), None, None, Some(&mut resp));
-    return resp;
+    resp
 }

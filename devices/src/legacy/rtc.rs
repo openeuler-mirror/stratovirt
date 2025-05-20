@@ -15,15 +15,16 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use log::{debug, error, warn};
-use vmm_sys_util::eventfd::EventFd;
 
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlBuilder, AmlDevice, AmlEisaId, AmlIoDecode, AmlIoResource, AmlIrqNoFlags, AmlNameDecl,
     AmlResTemplate, AmlScopeBuilder,
 };
 use address_space::GuestAddress;
+use util::gen_base_func;
+use util::loop_context::create_new_eventfd;
 use util::time::{mktime64, NANOSECONDS_PER_SECOND};
 
 /// IO port of RTC device to select Register to read/write.
@@ -94,7 +95,7 @@ fn bcd_to_bin(src: u8) -> u64 {
         return 0_u64;
     }
 
-    (((src >> 4) * 10) + (src & 0x0f)) as u64
+    u64::from(((src >> 4) * 10) + (src & 0x0f))
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -117,16 +118,11 @@ pub struct RTC {
 
 impl RTC {
     /// Construct function of RTC device.
-    pub fn new() -> Result<RTC> {
+    pub fn new(sysbus: &Arc<Mutex<SysBus>>) -> Result<RTC> {
         let mut rtc = RTC {
             base: SysBusDevBase {
                 dev_type: SysBusDevType::Rtc,
-                res: SysRes {
-                    region_base: RTC_PORT_INDEX,
-                    region_size: 8,
-                    irq: -1,
-                },
-                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+                interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
                 ..Default::default()
             },
             cmos_data: [0_u8; 128],
@@ -145,6 +141,9 @@ impl RTC {
         rtc.set_rtc_cmos(tm);
 
         rtc.init_rtc_reg();
+
+        rtc.set_sys_resource(sysbus, RTC_PORT_INDEX, 8, "RTC")?;
+        rtc.set_parent_bus(sysbus.clone());
 
         Ok(rtc)
     }
@@ -266,19 +265,9 @@ impl RTC {
         true
     }
 
-    pub fn realize(mut self, sysbus: &mut SysBus) -> Result<()> {
-        let region_base = self.base.res.region_base;
-        let region_size = self.base.res.region_size;
-        self.set_sys_resource(sysbus, region_base, region_size)?;
-
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "RTC")?;
-        Ok(())
-    }
-
     /// Get current clock value.
     fn get_current_value(&self) -> i64 {
-        (self.base_time.elapsed().as_secs() as i128 + self.tick_offset as i128) as i64
+        (i128::from(self.base_time.elapsed().as_secs()) + i128::from(self.tick_offset)) as i64
     }
 
     fn set_rtc_cmos(&mut self, tm: libc::tm) {
@@ -332,7 +321,13 @@ impl RTC {
             + bcd_to_bin(self.cmos_data[RTC_CENTURY_BCD as usize]) * 100;
 
         // Check rtc time is valid to prevent tick_offset overflow.
-        if year < 1970 || !(1..=12).contains(&mon) || !(1..=31).contains(&day) {
+        if year < 1970
+            || !(1..=12).contains(&mon)
+            || !(1..=31).contains(&day)
+            || !(0..=24).contains(&hour)
+            || !(0..=60).contains(&min)
+            || !(0..=60).contains(&sec)
+        {
             warn!(
                 "RTC: the updated rtc time {}-{}-{} may be invalid.",
                 year, mon, day
@@ -351,23 +346,26 @@ impl RTC {
 }
 
 impl Device for RTC {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.cmos_data.fill(0);
+        self.init_rtc_reg();
+        self.set_memory(self.mem_size, self.gap_start);
+        Ok(())
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for RTC {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
         if offset == 0 {
@@ -389,17 +387,6 @@ impl SysBusDevOps for RTC {
         } else {
             self.write_data(data)
         }
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.cmos_data.fill(0);
-        self.init_rtc_reg();
-        self.set_memory(self.mem_size, self.gap_start);
-        Ok(())
     }
 }
 
@@ -428,6 +415,7 @@ mod test {
     use anyhow::Context;
 
     use super::*;
+    use crate::sysbus::sysbus_init;
     use address_space::GuestAddress;
 
     const WIGGLE: u8 = 2;
@@ -448,7 +436,8 @@ mod test {
 
     #[test]
     fn test_set_year_20xx() -> Result<()> {
-        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
+        let sysbus = sysbus_init();
+        let mut rtc = RTC::new(&sysbus).with_context(|| "Failed to create RTC device")?;
         // Set rtc time: 2013-11-13 02:04:56
         cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x20);
         cmos_write(&mut rtc, RTC_YEAR, 0x13);
@@ -482,7 +471,8 @@ mod test {
 
     #[test]
     fn test_set_year_1970() -> Result<()> {
-        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
+        let sysbus = sysbus_init();
+        let mut rtc = RTC::new(&sysbus).with_context(|| "Failed to create RTC device")?;
         // Set rtc time (min): 1970-01-01 00:00:00
         cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x19);
         cmos_write(&mut rtc, RTC_YEAR, 0x70);
@@ -505,7 +495,8 @@ mod test {
 
     #[test]
     fn test_invalid_rtc_time() -> Result<()> {
-        let mut rtc = RTC::new().with_context(|| "Failed to create RTC device")?;
+        let sysbus = sysbus_init();
+        let mut rtc = RTC::new(&sysbus).with_context(|| "Failed to create RTC device")?;
         // Set rtc year: 1969
         cmos_write(&mut rtc, RTC_CENTURY_BCD, 0x19);
         cmos_write(&mut rtc, RTC_YEAR, 0x69);

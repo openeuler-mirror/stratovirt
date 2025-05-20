@@ -28,9 +28,10 @@ use crate::{
     VIRTIO_NET_F_MRG_RXBUF, VIRTIO_TYPE_NET,
 };
 use address_space::AddressSpace;
-use machine_manager::config::NetworkInterfaceConfig;
+use machine_manager::config::{NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::EventNotifierHelper;
 
 /// Number of virtqueues.
@@ -42,6 +43,10 @@ pub struct Net {
     base: VirtioBase,
     /// Configuration of the vhost user network device.
     net_cfg: NetworkInterfaceConfig,
+    /// Configuration of the backend netdev.
+    netdev_cfg: NetDevcfg,
+    /// path of the socket chardev.
+    sock_path: String,
     /// Virtio net configurations.
     config_space: Arc<Mutex<VirtioNetConfig>>,
     /// System address space.
@@ -53,18 +58,25 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new(cfg: &NetworkInterfaceConfig, mem_space: &Arc<AddressSpace>) -> Self {
-        let queue_num = if cfg.mq {
+    pub fn new(
+        net_cfg: &NetworkInterfaceConfig,
+        netdev_cfg: NetDevcfg,
+        sock_path: String,
+        mem_space: &Arc<AddressSpace>,
+    ) -> Self {
+        let queue_num = if net_cfg.mq {
             // If support multi-queue, it should add 1 control queue.
-            (cfg.queues + 1) as usize
+            (netdev_cfg.queues + 1) as usize
         } else {
             QUEUE_NUM_NET
         };
-        let queue_size = cfg.queue_size;
+        let queue_size = net_cfg.queue_size;
 
         Net {
             base: VirtioBase::new(VIRTIO_TYPE_NET, queue_num, queue_size),
-            net_cfg: cfg.clone(),
+            net_cfg: net_cfg.clone(),
+            netdev_cfg,
+            sock_path,
             config_space: Default::default(),
             mem_space: mem_space.clone(),
             client: None,
@@ -106,23 +118,12 @@ impl Net {
 }
 
 impl VirtioDevice for Net {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
-        let socket_path = self
-            .net_cfg
-            .socket_path
-            .as_ref()
-            .with_context(|| "vhost-user: socket path is not found")?;
         let client = VhostUserClient::new(
             &self.mem_space,
-            socket_path,
+            &self.sock_path,
             self.queue_num() as u64,
             VhostBackendType::TypeNet,
         )
@@ -158,7 +159,7 @@ impl VirtioDevice for Net {
 
         let mut locked_config = self.config_space.lock().unwrap();
 
-        let queue_pairs = self.net_cfg.queues / 2;
+        let queue_pairs = self.netdev_cfg.queues / 2;
         if self.net_cfg.mq
             && (VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN..=VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX)
                 .contains(&queue_pairs)

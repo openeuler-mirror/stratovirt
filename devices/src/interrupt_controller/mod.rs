@@ -81,6 +81,8 @@ pub trait LineIrqManager: Send + Sync {
 }
 
 pub trait MsiIrqManager: Send + Sync {
+    fn irqfd_enable(&self) -> bool;
+
     fn allocate_irq(&self, _vector: MsiVector) -> Result<u32> {
         Ok(0)
     }
@@ -140,6 +142,10 @@ impl IrqState {
     }
 
     pub fn register_irq(&mut self) -> Result<()> {
+        if self.irq_handler.is_none() {
+            return Ok(());
+        }
+
         let irq_handler = self.irq_handler.as_ref().unwrap();
         if !irq_handler.irqfd_enable() {
             self.irq_fd = None;

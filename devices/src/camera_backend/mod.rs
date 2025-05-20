@@ -54,7 +54,7 @@ impl CamBasicFmt {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Default)]
 pub enum FmtType {
     #[default]
     Yuy2 = 0,
@@ -123,9 +123,9 @@ pub fn get_video_frame_size(width: u32, height: u32, fmt: FmtType) -> Result<u32
 
 pub fn get_bit_rate(width: u32, height: u32, interval: u32, fmt: FmtType) -> Result<u32> {
     let fm_size = get_video_frame_size(width, height, fmt)?;
-    let size_in_bit = fm_size as u64 * INTERVALS_PER_SEC as u64 * 8;
+    let size_in_bit = u64::from(fm_size) * u64::from(INTERVALS_PER_SEC) * 8;
     let rate = size_in_bit
-        .checked_div(interval as u64)
+        .checked_div(u64::from(interval))
         .with_context(|| format!("Invalid size {} or interval {}", size_in_bit, interval))?;
     Ok(rate as u32)
 }
@@ -184,12 +184,16 @@ pub trait CameraBackend: Send + Sync {
 
     /// Register broken callback which is called when backend is broken.
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
+
+    /// Pause/resume stream.
+    fn pause(&mut self, _paused: bool) {}
 }
 
 #[allow(unused_variables)]
 pub fn create_cam_backend(
     config: UsbCameraConfig,
     cameradev: CameraDevConfig,
+    _tokenid: u64,
 ) -> Result<Arc<Mutex<dyn CameraBackend>>> {
     let cam: Arc<Mutex<dyn CameraBackend>> = match cameradev.backend {
         #[cfg(feature = "usb_camera_v4l2")]
@@ -202,6 +206,7 @@ pub fn create_cam_backend(
         CamBackendType::OhCamera => Arc::new(Mutex::new(OhCameraBackend::new(
             cameradev.id,
             cameradev.path,
+            _tokenid,
         )?)),
         CamBackendType::Demo => Arc::new(Mutex::new(DemoCameraBackend::new(
             config.id,

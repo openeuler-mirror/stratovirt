@@ -103,6 +103,9 @@ const XHCI_INTR_REG_SHIFT: u64 = 5;
 /// Doorbell Register Bit Field.
 /// DB Target.
 const DB_TARGET_MASK: u32 = 0xff;
+/// DB Stream.
+const DB_STREAM_ID_SHIFT: u32 = 16;
+const DB_STREAM_ID_MASK: u32 = 0xffff;
 /// Port Registers.
 const XHCI_PORTSC: u64 = 0x0;
 const XHCI_PORTPMSC: u64 = 0x4;
@@ -121,7 +124,7 @@ pub struct XhciOperReg {
     /// Command Ring Control
     pub cmd_ring_ctrl: u64,
     /// Device Context Base Address Array Pointer
-    pub dcbaap: u64,
+    pub dcbaap: GuestAddress,
     /// Configure
     pub config: u32,
 }
@@ -132,13 +135,13 @@ impl XhciOperReg {
         self.set_usb_status(USB_STS_HCH);
         self.dev_notify_ctrl = 0;
         self.cmd_ring_ctrl = 0;
-        self.dcbaap = 0;
+        self.dcbaap = GuestAddress(0);
         self.config = 0;
     }
 
     /// Run the command ring.
     pub fn start_cmd_ring(&mut self) {
-        self.cmd_ring_ctrl |= CMD_RING_CTRL_CRR as u64;
+        self.cmd_ring_ctrl |= u64::from(CMD_RING_CTRL_CRR);
     }
 
     pub fn set_usb_cmd(&mut self, value: u32) {
@@ -157,7 +160,7 @@ impl XhciOperReg {
         self.usb_status.load(Ordering::Acquire)
     }
 
-    pub fn set_usb_status_flag(&mut self, value: u32) {
+    pub fn set_usb_status_flag(&self, value: u32) {
         self.usb_status.fetch_or(value, Ordering::SeqCst);
     }
 
@@ -180,12 +183,12 @@ pub struct XhciInterrupter {
     /// Event Ring Segment Table Size
     pub erstsz: u32,
     /// Event Ring Segment Table Base Address
-    pub erstba: u64,
+    pub erstba: GuestAddress,
     /// Event Ring Dequeue Pointer
-    pub erdp: u64,
+    pub erdp: GuestAddress,
     /// Event Ring Producer Cycle State
     pub er_pcs: bool,
-    pub er_start: u64,
+    pub er_start: GuestAddress,
     pub er_size: u32,
     pub er_ep_idx: u32,
 }
@@ -206,10 +209,10 @@ impl XhciInterrupter {
             iman: 0,
             imod: 0,
             erstsz: 0,
-            erstba: 0,
-            erdp: 0,
+            erstba: GuestAddress(0),
+            erdp: GuestAddress(0),
             er_pcs: true,
-            er_start: 0,
+            er_start: GuestAddress(0),
             er_size: 0,
             er_ep_idx: 0,
         }
@@ -232,10 +235,10 @@ impl XhciInterrupter {
         self.iman = 0;
         self.imod = 0;
         self.erstsz = 0;
-        self.erstba = 0;
-        self.erdp = 0;
+        self.erstba = GuestAddress(0);
+        self.erdp = GuestAddress(0);
         self.er_pcs = true;
-        self.er_start = 0;
+        self.er_start = GuestAddress(0);
         self.er_size = 0;
         self.er_ep_idx = 0;
     }
@@ -244,25 +247,27 @@ impl XhciInterrupter {
     pub fn send_event(&mut self, evt: &XhciEvent) -> Result<()> {
         let er_end = self
             .er_start
-            .checked_add((TRB_SIZE * self.er_size) as u64)
-            .ok_or(UsbError::MemoryAccessOverflow(
-                self.er_start,
-                (TRB_SIZE * self.er_size) as u64,
-            ))?;
+            .checked_add(u64::from(TRB_SIZE * self.er_size))
+            .ok_or_else(|| {
+                UsbError::MemoryAccessOverflow(
+                    self.er_start.raw_value(),
+                    u64::from(TRB_SIZE * self.er_size),
+                )
+            })?;
         if self.erdp < self.er_start || self.erdp >= er_end {
             bail!(
-                "DMA out of range, erdp {} er_start {:x} er_size {}",
-                self.erdp,
-                self.er_start,
+                "DMA out of range, erdp {:x} er_start {:x} er_size {}",
+                self.erdp.raw_value(),
+                self.er_start.raw_value(),
                 self.er_size
             );
         }
-        let dp_idx = (self.erdp - self.er_start) / TRB_SIZE as u64;
-        if ((self.er_ep_idx + 2) % self.er_size) as u64 == dp_idx {
+        let dp_idx = (self.erdp.raw_value() - self.er_start.raw_value()) / u64::from(TRB_SIZE);
+        if u64::from((self.er_ep_idx + 2) % self.er_size) == dp_idx {
             debug!("Event ring full error, idx {}", dp_idx);
             let event = XhciEvent::new(TRBType::ErHostController, TRBCCode::EventRingFullError);
             self.write_event(&event)?;
-        } else if ((self.er_ep_idx + 1) % self.er_size) as u64 == dp_idx {
+        } else if u64::from((self.er_ep_idx + 1) % self.er_size) == dp_idx {
             debug!("Event Ring full, drop Event.");
         } else {
             self.write_event(evt)?;
@@ -272,10 +277,11 @@ impl XhciInterrupter {
     }
 
     fn send_intr(&mut self) {
-        let pending = read_u32(self.erdp, 0) & ERDP_EHB == ERDP_EHB;
-        let mut erdp_low = read_u32(self.erdp, 0);
+        let erdp = self.erdp.raw_value();
+        let pending = read_u32(erdp, 0) & ERDP_EHB == ERDP_EHB;
+        let mut erdp_low = read_u32(erdp, 0);
         erdp_low |= ERDP_EHB;
-        self.erdp = write_u64_low(self.erdp, erdp_low);
+        self.erdp = GuestAddress(write_u64_low(erdp, erdp_low));
         self.iman |= IMAN_IP;
         self.enable_intr();
         if pending {
@@ -331,11 +337,13 @@ impl XhciInterrupter {
     fn write_trb(&mut self, trb: &XhciTRB) -> Result<()> {
         let addr = self
             .er_start
-            .checked_add((TRB_SIZE * self.er_ep_idx) as u64)
-            .ok_or(UsbError::MemoryAccessOverflow(
-                self.er_start,
-                (TRB_SIZE * self.er_ep_idx) as u64,
-            ))?;
+            .checked_add(u64::from(TRB_SIZE * self.er_ep_idx))
+            .ok_or_else(|| {
+                UsbError::MemoryAccessOverflow(
+                    self.er_start.raw_value(),
+                    u64::from(TRB_SIZE * self.er_ep_idx),
+                )
+            })?;
         let cycle = trb.control as u8;
         // Toggle the cycle bit to avoid driver read it.
         let control = if trb.control & TRB_C == TRB_C {
@@ -347,10 +355,10 @@ impl XhciInterrupter {
         LittleEndian::write_u64(&mut buf, trb.parameter);
         LittleEndian::write_u32(&mut buf[8..], trb.status);
         LittleEndian::write_u32(&mut buf[12..], control);
-        dma_write_bytes(&self.mem, GuestAddress(addr), &buf)?;
+        dma_write_bytes(&self.mem, addr, &buf)?;
         // Write the cycle bit at last.
         fence(Ordering::SeqCst);
-        dma_write_bytes(&self.mem, GuestAddress(addr + 12), &[cycle])?;
+        dma_write_bytes(&self.mem, addr.unchecked_add(12), &[cycle])?;
         Ok(())
     }
 }
@@ -368,7 +376,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 XHCI_VERSION << hci_version_offset | XHCI_CAP_LENGTH
             }
             XHCI_CAP_REG_HCSPARAMS1 => {
-                (max_ports as u32) << CAP_HCSP_NP_SHIFT
+                u32::from(max_ports) << CAP_HCSP_NP_SHIFT
                     | max_intrs << CAP_HCSP_NI_SHIFT
                     | (locked_dev.slots.len() as u32) << CAP_HCSP_NDS_SHIFT
             }
@@ -378,7 +386,9 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             }
             XHCI_CAP_REG_HCSPARAMS3 => 0x0,
             XHCI_CAP_REG_HCCPARAMS1 => {
-                0x8 << CAP_HCCP_EXCP_SHIFT | (0 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
+                // The offset of the first extended capability is (base) + (0x8 << 2)
+                // The primary stream array size is 1 << (0x7 + 1)
+                0x8 << CAP_HCCP_EXCP_SHIFT | (0x7 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
             }
             XHCI_CAP_REG_DBOFF => XHCI_OFF_DOORBELL,
             XHCI_CAP_REG_RTSOFF => XHCI_OFF_RUNTIME,
@@ -387,18 +397,18 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             0x20 => {
                 CAP_EXT_USB_REVISION_2_0 << CAP_EXT_REVISION_SHIFT
                     | 0x4 << CAP_EXT_NEXT_CAP_POINTER_SHIFT
-                    | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
+                    | u32::from(CAP_EXT_CAP_ID_SUPPORT_PROTOCOL)
             }
             0x24 => CAP_EXT_USB_NAME_STRING,
-            0x28 => ((locked_dev.numports_2 as u32) << 8) | 1,
+            0x28 => (u32::from(locked_dev.numports_2) << 8) | 1,
             0x2c => 0x0,
             // Extended capabilities (USB 3.0)
             0x30 => {
                 CAP_EXT_USB_REVISION_3_0 << CAP_EXT_REVISION_SHIFT
-                    | CAP_EXT_CAP_ID_SUPPORT_PROTOCOL as u32
+                    | u32::from(CAP_EXT_CAP_ID_SUPPORT_PROTOCOL)
             }
             0x34 => CAP_EXT_USB_NAME_STRING,
-            0x38 => ((locked_dev.numports_3 as u32) << 8) | (locked_dev.numports_2 + 1) as u32,
+            0x38 => (u32::from(locked_dev.numports_3) << 8) | u32::from(locked_dev.numports_2 + 1),
             0x3c => 0x0,
             _ => {
                 error!("Failed to read xhci cap: not implemented");
@@ -443,8 +453,8 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 // Table 5-24 shows read CRP always returns 0.
                 0
             }
-            XHCI_OPER_REG_DCBAAP_LO => read_u32(locked_xhci.oper.dcbaap, 0),
-            XHCI_OPER_REG_DCBAAP_HI => read_u32(locked_xhci.oper.dcbaap, 1),
+            XHCI_OPER_REG_DCBAAP_LO => read_u32(locked_xhci.oper.dcbaap.raw_value(), 0),
+            XHCI_OPER_REG_DCBAAP_HI => read_u32(locked_xhci.oper.dcbaap.raw_value(), 1),
             XHCI_OPER_REG_CONFIG => locked_xhci.oper.config,
             _ => {
                 error!(
@@ -506,7 +516,7 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                     write_u64_low(locked_xhci.oper.cmd_ring_ctrl, crc_lo);
             }
             XHCI_OPER_REG_CMD_RING_CTRL_HI => {
-                let crc_hi = (value as u64) << 32;
+                let crc_hi = u64::from(value) << 32;
                 let mut crc_lo = read_u32(locked_xhci.oper.cmd_ring_ctrl, 0);
                 if crc_lo & (CMD_RING_CTRL_CA | CMD_RING_CTRL_CS) != 0
                     && (crc_lo & CMD_RING_CTRL_CRR) == CMD_RING_CTRL_CRR
@@ -518,17 +528,19 @@ pub fn build_oper_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                         error!("Failed to send event: {:?}", e);
                     }
                 } else {
-                    let addr = (crc_hi | crc_lo as u64) & XHCI_CRCR_CRP_MASK;
+                    let addr = (crc_hi | u64::from(crc_lo)) & XHCI_CRCR_CRP_MASK;
                     locked_xhci.cmd_ring.init(addr);
                 }
                 crc_lo &= !(CMD_RING_CTRL_CA | CMD_RING_CTRL_CS);
                 locked_xhci.oper.cmd_ring_ctrl = write_u64_low(crc_hi, crc_lo);
             }
             XHCI_OPER_REG_DCBAAP_LO => {
-                locked_xhci.oper.dcbaap = write_u64_low(locked_xhci.oper.dcbaap, value & 0xffffffc0)
+                let dcbaap = write_u64_low(locked_xhci.oper.dcbaap.raw_value(), value & 0xffffffc0);
+                locked_xhci.oper.dcbaap = GuestAddress(dcbaap);
             }
             XHCI_OPER_REG_DCBAAP_HI => {
-                locked_xhci.oper.dcbaap = write_u64_high(locked_xhci.oper.dcbaap, value)
+                let dcbaap = write_u64_high(locked_xhci.oper.dcbaap.raw_value(), value);
+                locked_xhci.oper.dcbaap = GuestAddress(dcbaap);
             }
             XHCI_OPER_REG_CONFIG => locked_xhci.oper.config = value & 0xff,
             _ => {
@@ -572,10 +584,10 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 XHCI_INTR_REG_IMAN => locked_intr.iman,
                 XHCI_INTR_REG_IMOD => locked_intr.imod,
                 XHCI_INTR_REG_ERSTSZ => locked_intr.erstsz,
-                XHCI_INTR_REG_ERSTBA_LO => read_u32(locked_intr.erstba, 0),
-                XHCI_INTR_REG_ERSTBA_HI => read_u32(locked_intr.erstba, 1),
-                XHCI_INTR_REG_ERDP_LO => read_u32(locked_intr.erdp, 0),
-                XHCI_INTR_REG_ERDP_HI => read_u32(locked_intr.erdp, 1),
+                XHCI_INTR_REG_ERSTBA_LO => read_u32(locked_intr.erstba.raw_value(), 0),
+                XHCI_INTR_REG_ERSTBA_HI => read_u32(locked_intr.erstba.raw_value(), 1),
+                XHCI_INTR_REG_ERDP_LO => read_u32(locked_intr.erdp.raw_value(), 0),
+                XHCI_INTR_REG_ERDP_HI => read_u32(locked_intr.erdp.raw_value(), 1),
                 _ => {
                     error!(
                         "Invalid offset {:x} for reading interrupter registers.",
@@ -618,10 +630,12 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             XHCI_INTR_REG_IMOD => locked_intr.imod = value,
             XHCI_INTR_REG_ERSTSZ => locked_intr.erstsz = value & 0xffff,
             XHCI_INTR_REG_ERSTBA_LO => {
-                locked_intr.erstba = write_u64_low(locked_intr.erstba, value & 0xffffffc0);
+                let erstba = write_u64_low(locked_intr.erstba.raw_value(), value & 0xffffffc0);
+                locked_intr.erstba = GuestAddress(erstba);
             }
             XHCI_INTR_REG_ERSTBA_HI => {
-                locked_intr.erstba = write_u64_high(locked_intr.erstba, value);
+                let erstba = GuestAddress(write_u64_high(locked_intr.erstba.raw_value(), value));
+                locked_intr.erstba = erstba;
                 drop(locked_intr);
                 if let Err(e) = xhci.reset_event_ring(idx) {
                     error!("Failed to reset event ring: {:?}", e);
@@ -631,29 +645,31 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 // ERDP_EHB is write 1 clear.
                 let mut erdp_lo = value & !ERDP_EHB;
                 if value & ERDP_EHB != ERDP_EHB {
-                    let erdp_old = read_u32(locked_intr.erdp, 0);
+                    let erdp_old = read_u32(locked_intr.erdp.raw_value(), 0);
                     erdp_lo |= erdp_old & ERDP_EHB;
                 }
-                locked_intr.erdp = write_u64_low(locked_intr.erdp, erdp_lo);
+                let erdp = write_u64_low(locked_intr.erdp.raw_value(), erdp_lo);
+                locked_intr.erdp = GuestAddress(erdp);
                 if value & ERDP_EHB == ERDP_EHB {
                     let erdp = locked_intr.erdp;
                     let er_end = if let Some(addr) = locked_intr
                         .er_start
-                        .checked_add((TRB_SIZE * locked_intr.er_size) as u64)
+                        .checked_add(u64::from(TRB_SIZE * locked_intr.er_size))
                     {
                         addr
                     } else {
                         error!(
                             "Memory access overflow, addr {:x} offset {:x}",
-                            locked_intr.er_start,
-                            (TRB_SIZE * locked_intr.er_size) as u64
+                            locked_intr.er_start.raw_value(),
+                            u64::from(TRB_SIZE * locked_intr.er_size)
                         );
                         return false;
                     };
                     if erdp >= locked_intr.er_start
                         && erdp < er_end
-                        && (erdp - locked_intr.er_start) / TRB_SIZE as u64
-                            != locked_intr.er_ep_idx as u64
+                        && (erdp.raw_value() - locked_intr.er_start.raw_value())
+                            / u64::from(TRB_SIZE)
+                            != u64::from(locked_intr.er_ep_idx)
                     {
                         drop(locked_intr);
                         xhci.intrs[idx as usize].lock().unwrap().send_intr();
@@ -661,7 +677,8 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
                 }
             }
             XHCI_INTR_REG_ERDP_HI => {
-                locked_intr.erdp = write_u64_high(locked_intr.erdp, value);
+                let erdp = write_u64_high(locked_intr.erdp.raw_value(), value);
+                locked_intr.erdp = GuestAddress(erdp);
             }
             _ => {
                 error!(
@@ -692,18 +709,19 @@ pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         if !read_data_u32(data, &mut value) {
             return false;
         }
-        if !xhci.lock().unwrap().running() {
+        let mut xhci = xhci.lock().unwrap();
+        if !xhci.running() {
             error!("Failed to write doorbell, XHCI is not running");
             return false;
         }
-        let mut xhci = xhci.lock().unwrap();
         let slot_id = (offset >> 2) as u32;
         if slot_id == 0 {
             error!("Invalid slot id 0 !");
             return false;
         } else {
             let ep_id = value & DB_TARGET_MASK;
-            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id) {
+            let stream_id = (value >> DB_STREAM_ID_SHIFT) & DB_STREAM_ID_MASK;
+            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id, stream_id) {
                 error!("Failed to kick endpoint: {:?}", e);
                 xhci.host_controller_error();
                 return false;

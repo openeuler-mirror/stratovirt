@@ -19,8 +19,8 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AcpiError, AcpiLocalApic, AmlAcquire, AmlAddressSpaceType, AmlArg, AmlBuffer, AmlBuilder,
     AmlCallWithArgs1, AmlCallWithArgs2, AmlCallWithArgs4, AmlDevice, AmlEisaId, AmlEqual, AmlField,
@@ -32,6 +32,7 @@ use acpi::{
 use address_space::GuestAddress;
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CpuLifecycleState, CPU};
 use migration::MigrationManager;
+use util::gen_base_func;
 
 const CPU_ENABLE_FLAG: u8 = 1;
 const CPU_INSERTING_FLAG: u8 = 2;
@@ -87,24 +88,28 @@ pub struct CpuController {
 }
 
 impl CpuController {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
+    pub fn new(
         max_cpus: u8,
+        sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
         cpu_config: CpuConfig,
         hotplug_cpu_req: Arc<EventFd>,
-    ) -> Result<Arc<Mutex<CpuController>>> {
-        self.max_cpus = max_cpus;
-        self.cpu_config = Some(cpu_config);
-        self.hotplug_cpu_req = Some(hotplug_cpu_req);
-        self.set_sys_resource(sysbus, region_base, region_size)
+        boot_vcpus: Vec<Arc<CPU>>,
+    ) -> Result<Self> {
+        let mut cpu_controller = CpuController {
+            max_cpus,
+            cpu_config: Some(cpu_config),
+            hotplug_cpu_req: Some(hotplug_cpu_req),
+            ..Default::default()
+        };
+        cpu_controller
+            .set_sys_resource(sysbus, region_base, region_size, "CPUController")
             .with_context(|| AcpiError::Alignment(region_size.try_into().unwrap()))?;
-        let dev = Arc::new(Mutex::new(self));
-        let ret_dev = dev.clone();
-        sysbus.attach_device(&dev, region_base, region_size, "CPUController")?;
-        Ok(ret_dev)
+        cpu_controller.set_boot_vcpu(boot_vcpus)?;
+        cpu_controller.set_parent_bus(sysbus.clone());
+
+        Ok(cpu_controller)
     }
 
     fn eject_cpu(&mut self, vcpu_id: u8) -> Result<()> {
@@ -157,8 +162,8 @@ impl CpuController {
         None
     }
 
-    pub fn get_boot_config(&self) -> &CPUBootConfig {
-        &self.cpu_config.as_ref().unwrap().boot_config
+    pub fn get_boot_config(&self) -> CPUBootConfig {
+        self.cpu_config.as_ref().unwrap().boot_config
     }
 
     pub fn get_hotplug_cpu_info(&self) -> (String, u8) {
@@ -242,23 +247,19 @@ impl CpuController {
 }
 
 impl Device for CpuController {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for CpuController {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         data[0] = 0;
@@ -329,15 +330,11 @@ impl SysBusDevOps for CpuController {
         }
         true
     }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
 }
 
 impl AmlBuilder for CpuController {
     fn aml_bytes(&self) -> Vec<u8> {
-        let res = self.base.res;
+        let res = self.base.res.clone();
         let mut cpu_hotplug_controller = AmlDevice::new("PRES");
         cpu_hotplug_controller.append_child(AmlNameDecl::new("_HID", AmlEisaId::new("PNP0A06")));
         cpu_hotplug_controller.append_child(AmlNameDecl::new(

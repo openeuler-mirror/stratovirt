@@ -103,8 +103,8 @@ fn check_fadt(data: &[u8]) -> (u32, u64) {
     assert_eq!(String::from_utf8_lossy(&data[..4]), "FACP");
     assert_eq!(LittleEndian::read_u32(&data[4..]), FADT_TABLE_DATA_LENGTH); // Check length
 
-    // Enable HW_REDUCED_ACPI and LOW_POWER_S0_IDLE_CAPABLE bit
-    assert_eq!(LittleEndian::read_i32(&data[112..]), 0x30_0500);
+    // Enable HW_REDUCED_ACPI bit
+    assert_eq!(LittleEndian::read_i32(&data[112..]), 0x10_0500);
     assert_eq!(LittleEndian::read_u16(&data[129..]), 0x3); // ARM Boot Architecture Flags
     assert_eq!(LittleEndian::read_i32(&data[131..]), 3); // FADT minor revision
 
@@ -140,12 +140,12 @@ fn check_madt(data: &[u8], cpu: u8) {
     offset += mem::size_of::<AcpiGicDistributor>();
     for i in 0..cpu {
         assert_eq!(data[offset + 1], 80); // The length of this structure
-        assert_eq!(LittleEndian::read_u32(&data[(offset + 4)..]), i as u32); // CPU interface number
-        assert_eq!(LittleEndian::read_u32(&data[(offset + 8)..]), i as u32); // ACPI processor UID
+        assert_eq!(LittleEndian::read_u32(&data[(offset + 4)..]), u32::from(i)); // CPU interface number
+        assert_eq!(LittleEndian::read_u32(&data[(offset + 8)..]), u32::from(i)); // ACPI processor UID
         assert_eq!(LittleEndian::read_u32(&data[(offset + 12)..]), 5); // Flags
         assert_eq!(LittleEndian::read_u32(&data[(offset + 20)..]), 23); // Performance monitoring interrupts
         assert_eq!(LittleEndian::read_u64(&data[(offset + 56)..]), 25); // Virtual GIC maintenance interrupt
-        assert_eq!(LittleEndian::read_u64(&data[(offset + 68)..]), i as u64); // MPIDR
+        assert_eq!(LittleEndian::read_u64(&data[(offset + 68)..]), u64::from(i)); // MPIDR
         offset += mem::size_of::<AcpiGicCpu>();
     }
 
@@ -462,7 +462,7 @@ fn check_madt_of_two_gicr(
     let len = LittleEndian::read_u32(&read_data[(madt_addr + offset + 12)..]);
     assert_eq!(
         MEM_LAYOUT[LayoutEntryType::HighGicRedist as usize].1,
-        len as u64
+        u64::from(len)
     );
 }
 

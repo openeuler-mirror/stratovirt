@@ -18,10 +18,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
-use address_space::{FileBackend, GuestAddress, HostMemMapping, Region};
+use address_space::{AddressAttr, FileBackend, GuestAddress, HostMemMapping, Region};
+use util::gen_base_func;
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, round_up, write_data_u32};
 use util::unix::host_page_size;
 
@@ -57,20 +58,21 @@ pub struct PFlash {
     write_blk_size: u32,
     /// ROM region of PFlash.
     rom: Option<Region>,
+    /// backend: Option<File>,
+    host_mmap: Arc<HostMemMapping>,
 }
 
 impl PFlash {
     fn flash_region_size(
         region_max_size: u64,
-        backend: &Option<File>,
+        backend: &Option<Arc<File>>,
         read_only: bool,
     ) -> Result<u64> {
         // We don't have to occupy the whole memory region.
-        // If flash is read-only, expose just real data size,
-        // rounded up to page_size
+        // Expose just real data size, rounded up to page_size.
         if let Some(fd) = backend.as_ref() {
-            let len = fd.metadata().unwrap().len();
-            if len > region_max_size || len == 0 || (!read_only && len != region_max_size) {
+            let len = fd.as_ref().metadata().unwrap().len();
+            if len > region_max_size || len == 0 || (!read_only && len % host_page_size() != 0) {
                 bail!(
                     "Invalid flash file: Region size 0x{region_max_size:X}, file size 0x{len:X}; read_only {read_only}"
                 );
@@ -98,18 +100,21 @@ impl PFlash {
     /// * block-length is zero.
     /// * PFlash size is zero.
     /// * flash is writable and file size is smaller than region_max_size.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         region_max_size: u64,
-        backend: &Option<File>,
+        backend: Option<Arc<File>>,
         block_len: u32,
         bank_width: u32,
         device_width: u32,
         read_only: bool,
+        sysbus: &Arc<Mutex<SysBus>>,
+        region_base: u64,
     ) -> Result<Self> {
         if block_len == 0 {
             bail!("PFlash: block-length is zero which is invalid.");
         }
-        let size = Self::flash_region_size(region_max_size, backend, read_only)?;
+        let size = Self::flash_region_size(region_max_size, &backend, read_only)?;
         let blocks_per_device: u32 = size as u32 / block_len;
         if blocks_per_device == 0 {
             bail!("PFlash: num-blocks is zero which is invalid.");
@@ -186,9 +191,21 @@ impl PFlash {
         // Number of protection fields.
         cfi_table[0x3f] = 0x01;
 
-        Ok(PFlash {
+        let has_backend = backend.is_some();
+        let region_size = Self::flash_region_size(region_max_size, &backend, read_only)?;
+        let host_mmap = Arc::new(HostMemMapping::new(
+            GuestAddress(region_base),
+            None,
+            region_size,
+            backend.map(FileBackend::new_common),
+            false,
+            true,
+            read_only,
+        )?);
+
+        let mut pflash = PFlash {
             base: SysBusDevBase::new(SysBusDevType::Flash),
-            has_backend: backend.is_some(),
+            has_backend,
             block_len,
             bank_width,
             // device id for Intel PFlash.
@@ -203,43 +220,14 @@ impl PFlash {
             counter: 0,
             write_blk_size,
             rom: None,
-        })
-    }
+            host_mmap,
+        };
 
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_max_size: u64,
-        backend: Option<File>,
-    ) -> Result<()> {
-        let region_size = Self::flash_region_size(region_max_size, &backend, self.read_only)?;
-        self.set_sys_resource(sysbus, region_base, region_size)
+        pflash
+            .set_sys_resource(sysbus, region_base, region_size, "PflashRom")
             .with_context(|| "Failed to allocate system resource for PFlash.")?;
-
-        let host_mmap = Arc::new(HostMemMapping::new(
-            GuestAddress(region_base),
-            None,
-            region_size,
-            backend.map(FileBackend::new_common),
-            false,
-            true,
-            self.read_only,
-        )?);
-
-        let dev = Arc::new(Mutex::new(self));
-        let region_ops = sysbus.build_region_ops(&dev);
-
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
-        dev.lock().unwrap().rom = Some(rom_region.clone());
-        sysbus
-            .sys_mem
-            .root()
-            .add_subregion(rom_region, region_base)
-            .with_context(|| "Failed to attach PFlash to system bus")?;
-        sysbus.devices.push(dev);
-
-        Ok(())
+        pflash.set_parent_bus(sysbus.clone());
+        Ok(pflash)
     }
 
     fn set_read_array_mode(&mut self, is_illegal_cmd: bool) -> Result<()> {
@@ -318,7 +306,7 @@ impl PFlash {
             }
             // Repeat data for PFlash device which supports x16-mode but works in x8-mode.
             for i in 1..self.max_device_width {
-                resp = deposit_u32(resp, 8 * i, 8, self.cfi_table[index as usize] as u32)
+                resp = deposit_u32(resp, 8 * i, 8, u32::from(self.cfi_table[index as usize]))
                     .with_context(|| "Failed to deposit bits to u32")?;
             }
         }
@@ -341,17 +329,23 @@ impl PFlash {
         }
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + size as u64 > mr.size() {
+        if offset
+            .checked_add(size as u64)
+            .map(|sum| sum > mr.size())
+            .unwrap_or(true)
+        {
             return Err(anyhow!(LegacyError::PFlashWriteOverflow(
                 mr.size(),
                 offset,
-                size as u64
+                u64::from(size)
             )));
         }
 
-        let addr: u64 = mr
-            .get_host_address()
-            .with_context(|| "Failed to get host address.")?;
+        // SAFETY: size has been checked.
+        let addr: u64 = unsafe {
+            mr.get_host_address(AddressAttr::RomDevice)
+                .with_context(|| "Failed to get host address.")
+        }?;
         let ret =
         // SAFETY: addr and size are valid.
         unsafe {
@@ -371,14 +365,19 @@ impl PFlash {
     fn read_data(&mut self, data: &mut [u8], offset: u64) -> Result<()> {
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + data.len() as u64 > mr.size() {
+        if offset
+            .checked_add(data.len() as u64)
+            .map(|sum| sum > mr.size())
+            .unwrap_or(true)
+        {
             return Err(anyhow!(LegacyError::PFlashReadOverflow(
                 mr.size(),
                 offset,
                 data.len() as u64
             )));
         }
-        let host_addr = mr.get_host_address().unwrap();
+        // SAFETY: size has been checked.
+        let host_addr = unsafe { mr.get_host_address(AddressAttr::RomDevice).unwrap() };
         let src =
             // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
@@ -399,14 +398,19 @@ impl PFlash {
         );
         // Unwrap is safe, because after realize function, rom isn't none.
         let mr = self.rom.as_ref().unwrap();
-        if offset + data.len() as u64 > mr.size() {
+        if offset
+            .checked_add(data.len() as u64)
+            .map(|sum| sum > mr.size())
+            .unwrap_or(true)
+        {
             return Err(anyhow!(LegacyError::PFlashWriteOverflow(
                 mr.size(),
                 offset,
                 data.len() as u64
             )));
         }
-        let host_addr = mr.get_host_address().unwrap();
+        // SAFETY: size has been checked.
+        let host_addr = unsafe { mr.get_host_address(AddressAttr::RomDevice).unwrap() };
         let mut dst =
             // SAFETY: host_addr of the region is local allocated and sanity has been checked.
             unsafe { std::slice::from_raw_parts_mut((host_addr + offset) as *mut u8, data.len()) };
@@ -434,7 +438,7 @@ impl PFlash {
                 trace::pflash_write("single byte program (0)".to_string(), cmd);
             }
             0x20 => {
-                let offset_mask = offset & !(self.block_len as u64 - 1);
+                let offset_mask = offset & !(u64::from(self.block_len) - 1);
                 trace::pflash_write_block_erase(offset, self.block_len);
                 if !self.read_only {
                     let all_one = vec![0xff_u8; self.block_len as usize];
@@ -630,7 +634,7 @@ impl PFlash {
                 }
                 self.status |= 0x80;
                 if self.counter == 0 {
-                    let mask: u64 = !(self.write_blk_size as u64 - 1);
+                    let mask: u64 = !(u64::from(self.write_blk_size) - 1);
                     trace::pflash_write("block write finished".to_string(), self.cmd);
                     self.write_cycle = self.write_cycle.wrapping_add(1);
                     if !self.read_only {
@@ -691,23 +695,42 @@ impl PFlash {
 }
 
 impl Device for PFlash {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.rom
+            .as_ref()
+            .unwrap()
+            .set_rom_device_romd(true)
+            .with_context(|| "Fail to set PFlash rom region read only")?;
+        self.cmd = 0x00;
+        self.write_cycle = 0;
+        self.status = 0x80;
+        Ok(())
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let region_base = self.base.res.region_base;
+        let host_mmap = self.host_mmap.clone();
+        let dev = Arc::new(Mutex::new(self));
+        let region_ops = sysbus.build_region_ops(&dev);
+        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
+        dev.lock().unwrap().rom = Some(rom_region.clone());
+        sysbus
+            .sys_mem
+            .root()
+            .add_subregion(rom_region, region_base)
+            .with_context(|| "Failed to attach PFlash to system bus")?;
+        sysbus.sysbus_attach_child(dev.clone())?;
+
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for PFlash {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let mut index: u64;
@@ -720,8 +743,8 @@ impl SysBusDevOps for PFlash {
         // - cmd 0x98 represents PFlash CFI query.
         match self.cmd {
             0x00 => {
-                if self.read_data(data, offset).is_err() {
-                    error!("Failed to read data from PFlash.");
+                if let Err(e) = self.read_data(data, offset) {
+                    error!("Failed to read data from PFlash {:?}.", e);
                 }
                 return true;
             }
@@ -733,15 +756,15 @@ impl SysBusDevOps for PFlash {
                 // 0x70: Status Register.
                 // 0xe8: Write block.
                 // Just read status register, return every device status in bank.
-                ret = self.status as u32;
+                ret = u32::from(self.status);
                 if self.device_width != 0 && data_len > self.device_width {
                     let mut shift: u32 = self.device_width * 8;
                     while shift + self.device_width * 8 <= data_len * 8 {
-                        ret |= (self.status as u32) << shift;
+                        ret |= u32::from(self.status) << shift;
                         shift += self.device_width * 8;
                     }
                 } else if self.device_width == 0 && data_len > 2 {
-                    ret |= (self.status as u32) << 16;
+                    ret |= u32::from(self.status) << 16;
                 }
                 trace::pflash_read_status(ret);
             }
@@ -775,7 +798,7 @@ impl SysBusDevOps for PFlash {
                     // combine serval queries into one response.
                     let mut i: u32 = 0;
                     while i < data_len {
-                        match self.query_devid(offset + (i * self.bank_width) as u64) {
+                        match self.query_devid(offset + u64::from(i * self.bank_width)) {
                             Err(e) => {
                                 error!("Failed to query devid {:?}", e);
                                 break;
@@ -815,7 +838,7 @@ impl SysBusDevOps for PFlash {
                 } else {
                     let mut i: u32 = 0;
                     while i < data_len {
-                        match self.query_cfi(offset + (i * self.bank_width) as u64) {
+                        match self.query_cfi(offset + u64::from(i * self.bank_width)) {
                             Err(e) => {
                                 error!("Failed to query devid, {:?}", e);
                                 break;
@@ -854,7 +877,7 @@ impl SysBusDevOps for PFlash {
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        let mut value = 0;
+        let mut value = 0_u32;
         if !read_data_u32(data, &mut value) {
             return false;
         }
@@ -862,15 +885,10 @@ impl SysBusDevOps for PFlash {
         let data_len: u8 = data.len() as u8;
         trace::pflash_io_write(offset, data_len, value, self.write_cycle);
 
-        if self.write_cycle == 0
-            && self
-                .rom
-                .as_ref()
-                .unwrap()
-                .set_rom_device_romd(false)
-                .is_err()
-        {
-            error!("Failed PFlash to set device to read array mode.");
+        if self.write_cycle == 0 {
+            if let Err(e) = self.rom.as_ref().unwrap().set_rom_device_romd(false) {
+                error!("Failed PFlash to set device to read array mode {:?}.", e);
+            }
         }
 
         // Write:
@@ -893,32 +911,15 @@ impl SysBusDevOps for PFlash {
         }
     }
 
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
-
     fn set_sys_resource(
         &mut self,
-        _sysbus: &mut SysBus,
+        _sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
         region_size: u64,
+        region_name: &str,
     ) -> Result<()> {
-        let res = self.get_sys_resource_mut().unwrap();
-        res.region_base = region_base;
-        res.region_size = region_size;
-        res.irq = 0;
-        Ok(())
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.rom
-            .as_ref()
-            .unwrap()
-            .set_rom_device_romd(true)
-            .with_context(|| "Fail to set PFlash rom region read only")?;
-        self.cmd = 0x00;
-        self.write_cycle = 0;
-        self.status = 0x80;
+        self.sysbusdev_base_mut()
+            .set_sys(0, region_base, region_size, region_name);
         Ok(())
     }
 }
@@ -935,33 +936,7 @@ mod test {
     use std::fs::File;
 
     use super::*;
-    use crate::sysbus::{IRQ_BASE, IRQ_MAX};
-    use address_space::AddressSpace;
-
-    fn sysbus_init() -> SysBus {
-        let sys_mem = AddressSpace::new(
-            Region::init_container_region(u64::max_value(), "sys_mem"),
-            "sys_mem",
-            None,
-        )
-        .unwrap();
-        #[cfg(target_arch = "x86_64")]
-        let sys_io = AddressSpace::new(
-            Region::init_container_region(1 << 16, "sys_io"),
-            "sys_io",
-            None,
-        )
-        .unwrap();
-        let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
-        let mmio_region: (u64, u64) = (0x0A00_0000, 0x1000_0000);
-        SysBus::new(
-            #[cfg(target_arch = "x86_64")]
-            &sys_io,
-            &sys_mem,
-            free_irqs,
-            mmio_region,
-        )
-    }
+    use crate::sysbus::sysbus_init;
 
     fn pflash_dev_init(file_name: &str) -> Arc<Mutex<PFlash>> {
         let sector_len: u32 = 0x40_000;
@@ -973,32 +948,20 @@ mod test {
         fd.set_len(flash_size).unwrap();
         drop(fd);
 
-        let fd = Some(
+        let fd = Some(Arc::new(
             std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .open(file_name)
                 .unwrap(),
-        );
-        let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only).unwrap();
+        ));
         let sysbus = sysbus_init();
-        let dev = Arc::new(Mutex::new(pflash));
-        let region_ops = sysbus.build_region_ops(&dev);
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(flash_base),
-                None,
-                flash_size,
-                fd.map(FileBackend::new_common),
-                false,
-                true,
-                false,
-            )
-            .unwrap(),
-        );
+        let pflash = PFlash::new(
+            flash_size, fd, sector_len, 4, 2, read_only, &sysbus, flash_base,
+        )
+        .unwrap();
+        let dev = pflash.realize().unwrap();
 
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "pflash-dev");
-        dev.lock().unwrap().rom = Some(rom_region);
         dev
     }
 

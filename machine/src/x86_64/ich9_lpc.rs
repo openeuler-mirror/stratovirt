@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     Arc, Mutex, Weak,
 };
 
@@ -26,9 +26,10 @@ use devices::pci::config::{
     PciConfig, CLASS_CODE_ISA_BRIDGE, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_BRIDGE,
     HEADER_TYPE_MULTIFUNC, PCI_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::pci::{le_write_u16, le_write_u32, PciBus, PciDevBase, PciDevOps};
-use devices::{Device, DeviceBase};
+use devices::pci::{le_write_u16, le_write_u32, PciDevBase, PciDevOps};
+use devices::{Bus, Device, DeviceBase};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::num_ops::ranges_overlap;
 
 const DEVICE_ID_INTEL_ICH9: u16 = 0x2918;
@@ -56,17 +57,17 @@ pub struct LPCBridge {
 
 impl LPCBridge {
     pub fn new(
-        parent_bus: Weak<Mutex<PciBus>>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
         sys_io: Arc<AddressSpace>,
         reset_req: Arc<EventFd>,
         shutdown_req: Arc<EventFd>,
     ) -> Result<Self> {
         Ok(Self {
             base: PciDevBase {
-                base: DeviceBase::new("ICH9 LPC bridge".to_string(), false),
-                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
+                base: DeviceBase::new("ICH9 LPC bridge".to_string(), false, Some(parent_bus)),
+                config: PciConfig::new(0x1F << 3, PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0x1F << 3,
-                parent_bus,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             sys_io,
             pm_timer: Arc::new(Mutex::new(AcpiPMTimer::new())),
@@ -94,9 +95,10 @@ impl LPCBridge {
         self.base
             .config
             .read(PM_BASE_OFFSET as usize, pm_base_addr.as_mut_bytes());
-        self.sys_io
-            .root()
-            .add_subregion(pmtmr_region, pm_base_addr as u64 + PM_TIMER_OFFSET as u64)?;
+        self.sys_io.root().add_subregion(
+            pmtmr_region,
+            u64::from(pm_base_addr) + u64::from(PM_TIMER_OFFSET),
+        )?;
 
         Ok(())
     }
@@ -143,7 +145,7 @@ impl LPCBridge {
         let rst_ctrl_region = Region::init_io_region(0x1, ops, "RstCtrlRegion");
         self.sys_io
             .root()
-            .add_subregion(rst_ctrl_region, RST_CTRL_OFFSET as u64)?;
+            .add_subregion(rst_ctrl_region, u64::from(RST_CTRL_OFFSET))?;
 
         Ok(())
     }
@@ -170,7 +172,7 @@ impl LPCBridge {
         let sleep_reg_region = Region::init_io_region(0x1, ops, "SleepReg");
         self.sys_io
             .root()
-            .add_subregion(sleep_reg_region, SLEEP_CTRL_OFFSET as u64)?;
+            .add_subregion(sleep_reg_region, u64::from(SLEEP_CTRL_OFFSET))?;
         Ok(())
     }
 
@@ -192,7 +194,7 @@ impl LPCBridge {
         let pm_evt_region = Region::init_io_region(0x4, ops, "PmEvtRegion");
         self.sys_io
             .root()
-            .add_subregion(pm_evt_region, PM_EVENT_OFFSET as u64)?;
+            .add_subregion(pm_evt_region, u64::from(PM_EVENT_OFFSET))?;
 
         Ok(())
     }
@@ -222,32 +224,16 @@ impl LPCBridge {
         let pm_ctrl_region = Region::init_io_region(0x4, ops, "PmCtrl");
         self.sys_io
             .root()
-            .add_subregion(pm_ctrl_region, PM_CTRL_OFFSET as u64)?;
+            .add_subregion(pm_ctrl_region, u64::from(PM_CTRL_OFFSET))?;
 
         Ok(())
     }
 }
 
 impl Device for LPCBridge {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
-}
-
-impl PciDevOps for LPCBridge {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -274,7 +260,7 @@ impl PciDevOps for LPCBridge {
         le_write_u16(
             &mut self.base.config.config,
             HEADER_TYPE as usize,
-            (HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC) as u16,
+            u16::from(HEADER_TYPE_BRIDGE | HEADER_TYPE_MULTIFUNC),
         )?;
 
         self.init_sleep_reg()
@@ -288,16 +274,16 @@ impl PciDevOps for LPCBridge {
         self.init_pm_ctrl_reg()
             .with_context(|| "Fail to init IO region for PM control register")?;
 
-        let parent_bus = self.base.parent_bus.clone();
-        parent_bus
-            .upgrade()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .devices
-            .insert(0x1F << 3, Arc::new(Mutex::new(self)));
-        Ok(())
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        let dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(0x1F << 3, dev.clone())?;
+        Ok(dev)
     }
+}
+
+impl PciDevOps for LPCBridge {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         self.base.config.write(offset, data, 0, None, None);

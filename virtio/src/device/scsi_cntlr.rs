@@ -17,31 +17,41 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
-    report_virtio_error, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
-    VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1,
-    VIRTIO_TYPE_SCSI,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_read_object,
+    read_config_default, report_virtio_error, Element, Queue, VirtioBase, VirtioDevice,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SCSI,
 };
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use block_backend::BlockIoErrorCallback;
 use devices::ScsiBus::{
     ScsiBus, ScsiRequest, ScsiRequestOps, ScsiSense, ScsiXferMode, CHECK_CONDITION,
     EMULATE_SCSI_OPS, SCSI_CMD_BUF_SIZE, SCSI_SENSE_INVALID_OPCODE,
 };
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use machine_manager::{
-    config::{ScsiCntlrConfig, VIRTIO_SCSI_MAX_LUN, VIRTIO_SCSI_MAX_TARGET},
-    event_loop::EventLoop,
+use devices::ScsiDisk::ScsiDevice;
+use devices::{convert_device_ref, Bus, SCSI_DEVICE};
+use machine_manager::config::{
+    get_pci_df, parse_bool, valid_block_device_virtqueue_size, valid_id, MAX_VIRTIO_QUEUE,
 };
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use util::aio::Iovec;
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
+
+/// According to Virtio Spec.
+/// Max_channel should be 0.
+/// Max_target should be less than or equal to 255.
+const VIRTIO_SCSI_MAX_TARGET: u16 = 255;
+/// Max_lun should be less than or equal to 16383 (2^14 - 1).
+const VIRTIO_SCSI_MAX_LUN: u32 = 16383;
 
 /// Virtio Scsi Controller has 1 ctrl queue, 1 event queue and at least 1 cmd queue.
 const SCSI_CTRL_QUEUE_NUM: usize = 1;
@@ -88,6 +98,27 @@ const VIRTIO_SCSI_S_BAD_TARGET: u8 = 3;
 /// with a response equal to VIRTIO_SCSI_S_FAILURE.
 const VIRTIO_SCSI_S_FAILURE: u8 = 9;
 
+#[derive(Parser, Debug, Clone, Default)]
+#[command(no_binary_name(true))]
+pub struct ScsiCntlrConfig {
+    #[arg(long, value_parser = ["virtio-scsi-pci"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, value_parser = parse_bool)]
+    pub multifunction: Option<bool>,
+    #[arg(long, alias = "num-queues", value_parser = clap::value_parser!(u32).range(1..=MAX_VIRTIO_QUEUE as i64))]
+    pub num_queues: Option<u32>,
+    #[arg(long)]
+    pub iothread: Option<String>,
+    #[arg(long, alias = "queue-size", default_value = "256", value_parser = valid_block_device_virtqueue_size)]
+    pub queue_size: u16,
+}
+
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
 struct VirtioScsiConfig {
@@ -121,7 +152,8 @@ pub struct ScsiCntlr {
 impl ScsiCntlr {
     pub fn new(config: ScsiCntlrConfig) -> ScsiCntlr {
         // Note: config.queues <= MAX_VIRTIO_QUEUE(32).
-        let queue_num = config.queues as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM;
+        let queue_num =
+            config.num_queues.unwrap() as usize + SCSI_CTRL_QUEUE_NUM + SCSI_EVENT_QUEUE_NUM;
         let queue_size = config.queue_size;
 
         Self {
@@ -141,13 +173,7 @@ impl ScsiCntlr {
 }
 
 impl VirtioDevice for ScsiCntlr {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         // If iothread not found, return err.
@@ -164,16 +190,15 @@ impl VirtioDevice for ScsiCntlr {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.config_space.num_queues = self.config.queues;
         self.config_space.max_sectors = 0xFFFF_u32;
         // cmd_per_lun: maximum number of linked commands can be sent to one LUN. 32bit.
         self.config_space.cmd_per_lun = 128;
         // seg_max: queue size - 2, 32 bit.
-        self.config_space.seg_max = self.queue_size_max() as u32 - 2;
+        self.config_space.seg_max = u32::from(self.queue_size_max()) - 2;
         self.config_space.max_target = VIRTIO_SCSI_MAX_TARGET;
-        self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN as u32;
+        self.config_space.max_lun = VIRTIO_SCSI_MAX_LUN;
         // num_queues: request queues number.
-        self.config_space.num_queues = self.config.queues;
+        self.config_space.num_queues = self.config.num_queues.unwrap();
 
         self.base.device_features |= (1_u64 << VIRTIO_F_VERSION_1)
             | (1_u64 << VIRTIO_F_RING_EVENT_IDX)
@@ -273,11 +298,11 @@ impl VirtioDevice for ScsiCntlr {
         // Register event notifier for device aio.
         let bus = self.bus.as_ref().unwrap();
         let locked_bus = bus.lock().unwrap();
-        for device in locked_bus.devices.values() {
-            let locked_device = device.lock().unwrap();
+        for device in locked_bus.child_devices().values() {
+            SCSI_DEVICE!(device, locked_dev, scsi_dev);
             let err_cb = self.gen_error_cb(interrupt_cb.clone());
             // SAFETY: the disk_image is assigned after device realized.
-            let disk_image = locked_device.block_backend.as_ref().unwrap();
+            let disk_image = scsi_dev.block_backend.as_ref().unwrap();
             let mut locked_backend = disk_image.lock().unwrap();
             locked_backend.register_io_event(self.base.broken.clone(), err_cb)?;
         }
@@ -291,10 +316,10 @@ impl VirtioDevice for ScsiCntlr {
         )?;
         let bus = self.bus.as_ref().unwrap();
         let locked_bus = bus.lock().unwrap();
-        for device in locked_bus.devices.values() {
-            let locked_dev = device.lock().unwrap();
+        for device in locked_bus.child_devices().values() {
+            SCSI_DEVICE!(device, locked_dev, scsi_dev);
             // SAFETY: the disk_image is assigned after device realized.
-            let disk_image = locked_dev.block_backend.as_ref().unwrap();
+            let disk_image = scsi_dev.block_backend.as_ref().unwrap();
             let mut locked_backend = disk_image.lock().unwrap();
             locked_backend.unregister_io_event()?;
         }
@@ -456,43 +481,24 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
                 elem.desc_num
             );
         }
+        let locked_queue = queue.lock().unwrap();
+        let cache = locked_queue.vring.get_cache();
 
         // Get request from virtqueue Element.
-        let mut req = T::default();
-        iov_to_buf(mem_space, &elem.out_iovec, req.as_mut_bytes()).and_then(|size| {
-            if size < size_of::<T>() {
-                bail!(
-                    "Invalid length for request: get {}, expected {}",
-                    size,
-                    size_of::<T>(),
-                );
-            }
-            Ok(())
-        })?;
-
+        let req = iov_read_object::<T>(mem_space, &elem.out_iovec, cache)?;
         // Get response from virtqueue Element.
-        let mut resp = U::default();
-        iov_to_buf(mem_space, &elem.in_iovec, resp.as_mut_bytes()).and_then(|size| {
-            if size < size_of::<U>() {
-                bail!(
-                    "Invalid length for response: get {}, expected {}",
-                    size,
-                    size_of::<U>(),
-                );
-            }
-            Ok(())
-        })?;
+        let resp = iov_read_object::<U>(mem_space, &elem.in_iovec, cache)?;
 
         let mut request = VirtioScsiRequest {
             mem_space: mem_space.clone(),
-            queue,
+            queue: queue.clone(),
             desc_index: elem.index,
             iovec: Vec::with_capacity(elem.desc_num as usize),
             data_len: 0,
             mode: ScsiXferMode::ScsiXferNone,
             interrupt_cb,
             driver_features,
-            // Safety: in_iovec will not be empty since it has been checked after "iov_to_buf".
+            // Safety: in_iovec will not be empty since it has been checked after "iov_read_object".
             resp_addr: elem.in_iovec[0].addr,
             req,
             resp,
@@ -501,12 +507,12 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
         // Get possible dataout buffer from virtqueue Element.
         let mut iovec = elem.out_iovec.clone();
         let elemiov = iov_discard_front(&mut iovec, size_of::<T>() as u64).unwrap_or_default();
-        let (out_len, out_iovec) = gpa_hva_iovec_map(elemiov, mem_space)?;
+        let (out_len, out_iovec) = gpa_hva_iovec_map(elemiov, mem_space, cache)?;
 
         // Get possible dataout buffer from virtqueue Element.
         let mut iovec = elem.in_iovec.clone();
         let elemiov = iov_discard_front(&mut iovec, size_of::<U>() as u64).unwrap_or_default();
-        let (in_len, in_iovec) = gpa_hva_iovec_map(elemiov, mem_space)?;
+        let (in_len, in_iovec) = gpa_hva_iovec_map(elemiov, mem_space, cache)?;
 
         if out_len > 0 && in_len > 0 {
             warn!("Wrong scsi request! Don't support both datain and dataout buffer");
@@ -529,7 +535,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
 
     fn complete(&self) -> Result<()> {
         self.mem_space
-            .write_object(&self.resp, self.resp_addr)
+            .write_object(&self.resp, self.resp_addr, AddressAttr::Ram)
             .with_context(|| "Failed to write the scsi response")?;
 
         let mut queue_lock = self.queue.lock().unwrap();
@@ -538,11 +544,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
         // DESC_CHAIN_MAX_TOTAL_LEN(1 << 32). So, it will not overflow here.
         queue_lock
             .vring
-            .add_used(
-                &self.mem_space,
-                self.desc_index,
-                self.data_len + (size_of::<U>() as u32),
-            )
+            .add_used(self.desc_index, self.data_len + (size_of::<U>() as u32))
             .with_context(|| {
                 format!(
                     "Failed to add used ring(scsi completion), index {}, len {}",
@@ -550,10 +552,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
                 )
             })?;
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(
@@ -611,11 +610,11 @@ impl ScsiCtrlQueueHandler {
 
             let ctrl_desc = elem
                 .out_iovec
-                .get(0)
+                .first()
                 .with_context(|| "Error request in ctrl queue. Empty dataout buf!")?;
             let ctrl_type = self
                 .mem_space
-                .read_object::<u32>(ctrl_desc.addr)
+                .read_object::<u32>(ctrl_desc.addr, AddressAttr::Ram)
                 .with_context(|| "Failed to get control queue descriptor")?;
 
             match ctrl_type {
@@ -747,7 +746,7 @@ impl ScsiRequestOps for CmdQueueRequest {
 //   | Byte 0 | Byte 1 | Byte 2 | Byte 3 | Byte 4 | Byte 5 | Byte 6 | Byte 7 |
 //   |    1   | target |       lun       |                 0                 |
 fn virtio_scsi_get_lun_id(lun: [u8; 8]) -> u16 {
-    (((lun[2] as u16) << 8) | (lun[3] as u16)) & 0x3FFF
+    ((u16::from(lun[2]) << 8) | u16::from(lun[3])) & 0x3FFF
 }
 
 struct ScsiCmdQueueHandler {
@@ -927,7 +926,7 @@ impl ScsiCmdQueueHandler {
         }
 
         let sreq = scsi_req.unwrap();
-        if sreq.cmd.xfer > sreq.datalen && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
+        if sreq.cmd.xfer > u64::from(sreq.datalen) && sreq.cmd.mode != ScsiXferMode::ScsiXferNone {
             // Wrong virtio scsi request which doesn't provide enough datain/dataout buffer.
             qrequest.resp.response = VIRTIO_SCSI_S_OVERRUN;
             qrequest.complete()?;
@@ -964,4 +963,56 @@ pub fn scsi_cntlr_create_scsi_bus(
     let bus = ScsiBus::new(bus_name.to_string());
     locked_scsi_cntlr.bus = Some(Arc::new(Mutex::new(bus)));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_scsi_cntlr_config_cmdline_parser() {
+        // Test1: Right.
+        let cmdline1 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3,multifunction=on,iothread=iothread1,num-queues=3,queue-size=128";
+        let device_cfg =
+            ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline1, true, false)).unwrap();
+        assert_eq!(device_cfg.id, "scsi0");
+        assert_eq!(device_cfg.bus, "pcie.0");
+        assert_eq!(device_cfg.addr, (3, 0));
+        assert_eq!(device_cfg.multifunction, Some(true));
+        assert_eq!(device_cfg.iothread.unwrap(), "iothread1");
+        assert_eq!(device_cfg.num_queues.unwrap(), 3);
+        assert_eq!(device_cfg.queue_size, 128);
+
+        // Test2: Default value.
+        let cmdline2 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1";
+        let device_cfg =
+            ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline2, true, false)).unwrap();
+        assert_eq!(device_cfg.addr, (3, 1));
+        assert_eq!(device_cfg.multifunction, None);
+        assert_eq!(device_cfg.num_queues, None);
+        assert_eq!(device_cfg.queue_size, 256);
+
+        // Test3: Illegal value.
+        let cmdline3 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1,num-queues=33";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+        let cmdline3 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1,queue-size=1025";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+        let cmdline3 = "virtio-scsi-pci,id=scsi0,bus=pcie.0,addr=0x3.0x1,queue-size=65";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline3, true, false));
+        assert!(result.is_err());
+
+        // Test4: Missing necessary parameters.
+        let cmdline4 = "virtio-scsi-pci,id=scsi0";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "virtio-scsi-pci,bus=pcie.0,addr=0x3.0x1";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+        let cmdline4 = "virtio-scsi-pci,id=scsi0,addr=0x3.0x1";
+        let result = ScsiCntlrConfig::try_parse_from(str_slip_to_clap(cmdline4, true, false));
+        assert!(result.is_err());
+    }
 }

@@ -85,7 +85,7 @@ impl InternalSnapshot {
     }
 
     pub fn find_new_snapshot_id(&self) -> u64 {
-        let mut id_max = 0;
+        let mut id_max: u64 = 0;
         for snap in &self.snapshots {
             if id_max < snap.id {
                 id_max = snap.id;
@@ -98,18 +98,20 @@ impl InternalSnapshot {
     pub fn save_snapshot_table(
         &self,
         addr: u64,
-        extra_snap: &QcowSnapshot,
+        extra_snap: Option<&QcowSnapshot>,
         attach: bool,
     ) -> Result<()> {
         let mut buf = Vec::new();
         for snap in &self.snapshots {
-            if !attach && snap.id == extra_snap.id {
+            if !attach && extra_snap.is_some() && snap.id == extra_snap.unwrap().id {
                 continue;
             }
             buf.append(&mut snap.gen_snapshot_table_entry());
         }
         if attach {
-            buf.append(&mut extra_snap.gen_snapshot_table_entry());
+            if let Some(extra) = extra_snap {
+                buf.append(&mut extra.gen_snapshot_table_entry());
+            }
         }
         self.sync_aio.borrow_mut().write_buffer(addr, &buf)
     }
@@ -139,7 +141,7 @@ impl InternalSnapshot {
         for i in 0..nb_snapshots {
             let offset = addr + self.snapshot_size;
 
-            let mut pos = 0;
+            let mut pos: usize = 0;
             let header_size = size_of::<QcowSnapshotHeader>();
             let mut header_buf = vec![0_u8; header_size];
             self.sync_aio
@@ -281,7 +283,7 @@ impl QcowSnapshot {
         // Snapshot Extra data.
         // vm_state_size_large is used for vm snapshot.
         // It's equal to vm_state_size which is also 0 in disk snapshot.
-        BigEndian::write_u64(&mut buf[40..48], self.vm_state_size as u64);
+        BigEndian::write_u64(&mut buf[40..48], u64::from(self.vm_state_size));
         BigEndian::write_u64(&mut buf[48..56], self.disk_size);
         if self.extra_data_size == SNAPSHOT_EXTRA_DATA_LEN_24 as u32 {
             BigEndian::write_u64(&mut buf[56..64], self.icount);

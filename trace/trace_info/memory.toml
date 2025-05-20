@@ -1,0 +1,29 @@
+[[events]]
+name = "address_space_read"
+args = "addr: &dyn fmt::Debug, count: u64"
+message = "Memory: flatview_read addr {:?}, count {}"
+enabled = true
+
+[[events]]
+name = "address_space_write"
+args = "addr: &dyn fmt::Debug, count: u64"
+message = "Memory: flatview_write addr {:?}, count {}"
+enabled = true
+
+[[scopes]]
+name = "address_update_topology"
+args = ""
+message = "Memory: update opology"
+enabled = true
+
+[[scopes]]
+name = "pre_alloc"
+args = "size: u64"
+message = "Memory: pre_alloc ram size is {}"
+enabled = true
+
+[[scopes]]
+name = "init_memory"
+args = ""
+message = "Memory: init memory"
+enabled = true

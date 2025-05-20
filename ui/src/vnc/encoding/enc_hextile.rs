@@ -127,7 +127,8 @@ fn compress_each_tile<'a>(
                 &mut tmp_buf,
             );
             // If the length becomes longer after compression, give up compression.
-            if tmp_buf.len() > (sub_rect.h * sub_rect.w * client_dpm.pf.pixel_bytes as i32) as usize
+            if tmp_buf.len()
+                > (sub_rect.h * sub_rect.w * i32::from(client_dpm.pf.pixel_bytes)) as usize
             {
                 flag = RAW;
                 *last_bg = None;
@@ -396,8 +397,8 @@ mod tests {
 
         let image = create_pixman_image(
             pixman_format_code_t::PIXMAN_x8r8g8b8,
-            image_width as i32,
-            image_height as i32,
+            image_width,
+            image_height,
             image_data.as_ptr() as *mut u32,
             image_stride,
         );
@@ -427,8 +428,8 @@ mod tests {
 
         let image = create_pixman_image(
             pixman_format_code_t::PIXMAN_x8r8g8b8,
-            image_width as i32,
-            image_height as i32,
+            image_width,
+            image_height,
             image_data.as_ptr() as *mut u32,
             image_stride,
         );
@@ -458,8 +459,8 @@ mod tests {
 
         let image = create_pixman_image(
             pixman_format_code_t::PIXMAN_x8r8g8b8,
-            image_width as i32,
-            image_height as i32,
+            image_width,
+            image_height,
             image_data.as_ptr() as *mut u32,
             image_stride,
         );

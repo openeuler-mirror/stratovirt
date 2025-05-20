@@ -14,7 +14,6 @@ pub mod channel;
 pub mod msg;
 pub mod msg_handle;
 
-use std::mem::size_of;
 use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::ptr;
@@ -24,7 +23,7 @@ use std::sync::{
     Arc, Mutex, RwLock,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
 use once_cell::sync::OnceCell;
 use vmm_sys_util::epoll::EventSet;
@@ -35,7 +34,6 @@ use crate::{
         DisplayChangeListenerOperations, DisplayMouse, DisplaySurface,
         DISPLAY_UPDATE_INTERVAL_DEFAULT,
     },
-    input::{register_led_sync, unregister_led_sync},
     pixman::{bytes_per_pixel, get_image_data, ref_pixman_image, unref_pixman_image},
 };
 use address_space::FileBackend;
@@ -52,7 +50,7 @@ use util::{
         NotifierOperation,
     },
     pixman::{pixman_format_code_t, pixman_image_t},
-    unix::do_mmap,
+    unix::{do_mmap, limit_permission},
 };
 
 #[derive(Debug, Clone)]
@@ -93,9 +91,9 @@ pub struct OhUiServer {
     // guest surface for framebuffer
     surface: RwLock<GuestSurface>,
     // transfer channel via unix sock
-    channel: Arc<OhUiChannel>,
+    channel: Arc<Mutex<OhUiChannel>>,
     // message handler
-    msg_handler: Arc<OhUiMsgHandler>,
+    msg_handler: OhUiMsgHandler,
     // connected or not
     connected: AtomicBool,
     // iothread processing unix socket
@@ -111,13 +109,13 @@ pub struct OhUiServer {
 }
 
 impl OhUiServer {
-    fn init_channel(path: &String) -> Result<Arc<OhUiChannel>> {
+    fn init_channel(path: &String) -> Result<Arc<Mutex<OhUiChannel>>> {
         let file_path = Path::new(path.as_str()).join("ohui.sock");
         let sock_file = file_path
             .to_str()
             .ok_or_else(|| anyhow!("init_channel: Failed to get str from {}", path))?;
         TempCleaner::add_path(sock_file.to_string());
-        Ok(Arc::new(OhUiChannel::new(sock_file)))
+        Ok(Arc::new(Mutex::new(OhUiChannel::new(sock_file)?)))
     }
 
     fn init_fb_file(path: &String) -> Result<(Option<FileBackend>, u64)> {
@@ -127,6 +125,12 @@ impl OhUiServer {
             .ok_or_else(|| anyhow!("init_fb_file: Failed to get str from {}", path))?;
         let fb_backend = FileBackend::new_mem(fb_file, VIRTIO_GPU_ENABLE_BAR0_SIZE)?;
         TempCleaner::add_path(fb_file.to_string());
+        limit_permission(fb_file).unwrap_or_else(|e| {
+            error!(
+                "Failed to limit permission for ohui-fb {}, err: {:?}",
+                fb_file, e
+            );
+        });
 
         let host_addr = do_mmap(
             &Some(fb_backend.file.as_ref()),
@@ -147,6 +151,12 @@ impl OhUiServer {
             .ok_or_else(|| anyhow!("init_cursor_file: Failed to get str from {}", path))?;
         let cursor_backend = FileBackend::new_mem(cursor_file, CURSOR_SIZE)?;
         TempCleaner::add_path(cursor_file.to_string());
+        limit_permission(cursor_file).unwrap_or_else(|e| {
+            error!(
+                "Failed to limit permission for ohui-cursor {}, err: {:?}",
+                cursor_file, e
+            );
+        });
 
         let cursorbuffer = do_mmap(
             &Some(cursor_backend.file.as_ref()),
@@ -160,16 +170,16 @@ impl OhUiServer {
         Ok(cursorbuffer)
     }
 
-    pub fn new(path: String) -> Result<Self> {
-        let channel = Self::init_channel(&path)?;
-        let (fb_file, framebuffer) = Self::init_fb_file(&path)?;
-        let cursorbuffer = Self::init_cursor_file(&path)?;
+    pub fn new(ui_path: String, sock_path: String) -> Result<Self> {
+        let channel = Self::init_channel(&sock_path)?;
+        let (fb_file, framebuffer) = Self::init_fb_file(&ui_path)?;
+        let cursorbuffer = Self::init_cursor_file(&ui_path)?;
 
         Ok(OhUiServer {
             passthru: OnceCell::new(),
             surface: RwLock::new(GuestSurface::new()),
-            channel: channel.clone(),
-            msg_handler: Arc::new(OhUiMsgHandler::new(channel)),
+            channel,
+            msg_handler: OhUiMsgHandler::new(),
             connected: AtomicBool::new(false),
             iothread: OnceCell::new(),
             cursorbuffer,
@@ -186,8 +196,8 @@ impl OhUiServer {
     }
 
     #[inline(always)]
-    fn get_channel(&self) -> &OhUiChannel {
-        self.channel.as_ref()
+    fn get_channel(&self) -> Arc<Mutex<OhUiChannel>> {
+        self.channel.clone()
     }
 
     #[inline(always)]
@@ -202,17 +212,22 @@ impl OhUiServer {
         self.msg_handler.handle_msg(self.token_id.clone())
     }
 
-    fn raw_update_dirty_area(
+    // check dirty area data before call it.
+    unsafe fn raw_update_dirty_area(
         &self,
         surface_data: *mut u32,
         stride: i32,
         pos: (i32, i32),
         size: (i32, i32),
+        force_copy: bool,
     ) {
         let (x, y) = pos;
         let (w, h) = size;
 
-        if self.framebuffer == 0 || *self.passthru.get_or_init(|| false) {
+        if self.framebuffer == 0
+            || surface_data.is_null()
+            || (!force_copy && *self.passthru.get_or_init(|| false))
+        {
             return;
         }
 
@@ -254,9 +269,10 @@ impl OhUiServer {
     fn set_connect(&self, conn: bool) {
         self.connected.store(conn, Ordering::Relaxed);
         if conn {
-            register_led_sync(self.msg_handler.clone());
+            self.msg_handler.update_sock(self.channel.clone());
         } else {
-            unregister_led_sync();
+            self.channel.lock().unwrap().disconnect();
+            self.msg_handler.reset();
         }
     }
 
@@ -269,6 +285,15 @@ impl OhUiServer {
 
 impl DisplayChangeListenerOperations for OhUiServer {
     fn dpy_switch(&self, surface: &DisplaySurface) -> Result<()> {
+        let height = surface.height() as u64;
+        let stride = surface.stride() as u64;
+        if self.framebuffer != 0 && height * stride > VIRTIO_GPU_ENABLE_BAR0_SIZE {
+            bail!(
+                "surface size is larger than ohui buffer size {}",
+                VIRTIO_GPU_ENABLE_BAR0_SIZE
+            );
+        }
+
         let mut locked_surface = self.surface.write().unwrap();
 
         unref_pixman_image(locked_surface.guest_image);
@@ -280,12 +305,16 @@ impl DisplayChangeListenerOperations for OhUiServer {
         locked_surface.height = surface.height();
         drop(locked_surface);
         let locked_surface = self.surface.read().unwrap();
-        self.raw_update_dirty_area(
-            get_image_data(locked_surface.guest_image),
-            locked_surface.stride,
-            (0, 0),
-            (locked_surface.width, locked_surface.height),
-        );
+        // SAFETY: Dirty area does not exceed surface buffer.
+        unsafe {
+            self.raw_update_dirty_area(
+                get_image_data(locked_surface.guest_image),
+                locked_surface.stride,
+                (0, 0),
+                (locked_surface.width, locked_surface.height),
+                true,
+            )
+        };
 
         if !self.connected() {
             return Ok(());
@@ -311,12 +340,24 @@ impl DisplayChangeListenerOperations for OhUiServer {
             return Ok(());
         }
 
-        self.raw_update_dirty_area(
-            get_image_data(locked_surface.guest_image),
-            locked_surface.stride,
-            (x, y),
-            (w, h),
-        );
+        if locked_surface.width < x
+            || locked_surface.height < y
+            || locked_surface.width < x.saturating_add(w)
+            || locked_surface.height < y.saturating_add(h)
+        {
+            bail!("dpy_image_update: invalid dirty area");
+        }
+
+        // SAFETY: We checked dirty area data before.
+        unsafe {
+            self.raw_update_dirty_area(
+                get_image_data(locked_surface.guest_image),
+                locked_surface.stride,
+                (x, y),
+                (w, h),
+                false,
+            )
+        };
 
         self.msg_handler
             .handle_dirty_area(x as u32, y as u32, w as u32, h as u32);
@@ -330,14 +371,19 @@ impl DisplayChangeListenerOperations for OhUiServer {
             return Ok(());
         }
 
-        let len = cursor.width * cursor.height * size_of::<i32>() as u32;
-        if len > CURSOR_SIZE as u32 {
+        let len = cursor
+            .width
+            .checked_mul(cursor.height)
+            .with_context(|| "Invalid cursor width * height")?
+            .checked_mul(bytes_per_pixel() as u32)
+            .with_context(|| "Invalid cursor size")?;
+        if len > CURSOR_SIZE as u32 || len > cursor.data.len().try_into()? {
             error!("Too large cursor length {}.", len);
             // No need to return Err for this situation is not fatal
             return Ok(());
         }
 
-        // SAFETY: len is checked before copying,it's safe to do this.
+        // SAFETY: len is checked before copying, it's safe to do this.
         unsafe {
             ptr::copy_nonoverlapping(
                 cursor.data.as_ptr(),
@@ -351,7 +397,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
             cursor.height,
             cursor.hot_x,
             cursor.hot_y,
-            size_of::<i32>() as u32,
+            bytes_per_pixel() as u32,
         );
         Ok(())
     }
@@ -359,7 +405,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
 
 pub fn ohui_init(ohui_srv: Arc<OhUiServer>, cfg: &DisplayConfig) -> Result<()> {
     // set iothread
-    ohui_srv.set_iothread(cfg.ohui_config.iothread.clone());
+    ohui_srv.set_iothread(cfg.iothread.clone());
     // Register ohui interface
     let dcl = Arc::new(Mutex::new(DisplayChangeListener::new(
         None,
@@ -392,7 +438,12 @@ impl OhUiTrans {
     }
 
     fn get_fd(&self) -> RawFd {
-        self.server.get_channel().get_stream_raw_fd()
+        self.server
+            .get_channel()
+            .lock()
+            .unwrap()
+            .get_stream_raw_fd()
+            .unwrap()
     }
 }
 
@@ -437,8 +488,6 @@ impl OhUiListener {
     }
 
     fn handle_connection(&self) -> Result<()> {
-        // Set stream sock with nonblocking
-        self.server.get_channel().set_nonblocking(true)?;
         // Register OhUiTrans read notifier
         ohui_register_event(OhUiTrans::new(self.server.clone()), self.server.clone())?;
         self.server.set_connect(true);
@@ -448,11 +497,15 @@ impl OhUiListener {
     }
 
     fn accept(&self) -> Result<()> {
-        self.server.get_channel().accept()
+        self.server.get_channel().lock().unwrap().accept()
     }
 
     fn get_fd(&self) -> RawFd {
-        self.server.get_channel().get_listener_raw_fd()
+        self.server
+            .get_channel()
+            .lock()
+            .unwrap()
+            .get_listener_raw_fd()
     }
 }
 
@@ -499,11 +552,7 @@ fn ohui_register_event<T: EventNotifierHelper>(e: T, srv: Arc<OhUiServer>) -> Re
 }
 
 fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
-    // Bind and set listener nonblocking
-    let channel = server.get_channel();
-    channel.bind()?;
-    channel.set_listener_nonblocking(true)?;
-    ohui_register_event(OhUiListener::new(server.clone()), server.clone())?;
+    ohui_register_event(OhUiListener::new(server.clone()), server)?;
     info!("Successfully start listener.");
     Ok(())
 }

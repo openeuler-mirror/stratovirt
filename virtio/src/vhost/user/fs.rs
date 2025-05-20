@@ -19,7 +19,8 @@ const VIRTIO_FS_QUEUE_SIZE: u16 = 128;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::super::super::{VirtioDevice, VIRTIO_TYPE_FS};
@@ -27,9 +28,45 @@ use super::super::VhostOps;
 use super::{listen_guest_notifier, VhostBackendType, VhostUserClient};
 use crate::{read_config_default, VirtioBase, VirtioInterrupt};
 use address_space::AddressSpace;
-use machine_manager::config::{FsConfig, MAX_TAG_LENGTH};
+use machine_manager::config::{
+    get_pci_df, parse_bool, valid_id, ChardevConfig, ConfigError, SocketType,
+};
 use machine_manager::event_loop::unregister_event_helper;
 use util::byte_code::ByteCode;
+use util::gen_base_func;
+
+const MAX_TAG_LENGTH: usize = 36;
+
+/// Config struct for `fs`.
+/// Contains fs device's attr.
+#[derive(Parser, Debug, Clone)]
+#[command(no_binary_name(true))]
+pub struct FsConfig {
+    #[arg(long, value_parser = ["vhost-user-fs-pci", "vhost-user-fs-device"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub chardev: String,
+    #[arg(long, value_parser = valid_tag)]
+    pub tag: String,
+    #[arg(long)]
+    pub bus: Option<String>,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: Option<(u8, u8)>,
+    #[arg(long, value_parser = parse_bool)]
+    pub multifunction: Option<bool>,
+}
+
+fn valid_tag(tag: &str) -> Result<String> {
+    if tag.len() >= MAX_TAG_LENGTH {
+        return Err(anyhow!(ConfigError::StringLengthTooLong(
+            "fs device tag".to_string(),
+            MAX_TAG_LENGTH - 1,
+        )));
+    }
+    Ok(tag.to_string())
+}
 
 #[derive(Copy, Clone)]
 #[repr(C, packed)]
@@ -52,6 +89,7 @@ impl ByteCode for VirtioFsConfig {}
 pub struct Fs {
     base: VirtioBase,
     fs_cfg: FsConfig,
+    chardev_cfg: ChardevConfig,
     config_space: VirtioFsConfig,
     client: Option<Arc<Mutex<VhostUserClient>>>,
     mem_space: Arc<AddressSpace>,
@@ -64,14 +102,16 @@ impl Fs {
     /// # Arguments
     ///
     /// `fs_cfg` - The config of this Fs device.
+    /// `chardev_cfg` - The config of this Fs device's chardev.
     /// `mem_space` - The address space of this Fs device.
-    pub fn new(fs_cfg: FsConfig, mem_space: Arc<AddressSpace>) -> Self {
+    pub fn new(fs_cfg: FsConfig, chardev_cfg: ChardevConfig, mem_space: Arc<AddressSpace>) -> Self {
         let queue_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
         let queue_size = VIRTIO_FS_QUEUE_SIZE;
 
         Fs {
             base: VirtioBase::new(VIRTIO_TYPE_FS, queue_num, queue_size),
             fs_cfg,
+            chardev_cfg,
             config_space: VirtioFsConfig::default(),
             client: None,
             mem_space,
@@ -81,19 +121,19 @@ impl Fs {
 }
 
 impl VirtioDevice for Fs {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         let queues_num = VIRIOT_FS_HIGH_PRIO_QUEUE_NUM + VIRTIO_FS_REQ_QUEUES_NUM;
+
+        let socket_path = match self.chardev_cfg.classtype.socket_type()? {
+            SocketType::Unix { path } => path,
+            _ => bail!("Vhost-user-fs Chardev backend should be unix-socket type."),
+        };
+
         let client = VhostUserClient::new(
             &self.mem_space,
-            &self.fs_cfg.sock,
+            &socket_path,
             queues_num as u64,
             VhostBackendType::TypeFs,
         )
@@ -192,5 +232,26 @@ impl VirtioDevice for Fs {
         self.client = None;
 
         self.realize()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_vhostuserfs_cmdline_parser() {
+        // Test1: Right.
+        let fs_cmd = "vhost-user-fs-device,id=fs0,chardev=chardev0,tag=tag0";
+        let fs_config = FsConfig::try_parse_from(str_slip_to_clap(fs_cmd, true, false)).unwrap();
+        assert_eq!(fs_config.id, "fs0");
+        assert_eq!(fs_config.chardev, "chardev0");
+        assert_eq!(fs_config.tag, "tag0");
+
+        // Test2: Illegal value.
+        let fs_cmd = "vhost-user-fs-device,id=fs0,chardev=chardev0,tag=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        let result = FsConfig::try_parse_from(str_slip_to_clap(fs_cmd, true, false));
+        assert!(result.is_err());
     }
 }

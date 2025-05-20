@@ -1,0 +1,23 @@
+[[events]]
+name = "ged_inject_acpi_event"
+args = "event: u32"
+message = "acpi_sevent {}"
+enabled = true
+
+[[events]]
+name = "ged_read"
+args = "event: u32"
+message = "acpi_sevent {}"
+enabled = true
+
+[[events]]
+name = "power_read"
+args = "reg_idx: u64, value: u32"
+message = "reg_idx {} value {}"
+enabled = true
+
+[[events]]
+name = "power_status_read"
+args = "regs: &dyn fmt::Debug"
+message = "regs {:?}"
+enabled = true

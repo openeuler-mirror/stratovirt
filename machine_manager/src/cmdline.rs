@@ -11,9 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 use anyhow::{bail, Context, Result};
+use clap::{ArgAction, Parser};
 
 use crate::{
-    config::{parse_trace_options, ChardevType, CmdParser, MachineType, VmConfig},
+    config::{add_trace, str_slip_to_clap, ChardevType, MachineType, SocketType, VmConfig},
     qmp::qmp_socket::QmpSocketPath,
     temp_cleaner::TempCleaner,
 };
@@ -37,7 +38,8 @@ use util::{
 macro_rules! add_args_to_config {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temp) = &$x {
-            $z.$s(temp)?;
+            $z.$s(temp)
+                .with_context(|| format!("Add args {:?} error.", temp))?;
         }
     };
     ( $x:tt, $z:expr, $s:tt, vec ) => {
@@ -64,7 +66,8 @@ macro_rules! add_args_to_config_multi {
     ( $x:tt, $z:expr, $s:tt ) => {
         if let Some(temps) = &$x {
             for temp in temps {
-                $z.$s(temp)?;
+                $z.$s(temp)
+                    .with_context(|| format!("Add args {:?} error.", temp))?;
             }
         }
     };
@@ -246,6 +249,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd virtio pci balloon: -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]; \
                    \n\t\tadd virtio mmio rng: -device virtio-rng-device,rng=<objrng0>,max-bytes=<1234>,period=<1000>; \
                    \n\t\tadd virtio pci rng: -device virtio-rng-pci,id=<rng_id>,rng=<objrng0>,max-bytes=<1234>,period=<1000>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
+                   \n\t\tadd virtio mmio input: -device virtio-input-device,id=<input_id>,evdev=<evdev0>; \
+                   \n\t\tadd virtio pci input: -device virtio-input-pci,id=<input_id>,evdev=<evdev0>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
                    \n\t\tadd pcie root port: -device pcie-root-port,id=<pcie.1>,port=<0x1>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
                    \n\t\tadd vfio pci: -device vfio-pci,id=<vfio_id>,host=<0000:1a:00.3>,bus=<pcie.0>,addr=<0x03>[,multifunction=on|off]; \
                    \n\t\tadd usb controller: -device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>; \
@@ -446,8 +451,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("trace")
             .multiple(false)
             .long("trace")
-            .value_name("file=<file>")
-            .help("specify the file lists trace state to enable")
+            .value_name("file=<file>|type=<all|events|scopes>")
+            .help("specify the trace state to enable")
             .takes_value(true),
         )
         .arg(
@@ -457,6 +462,15 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .value_name("[key=<value>]")
             .help("set global config")
             .takes_values(true)
+            .required(false),
+        )
+        .arg(
+            Arg::with_name("hardware-signature")
+            .multiple(false)
+            .long("hardware-signature")
+            .value_name("<32bit integer>")
+            .help("set ACPI Hardware Signature")
+            .takes_value(true)
             .required(false),
         )
         .arg(
@@ -509,7 +523,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .multiple(false)
             .long("windows_emu_pid")
             .value_name("pid")
-            .help("watch on the external windows emu pid")
+            .help("watch on the external emulator pid")
             .takes_value(true),
     );
 
@@ -576,6 +590,11 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
         add_kernel_cmdline,
         vec
     );
+    add_args_to_config!(
+        (args.value_of("hardware-signature")),
+        vm_cfg,
+        add_hw_signature
+    );
     add_args_to_config_multi!((args.values_of("drive")), vm_cfg, add_drive);
     add_args_to_config_multi!((args.values_of("object")), vm_cfg, add_object);
     add_args_to_config_multi!((args.values_of("netdev")), vm_cfg, add_netdev);
@@ -587,7 +606,7 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
     add_args_to_config_multi!((args.values_of("smbios")), vm_cfg, add_smbios);
     if let Some(opt) = args.value_of("trace") {
-        parse_trace_options(&opt)?;
+        add_trace(&opt)?;
     }
 
     // Check the mini-set for Vm to start is ok
@@ -597,6 +616,28 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
             .with_context(|| "Precheck failed, VmConfig is unhealthy, stop running")?;
     }
     Ok(vm_cfg)
+}
+
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct QmpConfig {
+    #[arg(long, alias = "classtype")]
+    uri: String,
+    #[arg(long, action = ArgAction::SetTrue, required = true)]
+    server: bool,
+    #[arg(long, action = ArgAction::SetTrue, required = true)]
+    nowait: bool,
+}
+
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+struct MonConfig {
+    #[arg(long, default_value = "")]
+    id: String,
+    #[arg(long, value_parser = ["control"])]
+    mode: String,
+    #[arg(long)]
+    chardev: String,
 }
 
 /// This function is to parse qmp socket path and type.
@@ -613,75 +654,34 @@ pub fn check_api_channel(
     vm_config: &mut VmConfig,
 ) -> Result<Vec<SocketListener>> {
     let mut sock_paths = Vec::new();
-    if let Some(qmp_config) = args.value_of("qmp") {
-        let mut cmd_parser = CmdParser::new("qmp");
-        cmd_parser.push("").push("server").push("nowait");
-
-        cmd_parser.parse(&qmp_config)?;
-        if let Some(uri) = cmd_parser.get_value::<String>("")? {
-            let sock_path =
-                QmpSocketPath::new(uri).with_context(|| "Failed to parse qmp socket path")?;
-            sock_paths.push(sock_path);
-        } else {
-            bail!("No uri found for qmp");
-        }
-        if cmd_parser.get_value::<String>("server")?.is_none() {
-            bail!("Argument \'server\' is needed for qmp");
-        }
-        if cmd_parser.get_value::<String>("nowait")?.is_none() {
-            bail!("Argument \'nowait\' is needed for qmp");
-        }
+    if let Some(qmp_args) = args.value_of("qmp") {
+        let qmp_cfg = QmpConfig::try_parse_from(str_slip_to_clap(&qmp_args, true, false))?;
+        let sock_path =
+            QmpSocketPath::new(qmp_cfg.uri).with_context(|| "Failed to parse qmp socket path")?;
+        sock_paths.push(sock_path);
     }
-    if let Some(mon_config) = args.value_of("mon") {
-        let mut cmd_parser = CmdParser::new("monitor");
-        cmd_parser.push("id").push("mode").push("chardev");
-        cmd_parser.parse(&mon_config)?;
-
-        let chardev = cmd_parser
-            .get_value::<String>("chardev")?
-            .with_context(|| "Argument \'chardev\' is missing for \'mon\'")?;
-
-        if let Some(mode) = cmd_parser.get_value::<String>("mode")? {
-            if mode != *"control" {
-                bail!("Invalid \'mode\' parameter: {:?} for monitor", &mode);
+    if let Some(mon_args) = args.value_of("mon") {
+        let mon_cfg = MonConfig::try_parse_from(str_slip_to_clap(&mon_args, false, false))?;
+        let cfg = vm_config
+            .chardev
+            .remove(&mon_cfg.chardev)
+            .with_context(|| format!("No chardev found: {}", &mon_cfg.chardev))?;
+        let socket = cfg
+            .classtype
+            .socket_type()
+            .with_context(|| "Only chardev of unix-socket type can be used for monitor")?;
+        if let ChardevType::Socket { server, nowait, .. } = cfg.classtype {
+            if !server || !nowait {
+                bail!(
+                    "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                    cfg.id()
+                );
             }
-        } else {
-            bail!("Argument \'mode\' of \'mon\' should be set to \'control\'.");
         }
-
-        if let Some(cfg) = vm_config.chardev.remove(&chardev) {
-            if let ChardevType::UnixSocket {
-                path,
-                server,
-                nowait,
-            } = cfg.backend
-            {
-                if !server || !nowait {
-                    bail!(
-                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
-                        path
-                    );
-                }
-                sock_paths.push(QmpSocketPath::Unix { path });
-            } else if let ChardevType::TcpSocket {
-                host,
-                port,
-                server,
-                nowait,
-            } = cfg.backend
-            {
-                if !server || !nowait {
-                    bail!(
-                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}:{}\'",
-                        host, port
-                    );
-                }
-                sock_paths.push(QmpSocketPath::Tcp { host, port });
-            } else {
-                bail!("Only chardev of unix-socket type can be used for monitor");
-            }
-        } else {
-            bail!("No chardev found: {}", &chardev);
+        if let SocketType::Tcp { host, port } = socket {
+            sock_paths.push(QmpSocketPath::Tcp { host, port });
+        } else if let SocketType::Unix { path } = socket {
+            sock_paths.push(QmpSocketPath::Unix { path });
         }
     }
 

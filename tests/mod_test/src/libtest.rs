@@ -54,6 +54,12 @@ impl StreamHandler {
             .unwrap();
     }
 
+    fn clear_stream(&self) {
+        let mut stream = self.stream.try_clone().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let _ = stream.read(&mut [0_u8; 1024]);
+    }
+
     fn read_line(&self, timeout: Duration) -> String {
         let start = Instant::now();
         let mut resp = self.read_buffer.borrow_mut();
@@ -132,11 +138,12 @@ impl TestState {
         let resp: Value =
             serde_json::from_slice(self.qmp_sock.read_line(timeout).as_bytes()).unwrap();
         assert!(resp.get("event").is_some());
-        return resp;
+        resp
     }
 
     pub fn qmp(&self, cmd: &str) -> Value {
         let timeout = Duration::from_secs(10);
+        self.qmp_sock.clear_stream();
         self.qmp_sock.write_line(cmd);
         serde_json::from_slice(self.qmp_sock.read_line(timeout).as_bytes()).unwrap()
     }
@@ -198,7 +205,7 @@ impl TestState {
 
     pub fn readq(&self, addr: u64) -> u64 {
         let cmd = format!("readq 0x{:x}", addr);
-        self.send_read_cmd(&cmd) as u64
+        self.send_read_cmd(&cmd)
     }
 
     pub fn memread(&self, addr: u64, size: u64) -> Vec<u8> {
@@ -355,7 +362,12 @@ pub fn test_init(extra_arg: Vec<&str>) -> TestState {
 
     let listener = init_socket(&test_socket);
 
-    let child = Command::new(binary_path)
+    let mut cmd = Command::new(binary_path);
+
+    #[cfg(target_env = "ohos")]
+    cmd.args(["-disable-seccomp"]);
+
+    let child = cmd
         .args(["-accel", "test"])
         .args(["-qmp", &format!("unix:{},server,nowait", qmp_socket)])
         .args(["-mod-test", &test_socket])

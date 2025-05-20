@@ -111,7 +111,7 @@ impl SerialTest {
 
     fn get_pty_path(&mut self) -> String {
         let ret = self.state.borrow().qmp("{\"execute\": \"query-chardev\"}");
-        if (*ret.get("return").unwrap()).as_array().unwrap().len() != 0
+        if !(*ret.get("return").unwrap()).as_array().unwrap().is_empty()
             && (*ret.get("return").unwrap())[0].get("filename").is_some()
         {
             let filename = (*ret.get("return").unwrap())[0]
@@ -120,9 +120,9 @@ impl SerialTest {
                 .to_string()
                 .replace('"', "");
             let mut file_path: Vec<&str> = filename.split("pty:").collect();
-            return file_path.pop().unwrap().to_string();
+            file_path.pop().unwrap().to_string()
         } else {
-            return String::from("");
+            String::from("")
         }
     }
 
@@ -155,7 +155,7 @@ impl SerialTest {
 
         self.serial
             .borrow()
-            .kick_virtqueue(self.state.clone(), queue.clone());
+            .kick_virtqueue(self.state.clone(), queue);
 
         (addr, free_head)
     }
@@ -214,7 +214,8 @@ impl SerialTest {
 
         // Port Ready.
         for port in self.ports.clone().iter() {
-            let ready_msg = VirtioConsoleControl::new(*port.0 as u32, VIRTIO_CONSOLE_PORT_READY, 1);
+            let ready_msg =
+                VirtioConsoleControl::new(u32::from(*port.0), VIRTIO_CONSOLE_PORT_READY, 1);
             self.out_control_event(ready_msg);
 
             // If it's a console port.
@@ -258,7 +259,7 @@ impl SerialTest {
 
                 // driver -> device: port open.
                 let open_msg: VirtioConsoleControl =
-                    VirtioConsoleControl::new(*port.0 as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
+                    VirtioConsoleControl::new(u32::from(*port.0), VIRTIO_CONSOLE_PORT_OPEN, 1);
                 self.out_control_event(open_msg);
             }
         }
@@ -314,14 +315,14 @@ impl SerialTest {
                 server: _,
                 nowait: _,
             } => {
-                stream = self.connect_socket_host(&path);
+                stream = self.connect_socket_host(path);
             }
         }
 
         // Connect Guest.
         // driver -> device: port open.
         let open_msg: VirtioConsoleControl =
-            VirtioConsoleControl::new(port.nr as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
+            VirtioConsoleControl::new(u32::from(port.nr), VIRTIO_CONSOLE_PORT_OPEN, 1);
         self.out_control_event(open_msg);
 
         // IO: Guest -> Host.
@@ -354,9 +355,9 @@ impl SerialTest {
         let result = match port.chardev_type {
             ChardevType::Pty => {
                 let output = self.connect_pty_host(true);
-                output.unwrap().write(&test_data.as_bytes())
+                output.unwrap().write(test_data.as_bytes())
             }
-            _ => stream.as_ref().unwrap().write(&test_data.as_bytes()),
+            _ => stream.as_ref().unwrap().write(test_data.as_bytes()),
         };
         match result {
             Ok(_num) => {
@@ -461,7 +462,7 @@ fn create_serial(ports_config: Vec<PortConfig>, pci_slot: u8, pci_fn: u8) -> Ser
 
 fn verify_output_data(test_state: Rc<RefCell<TestState>>, addr: u64, len: u32, test_data: &String) {
     let mut data_buf: Vec<u8> = Vec::with_capacity(len as usize);
-    data_buf.append(test_state.borrow().memread(addr, len as u64).as_mut());
+    data_buf.append(test_state.borrow().memread(addr, u64::from(len)).as_mut());
     let data = String::from_utf8(data_buf).unwrap();
     assert_eq!(data, *test_data);
 }
@@ -598,7 +599,7 @@ fn virtserialport_socket_basic() {
         nowait: true,
     };
     let port = PortConfig {
-        chardev_type: socket.clone(),
+        chardev_type: socket,
         nr: 1,
         is_console: false,
     };
@@ -656,18 +657,19 @@ fn virtconsole_pty_err_out_control_msg() {
     };
     let pci_slot = 0x04;
     let pci_fn = 0x0;
-    let mut st = create_serial(vec![port.clone()], pci_slot, pci_fn);
+    let mut st = create_serial(vec![port], pci_slot, pci_fn);
 
     st.serial_init();
 
     // Error out control msg which has invalid event. Just discard this invalid msg. Nothing
     // happened.
-    let invalid_event_msg = VirtioConsoleControl::new(nr as u32, VIRTIO_CONSOLE_PORT_NAME, 1);
+    let invalid_event_msg = VirtioConsoleControl::new(u32::from(nr), VIRTIO_CONSOLE_PORT_NAME, 1);
     st.out_control_event(invalid_event_msg);
 
     // Error out control msg which has non-existed port id. Just discard this invalid msg. Nothing
     // happened.
-    let invalid_event_msg = VirtioConsoleControl::new((nr + 5) as u32, VIRTIO_CONSOLE_PORT_OPEN, 1);
+    let invalid_event_msg =
+        VirtioConsoleControl::new(u32::from(nr + 5), VIRTIO_CONSOLE_PORT_OPEN, 1);
     st.out_control_event(invalid_event_msg);
 
     // Error out control msg which size is illegal.
@@ -705,7 +707,7 @@ fn virtconsole_pty_invalid_in_control_buffer() {
     };
     let pci_slot = 0x04;
     let pci_fn = 0x0;
-    let mut st = create_serial(vec![port.clone()], pci_slot, pci_fn);
+    let mut st = create_serial(vec![port], pci_slot, pci_fn);
 
     // Init virtqueues.
     st.virtqueue_setup(DEFAULT_SERIAL_VIRTQUEUES);
@@ -774,7 +776,7 @@ fn virtserialport_socket_not_connect() {
         nowait: true,
     };
     let port = PortConfig {
-        chardev_type: socket.clone(),
+        chardev_type: socket,
         nr,
         is_console: false,
     };

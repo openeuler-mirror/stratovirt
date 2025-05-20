@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use log::{error, info};
 use thiserror::Error;
 
-use machine::{LightMachine, MachineOps, StdMachine};
+use machine::{type_init, LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
     config::MachineType,
@@ -71,6 +71,8 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
+    type_init()?;
+
     let cmd_args = create_args_parser().get_matches()?;
 
     if cmd_args.is_present("mod-test") {
@@ -101,7 +103,13 @@ fn run() -> Result<()> {
         exit_with_code(VM_EXIT_GENE_ERR);
     }));
 
-    let mut vm_config: VmConfig = create_vmconfig(&cmd_args)?;
+    let mut vm_config: VmConfig = match create_vmconfig(&cmd_args) {
+        Ok(vm_cfg) => vm_cfg,
+        Err(e) => {
+            error!("Failed to create vmconfig {:?}", e);
+            return Err(e);
+        }
+    };
     info!("VmConfig is {:?}", vm_config);
 
     match real_main(&cmd_args, &mut vm_config) {
@@ -109,18 +117,15 @@ fn run() -> Result<()> {
             info!("MainLoop over, Vm exit");
             // clean temporary file
             TempCleaner::clean();
+            EventLoop::loop_clean();
             handle_signal();
         }
         Err(ref e) => {
             set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
-            if cmd_args.is_present("display log") {
-                error!("{}", format!("{:?}\r\n", e));
-            } else {
-                write!(&mut std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
-                    .expect("Failed to write to stderr");
-            }
+            error!("{}", format!("{:?}\r\n", e));
             // clean temporary file
             TempCleaner::clean();
+            EventLoop::loop_clean();
             exit_with_code(VM_EXIT_GENE_ERR);
         }
     }
@@ -160,7 +165,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
                 LightMachine::new(vm_config).with_context(|| "Failed to init MicroVM")?,
             ));
             MachineOps::realize(&vm, vm_config).with_context(|| "Failed to realize micro VM.")?;
-            EventLoop::set_manager(vm.clone(), None);
+            EventLoop::set_manager(vm.clone());
 
             for listener in listeners {
                 sockets.push(Socket::from_listener(listener, Some(vm.clone())));
@@ -173,15 +178,13 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             ));
             MachineOps::realize(&vm, vm_config)
                 .with_context(|| "Failed to realize standard VM.")?;
-            EventLoop::set_manager(vm.clone(), None);
+            EventLoop::set_manager(vm.clone());
 
             if is_test_enabled() {
                 let sock_path = cmd_args.value_of("mod-test");
-                let test_sock = Some(TestSock::new(sock_path.unwrap().as_str(), vm.clone()));
+                let test_sock = TestSock::new(sock_path.unwrap().as_str(), vm.clone());
                 EventLoop::update_event(
-                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(
-                        test_sock.unwrap(),
-                    ))),
+                    EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(test_sock))),
                     None,
                 )
                 .with_context(|| "Failed to add test socket to MainLoop")?;
@@ -199,7 +202,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             let vm = Arc::new(Mutex::new(
                 StdMachine::new(vm_config).with_context(|| "Failed to init NoneVM")?,
             ));
-            EventLoop::set_manager(vm.clone(), None);
+            EventLoop::set_manager(vm.clone());
 
             for listener in listeners {
                 sockets.push(Socket::from_listener(listener, Some(vm.clone())));
@@ -208,7 +211,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
         }
     };
 
-    let balloon_switch_on = vm_config.dev_name.get("balloon").is_some();
+    let balloon_switch_on = vm_config.dev_name.contains_key("balloon");
     if !cmd_args.is_present("disable-seccomp") {
         vm.lock()
             .unwrap()
@@ -227,6 +230,5 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     machine::vm_run(&vm, cmd_args).with_context(|| "Failed to start VM.")?;
 
     EventLoop::loop_run().with_context(|| "MainLoop exits unexpectedly: error occurs")?;
-    EventLoop::loop_clean();
     Ok(())
 }

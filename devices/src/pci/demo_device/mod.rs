@@ -33,31 +33,49 @@ pub mod dpy_device;
 pub mod gpu_device;
 pub mod kbd_pointer_device;
 
-use std::{
-    sync::Mutex,
-    sync::{
-        atomic::{AtomicU16, Ordering},
-        Arc, Weak,
-    },
-};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Result};
+use anyhow::Result;
+use clap::Parser;
 use log::error;
 
+use crate::pci::config::{
+    PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT, PCIE_CONFIG_SPACE_SIZE,
+    SUB_CLASS_CODE, VENDOR_ID,
+};
 use crate::pci::demo_device::{
-    dpy_device::DemoDisplay, gpu_device::DemoGpu, kbd_pointer_device::DemoKbdMouse,
+    base_device::BaseDevice, dpy_device::DemoDisplay, gpu_device::DemoGpu,
+    kbd_pointer_device::DemoKbdMouse,
 };
-use crate::pci::{
-    config::{
-        PciConfig, RegionType, DEVICE_ID, HEADER_TYPE, HEADER_TYPE_ENDPOINT,
-        PCIE_CONFIG_SPACE_SIZE, SUB_CLASS_CODE, VENDOR_ID,
-    },
-    init_msix, le_write_u16, PciBus, PciDevOps,
-};
-use crate::pci::{demo_device::base_device::BaseDevice, PciDevBase};
-use crate::{Device, DeviceBase};
+use crate::pci::{init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressSpace, GuestAddress, Region, RegionOps};
-use machine_manager::config::DemoDevConfig;
+use machine_manager::config::{get_pci_df, valid_id};
+use util::gen_base_func;
+
+/// Config struct for `demo_dev`.
+/// Contains demo_dev device's attr.
+#[derive(Parser, Debug, Clone)]
+#[command(no_binary_name(true))]
+pub struct DemoDevConfig {
+    #[arg(long, value_parser = ["pcie-demo-dev"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    // Different device implementations can be configured based on this parameter
+    #[arg(long, alias = "device_type")]
+    pub device_type: Option<String>,
+    #[arg(long, alias = "bar_num", default_value = "0")]
+    pub bar_num: u8,
+    // Every bar has the same size just for simplification.
+    #[arg(long, alias = "bar_size", default_value = "0")]
+    pub bar_size: u64,
+}
 
 pub struct DemoDev {
     base: PciDevBase,
@@ -71,25 +89,26 @@ impl DemoDev {
     pub fn new(
         cfg: DemoDevConfig,
         devfn: u8,
-        _sys_mem: Arc<AddressSpace>,
-        parent_bus: Weak<Mutex<PciBus>>,
+        sys_mem: Arc<AddressSpace>,
+        parent_bus: Weak<Mutex<dyn Bus>>,
     ) -> Self {
         // You can choose different device function based on the parameter of device_type.
-        let device: Arc<Mutex<dyn DeviceTypeOperation>> = match cfg.device_type.as_str() {
-            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(_sys_mem, cfg.id.clone()))),
-            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(_sys_mem))),
-            "demo-display" => Arc::new(Mutex::new(DemoDisplay::new(_sys_mem))),
+        let device_type = cfg.device_type.clone().unwrap_or_default();
+        let device: Arc<Mutex<dyn DeviceTypeOperation>> = match device_type.as_str() {
+            "demo-gpu" => Arc::new(Mutex::new(DemoGpu::new(sys_mem, cfg.id.clone()))),
+            "demo-input" => Arc::new(Mutex::new(DemoKbdMouse::new(sys_mem))),
+            "demo-display" => Arc::new(Mutex::new(DemoDisplay::new(sys_mem))),
             _ => Arc::new(Mutex::new(BaseDevice::new())),
         };
         DemoDev {
             base: PciDevBase {
-                base: DeviceBase::new(cfg.id.clone(), false),
-                config: PciConfig::new(PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
+                base: DeviceBase::new(cfg.id.clone(), false, Some(parent_bus)),
+                config: PciConfig::new(devfn, PCIE_CONFIG_SPACE_SIZE, cfg.bar_num),
                 devfn,
-                parent_bus,
+                bme: Arc::new(AtomicBool::new(false)),
             },
             cmd_cfg: cfg,
-            mem_region: Region::init_container_region(u32::MAX as u64, "DemoDev"),
+            mem_region: Region::init_container_region(u64::from(u32::MAX), "DemoDev"),
             dev_id: Arc::new(AtomicU16::new(0)),
             device,
         }
@@ -104,19 +123,6 @@ impl DemoDev {
         le_write_u16(config, VENDOR_ID as usize, VENDOR_ID_DEMO)?;
         le_write_u16(config, SUB_CLASS_CODE as usize, CLASS_CODE_DEMO)?;
         config[HEADER_TYPE as usize] = HEADER_TYPE_ENDPOINT;
-
-        Ok(())
-    }
-
-    fn attach_to_parent_bus(self) -> Result<()> {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let mut locked_parent_bus = parent_bus.lock().unwrap();
-        if locked_parent_bus.devices.get(&self.base.devfn).is_some() {
-            bail!("device already existed");
-        }
-        let devfn = self.base.devfn;
-        let demo_pci_dev = Arc::new(Mutex::new(self));
-        locked_parent_bus.devices.insert(devfn, demo_pci_dev);
 
         Ok(())
     }
@@ -155,7 +161,7 @@ impl DemoDev {
             self.mem_region.clone(),
             RegionType::Mem64Bit,
             false,
-            (self.cmd_cfg.bar_size * self.cmd_cfg.bar_num as u64).next_power_of_two(),
+            (self.cmd_cfg.bar_size * u64::from(self.cmd_cfg.bar_num)).next_power_of_two(),
         )?;
 
         Ok(())
@@ -170,26 +176,13 @@ const DEVICE_ID_DEMO: u16 = 0xBEEF;
 const CLASS_CODE_DEMO: u16 = 0xEE;
 
 impl Device for DemoDev {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.base.config.reset_common_regs()
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
-}
-
-impl PciDevOps for DemoDev {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
-
-    /// Realize PCI/PCIe device.
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_pci_config()?;
         if self.cmd_cfg.bar_num > 0 {
             init_msix(&mut self.base, 0, 1, self.dev_id.clone(), None, None)?;
@@ -198,19 +191,27 @@ impl PciDevOps for DemoDev {
         self.register_data_handling_bar()?;
         self.device.lock().unwrap().realize()?;
 
-        self.attach_to_parent_bus()?;
-        Ok(())
+        let devfn = u64::from(self.base.devfn);
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        let demo_pci_dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(devfn, demo_pci_dev.clone())?;
+
+        Ok(demo_pci_dev)
     }
 
-    /// Unrealize PCI/PCIe device.
     fn unrealize(&mut self) -> Result<()> {
         self.device.lock().unwrap().unrealize()
     }
+}
+
+impl PciDevOps for DemoDev {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     /// write the pci configuration space
     fn write_config(&mut self, offset: usize, data: &[u8]) {
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        let parent_bus_locked = parent_bus.lock().unwrap();
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
 
         self.base.config.write(
             offset,
@@ -218,13 +219,8 @@ impl PciDevOps for DemoDev {
             self.dev_id.load(Ordering::Acquire),
             #[cfg(target_arch = "x86_64")]
             None,
-            Some(&parent_bus_locked.mem_region),
+            Some(&pci_bus.mem_region),
         );
-    }
-
-    /// Reset device
-    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        self.base.config.reset_common_regs()
     }
 }
 
@@ -233,4 +229,30 @@ pub trait DeviceTypeOperation: Send {
     fn write(&mut self, data: &[u8], addr: GuestAddress, offset: u64) -> Result<()>;
     fn realize(&mut self) -> Result<()>;
     fn unrealize(&mut self) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+    #[test]
+    fn test_parse_demo_dev() {
+        // Test1: Right.
+        let demo_cmd1 = "pcie-demo-dev,bus=pcie.0,addr=0x4,id=test_0,device_type=demo-gpu,bar_num=3,bar_size=4096";
+        let result = DemoDevConfig::try_parse_from(str_slip_to_clap(demo_cmd1, true, false));
+        assert!(result.is_ok());
+        let demo_cfg = result.unwrap();
+        assert_eq!(demo_cfg.id, "test_0".to_string());
+        assert_eq!(demo_cfg.device_type, Some("demo-gpu".to_string()));
+        assert_eq!(demo_cfg.bar_num, 3);
+        assert_eq!(demo_cfg.bar_size, 4096);
+
+        // Test2: Default bar_num/bar_size.
+        let demo_cmd2 = "pcie-demo-dev,bus=pcie.0,addr=4.0,id=test_0,device_type=demo-gpu";
+        let result = DemoDevConfig::try_parse_from(str_slip_to_clap(demo_cmd2, true, false));
+        assert!(result.is_ok());
+        let demo_cfg = result.unwrap();
+        assert_eq!(demo_cfg.bar_num, 0);
+        assert_eq!(demo_cfg.bar_size, 0);
+    }
 }

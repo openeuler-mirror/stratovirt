@@ -15,7 +15,7 @@ use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 /// A trait bound defined for types which are safe to convert to a byte slice and
 /// to create from a byte slice.
-pub trait ByteCode: Default + Copy + Send + Sync {
+pub trait ByteCode: Clone + Default + Send + Sync {
     /// Return the contents of an object (impl trait `ByteCode`) as a slice of bytes.
     /// the inverse of this function is "from_bytes"
     fn as_bytes(&self) -> &[u8] {

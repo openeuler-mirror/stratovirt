@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use anyhow::{Context, Result};
 use log::info;
@@ -27,6 +27,9 @@ use crate::{
 };
 use machine_manager::config::MAX_L2_CACHE_SIZE;
 use util::num_ops::div_round_up;
+
+// Default l1 table map length, which can describe 512GiB data for 64KiB cluster.
+const L1_TABLE_MAP_LEN: usize = 1024;
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Qcow2ClusterType {
@@ -81,6 +84,7 @@ pub struct Qcow2Table {
     cluster_bits: u64,
     cluster_size: u64,
     pub l1_table: Vec<u64>,
+    pub l1_table_map: HashMap<u64, u8>,
     pub l1_table_offset: u64,
     pub l1_size: u32,
     pub l2_table_cache: Qcow2Cache,
@@ -96,6 +100,7 @@ impl Qcow2Table {
             cluster_bits: 0,
             cluster_size: 0,
             l1_table: Vec::new(),
+            l1_table_map: HashMap::with_capacity(L1_TABLE_MAP_LEN),
             l1_table_offset: 0,
             l1_size: 0,
             l2_table_cache: Qcow2Cache::default(),
@@ -128,9 +133,9 @@ impl Qcow2Table {
         };
         info!("Driver {} l2 cache size {}", conf.id, cache_size);
         let l2_table_cache: Qcow2Cache = Qcow2Cache::new(cache_size as usize);
-        self.cluster_bits = header.cluster_bits as u64;
+        self.cluster_bits = u64::from(header.cluster_bits);
         self.cluster_size = header.cluster_size();
-        self.l2_bits = header.cluster_bits as u64 - ENTRY_BITS;
+        self.l2_bits = u64::from(header.cluster_bits) - ENTRY_BITS;
         self.l2_size = header.cluster_size() / ENTRY_SIZE;
         self.l2_table_cache = l2_table_cache;
         self.l1_table_offset = header.l1_table_offset;
@@ -142,7 +147,11 @@ impl Qcow2Table {
         self.l1_table = self
             .sync_aio
             .borrow_mut()
-            .read_ctrl_cluster(self.l1_table_offset, self.l1_size as u64)?;
+            .read_ctrl_cluster(self.l1_table_offset, u64::from(self.l1_size))?;
+        for l1_entry in &self.l1_table {
+            let l1_entry_addr = l1_entry & L1_TABLE_OFFSET_MASK;
+            self.l1_table_map.insert(l1_entry_addr, 1);
+        }
         Ok(())
     }
 
@@ -185,7 +194,11 @@ impl Qcow2Table {
     }
 
     pub fn update_l1_table(&mut self, l1_index: usize, l2_address: u64) {
+        let old_addr = self.l1_table[l1_index] & L1_TABLE_OFFSET_MASK;
+        let new_addr = l2_address & L1_TABLE_OFFSET_MASK;
         self.l1_table[l1_index] = l2_address;
+        self.l1_table_map.remove(&old_addr);
+        self.l1_table_map.insert(new_addr, 1);
     }
 
     pub fn update_l2_table(
@@ -256,7 +269,7 @@ mod test {
         let addr = qcow2.alloc_cluster(1, true).unwrap();
         let l2_cluster: Vec<u8> = vec![0_u8; cluster_size];
         let l2_table = Rc::new(RefCell::new(
-            CacheTable::new(addr, l2_cluster.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(addr, l2_cluster, ENTRY_SIZE_U64).unwrap(),
         ));
         qcow2.table.cache_l2_table(l2_table.clone()).unwrap();
 

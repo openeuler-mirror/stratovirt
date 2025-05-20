@@ -66,21 +66,21 @@ impl Qcow2Driver {
     fn raw_read(&self, offset: u64, buf: &mut [u8]) -> i64 {
         let ptr = buf.as_mut_ptr() as u64;
         let cnt = buf.len() as u64;
-        let iovec = vec![Iovec::new(ptr, cnt)];
-        let ret = unsafe {
+        let iovec = [Iovec::new(ptr, cnt)];
+
+        unsafe {
             preadv(
                 self.file.as_raw_fd() as c_int,
                 iovec.as_ptr() as *const iovec,
                 iovec.len() as c_int,
                 offset as off_t,
             ) as i64
-        };
-        ret
+        }
     }
 
     fn raw_write(&mut self, offset: u64, buf: &mut [u8]) {
         self.file.seek(SeekFrom::Start(offset)).unwrap();
-        self.file.write_all(&buf).unwrap();
+        self.file.write_all(buf).unwrap();
     }
 }
 
@@ -192,12 +192,7 @@ impl QcowHeader {
 
 // From size to bits.
 fn size_to_bits(size: u64) -> Option<u64> {
-    for i in 0..63 {
-        if size >> i == 1 {
-            return Some(i);
-        }
-    }
-    return None;
+    (0..63).find(|&i| size >> i == 1)
 }
 
 /// Create a qcow2 format image for test.
@@ -236,15 +231,15 @@ pub fn create_qcow2_img(image_path: String, image_size: u64) {
         .custom_flags(libc::O_CREAT | libc::O_TRUNC)
         .open(image_path.clone())
         .unwrap();
-    file.set_len(cluster_sz * 3 + header.l1_size as u64 * ENTRY_SIZE)
+    file.set_len(cluster_sz * 3 + u64::from(header.l1_size) * ENTRY_SIZE)
         .unwrap();
     file.write_all(&header.to_vec()).unwrap();
 
     // Cluster 1 is the refcount table.
-    assert_eq!(header.refcount_table_offset, cluster_sz * 1);
+    assert_eq!(header.refcount_table_offset, cluster_sz);
     let mut refcount_table = [0_u8; ENTRY_SIZE as usize];
     BigEndian::write_u64(&mut refcount_table, cluster_sz * 2);
-    file.seek(SeekFrom::Start(cluster_sz * 1)).unwrap();
+    file.seek(SeekFrom::Start(cluster_sz)).unwrap();
     file.write_all(&refcount_table).unwrap();
 
     // Clusters which has been allocated.
@@ -281,7 +276,7 @@ fn write_full_disk(image_path: String) {
     // Write l2 table.
     let mut refcount_block: Vec<u8> = Vec::new();
     let mut l1_table = [0_u8; ENTRY_SIZE as usize];
-    BigEndian::write_u64(&mut l1_table, cluster_size * 4 | QCOW2_OFFSET_COPIED);
+    BigEndian::write_u64(&mut l1_table, (cluster_size * 4) | QCOW2_OFFSET_COPIED);
     let mut l2_table: Vec<u8> = Vec::new();
     for _ in 0..5 {
         refcount_block.push(0x00);
@@ -318,7 +313,7 @@ pub fn delete_snapshot(state: Rc<RefCell<TestState>>, device: &str, snap: &str) 
 
 pub fn query_snapshot(state: Rc<RefCell<TestState>>) -> Value {
     let qmp_str =
-        format!("{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"info snapshots\"}}}}");
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info snapshots\"}}".to_string();
     let value = state.borrow_mut().qmp(&qmp_str);
 
     value
@@ -326,7 +321,7 @@ pub fn query_snapshot(state: Rc<RefCell<TestState>>) -> Value {
 
 // Check if there exists snapshot with the specified name.
 pub fn check_snapshot(state: Rc<RefCell<TestState>>, snap: &str) -> bool {
-    let value = query_snapshot(state.clone());
+    let value = query_snapshot(state);
     let str = (*value.get("return").unwrap()).as_str().unwrap();
     let lines: Vec<&str> = str.split("\r\n").collect();
     for line in lines {

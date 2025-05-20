@@ -11,16 +11,21 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Result as IoResult, Write};
+use std::io::{ErrorKind, Read, Result as IoResult, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use vmm_sys_util::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr};
+
+use crate::aio::Iovec;
 
 const IFF_ATTACH_QUEUE: u16 = 0x0200;
 const IFF_DETACH_QUEUE: u16 = 0x0400;
@@ -55,6 +60,8 @@ pub struct IfReq {
 pub struct Tap {
     pub file: Arc<File>,
     pub enabled: bool,
+    pub upload_stats: Arc<AtomicU64>,
+    pub download_stats: Arc<AtomicU64>,
 }
 
 impl Tap {
@@ -108,7 +115,7 @@ impl Tap {
             ));
         }
 
-        let mut features = 0;
+        let mut features: u16 = 0;
         // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
         let ret = unsafe { ioctl_with_mut_ref(&file, TUNGETFEATURES(), &mut features) };
         if ret < 0 {
@@ -125,13 +132,15 @@ impl Tap {
         Ok(Tap {
             file: Arc::new(file),
             enabled: true,
+            upload_stats: Arc::new(AtomicU64::new(0)),
+            download_stats: Arc::new(AtomicU64::new(0)),
         })
     }
 
     pub fn set_offload(&self, flags: u32) -> Result<()> {
         let ret =
             // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
-            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) };
+            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), u64::from(flags)) };
         if ret < 0 {
             return Err(anyhow!("ioctl TUNSETOFFLOAD failed.".to_string()));
         }
@@ -153,7 +162,7 @@ impl Tap {
         let flags = TUN_F_CSUM | TUN_F_UFO;
         (
             // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
-            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), flags as libc::c_ulong) }
+            unsafe { ioctl_with_val(self.file.as_ref(), TUNSETOFFLOAD(), u64::from(flags)) }
         ) >= 0
     }
 
@@ -185,11 +194,72 @@ impl Tap {
         ret
     }
 
-    pub fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+    pub fn receive_packets(&self, iovecs: &[Iovec]) -> isize {
+        // SAFETY: the arguments of readv has been checked and is correct.
+        let size = unsafe {
+            libc::readv(
+                self.as_raw_fd() as libc::c_int,
+                iovecs.as_ptr() as *const libc::iovec,
+                iovecs.len() as libc::c_int,
+            )
+        };
+        if size < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                return size;
+            }
+
+            // If the backend tap device is removed, readv returns less than 0.
+            // At this time, the content in the tap needs to be cleaned up.
+            // Here, read is called to process, otherwise handle_rx may be triggered all the time.
+            let mut buf = [0; 1024];
+            match self.read(&mut buf) {
+                Ok(cnt) => error!("Failed to call readv but tap read is ok: cnt {}", cnt),
+                Err(e) => {
+                    // When the backend tap device is abnormally removed, read return EBADFD.
+                    error!("Failed to read tap: {:?}", e);
+                }
+            }
+            error!("Failed to call readv for net handle_rx: {:?}", e);
+        } else {
+            self.download_stats.fetch_add(size as u64, Ordering::SeqCst);
+        }
+
+        size
+    }
+
+    pub fn send_packets(&self, iovecs: &[Iovec]) -> i8 {
+        loop {
+            // SAFETY: the arguments of writev has been checked and is correct.
+            let size = unsafe {
+                libc::writev(
+                    self.as_raw_fd(),
+                    iovecs.as_ptr() as *const libc::iovec,
+                    iovecs.len() as libc::c_int,
+                )
+            };
+            if size < 0 {
+                let e = std::io::Error::last_os_error();
+                match e.kind() {
+                    ErrorKind::Interrupted => continue,
+                    ErrorKind::WouldBlock => return -1_i8,
+                    // Ignore other errors which can not be handled.
+                    _ => error!("Failed to call writev for net handle_tx: {:?}", e),
+                }
+            } else {
+                self.upload_stats.fetch_add(size as u64, Ordering::SeqCst);
+            }
+
+            break;
+        }
+        0_i8
+    }
+
+    pub fn read(&self, buf: &mut [u8]) -> IoResult<usize> {
         self.file.as_ref().read(buf)
     }
 
-    pub fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+    pub fn write(&self, buf: &[u8]) -> IoResult<usize> {
         self.file.as_ref().write(buf)
     }
 

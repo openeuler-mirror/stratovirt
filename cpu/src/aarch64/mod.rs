@@ -108,6 +108,8 @@ pub struct ArmCPUState {
     pub features: ArmCPUFeatures,
     /// Virtual timer count.
     pub vtimer_cnt: u64,
+    /// Virtual timer count valid.
+    pub vtimer_cnt_valid: bool,
 }
 
 impl ArmCPUState {

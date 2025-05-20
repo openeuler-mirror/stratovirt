@@ -11,18 +11,23 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::os::fd::{FromRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, RwLock};
 
-use anyhow::{anyhow, bail, Result};
-use log::{error, warn};
+use anyhow::{anyhow, bail, Context, Result};
+use log::error;
 use util::byte_code::ByteCode;
 
-use super::{channel::OhUiChannel, msg::*};
+use super::{
+    channel::{recv_slice, send_obj, OhUiChannel},
+    msg::*,
+};
 use crate::{
     console::{get_active_console, graphic_hardware_ui_info},
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
-        release_all_key, trigger_key, Axis, SyncLedstate, ABS_MAX, CAPS_LOCK_LED,
+        release_all_btn, release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED,
         INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
         INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD, INPUT_POINT_LEFT,
         INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK,
@@ -49,11 +54,20 @@ fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
     )
 }
 
+#[derive(Clone, Default)]
+struct CursorState {
+    w: u32,
+    h: u32,
+    hot_x: u32,
+    hot_y: u32,
+    size_per_pixel: u32,
+}
+
 #[derive(Default)]
 struct WindowState {
     width: u32,
     height: u32,
-    led_state: Option<u8>,
+    cursor: CursorState,
 }
 
 impl WindowState {
@@ -86,25 +100,16 @@ impl WindowState {
     }
 
     fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
-        let (pos_x, pos_y) = trans_mouse_pos(x, y, self.width as f64, self.height as f64);
+        let (pos_x, pos_y) = trans_mouse_pos(x, y, f64::from(self.width), f64::from(self.height));
         input_move_abs(Axis::X, pos_x)?;
         input_move_abs(Axis::Y, pos_y)?;
         input_point_sync()
     }
 
-    fn update_host_ledstate(&mut self, led: u8) {
-        self.led_state = Some(led);
-    }
-
-    fn sync_kbd_led_state(&mut self) -> Result<()> {
-        if self.led_state.is_none() {
-            return Ok(());
-        }
-
-        let host_stat = self.led_state.unwrap();
+    fn sync_kbd_led_state(&mut self, led: u8) -> Result<()> {
         let guest_stat = get_kbd_led_state();
-        if host_stat != guest_stat {
-            let sync_bits = host_stat ^ guest_stat;
+        if led != guest_stat {
+            let sync_bits = led ^ guest_stat;
             if (sync_bits & CAPS_LOCK_LED) != 0 {
                 trigger_key(KEYCODE_CAPS_LOCK)?;
             }
@@ -115,61 +120,47 @@ impl WindowState {
                 trigger_key(KEYCODE_SCR_LOCK)?;
             }
         }
-        self.led_state = None;
         Ok(())
     }
 }
 
+#[derive(Default)]
 pub struct OhUiMsgHandler {
     state: Mutex<WindowState>,
     hmcode2svcode: HashMap<u16, u16>,
-    reader: Mutex<MsgReader>,
-    writer: Mutex<MsgWriter>,
-}
-
-impl SyncLedstate for OhUiMsgHandler {
-    fn sync_to_host(&self, state: u8) {
-        let body = LedstateEvent::new(state as u32);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::Ledstate, &body)
-        {
-            error!("sync_to_host: failed to send message with error {e}");
-        }
-    }
+    reader: Mutex<Option<MsgReader>>,
+    writer: Mutex<Option<MsgWriter>>,
 }
 
 impl OhUiMsgHandler {
-    pub fn new(channel: Arc<OhUiChannel>) -> Self {
+    pub fn new() -> Self {
         OhUiMsgHandler {
             state: Mutex::new(WindowState::default()),
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
-            reader: Mutex::new(MsgReader::new(channel.clone())),
-            writer: Mutex::new(MsgWriter::new(channel)),
+            reader: Mutex::new(None),
+            writer: Mutex::new(None),
         }
     }
 
+    pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
+        let fd = channel.lock().unwrap().get_stream_raw_fd().unwrap();
+        *self.reader.lock().unwrap() = Some(MsgReader::new(fd));
+        *self.writer.lock().unwrap() = Some(MsgWriter::new(fd));
+    }
+
     pub fn handle_msg(&self, token_id: Arc<RwLock<u64>>) -> Result<()> {
-        let mut reader = self.reader.lock().unwrap();
+        let mut locked_reader = self.reader.lock().unwrap();
+        let reader = locked_reader
+            .as_mut()
+            .with_context(|| "handle_msg: no connection established")?;
         if !reader.recv()? {
             return Ok(());
         }
 
         let hdr = &reader.header;
-        let body_size = hdr.size as usize;
         let event_type = hdr.event_type;
-        if body_size != event_msg_data_len(hdr.event_type) {
-            warn!(
-                "{:?} data len is wrong, we want {}, but receive {}",
-                event_type,
-                event_msg_data_len(hdr.event_type),
-                body_size
-            );
-            reader.clear();
-            return Ok(());
-        }
+        let body_size = hdr.size as usize;
+        trace::trace_scope_start!(handle_msg, args = (&event_type));
 
         let body_bytes = reader.body.as_ref().unwrap();
         if let Err(e) = match event_type {
@@ -196,20 +187,27 @@ impl OhUiMsgHandler {
             }
             EventType::Focus => {
                 let body = FocusEvent::from_bytes(&body_bytes[..]).unwrap();
+                trace::oh_event_focus(body.state);
                 if body.state == CLIENT_FOCUSOUT_EVENT {
                     reader.clear();
                     release_all_key()?;
+                    release_all_btn()?;
                 }
                 Ok(())
             }
-            EventType::Ledstate => {
-                let body = LedstateEvent::from_bytes(&body_bytes[..]).unwrap();
-                self.handle_ledstate(body);
-                Ok(())
-            }
+            EventType::Ledstate => Ok(()),
             EventType::Greet => {
                 let body = GreetEvent::from_bytes(&body_bytes[..]).unwrap();
+                trace::oh_event_greet(body.token_id);
                 *token_id.write().unwrap() = body.token_id;
+                let cursor = self.state.lock().unwrap().cursor.clone();
+                self.handle_cursor_define(
+                    cursor.w,
+                    cursor.h,
+                    cursor.hot_x,
+                    cursor.hot_y,
+                    cursor.size_per_pixel,
+                );
                 Ok(())
             }
             _ => {
@@ -217,6 +215,7 @@ impl OhUiMsgHandler {
                     "unsupported type {:?} and body size {}",
                     event_type, body_size
                 );
+                trace::oh_event_unsupported_type(&event_type, body_size.try_into().unwrap());
                 Ok(())
             }
         } {
@@ -228,6 +227,7 @@ impl OhUiMsgHandler {
 
     fn handle_mouse_button(&self, mb: &MouseButtonEvent) -> Result<()> {
         let (msg_btn, action) = (mb.button, mb.btn_action);
+        trace::oh_event_mouse_button(msg_btn, action);
         let btn = match msg_btn {
             CLIENT_MOUSE_BUTTON_LEFT => INPUT_POINT_LEFT,
             CLIENT_MOUSE_BUTTON_RIGHT => INPUT_POINT_RIGHT,
@@ -251,26 +251,33 @@ impl OhUiMsgHandler {
         hot_y: u32,
         size_per_pixel: u32,
     ) {
-        let body = HWCursorEvent::new(w, h, hot_x, hot_y, size_per_pixel);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::CursorDefine, &body)
-        {
-            error!("handle_cursor_define: failed to send message with error {e}");
+        self.state.lock().unwrap().cursor = CursorState {
+            w,
+            h,
+            hot_x,
+            hot_y,
+            size_per_pixel,
+        };
+
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = HWCursorEvent::new(w, h, hot_x, hot_y, size_per_pixel);
+            if let Err(e) = writer.send_message(EventType::CursorDefine, &body) {
+                error!("handle_cursor_define: failed to send message with error {e}");
+            }
         }
     }
 
     // NOTE: we only support absolute position info now, that means usb-mouse does not work.
     fn handle_mouse_motion(&self, mm: &MouseMotionEvent) -> Result<()> {
+        trace::oh_event_mouse_motion(mm.x, mm.y);
         self.state.lock().unwrap().move_pointer(mm.x, mm.y)
     }
 
     fn handle_keyboard(&self, ke: &KeyboardEvent) -> Result<()> {
-        if self.state.lock().unwrap().led_state.is_some() {
-            self.state.lock().unwrap().sync_kbd_led_state()?;
-        }
+        self.state
+            .lock()
+            .unwrap()
+            .sync_kbd_led_state(ke.led_state)?;
         let hmkey = ke.keycode;
         let keycode = match self.hmcode2svcode.get(&hmkey) {
             Some(k) => *k,
@@ -278,6 +285,7 @@ impl OhUiMsgHandler {
                 bail!("not supported keycode {}", hmkey);
             }
         };
+        trace::oh_event_keyboard(keycode, ke.key_action);
         self.state
             .lock()
             .unwrap()
@@ -295,6 +303,7 @@ impl OhUiMsgHandler {
         };
         self.state.lock().unwrap().press_btn(dir)?;
         self.state.lock().unwrap().release_btn(dir)?;
+        trace::oh_event_scroll(dir);
         Ok(())
     }
 
@@ -310,76 +319,86 @@ impl OhUiMsgHandler {
                 error!("handle_windowinfo failed with error {e}");
             }
         }
-    }
-
-    fn handle_ledstate(&self, led: &LedstateEvent) {
-        self.state
-            .lock()
-            .unwrap()
-            .update_host_ledstate(led.state as u8);
+        trace::oh_event_windowinfo(wi.width, wi.height);
     }
 
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
-        let body = WindowInfoEvent::new(w, h);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::WindowInfo, &body)
-        {
-            error!("send_windowinfo: failed to send message with error {e}");
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = WindowInfoEvent::new(w, h);
+            if let Err(e) = writer.send_message(EventType::WindowInfo, &body) {
+                error!("send_windowinfo: failed to send message with error {e}");
+            }
         }
     }
 
     pub fn handle_dirty_area(&self, x: u32, y: u32, w: u32, h: u32) {
-        let body = FrameBufferDirtyEvent::new(x, y, w, h);
-        if let Err(e) = self
-            .writer
-            .lock()
-            .unwrap()
-            .send_message(EventType::FrameBufferDirty, &body)
-        {
-            error!("handle_dirty_area: failed to send message with error {e}");
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = FrameBufferDirtyEvent::new(x, y, w, h);
+            if let Err(e) = writer.send_message(EventType::FrameBufferDirty, &body) {
+                error!("handle_dirty_area: failed to send message with error {e}");
+            }
         }
+    }
+
+    pub fn reset(&self) {
+        *self.reader.lock().unwrap() = None;
+        *self.writer.lock().unwrap() = None;
     }
 }
 
 struct MsgReader {
-    /// socket to read
-    channel: Arc<OhUiChannel>,
     /// cache for header
-    pub header: EventMsgHdr,
+    header: EventMsgHdr,
     /// received byte size of header
-    pub header_ready: usize,
+    header_ready: usize,
     /// cache of body
-    pub body: Option<Vec<u8>>,
+    body: Option<Vec<u8>>,
     /// received byte size of body
-    pub body_ready: usize,
+    body_ready: usize,
+    /// UnixStream to read
+    sock: UnixStream,
 }
 
 impl MsgReader {
-    pub fn new(channel: Arc<OhUiChannel>) -> Self {
+    pub fn new(fd: RawFd) -> Self {
         MsgReader {
-            channel,
             header: EventMsgHdr::default(),
             header_ready: 0,
             body: None,
             body_ready: 0,
+            // SAFETY: The fd is valid only when the new connection has been established
+            // and MsgReader instance would be destroyed when disconnected.
+            sock: unsafe { UnixStream::from_raw_fd(fd) },
         }
     }
 
     pub fn recv(&mut self) -> Result<bool> {
         if self.recv_header()? {
+            self.check_header()?;
             return self.recv_body();
         }
         Ok(false)
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.header_ready = 0;
         self.body_ready = 0;
         self.body = None;
+    }
+
+    fn check_header(&mut self) -> Result<()> {
+        let expected_size = event_msg_data_len(self.header.event_type);
+        if expected_size != self.header.size as usize {
+            self.clear();
+            bail!(
+                "{:?} data len is wrong, we want {}, but receive {}",
+                self.header.event_type as EventType,
+                expected_size,
+                self.header.size as usize,
+            );
+        }
+        Ok(())
     }
 
     fn recv_header(&mut self) -> Result<bool> {
@@ -388,7 +407,7 @@ impl MsgReader {
         }
 
         let buf = self.header.as_mut_bytes();
-        self.header_ready += self.channel.recv_slice(&mut buf[self.header_ready..])?;
+        self.header_ready += recv_slice(&mut self.sock, &mut buf[self.header_ready..])?;
         Ok(self.header_ready == EVENT_MSG_HDR_SIZE as usize)
     }
 
@@ -410,22 +429,32 @@ impl MsgReader {
         unsafe {
             buf.set_len(body_size);
         }
-        self.body_ready += self.channel.recv_slice(&mut buf[self.body_ready..])?;
+        self.body_ready += recv_slice(&mut self.sock, &mut buf[self.body_ready..])?;
 
         Ok(self.body_ready == body_size)
     }
 }
 
-struct MsgWriter(Arc<OhUiChannel>);
+struct MsgWriter {
+    sock: UnixStream,
+}
 
 impl MsgWriter {
-    fn new(channel: Arc<OhUiChannel>) -> Self {
-        MsgWriter(channel)
+    fn new(fd: RawFd) -> Self {
+        Self {
+            // SAFETY: The fd is valid only when the new connection has been established
+            // and MsgWriter instance would be destroyed when disconnected.
+            sock: unsafe { UnixStream::from_raw_fd(fd) },
+        }
     }
 
-    fn send_message<T: Sized + Default + ByteCode>(&self, t: EventType, body: &T) -> Result<()> {
+    fn send_message<T: Sized + Default + ByteCode>(
+        &mut self,
+        t: EventType,
+        body: &T,
+    ) -> Result<()> {
         let hdr = EventMsgHdr::new(t);
-        self.0.send_by_obj(&hdr)?;
-        self.0.send_by_obj(body)
+        send_obj(&mut self.sock, &hdr)?;
+        send_obj(&mut self.sock, body)
     }
 }

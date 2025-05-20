@@ -19,7 +19,7 @@ use super::super::BootGdtSegment;
 use super::super::{
     BOOT_GDT_MAX, BOOT_GDT_OFFSET, BOOT_IDT_OFFSET, GDT_ENTRY_BOOT_CS, GDT_ENTRY_BOOT_DS,
 };
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 
 // /*
 //  * Constructor for a conventional segment GDT (or LDT) entry.
@@ -94,7 +94,7 @@ fn write_gdt_table(table: &[u64], guest_mem: &Arc<AddressSpace>) -> Result<()> {
     let mut boot_gdt_addr = BOOT_GDT_OFFSET;
     for (_, entry) in table.iter().enumerate() {
         guest_mem
-            .write_object(entry, GuestAddress(boot_gdt_addr))
+            .write_object(entry, GuestAddress(boot_gdt_addr), AddressAttr::Ram)
             .with_context(|| format!("Failed to load gdt to 0x{:x}", boot_gdt_addr))?;
         boot_gdt_addr += 8;
     }
@@ -104,7 +104,7 @@ fn write_gdt_table(table: &[u64], guest_mem: &Arc<AddressSpace>) -> Result<()> {
 fn write_idt_value(val: u64, guest_mem: &Arc<AddressSpace>) -> Result<()> {
     let boot_idt_addr = BOOT_IDT_OFFSET;
     guest_mem
-        .write_object(&val, GuestAddress(boot_idt_addr))
+        .write_object(&val, GuestAddress(boot_idt_addr), AddressAttr::Ram)
         .with_context(|| format!("Failed to load gdt to 0x{:x}", boot_idt_addr))?;
 
     Ok(())
@@ -119,9 +119,9 @@ pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
     ];
 
     let mut code_seg: kvm_segment = GdtEntry(gdt_table[GDT_ENTRY_BOOT_CS as usize]).into();
-    code_seg.selector = GDT_ENTRY_BOOT_CS as u16 * 8;
+    code_seg.selector = u16::from(GDT_ENTRY_BOOT_CS) * 8;
     let mut data_seg: kvm_segment = GdtEntry(gdt_table[GDT_ENTRY_BOOT_DS as usize]).into();
-    data_seg.selector = GDT_ENTRY_BOOT_DS as u16 * 8;
+    data_seg.selector = u16::from(GDT_ENTRY_BOOT_DS) * 8;
 
     write_gdt_table(&gdt_table[..], guest_mem)?;
     write_idt_value(0, guest_mem)?;

@@ -19,7 +19,7 @@
 //! use std::sync::{Arc, Mutex};
 //! extern crate address_space;
 //! use address_space::{
-//!     AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps,
+//!     AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region, RegionOps,
 //! };
 //!
 //! struct DummyDevice;
@@ -76,7 +76,7 @@
 //!     space.root().add_subregion(io_region, 0x2000);
 //!
 //!     // 5. access address_space
-//!     space.write_object(&0x11u64, GuestAddress(0));
+//!     space.write_object(&0x11u64, GuestAddress(0), AddressAttr::Ram);
 //! }
 //! ```
 
@@ -90,7 +90,7 @@ mod region;
 mod state;
 
 pub use crate::address_space::{AddressSpace, RegionCache};
-pub use address::{AddressRange, GuestAddress};
+pub use address::{AddressAttr, AddressRange, GuestAddress};
 pub use error::AddressSpaceError;
 pub use host_mmap::{create_backend_mem, create_default_mem, FileBackend, HostMemMapping};
 pub use listener::{Listener, ListenerReqType, MemSlot};

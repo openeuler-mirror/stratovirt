@@ -25,12 +25,9 @@ use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
 use crate::{AddressRange, GuestAddress, Region};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
-use util::{
-    syscall::mbind,
-    unix::{do_mmap, host_page_size},
-};
+use util::unix::{do_mmap, host_page_size, mbind};
 
-const MAX_PREALLOC_THREAD: u8 = 16;
+const MAX_PREALLOC_THREAD: i64 = 16;
 /// Verify existing pages in the mapping.
 const MPOL_MF_STRICT: u32 = 1;
 /// Move pages owned by this process to conform to mapping.
@@ -59,9 +56,9 @@ impl FileBackend {
     /// # Arguments
     ///
     /// * `fd` - Opened backend file.
-    pub fn new_common(fd: File) -> Self {
+    pub fn new_common(fd: Arc<File>) -> Self {
         Self {
-            file: Arc::new(fd),
+            file: fd,
             offset: 0,
             page_size: 0,
         }
@@ -171,7 +168,8 @@ fn max_nr_threads(nr_vcpus: u8) -> u8 {
         return 1;
     }
 
-    min(min(nr_host_cpu as u8, MAX_PREALLOC_THREAD), nr_vcpus)
+    // MAX_PREALLOC_THREAD's value(16) is less than 255.
+    min(min(nr_host_cpu, MAX_PREALLOC_THREAD) as u8, nr_vcpus)
 }
 
 /// Touch pages to pre-alloc memory for VM.
@@ -205,11 +203,12 @@ fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 /// * `size` - Size of memory.
 /// * `nr_vcpus` - Number of vcpus.
 fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+    trace::trace_scope_start!(pre_alloc, args = (size));
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
     let nr_pages = (size + page_size - 1) / page_size;
-    let pages_per_thread = nr_pages / (threads as u64);
-    let left = nr_pages % (threads as u64);
+    let pages_per_thread = nr_pages / u64::from(threads);
+    let left = nr_pages % u64::from(threads);
     let mut addr = host_addr;
     let mut threads_join = Vec::new();
     for i in 0..threads {
@@ -294,7 +293,7 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
 pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<Region> {
     let mut f_back: Option<FileBackend> = None;
 
-    if mem_config.memfd {
+    if mem_config.memfd() {
         let anon_fd = memfd_create(
             &CString::new("stratovirt_anon_mem")?,
             MemFdCreateFlag::empty(),
@@ -368,15 +367,20 @@ fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConf
         nmask = vec![0_u64; max_node];
     }
 
-    mbind(
-        host_addr_start,
-        zone.size,
-        policy as u32,
-        nmask,
-        max_node as u64,
-        MPOL_MF_STRICT | MPOL_MF_MOVE,
-    )
-    .with_context(|| "Failed to call mbind")?;
+    // SAFETY:
+    // 1. addr is managed by memory mapping, it can be guaranteed legal.
+    // 2. node_mask was created in this function.
+    // 3. Upper limit of max_node is MAX_NODES.
+    unsafe {
+        mbind(
+            host_addr_start,
+            zone.size,
+            policy as u32,
+            nmask,
+            max_node as u64,
+            MPOL_MF_STRICT | MPOL_MF_MOVE,
+        )?;
+    }
 
     Ok(())
 }

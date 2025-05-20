@@ -25,7 +25,7 @@ use crate::{
     file::{CombineRequest, FileDriver},
     qcow2::is_aligned,
     BlockDriverOps, BlockIoErrorCallback, BlockProperty, BlockStatus, CheckResult, CreateOptions,
-    SECTOR_SIZE,
+    ImageInfo, SECTOR_SIZE,
 };
 use util::{
     aio::{get_iov_size, raw_write, Aio, Iovec},
@@ -45,7 +45,7 @@ unsafe impl<T: Clone + 'static> Send for RawDriver<T> {}
 unsafe impl<T: Clone + 'static> Sync for RawDriver<T> {}
 
 impl<T: Clone + 'static> RawDriver<T> {
-    pub fn new(file: File, aio: Aio<T>, prop: BlockProperty) -> Self {
+    pub fn new(file: Arc<File>, aio: Aio<T>, prop: BlockProperty) -> Self {
         Self {
             driver: FileDriver::new(file, aio, prop),
             status: Arc::new(Mutex::new(BlockStatus::Init)),
@@ -56,24 +56,27 @@ impl<T: Clone + 'static> RawDriver<T> {
     // get_file_alignment() detects the alignment length by submitting IO to the first sector.
     // If this area is fallocated, misaligned IO will also return success, so we pre fill this area.
     pub fn alloc_first_block(&mut self, new_size: u64) -> Result<()> {
-        let write_size = if new_size < MAX_FILE_ALIGN as u64 {
+        let write_size = if new_size < u64::from(MAX_FILE_ALIGN) {
             SECTOR_SIZE
         } else {
-            MAX_FILE_ALIGN as u64
+            u64::from(MAX_FILE_ALIGN)
         };
-        let max_align = std::cmp::max(MAX_FILE_ALIGN as u64, host_page_size()) as usize;
+        let max_align = std::cmp::max(u64::from(MAX_FILE_ALIGN), host_page_size()) as usize;
         // SAFETY: allocate aligned memory and free it later.
         let align_buf = unsafe { libc::memalign(max_align, write_size as usize) };
         if align_buf.is_null() {
             bail!("Failed to alloc memory for write.");
         }
 
-        let ret = raw_write(
-            self.driver.file.as_raw_fd(),
-            align_buf as u64,
-            write_size as usize,
-            0,
-        );
+        // SAFETY: align_buf is valid and large enough.
+        let ret = unsafe {
+            raw_write(
+                self.driver.file.as_raw_fd(),
+                align_buf as u64,
+                write_size as usize,
+                0,
+            )
+        };
         // SAFETY: the memory is allocated in this function.
         unsafe { libc::free(align_buf) };
 
@@ -90,6 +93,13 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         self.resize(raw_options.img_size)?;
         let image_info = format!("fmt=raw size={}", raw_options.img_size);
         Ok(image_info)
+    }
+
+    fn query_image(&mut self, info: &mut ImageInfo) -> Result<()> {
+        info.format = "raw".to_string();
+        info.virtual_size = self.disk_size()?;
+        info.actual_size = self.driver.actual_size()?;
+        Ok(())
     }
 
     fn check_image(&mut self, _res: &mut CheckResult, _quite: bool, _fix: u64) -> Result<()> {

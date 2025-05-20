@@ -85,7 +85,7 @@ impl CacheTable {
             bail!("Invalid idx {}", idx);
         }
         let v = match self.entry_size {
-            ENTRY_SIZE_U16 => BigEndian::read_u16(&self.table_data[start..end]) as u64,
+            ENTRY_SIZE_U16 => u64::from(BigEndian::read_u16(&self.table_data[start..end])),
             ENTRY_SIZE_U64 => BigEndian::read_u64(&self.table_data[start..end]),
             _ => bail!("Unsupported entry size {}", self.entry_size),
         };
@@ -190,7 +190,7 @@ impl Qcow2Cache {
     ) -> Option<Rc<RefCell<CacheTable>>> {
         let mut replaced_entry: Option<Rc<RefCell<CacheTable>>> = None;
         let mut lru_count = u64::MAX;
-        let mut target_idx = 0;
+        let mut target_idx: u64 = 0;
         self.check_refcount();
         entry.borrow_mut().lru_count = self.lru_count;
         self.lru_count += 1;
@@ -262,7 +262,7 @@ mod test {
         for i in 0..buf.len() {
             vec.append(&mut buf[i].to_be_bytes().to_vec());
         }
-        let mut entry = CacheTable::new(0x00 as u64, vec, ENTRY_SIZE_U64).unwrap();
+        let mut entry = CacheTable::new(0x00_u64, vec, ENTRY_SIZE_U64).unwrap();
         assert_eq!(entry.get_entry_map(0).unwrap(), 0x00);
         assert_eq!(entry.get_entry_map(3).unwrap(), 0x03);
         assert_eq!(entry.get_entry_map(4).unwrap(), 0x04);
@@ -279,19 +279,19 @@ mod test {
             vec.append(&mut buf[i].to_be_bytes().to_vec());
         }
         let entry_0 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_0.borrow_mut().lru_count = 0;
         let entry_1 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_1.borrow_mut().lru_count = 1;
         let entry_2 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_2.borrow_mut().lru_count = 2;
         let entry_3 = Rc::new(RefCell::new(
-            CacheTable::new(0x00 as u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
+            CacheTable::new(0x00_u64, vec.clone(), ENTRY_SIZE_U64).unwrap(),
         ));
         entry_3.borrow_mut().lru_count = 3;
 
@@ -315,7 +315,7 @@ mod test {
         ));
 
         let mut qcow2_cache = Qcow2Cache::new(2);
-        qcow2_cache.lru_replace(addr, entry.clone());
+        qcow2_cache.lru_replace(addr, entry);
         qcow2_cache.lru_count = u64::MAX - cnt / 2;
         // Not in cache.
         assert!(qcow2_cache.get(0).is_none());

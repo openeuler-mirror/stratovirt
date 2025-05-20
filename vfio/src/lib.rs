@@ -22,15 +22,17 @@ pub use vfio_dev::{
     VFIO_GROUP_GET_DEVICE_FD, VFIO_GROUP_GET_STATUS, VFIO_GROUP_SET_CONTAINER, VFIO_IOMMU_MAP_DMA,
     VFIO_IOMMU_UNMAP_DMA, VFIO_SET_IOMMU,
 };
-pub use vfio_pci::VfioPciDevice;
+pub use vfio_pci::{VfioConfig, VfioPciDevice};
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 
+use anyhow::Result;
 use kvm_ioctls::DeviceFd;
 use once_cell::sync::Lazy;
 
+use devices::pci::register_pcidevops_type;
 use vfio_dev::VfioGroup;
 
 pub static KVM_DEVICE_FD: Lazy<Mutex<Option<DeviceFd>>> = Lazy::new(|| Mutex::new(None));
@@ -38,3 +40,7 @@ pub static CONTAINERS: Lazy<Mutex<HashMap<RawFd, Arc<Mutex<VfioContainer>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 pub static GROUPS: Lazy<Mutex<HashMap<u32, Arc<VfioGroup>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub fn vfio_register_pcidevops_type() -> Result<()> {
+    register_pcidevops_type::<VfioPciDevice>()
+}

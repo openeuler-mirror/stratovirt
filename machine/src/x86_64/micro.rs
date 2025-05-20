@@ -14,18 +14,19 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 
-use crate::{
-    micro_common::syscall::syscall_whitelist, LightMachine, MachineBase, MachineError, MachineOps,
-};
+use crate::micro_common::syscall::syscall_whitelist;
+use crate::{register_shutdown_event, LightMachine, MachineBase, MachineError, MachineOps};
 use address_space::{AddressSpace, Region};
 use cpu::{CPUBootConfig, CPUTopology};
-use devices::legacy::FwCfgOps;
+use devices::legacy::{FwCfgOps, Serial, SERIAL_ADDR};
+use devices::Device;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
-use machine_manager::config::{SerialConfig, VmConfig};
+use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
+use util::gen_base_func;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
-use virtio::VirtioMmioDevice;
+use virtio::{VirtioDevice, VirtioMmioDevice};
 
 #[repr(usize)]
 pub enum LayoutEntryType {
@@ -47,13 +48,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
 ];
 
 impl MachineOps for LightMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
-    fn machine_base_mut(&mut self) -> &mut MachineBase {
-        &mut self.base
-    }
+    gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
@@ -89,7 +84,7 @@ impl MachineOps for LightMachine {
         locked_hypervisor.create_interrupt_controller()?;
 
         let irq_manager = locked_hypervisor.create_irq_manager()?;
-        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+        self.base.sysbus.lock().unwrap().irq_manager = irq_manager.line_irq_manager;
 
         Ok(())
     }
@@ -100,6 +95,7 @@ impl MachineOps for LightMachine {
         let boot_source = self.base.boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
+        // MEM_LAYOUT is defined statically, will not overflow.
         let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
             + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
         let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
@@ -108,6 +104,7 @@ impl MachineOps for LightMachine {
             initrd,
             kernel_cmdline: boot_source.kernel_cmdline.to_string(),
             cpu_count: self.base.cpu_topo.nrcpus,
+            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
             gap_range: (gap_start, gap_end - gap_start),
             ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
             lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
@@ -134,14 +131,13 @@ impl MachineOps for LightMachine {
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
-        use devices::legacy::{Serial, SERIAL_ADDR};
-
         let region_base: u64 = SERIAL_ADDR;
         let region_size: u64 = 8;
-        let serial = Serial::new(config.clone());
+        let serial = Serial::new(config.clone(), &self.base.sysbus, region_base, region_size)?;
         serial
-            .realize(&mut self.base.sysbus, region_base, region_size)
-            .with_context(|| "Failed to realize serial device.")
+            .realize()
+            .with_context(|| "Failed to realize serial device.")?;
+        Ok(())
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
@@ -174,7 +170,12 @@ impl MachineOps for LightMachine {
         locked_vm.add_devices(vm_config)?;
         trace::replaceable_info(&locked_vm.replaceable_info);
 
-        let boot_config = locked_vm.load_boot_source(None)?;
+        let migrate_info = locked_vm.get_migrate_info();
+        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+            Some(locked_vm.load_boot_source(None)?)
+        } else {
+            None
+        };
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
             vm.clone(),
@@ -184,6 +185,8 @@ impl MachineOps for LightMachine {
             &topology,
             &boot_config,
         )?);
+        register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Failed to register shutdown event")?;
 
         MigrationManager::register_vm_instance(vm.clone());
         let migration_hyp = locked_vm.base.migration_hypervisor.clone();
@@ -204,11 +207,12 @@ impl MachineOps for LightMachine {
         self.add_virtio_mmio_block(vm_config, cfg_args)
     }
 
-    fn realize_virtio_mmio_device(
+    fn add_virtio_mmio_device(
         &mut self,
-        dev: VirtioMmioDevice,
+        name: String,
+        device: Arc<Mutex<dyn VirtioDevice>>,
     ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
-        self.realize_virtio_mmio_device(dev)
+        self.add_virtio_mmio_device(name, device)
     }
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
@@ -238,7 +242,6 @@ pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_LAPIC() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MSRS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MSRS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_CPUID2() as u32)
 }
 

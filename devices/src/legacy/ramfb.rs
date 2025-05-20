@@ -16,20 +16,23 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use clap::{ArgAction, Parser};
 use drm_fourcc::DrmFourcc;
 use log::error;
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
-use crate::{Device, DeviceBase};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
+use machine_manager::config::valid_id;
 use machine_manager::event_loop::EventLoop;
 use ui::console::{
     console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
     DisplaySurface, HardWareOperations,
 };
 use ui::input::{key_event, KEYCODE_RET};
+use util::gen_base_func;
 use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_bits};
 
 const BYTES_PER_PIXELS: u32 = 8;
@@ -38,6 +41,17 @@ const HEIGHT_MAX: u32 = 12_000;
 const INSTALL_CHECK_INTERVEL_MS: u64 = 500;
 const INSTALL_RELEASE_INTERVEL_MS: u64 = 200;
 const INSTALL_PRESS_INTERVEL_MS: u64 = 100;
+
+#[derive(Parser, Debug, Clone)]
+#[command(no_binary_name(true))]
+pub struct RamfbConfig {
+    #[arg(long, value_parser = ["ramfb"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long, default_value = "false", action = ArgAction::Append)]
+    pub install: bool,
+}
 
 #[repr(packed)]
 struct RamfbCfg {
@@ -107,13 +121,17 @@ impl RamfbState {
         }
 
         if stride == 0 {
-            let linesize = width * pixman_format_bpp(format as u32) as u32 / BYTES_PER_PIXELS;
+            let linesize = width * u32::from(pixman_format_bpp(format as u32)) / BYTES_PER_PIXELS;
             stride = linesize;
         }
 
-        let fb_addr = match self.sys_mem.addr_cache_init(GuestAddress(addr)) {
+        let fb_addr = match self
+            .sys_mem
+            .addr_cache_init(GuestAddress(addr), AddressAttr::Ram)
+        {
             Some((hva, len)) => {
-                if len < stride as u64 {
+                let sf_len = u64::from(stride) * u64::from(height);
+                if len < sf_len {
                     error!("Insufficient contiguous memory length");
                     return;
                 }
@@ -230,38 +248,35 @@ pub struct Ramfb {
 }
 
 impl Ramfb {
-    pub fn new(sys_mem: Arc<AddressSpace>, install: bool) -> Self {
-        Ramfb {
+    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &Arc<Mutex<SysBus>>, install: bool) -> Self {
+        let mut ramfb = Ramfb {
             base: SysBusDevBase::new(SysBusDevType::Ramfb),
             ramfb_state: RamfbState::new(sys_mem, install),
-        }
-    }
-
-    pub fn realize(self, sysbus: &mut SysBus) -> Result<()> {
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_dynamic_device(&dev)?;
-        Ok(())
+        };
+        ramfb.set_parent_bus(sysbus.clone());
+        ramfb
     }
 }
 
 impl Device for Ramfb {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        self.ramfb_state.reset_ramfb_state();
+        Ok(())
     }
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for Ramfb {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, _data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be read!");
@@ -271,11 +286,6 @@ impl SysBusDevOps for Ramfb {
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         error!("Ramfb can not be written!");
         false
-    }
-
-    fn reset(&mut self) -> Result<()> {
-        self.ramfb_state.reset_ramfb_state();
-        Ok(())
     }
 }
 
@@ -315,5 +325,27 @@ fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
         );
     } else {
         install.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_ramfb_config_cmdline_parser() {
+        // Test1: install.
+        let ramfb_cmd1 = "ramfb,id=ramfb0,install=true";
+        let ramfb_config =
+            RamfbConfig::try_parse_from(str_slip_to_clap(ramfb_cmd1, true, false)).unwrap();
+        assert_eq!(ramfb_config.id, "ramfb0");
+        assert_eq!(ramfb_config.install, true);
+
+        // Test2: Default.
+        let ramfb_cmd2 = "ramfb,id=ramfb0";
+        let ramfb_config =
+            RamfbConfig::try_parse_from(str_slip_to_clap(ramfb_cmd2, true, false)).unwrap();
+        assert_eq!(ramfb_config.install, false);
     }
 }

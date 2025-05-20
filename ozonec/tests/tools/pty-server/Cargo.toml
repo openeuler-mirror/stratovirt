@@ -1,0 +1,24 @@
+[package]
+name = "pty-server"
+version = "0.1.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2021"
+license = "Mulan PSL v2"
+description = "A reference implementation of a consumer of ozonec's --console-socket API."
+
+[dependencies]
+anyhow = "= 1.0.71"
+clap = { version = "= 4.1.4", default-features = false, features = ["derive", "cargo", "std", "help", "usage"] }
+nix = "= 0.26.2"
+
+[workspace]
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 'z'
+codegen-units = 1
+panic = "abort"

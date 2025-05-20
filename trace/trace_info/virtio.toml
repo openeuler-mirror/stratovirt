@@ -297,3 +297,27 @@ name = "vhost_delete_mem_range_failed"
 args = ""
 message = "Vhost: deleting mem region failed: not matched."
 enabled = true
+
+[[events]]
+name = "auto_msg_evt_handler"
+args = ""
+message = "Balloon: handle auto balloon message"
+enabled = true
+
+[[events]]
+name = "reporting_evt_handler"
+args = ""
+message = "Balloon: handle fpr message"
+enabled = true
+
+[[events]]
+name = "virtio_read_object_direct"
+args = "host_addr: u64, count: usize"
+message = "Memory: virtio_read_object_direct host_addr {}, count {}"
+enabled = true
+
+[[events]]
+name = "virtio_write_object_direct"
+args = "host_addr: u64, count: usize"
+message = "Memory: virtio_write_object_direct host_addr {}, count {}"
+enabled = true

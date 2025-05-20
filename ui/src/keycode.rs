@@ -458,7 +458,7 @@ const KEY_CODE_OH: [(KeyCode, u16); 105] = [
     (KeyCode::Home, 0x0821),
     (KeyCode::SysReq, 0x081F),
     (KeyCode::Right, 0x07DF),
-    (KeyCode::Menu, 0x09A2),
+    (KeyCode::Menu, 0x0813),
     (KeyCode::Prior, 0x0814),
     (KeyCode::Insert, 0x0823),
     (KeyCode::NumLock, 0x0836),

@@ -6,7 +6,7 @@ edition = "2021"
 license = "Mulan PSL v2"
 
 [dependencies]
-vmm-sys-util = "0.11.0"
+vmm-sys-util = "0.12.1"
 anyhow = "1.0"
 log = "0.4"
 libc = "0.2"

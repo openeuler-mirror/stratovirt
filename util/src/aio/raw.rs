@@ -18,18 +18,18 @@ use vmm_sys_util::fallocate::{fallocate, FallocateMode};
 
 use super::Iovec;
 
-pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
+/// # Safety
+///
+/// Caller should has valid buf.
+pub unsafe fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     let mut ret;
     loop {
-        // SAFETY: fd and buf is valid.
-        ret = unsafe {
-            pread(
-                fd as c_int,
-                buf as *mut c_void,
-                size as size_t,
-                offset as off_t,
-            ) as i64
-        };
+        ret = pread(
+            fd as c_int,
+            buf as *mut c_void,
+            size as size_t,
+            offset as off_t,
+        ) as i64;
         if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
         {
             break;
@@ -48,18 +48,18 @@ pub fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     ret
 }
 
-pub fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
+/// # Safety
+///
+/// Caller should has valid iovec.
+pub unsafe fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
     let mut ret;
     loop {
-        // SAFETY: fd and buf is valid.
-        ret = unsafe {
-            preadv(
-                fd as c_int,
-                iovec.as_ptr() as *const iovec,
-                iovec.len() as c_int,
-                offset as off_t,
-            ) as i64
-        };
+        ret = preadv(
+            fd as c_int,
+            iovec.as_ptr() as *const iovec,
+            iovec.len() as c_int,
+            offset as off_t,
+        ) as i64;
         if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
         {
             break;
@@ -76,18 +76,18 @@ pub fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
     ret
 }
 
-pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
+/// # Safety
+///
+/// Caller should has valid buf.
+pub unsafe fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     let mut ret;
     loop {
-        // SAFETY: fd and buf is valid.
-        ret = unsafe {
-            pwrite(
-                fd as c_int,
-                buf as *mut c_void,
-                size as size_t,
-                offset as off_t,
-            ) as i64
-        };
+        ret = pwrite(
+            fd as c_int,
+            buf as *mut c_void,
+            size as size_t,
+            offset as off_t,
+        ) as i64;
         if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
         {
             break;
@@ -106,18 +106,19 @@ pub fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
     ret
 }
 
-pub fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
+/// # Safety
+///
+/// Caller should has valid iovec.
+pub unsafe fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
     let mut ret;
     loop {
-        // SAFETY: fd and buf is valid.
-        ret = unsafe {
-            pwritev(
-                fd as c_int,
-                iovec.as_ptr() as *const iovec,
-                iovec.len() as c_int,
-                offset as off_t,
-            ) as i64
-        };
+        // Caller should has valid iovec.
+        ret = pwritev(
+            fd as c_int,
+            iovec.as_ptr() as *const iovec,
+            iovec.len() as c_int,
+            offset as off_t,
+        ) as i64;
         if !(ret < 0 && (nix::errno::errno() == libc::EINTR || nix::errno::errno() == libc::EAGAIN))
         {
             break;
@@ -171,7 +172,7 @@ fn do_fallocate(
     offset: u64,
     size: u64,
 ) -> i32 {
-    let mut ret = 0;
+    let mut ret: i32 = 0;
     loop {
         let mode = match &fallocate_mode {
             FallocateMode::PunchHole => FallocateMode::PunchHole,

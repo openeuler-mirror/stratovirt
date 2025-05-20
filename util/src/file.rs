@@ -67,8 +67,8 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
         return (1, 1);
     }
 
-    let mut req_align = 0;
-    let mut buf_align = 0;
+    let mut req_align: u32 = 0;
+    let mut buf_align: u32 = 0;
     // SAFETY: we allocate aligned memory and free it later.
     let aligned_buffer = unsafe {
         libc::memalign(
@@ -76,6 +76,10 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
             (MAX_FILE_ALIGN * 2) as libc::size_t,
         )
     };
+    if aligned_buffer.is_null() {
+        log::warn!("OOM occurs when get file alignment, assume max alignment");
+        return (MAX_FILE_ALIGN, MAX_FILE_ALIGN);
+    }
 
     // Guess alignment requirement of request.
     let mut align = MIN_FILE_ALIGN;
@@ -92,7 +96,7 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
     while align <= MAX_FILE_ALIGN {
         if is_io_aligned(
             file,
-            aligned_buffer as u64 + align as u64,
+            aligned_buffer as u64 + u64::from(align),
             MAX_FILE_ALIGN as usize,
         ) {
             buf_align = align;

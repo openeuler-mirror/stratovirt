@@ -34,6 +34,7 @@ pub const INPUT_BUTTON_WHEEL_DOWN: u32 = 0x40;
 pub const INPUT_BUTTON_WHEEL_LEFT: u32 = 0x80;
 pub const INPUT_BUTTON_WHEEL_RIGHT: u32 = 0x100;
 pub const INPUT_BUTTON_MASK: u32 = 0x1f;
+pub const INPUT_POINT_MAX: u32 = INPUT_POINT_FORWARD;
 
 // ASCII value.
 pub const ASCII_A: i32 = 65;
@@ -252,23 +253,6 @@ impl KeyBoardState {
 #[derive(Default)]
 struct LedState {
     kbd_led: u8,
-    sync: Option<Arc<dyn SyncLedstate>>,
-}
-
-pub trait SyncLedstate: Send + Sync {
-    fn sync_to_host(&self, state: u8) {
-        debug!("ledstate in guest is {}", state);
-    }
-}
-
-impl LedState {
-    fn register_led_sync(&mut self, sync: Arc<dyn SyncLedstate>) {
-        self.sync = Some(sync);
-    }
-
-    fn unregister_led_sync(&mut self) {
-        self.sync = None;
-    }
 }
 
 #[derive(Default)]
@@ -278,6 +262,7 @@ struct Inputs {
     tablet_ids: Vec<String>,
     tablet_lists: HashMap<String, Arc<Mutex<dyn PointerOpts>>>,
     keyboard_state: KeyBoardState,
+    btn_state: u32,
 }
 
 impl Inputs {
@@ -343,14 +328,14 @@ impl Inputs {
         }
         Ok(())
     }
-}
 
-pub fn register_led_sync(sync: Arc<dyn SyncLedstate>) {
-    LED_STATE.lock().unwrap().register_led_sync(sync);
-}
-
-pub fn unregister_led_sync() {
-    LED_STATE.lock().unwrap().unregister_led_sync();
+    fn update_button_state(&mut self, btn: u32, press: bool) {
+        if press {
+            self.btn_state |= btn;
+        } else {
+            self.btn_state &= !btn;
+        }
+    }
 }
 
 pub fn register_keyboard(device: &str, kbd: Arc<Mutex<dyn KeyboardOpts>>) {
@@ -390,8 +375,23 @@ pub fn input_button(button: u32, down: bool) -> Result<()> {
     let mouse = INPUTS.lock().unwrap().get_active_mouse();
     if let Some(m) = mouse {
         m.lock().unwrap().update_point_state(input_event)?;
+        INPUTS.lock().unwrap().update_button_state(button, down);
     }
 
+    Ok(())
+}
+
+/// Release all pressed button.
+pub fn release_all_btn() -> Result<()> {
+    let state = INPUTS.lock().unwrap().btn_state;
+    let mut checked_btn = INPUT_POINT_LEFT;
+    while checked_btn <= INPUT_POINT_MAX {
+        if (state & checked_btn) != 0 {
+            input_button(checked_btn, false)?;
+            input_point_sync()?;
+        }
+        checked_btn <<= 1;
+    }
     Ok(())
 }
 
@@ -490,9 +490,6 @@ pub fn get_kbd_led_state() -> u8 {
 
 pub fn set_kbd_led_state(state: u8) {
     LED_STATE.lock().unwrap().kbd_led = state;
-    if let Some(sync_cb) = LED_STATE.lock().unwrap().sync.as_ref() {
-        sync_cb.sync_to_host(state);
-    }
 }
 
 pub fn keyboard_modifier_get(key_mod: KeyboardModifier) -> bool {
@@ -626,7 +623,7 @@ mod tests {
 
         assert!(key_event(12, true).is_ok());
         assert_eq!(test_kdb.lock().unwrap().keycode, 12);
-        assert_eq!(test_kdb.lock().unwrap().down, true);
+        assert!(test_kdb.lock().unwrap().down);
 
         // Test point event.
         assert_eq!(test_mouse.lock().unwrap().button, 0);
@@ -670,14 +667,14 @@ mod tests {
         let keysym_lists: Vec<u16> = vec![0x07D0, 0x07E1, 0x0802];
         let keycode_lists: Vec<u16> = keysym_lists
             .iter()
-            .map(|x| *keysym2qkeycode.get(&x).unwrap())
+            .map(|x| *keysym2qkeycode.get(x).unwrap())
             .collect();
         for idx in 0..keysym_lists.len() {
             let keysym = keycode_lists[idx];
             let keycode = keycode_lists[idx];
-            assert!(do_key_event(true, keysym as i32, keycode).is_ok());
+            assert!(do_key_event(true, i32::from(keysym), keycode).is_ok());
             assert_eq!(test_kdb.lock().unwrap().keycode, keycode);
-            assert_eq!(test_kdb.lock().unwrap().down, true);
+            assert!(test_kdb.lock().unwrap().down);
         }
 
         let locked_input = INPUTS.lock().unwrap();

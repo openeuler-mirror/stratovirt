@@ -13,7 +13,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{fence, Ordering},
+    Arc,
+};
 
 use log::{error, info};
 
@@ -105,7 +108,19 @@ impl TempCleaner {
             if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
                 tmp.clean_files();
                 tmp.exit_notifier();
+                fence(Ordering::SeqCst);
+                GLOBAL_TEMP_CLEANER = None;
             }
+        }
+    }
+
+    pub fn is_cleaned() -> bool {
+        // SAFETY: This global variable is read but not modified by iothread.
+        // so there is not need to add lock to it.
+        unsafe {
+            let ret = GLOBAL_TEMP_CLEANER.is_none();
+            fence(Ordering::SeqCst);
+            ret
         }
     }
 }

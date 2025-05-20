@@ -174,11 +174,11 @@ impl TestNormalTRB {
 
     pub fn generate_setup_td(device_req: &UsbDeviceRequest) -> TestNormalTRB {
         let mut setup_trb = TestNormalTRB::default();
-        setup_trb.parameter = (device_req.length as u64) << 48
-            | (device_req.index as u64) << 32
-            | (device_req.value as u64) << 16
-            | (device_req.request as u64) << 8
-            | device_req.request_type as u64;
+        setup_trb.parameter = u64::from(device_req.length) << 48
+            | u64::from(device_req.index) << 32
+            | u64::from(device_req.value) << 16
+            | u64::from(device_req.request) << 8
+            | u64::from(device_req.request_type);
         setup_trb.set_idt_flag(true);
         setup_trb.set_ch_flag(true);
         setup_trb.set_trb_type(TRBType::TrSetup as u32);
@@ -193,7 +193,7 @@ impl TestNormalTRB {
         data_trb.set_ch_flag(true);
         data_trb.set_dir_flag(in_dir);
         data_trb.set_trb_type(TRBType::TrData as u32);
-        data_trb.set_trb_transfer_length(len as u32);
+        data_trb.set_trb_transfer_length(u32::from(len));
         data_trb
     }
 
@@ -395,6 +395,12 @@ pub struct TestEventRingSegment {
     pub reserved: u32,
 }
 
+impl Default for TestEventRingSegment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestEventRingSegment {
     pub fn new() -> Self {
         Self {
@@ -503,21 +509,21 @@ impl TestXhciPciDevice {
     pub fn run(&mut self) {
         let status = self.pci_dev.io_readl(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_USBSTS as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS,
         );
         assert!(status & USB_STS_HCH == USB_STS_HCH);
         let cmd = self.pci_dev.io_readl(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_USBCMD as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBCMD,
         );
         self.pci_dev.io_writel(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_USBCMD as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBCMD,
             cmd | USB_CMD_RUN,
         );
         let status = self.pci_dev.io_readl(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_USBSTS as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_USBSTS,
         );
         assert!(status & USB_STS_HCH != USB_STS_HCH);
     }
@@ -589,7 +595,7 @@ impl TestXhciPciDevice {
         self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
-        let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, 1);
+        let buf = self.get_transfer_data_indirect(evt.ptr - u64::from(TRB_SIZE), 1);
         assert_eq!(buf[0], 0);
         // configure endpoint
         self.configure_endpoint(slot_id, false);
@@ -627,7 +633,7 @@ impl TestXhciPciDevice {
     pub fn reset_controller(&mut self, auto_run: bool) {
         // reset xhci
         self.oper_regs_write(0, USB_CMD_HCRST);
-        let status = self.oper_regs_read(XHCI_OPER_REG_USBSTS as u64);
+        let status = self.oper_regs_read(XHCI_OPER_REG_USBSTS);
         assert!(status & USB_STS_HCE != USB_STS_HCE);
         if auto_run {
             self.init_host_controller(XHCI_PCI_SLOT_NUM, XHCI_PCI_FUN_NUM);
@@ -643,18 +649,21 @@ impl TestXhciPciDevice {
 
     pub fn oper_regs_read(&self, offset: u64) -> u32 {
         self.pci_dev
-            .io_readl(self.bar_addr, XHCI_PCI_OPER_OFFSET as u64 + offset)
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_OPER_OFFSET) + offset)
     }
 
     pub fn oper_regs_write(&mut self, offset: u64, value: u32) {
-        self.pci_dev
-            .io_writel(self.bar_addr, XHCI_PCI_OPER_OFFSET as u64 + offset, value);
+        self.pci_dev.io_writel(
+            self.bar_addr,
+            u64::from(XHCI_PCI_OPER_OFFSET) + offset,
+            value,
+        );
     }
 
     pub fn interrupter_regs_read(&self, intr_idx: u64, offset: u64) -> u32 {
         self.pci_dev.io_readl(
             self.bar_addr,
-            XHCI_PCI_RUNTIME_OFFSET as u64
+            u64::from(XHCI_PCI_RUNTIME_OFFSET)
                 + XHCI_INTR_REG_SIZE
                 + intr_idx * XHCI_INTR_REG_SIZE
                 + offset,
@@ -664,7 +673,7 @@ impl TestXhciPciDevice {
     pub fn interrupter_regs_write(&mut self, intr_idx: u64, offset: u64, value: u32) {
         self.pci_dev.io_writel(
             self.bar_addr,
-            XHCI_PCI_RUNTIME_OFFSET as u64
+            u64::from(XHCI_PCI_RUNTIME_OFFSET)
                 + RUNTIME_REGS_INTERRUPT_OFFSET
                 + intr_idx * XHCI_INTR_REG_SIZE
                 + offset,
@@ -675,7 +684,7 @@ impl TestXhciPciDevice {
     pub fn interrupter_regs_readq(&self, intr_idx: u64, offset: u64) -> u64 {
         self.pci_dev.io_readq(
             self.bar_addr,
-            XHCI_PCI_RUNTIME_OFFSET as u64
+            u64::from(XHCI_PCI_RUNTIME_OFFSET)
                 + XHCI_INTR_REG_SIZE
                 + intr_idx * XHCI_INTR_REG_SIZE
                 + offset,
@@ -685,7 +694,7 @@ impl TestXhciPciDevice {
     pub fn interrupter_regs_writeq(&mut self, intr_idx: u64, offset: u64, value: u64) {
         self.pci_dev.io_writeq(
             self.bar_addr,
-            XHCI_PCI_RUNTIME_OFFSET as u64
+            u64::from(XHCI_PCI_RUNTIME_OFFSET)
                 + RUNTIME_REGS_INTERRUPT_OFFSET
                 + intr_idx * XHCI_INTR_REG_SIZE
                 + offset,
@@ -696,14 +705,14 @@ impl TestXhciPciDevice {
     pub fn port_regs_read(&self, port_id: u32, offset: u64) -> u32 {
         self.pci_dev.io_readl(
             self.bar_addr,
-            (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1) as u32) as u64 + offset,
+            u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1)) + offset,
         )
     }
 
     pub fn port_regs_write(&mut self, port_id: u32, offset: u64, value: u32) {
         self.pci_dev.io_writel(
             self.bar_addr,
-            (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1) as u32) as u64 + offset,
+            u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1)) + offset,
             value,
         );
     }
@@ -711,7 +720,7 @@ impl TestXhciPciDevice {
     pub fn doorbell_write(&mut self, slot_id: u32, target: u32) {
         self.pci_dev.io_writel(
             self.bar_addr,
-            XHCI_PCI_DOORBELL_OFFSET as u64 + (slot_id << 2) as u64,
+            u64::from(XHCI_PCI_DOORBELL_OFFSET) + u64::from(slot_id << 2),
             target,
         );
     }
@@ -741,84 +750,84 @@ impl TestXhciPciDevice {
         // Interface Version Number
         let cap = self
             .pci_dev
-            .io_readl(self.bar_addr, XHCI_PCI_CAP_OFFSET as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET));
         assert!(cap & 0x01000000 == 0x01000000);
         // HCSPARAMS1
         let hcsparams1 = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x4) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x4));
         assert_eq!(hcsparams1 & 0xffffff, 0x000140);
         // HCSPARAMS2
         let hcsparams2 = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x8) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x8));
         assert_eq!(hcsparams2, 0xf);
         // HCSPARAMS3
         let hcsparams3 = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0xc) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0xc));
         assert_eq!(hcsparams3, 0);
         // HCCPARAMS1
         let hccparams1 = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x10) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x10));
         // AC64 = 1
         assert_eq!(hccparams1 & 1, 1);
         // doorbell offset
         let db_offset = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x14) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x14));
         assert_eq!(db_offset, 0x2000);
         // runtime offset
         let runtime_offset = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x18) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x18));
         assert_eq!(runtime_offset, 0x1000);
         // HCCPARAMS2
         let hccparams2 = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x1c) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x1c));
         assert_eq!(hccparams2, 0);
         // USB 2.0
         let usb2_version = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x20) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x20));
         assert!(usb2_version & 0x02000000 == 0x02000000);
         let usb2_name = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x24) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x24));
         assert_eq!(usb2_name, 0x20425355);
         let usb2_port = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x28) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x28));
         let usb2_port_num = (usb2_port >> 8) & 0xff;
         // extend capability end
         let end = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x2c) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x2c));
         assert_eq!(end, 0);
         // USB 3.0
         let usb3_version = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x30) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x30));
         assert!(usb3_version & 0x03000000 == 0x03000000);
         let usb3_name = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x34) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x34));
         assert_eq!(usb3_name, 0x20425355);
         let usb3_port = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x38) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x38));
         let usb3_port_num = (usb3_port >> 8) & 0xff;
         // extend capability end
         let end = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x3c) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x3c));
         assert_eq!(end, 0);
         // Max ports
         let hcsparams1 = self
             .pci_dev
-            .io_readl(self.bar_addr, (XHCI_PCI_CAP_OFFSET + 0x4) as u64);
+            .io_readl(self.bar_addr, u64::from(XHCI_PCI_CAP_OFFSET + 0x4));
         assert_eq!(hcsparams1 >> 24, usb2_port_num + usb3_port_num);
     }
 
@@ -827,36 +836,36 @@ impl TestXhciPciDevice {
         let enabled_slot = USB_CONFIG_MAX_SLOTS_ENABLED & USB_CONFIG_MAX_SLOTS_EN_MASK;
         self.pci_dev.io_writel(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_CONFIG as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG,
             enabled_slot,
         );
 
         let config = self.pci_dev.io_readl(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_CONFIG as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CONFIG,
         );
         assert_eq!(config, enabled_slot);
     }
 
     pub fn init_device_context_base_address_array_pointer(&mut self) {
         let dcba = DEVICE_CONTEXT_ENTRY_SIZE * (USB_CONFIG_MAX_SLOTS_ENABLED + 1);
-        let dcbaap = self.allocator.borrow_mut().alloc(dcba as u64);
+        let dcbaap = self.allocator.borrow_mut().alloc(u64::from(dcba));
         self.pci_dev.io_writeq(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_DCBAAP as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DCBAAP,
             dcbaap,
         );
 
         let value = self.pci_dev.io_readq(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_DCBAAP as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_DCBAAP,
         );
         assert_eq!(value, dcbaap);
         self.xhci.dcbaap = value;
     }
 
     pub fn init_command_ring_dequeue_pointer(&mut self) {
-        let cmd_ring_sz = TRB_SIZE as u64 * COMMAND_RING_LEN;
+        let cmd_ring_sz = u64::from(TRB_SIZE) * COMMAND_RING_LEN;
         let cmd_ring = self.allocator.borrow_mut().alloc(cmd_ring_sz);
         self.pci_dev
             .pci_bus
@@ -867,13 +876,13 @@ impl TestXhciPciDevice {
         self.xhci.cmd_ring.init(cmd_ring, cmd_ring_sz);
         self.pci_dev.io_writeq(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_CMD_RING_CTRL as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CMD_RING_CTRL,
             cmd_ring,
         );
         // Read dequeue pointer return 0.
         let cmd_ring = self.pci_dev.io_readq(
             self.bar_addr,
-            XHCI_PCI_OPER_OFFSET as u64 + XHCI_OPER_REG_CMD_RING_CTRL as u64,
+            u64::from(XHCI_PCI_OPER_OFFSET) + XHCI_OPER_REG_CMD_RING_CTRL,
         );
         assert_eq!(cmd_ring, 0);
     }
@@ -903,13 +912,9 @@ impl TestXhciPciDevice {
 
     pub fn reset_port(&mut self, port_id: u32) {
         assert!(port_id > 0);
-        let port_offset =
-            (XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1) as u32) as u64;
-        self.pci_dev.io_writel(
-            self.bar_addr,
-            port_offset + XHCI_PORTSC_OFFSET,
-            PORTSC_PR as u32,
-        );
+        let port_offset = u64::from(XHCI_PCI_PORT_OFFSET + XHCI_PCI_PORT_LENGTH * (port_id - 1));
+        self.pci_dev
+            .io_writel(self.bar_addr, port_offset + XHCI_PORTSC_OFFSET, PORTSC_PR);
         self.oper_regs_write(XHCI_OPER_REG_USBSTS, USB_STS_PCD);
         let status = self.oper_regs_read(XHCI_OPER_REG_USBSTS);
         assert!(status & USB_STS_PCD != USB_STS_PCD);
@@ -954,14 +959,14 @@ impl TestXhciPciDevice {
         let ep0_tr_ring = self
             .allocator
             .borrow_mut()
-            .alloc(TRB_SIZE as u64 * TRANSFER_RING_LEN);
+            .alloc(u64::from(TRB_SIZE) * TRANSFER_RING_LEN);
         ep0_ctx.set_tr_dequeue_pointer(ep0_tr_ring | 1);
         ep0_ctx.set_ep_state(0);
         ep0_ctx.set_ep_type(4);
         self.mem_write_u32(input_ctx_addr + 0x40, ep0_ctx.as_dwords());
         self.xhci.device_slot[slot_id as usize].endpoints[(CONTROL_ENDPOINT_ID - 1) as usize]
             .transfer_ring
-            .init(ep0_tr_ring, TRB_SIZE as u64 * TRANSFER_RING_LEN);
+            .init(ep0_tr_ring, u64::from(TRB_SIZE) * TRANSFER_RING_LEN);
 
         let mut trb = TestNormalTRB::default();
         trb.parameter = input_ctx_addr;
@@ -1030,7 +1035,7 @@ impl TestXhciPciDevice {
         {
             TD_TRB_LIMIT
         } else {
-            TRB_SIZE as u64 * TRANSFER_RING_LEN
+            u64::from(TRB_SIZE) * TRANSFER_RING_LEN
         };
 
         for i in 0..endpoint_id.len() {
@@ -1137,7 +1142,7 @@ impl TestXhciPciDevice {
                         self.interrupter_regs_writeq(
                             intr_idx as u64,
                             XHCI_INTR_REG_ERDP_LO,
-                            self.xhci.interrupter[intr_idx].er_pointer | ERDP_EHB as u64,
+                            self.xhci.interrupter[intr_idx].er_pointer | u64::from(ERDP_EHB),
                         );
                         self.event_list.push_back(event);
                     } else {
@@ -1153,10 +1158,13 @@ impl TestXhciPciDevice {
 
     pub fn queue_device_request(&mut self, slot_id: u32, device_req: &UsbDeviceRequest) -> u64 {
         // Setup Stage.
-        let mut setup_trb = TestNormalTRB::generate_setup_td(&device_req);
+        let mut setup_trb = TestNormalTRB::generate_setup_td(device_req);
         self.queue_trb(slot_id, CONTROL_ENDPOINT_ID, &mut setup_trb);
         // Data Stage.
-        let ptr = self.allocator.borrow_mut().alloc(device_req.length as u64);
+        let ptr = self
+            .allocator
+            .borrow_mut()
+            .alloc(u64::from(device_req.length));
         let in_dir =
             device_req.request_type & USB_DIRECTION_DEVICE_TO_HOST == USB_DIRECTION_DEVICE_TO_HOST;
         let mut data_trb = TestNormalTRB::generate_data_td(ptr, device_req.length, in_dir);
@@ -1252,16 +1260,15 @@ impl TestXhciPciDevice {
 
     // Read data from parameter directly.
     pub fn get_transfer_data_direct(&self, addr: u64, len: u64) -> Vec<u8> {
-        let buf = self.mem_read(addr, len as usize);
-        buf
+        self.mem_read(addr, len as usize)
     }
 
     // Read data from parameter as address.
     pub fn get_transfer_data_indirect(&self, addr: u64, len: u64) -> Vec<u8> {
         let buf = self.mem_read(addr, 8);
         let mem = LittleEndian::read_u64(&buf);
-        let buf = self.mem_read(mem, len as usize);
-        buf
+
+        self.mem_read(mem, len as usize)
     }
 
     pub fn get_transfer_data_indirect_with_offset(
@@ -1272,8 +1279,8 @@ impl TestXhciPciDevice {
     ) -> Vec<u8> {
         let buf = self.mem_read(addr, 8);
         let mem = LittleEndian::read_u64(&buf);
-        let buf = self.mem_read(mem + offset, len);
-        buf
+
+        self.mem_read(mem + offset, len)
     }
 
     pub fn get_command_pointer(&self) -> u64 {
@@ -1311,7 +1318,7 @@ impl TestXhciPciDevice {
         let output_ctx_addr = self.get_device_context_address(slot_id);
         let mut ep_ctx = XhciEpCtx::default();
         self.mem_read_u32(
-            output_ctx_addr + 0x20 * ep_id as u64,
+            output_ctx_addr + 0x20 * u64::from(ep_id),
             ep_ctx.as_mut_dwords(),
         );
         ep_ctx
@@ -1339,7 +1346,7 @@ impl TestXhciPciDevice {
             trb.set_cycle_bit(self.get_cycle_bit(slot_id, ep_id));
         }
         let en_ptr = self.get_transfer_pointer(slot_id, ep_id);
-        self.write_trb(en_ptr, &trb);
+        self.write_trb(en_ptr, trb);
         self.increase_transfer_ring(slot_id, ep_id, 1);
     }
 
@@ -1383,11 +1390,11 @@ impl TestXhciPciDevice {
         assert_eq!(data, erstsz);
         // ERSTBA
         let table_size = EVENT_RING_SEGMENT_TABLE_ENTRY_SIZE * erstsz;
-        let evt_ring_seg_table = self.allocator.borrow_mut().alloc(table_size as u64);
+        let evt_ring_seg_table = self.allocator.borrow_mut().alloc(u64::from(table_size));
         self.xhci.interrupter[intr_idx].erstba = evt_ring_seg_table;
         // NOTE: Only support one Segment now.
         let mut seg = TestEventRingSegment::new();
-        let evt_ring_sz = (TRB_SIZE * ersz) as u64;
+        let evt_ring_sz = u64::from(TRB_SIZE * ersz);
         let evt_ring = self.allocator.borrow_mut().alloc(evt_ring_sz);
         seg.init(evt_ring, ersz);
         self.pci_dev
@@ -1420,7 +1427,7 @@ impl TestXhciPciDevice {
         assert_eq!(data, self.get_event_pointer(intr_idx));
 
         // enable USB_CMD_INTE
-        let value = self.oper_regs_read(XHCI_OPER_REG_USBCMD as u64);
+        let value = self.oper_regs_read(XHCI_OPER_REG_USBCMD);
         self.oper_regs_write(XHCI_OPER_REG_USBCMD, value | USB_CMD_INTE);
         // enable INTE
         let value = self.interrupter_regs_read(intr_idx as u64, XHCI_INTR_REG_IMAN);
@@ -1480,7 +1487,7 @@ impl TestXhciPciDevice {
 
     fn increase_event_ring(&mut self, intr_idx: usize) {
         self.xhci.interrupter[intr_idx].trb_count -= 1;
-        self.xhci.interrupter[intr_idx].er_pointer += TRB_SIZE as u64;
+        self.xhci.interrupter[intr_idx].er_pointer += u64::from(TRB_SIZE);
         if self.xhci.interrupter[intr_idx].trb_count == 0 {
             self.xhci.interrupter[intr_idx].segment_index += 1;
             if self.xhci.interrupter[intr_idx].segment_index
@@ -1503,7 +1510,7 @@ impl TestXhciPciDevice {
 
     fn read_segment_entry(&self, intr_idx: usize, index: u32) -> TestEventRingSegment {
         assert!(index <= self.xhci.interrupter[intr_idx].erstsz);
-        let addr = self.xhci.interrupter[intr_idx].erstba + (TRB_SIZE * index) as u64;
+        let addr = self.xhci.interrupter[intr_idx].erstba + u64::from(TRB_SIZE * index);
         let evt_seg_buf = self.mem_read(addr, TRB_SIZE as usize);
         let mut evt_seg = TestEventRingSegment::new();
         evt_seg.addr = LittleEndian::read_u64(&evt_seg_buf);
@@ -1513,17 +1520,17 @@ impl TestXhciPciDevice {
     }
 
     fn set_device_context_address(&mut self, slot_id: u32, addr: u64) {
-        let device_ctx_addr = self.xhci.dcbaap + (slot_id * DEVICE_CONTEXT_ENTRY_SIZE) as u64;
+        let device_ctx_addr = self.xhci.dcbaap + u64::from(slot_id * DEVICE_CONTEXT_ENTRY_SIZE);
         let mut buf = [0_u8; 8];
         LittleEndian::write_u64(&mut buf, addr);
         self.mem_write(device_ctx_addr, &buf);
     }
 
     fn get_device_context_address(&self, slot_id: u32) -> u64 {
-        let device_ctx_addr = self.xhci.dcbaap + (slot_id * DEVICE_CONTEXT_ENTRY_SIZE) as u64;
+        let device_ctx_addr = self.xhci.dcbaap + u64::from(slot_id * DEVICE_CONTEXT_ENTRY_SIZE);
         let mut buf = self.mem_read(device_ctx_addr, 8);
-        let addr = LittleEndian::read_u64(&mut buf);
-        addr
+
+        LittleEndian::read_u64(&mut buf)
     }
 
     fn has_msix(&mut self, msix_addr: u64, msix_data: u32) -> bool {
@@ -1537,21 +1544,25 @@ impl TestXhciPciDevice {
 
     fn increase_command_ring(&mut self) {
         let cmd_ring = self.xhci.cmd_ring;
-        if cmd_ring.pointer + TRB_SIZE as u64 >= cmd_ring.start + cmd_ring.size * TRB_SIZE as u64 {
+        if cmd_ring.pointer + u64::from(TRB_SIZE)
+            >= cmd_ring.start + cmd_ring.size * u64::from(TRB_SIZE)
+        {
             self.queue_link_trb(0, 0, cmd_ring.start, true);
         }
-        self.xhci.cmd_ring.pointer += TRB_SIZE as u64;
+        self.xhci.cmd_ring.pointer += u64::from(TRB_SIZE);
     }
 
     fn increase_transfer_ring(&mut self, slot_id: u32, ep_id: u32, len: u64) {
         let tr_ring =
             self.xhci.device_slot[slot_id as usize].endpoints[(ep_id - 1) as usize].transfer_ring;
-        if tr_ring.pointer + TRB_SIZE as u64 >= tr_ring.start + tr_ring.size * TRB_SIZE as u64 {
+        if tr_ring.pointer + u64::from(TRB_SIZE)
+            >= tr_ring.start + tr_ring.size * u64::from(TRB_SIZE)
+        {
             self.queue_link_trb(slot_id, ep_id, tr_ring.start, true);
         }
         self.xhci.device_slot[slot_id as usize].endpoints[(ep_id - 1) as usize]
             .transfer_ring
-            .increase_pointer(TRB_SIZE as u64 * len);
+            .increase_pointer(u64::from(TRB_SIZE) * len);
     }
 
     fn write_trb(&mut self, addr: u64, trb: &TestNormalTRB) {
@@ -1585,7 +1596,7 @@ impl TestXhciPciDevice {
 // Descriptor
 impl TestXhciPciDevice {
     fn get_usb_device_type(&mut self) -> UsbDeviceType {
-        let usb_device_type = if *self.device_config.get("tablet").unwrap_or(&false) {
+        if *self.device_config.get("tablet").unwrap_or(&false) {
             UsbDeviceType::Tablet
         } else if *self.device_config.get("keyboard").unwrap_or(&false) {
             UsbDeviceType::Keyboard
@@ -1595,9 +1606,7 @@ impl TestXhciPciDevice {
             UsbDeviceType::Camera
         } else {
             UsbDeviceType::Other
-        };
-
-        usb_device_type
+        }
     }
 
     fn get_iad_desc(&mut self, offset: &mut u64, addr: u64) {
@@ -1607,8 +1616,8 @@ impl TestXhciPciDevice {
         }
 
         // 1. IAD header descriptor
-        *offset += USB_DT_CONFIG_SIZE as u64;
-        let buf = self.get_transfer_data_indirect_with_offset(addr, 8 as usize, *offset);
+        *offset += u64::from(USB_DT_CONFIG_SIZE);
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 8_usize, *offset);
 
         // descriptor type
         assert_eq!(buf[1], USB_DT_INTERFACE_ASSOCIATION);
@@ -1631,8 +1640,8 @@ impl TestXhciPciDevice {
         assert_eq!(buf[6], SC_VIDEOCONTROL);
 
         // get total vc length from its header descriptor
-        *offset += USB_DT_INTERFACE_SIZE as u64;
-        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xd as usize, *offset);
+        *offset += u64::from(USB_DT_INTERFACE_SIZE);
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xd_usize, *offset);
 
         let total = u16::from_le_bytes(buf[5..7].try_into().unwrap());
         let remained = total - 0xd;
@@ -1641,7 +1650,7 @@ impl TestXhciPciDevice {
         let _buf = self.get_transfer_data_indirect_with_offset(addr, remained as usize, *offset);
 
         // 3. VS interface
-        *offset += remained as u64;
+        *offset += u64::from(remained);
         let buf = self.get_transfer_data_indirect_with_offset(
             addr,
             USB_DT_INTERFACE_SIZE as usize,
@@ -1653,8 +1662,8 @@ impl TestXhciPciDevice {
         assert_eq!(buf[6], SC_VIDEOSTREAMING);
 
         // get total vs length from its header descriptor
-        *offset += USB_DT_INTERFACE_SIZE as u64;
-        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xf as usize, *offset);
+        *offset += u64::from(USB_DT_INTERFACE_SIZE);
+        let buf = self.get_transfer_data_indirect_with_offset(addr, 0xf_usize, *offset);
         let total = u16::from_le_bytes(buf[4..6].try_into().unwrap());
         let remained = total - 0xf;
 
@@ -1668,7 +1677,7 @@ impl TestXhciPciDevice {
             return;
         }
 
-        *offset += USB_DT_CONFIG_SIZE as u64;
+        *offset += u64::from(USB_DT_CONFIG_SIZE);
         let buf = self.get_transfer_data_indirect_with_offset(
             addr,
             USB_DT_INTERFACE_SIZE as usize,
@@ -1692,7 +1701,7 @@ impl TestXhciPciDevice {
         match usb_device_type {
             UsbDeviceType::Tablet => {
                 // hid descriptor
-                *offset += USB_DT_INTERFACE_SIZE as u64;
+                *offset += u64::from(USB_DT_INTERFACE_SIZE);
                 let buf = self.get_transfer_data_indirect_with_offset(addr, 9, *offset);
                 assert_eq!(
                     buf,
@@ -1711,14 +1720,14 @@ impl TestXhciPciDevice {
             }
             UsbDeviceType::Keyboard => {
                 // hid descriptor
-                *offset += USB_DT_INTERFACE_SIZE as u64;
+                *offset += u64::from(USB_DT_INTERFACE_SIZE);
                 let buf = self.get_transfer_data_indirect_with_offset(addr, 9, *offset);
                 assert_eq!(buf, [0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3f, 0]);
             }
             _ => {}
         }
 
-        *offset += USB_DT_INTERFACE_SIZE as u64;
+        *offset += u64::from(USB_DT_INTERFACE_SIZE);
         // endpoint descriptor
         let buf = self.get_transfer_data_indirect_with_offset(
             addr,
@@ -1738,7 +1747,7 @@ impl TestXhciPciDevice {
                 assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_ENDPOINT);
                 // endpoint address
                 assert_eq!(buf[2], USB_DIRECTION_DEVICE_TO_HOST | 0x01);
-                *offset += USB_DT_ENDPOINT_SIZE as u64;
+                *offset += u64::from(USB_DT_ENDPOINT_SIZE);
                 // endpoint descriptor
                 let buf = self.get_transfer_data_indirect_with_offset(
                     addr,
@@ -1761,7 +1770,7 @@ impl TestXhciPciDevice {
         assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
 
         let len = name.len() * 2 + 2;
-        let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
+        let buf = self.get_transfer_data_indirect(evt.ptr - u64::from(TRB_SIZE), len as u64);
         for i in 0..name.len() {
             assert_eq!(buf[2 * i + 2], name.as_bytes()[i]);
         }
@@ -1774,8 +1783,10 @@ impl TestXhciPciDevice {
         self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
-        let buf =
-            self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, USB_DT_DEVICE_SIZE as u64);
+        let buf = self.get_transfer_data_indirect(
+            evt.ptr - u64::from(TRB_SIZE),
+            u64::from(USB_DT_DEVICE_SIZE),
+        );
         // descriptor type
         assert_eq!(buf[1], USB_DESCRIPTOR_TYPE_DEVICE);
         // bcdUSB
@@ -1796,7 +1807,7 @@ impl TestXhciPciDevice {
         self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::ShortPacket as u32);
-        let addr = evt.ptr - TRB_SIZE as u64;
+        let addr = evt.ptr - u64::from(TRB_SIZE);
         let mut offset = 0;
         let buf =
             self.get_transfer_data_indirect_with_offset(addr, USB_DT_CONFIG_SIZE as usize, offset);
@@ -1842,7 +1853,7 @@ impl TestXhciPciDevice {
                 self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
                 let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
                 assert_eq!(evt.ccode, TRBCCode::Success as u32);
-                let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, 63);
+                let buf = self.get_transfer_data_indirect(evt.ptr - u64::from(TRB_SIZE), 63);
                 assert_eq!(
                     buf,
                     [
@@ -1856,13 +1867,13 @@ impl TestXhciPciDevice {
                 );
             }
             UsbDeviceType::Tablet => {
-                self.get_hid_report_descriptor(slot_id, HID_POINTER_REPORT_LEN as u16);
+                self.get_hid_report_descriptor(slot_id, u16::from(HID_POINTER_REPORT_LEN));
                 self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
                 let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
                 assert_eq!(evt.ccode, TRBCCode::Success as u32);
                 let buf = self.get_transfer_data_indirect(
-                    evt.ptr - TRB_SIZE as u64,
-                    HID_POINTER_REPORT_LEN as u64,
+                    evt.ptr - u64::from(TRB_SIZE),
+                    u64::from(HID_POINTER_REPORT_LEN),
                 );
                 assert_eq!(
                     buf,
@@ -1887,7 +1898,7 @@ impl TestXhciPciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_IN_REQUEST,
             request: USB_REQUEST_GET_DESCRIPTOR,
-            value: (USB_DT_DEVICE as u16) << 8,
+            value: u16::from(USB_DT_DEVICE) << 8,
             index: 0,
             length: buf_len,
         };
@@ -1899,7 +1910,7 @@ impl TestXhciPciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_IN_REQUEST,
             request: USB_REQUEST_GET_DESCRIPTOR,
-            value: (USB_DT_CONFIGURATION as u16) << 8,
+            value: u16::from(USB_DT_CONFIGURATION) << 8,
             index: 0,
             length: buf_len,
         };
@@ -1911,7 +1922,7 @@ impl TestXhciPciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_DEVICE_IN_REQUEST,
             request: USB_REQUEST_GET_DESCRIPTOR,
-            value: (USB_DT_STRING as u16) << 8 | index,
+            value: u16::from(USB_DT_STRING) << 8 | index,
             index: 0,
             length: buf_len,
         };
@@ -2119,7 +2130,7 @@ impl TestXhciPciDevice {
 // Memory operation
 impl TestXhciPciDevice {
     pub fn mem_read_u32(&self, addr: u64, buf: &mut [u32]) {
-        let vec_len = size_of::<u32>() * buf.len();
+        let vec_len = std::mem::size_of_val(buf);
         let tmp = self.mem_read(addr, vec_len);
         for i in 0..buf.len() {
             buf[i] = LittleEndian::read_u32(&tmp[(size_of::<u32>() * i)..]);
@@ -2127,7 +2138,7 @@ impl TestXhciPciDevice {
     }
 
     pub fn mem_write_u32(&self, addr: u64, buf: &[u32]) {
-        let vec_len = size_of::<u32>() * buf.len();
+        let vec_len = std::mem::size_of_val(buf);
         let mut vec = vec![0_u8; vec_len];
         let tmp = vec.as_mut_slice();
         for i in 0..buf.len() {
@@ -2189,7 +2200,7 @@ impl TestXhciPciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_INTERFACE_CLASS_IN_REQUEST,
             request: GET_INFO,
-            value: (VS_PROBE_CONTROL as u16) << 8,
+            value: u16::from(VS_PROBE_CONTROL) << 8,
             index: VS_INTERFACE_NUM,
             length: 1,
         };
@@ -2197,7 +2208,7 @@ impl TestXhciPciDevice {
         self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::Success as u32);
-        let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, 1);
+        let buf = self.get_transfer_data_indirect(evt.ptr - u64::from(TRB_SIZE), 1);
         buf[0]
     }
 
@@ -2206,7 +2217,7 @@ impl TestXhciPciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_INTERFACE_CLASS_IN_REQUEST,
             request: GET_CUR,
-            value: (VS_PROBE_CONTROL as u16) << 8,
+            value: u16::from(VS_PROBE_CONTROL) << 8,
             index: VS_INTERFACE_NUM,
             length: len,
         };
@@ -2214,7 +2225,7 @@ impl TestXhciPciDevice {
         self.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
         let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
         assert_eq!(evt.ccode, TRBCCode::Success as u32);
-        let buf = self.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, len as u64);
+        let buf = self.get_transfer_data_indirect(evt.ptr - u64::from(TRB_SIZE), u64::from(len));
         let mut vs_control = VideoStreamingControl::default();
         vs_control.as_mut_bytes().copy_from_slice(&buf);
         vs_control
@@ -2228,7 +2239,7 @@ impl TestXhciPciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_INTERFACE_CLASS_OUT_REQUEST,
             request: SET_CUR,
-            value: (VS_PROBE_CONTROL as u16) << 8,
+            value: u16::from(VS_PROBE_CONTROL) << 8,
             index: VS_INTERFACE_NUM,
             length: len,
         };
@@ -2243,7 +2254,7 @@ impl TestXhciPciDevice {
         let device_req = UsbDeviceRequest {
             request_type: USB_INTERFACE_CLASS_OUT_REQUEST,
             request: SET_CUR,
-            value: (VS_COMMIT_CONTROL as u16) << 8,
+            value: u16::from(VS_COMMIT_CONTROL) << 8,
             index: VS_INTERFACE_NUM,
             length: 0,
         };
@@ -2287,16 +2298,16 @@ impl TestXhciPciDevice {
         let cnt = (total + TRB_MAX_LEN - 1) / TRB_MAX_LEN;
         let mut data = Vec::new();
         for _ in 0..cnt {
-            self.queue_indirect_td(slot_id, ep_id, TRB_MAX_LEN as u64);
+            self.queue_indirect_td(slot_id, ep_id, u64::from(TRB_MAX_LEN));
             self.doorbell_write(slot_id, ep_id);
             // wait for frame done.
             std::thread::sleep(std::time::Duration::from_millis(FRAME_WAIT_MS));
             let evt = self.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
             if evt.ccode == TRBCCode::Success as u32 {
-                let mut buf = self.get_transfer_data_indirect(evt.ptr, TRB_MAX_LEN as u64);
+                let mut buf = self.get_transfer_data_indirect(evt.ptr, u64::from(TRB_MAX_LEN));
                 data.append(&mut buf);
             } else if evt.ccode == TRBCCode::ShortPacket as u32 {
-                let copied = (TRB_MAX_LEN - evt.length) as u64;
+                let copied = u64::from(TRB_MAX_LEN - evt.length);
                 let mut buf = self.get_transfer_data_indirect(evt.ptr, copied);
                 data.append(&mut buf);
                 if total == data.len() as u32 {
@@ -2316,6 +2327,12 @@ impl TestXhciPciDevice {
 pub struct TestUsbBuilder {
     args: Vec<String>,
     config: HashMap<String, bool>,
+}
+
+impl Default for TestUsbBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TestUsbBuilder {
@@ -2374,7 +2391,7 @@ impl TestUsbBuilder {
     }
 
     pub fn with_usb_storage(mut self, image_path: &str, media: &str) -> Self {
-        let args = format!("-device usb-storage,drive=drive0,id=storage0");
+        let args = "-device usb-storage,drive=drive0,id=storage0".to_string();
         let args: Vec<&str> = args[..].split(' ').collect();
         let mut args = args.into_iter().map(|s| s.to_string()).collect();
         self.args.append(&mut args);
@@ -2480,8 +2497,7 @@ pub fn qmp_plug_keyboard_event(test_state: RefMut<TestState>, num: u32) -> Value
     str += &num_str;
     str += "\",\"bus\":\"usb.0\",\"port\":\"1\"}}";
 
-    let value = test_state.qmp(&str);
-    value
+    test_state.qmp(&str)
 }
 
 pub fn qmp_plug_tablet_event(test_state: RefMut<TestState>, num: u32) -> Value {
@@ -2492,8 +2508,7 @@ pub fn qmp_plug_tablet_event(test_state: RefMut<TestState>, num: u32) -> Value {
     str += &num_str;
     str += "\",\"bus\":\"usb.0\",\"port\":\"2\"}}";
 
-    let value = test_state.qmp(&str);
-    value
+    test_state.qmp(&str)
 }
 
 pub fn qmp_unplug_usb_event(test_state: RefMut<TestState>, num: u32) -> Value {
@@ -2502,8 +2517,7 @@ pub fn qmp_unplug_usb_event(test_state: RefMut<TestState>, num: u32) -> Value {
     str += &num_str;
     str += "\"}}";
 
-    let value = test_state.qmp(&str);
-    value
+    test_state.qmp(&str)
 }
 
 pub fn qmp_event_read(test_state: RefMut<TestState>) {
@@ -2512,6 +2526,6 @@ pub fn qmp_event_read(test_state: RefMut<TestState>) {
 
 pub fn clear_iovec(test_state: RefMut<TestState>, iovecs: &Vec<TestIovec>) {
     for iov in iovecs.iter() {
-        test_state.memwrite(iov.io_base, &vec![0; iov.io_len as usize]);
+        test_state.memwrite(iov.io_base, &vec![0; iov.io_len]);
     }
 }

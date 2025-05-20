@@ -84,10 +84,10 @@ impl GICv2Access for KvmGICv2 {
     }
 
     fn vcpu_gicr_attr(&self, offset: u64, cpu: usize) -> u64 {
-        (((cpu as u64) << kvm_bindings::KVM_DEV_ARM_VGIC_CPUID_SHIFT as u64)
+        (((cpu as u64) << u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_CPUID_SHIFT))
             & kvm_bindings::KVM_DEV_ARM_VGIC_CPUID_MASK)
-            | ((offset << kvm_bindings::KVM_DEV_ARM_VGIC_OFFSET_SHIFT as u64)
-                & kvm_bindings::KVM_DEV_ARM_VGIC_OFFSET_MASK as u64)
+            | ((offset << u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_OFFSET_SHIFT))
+                & u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_OFFSET_MASK))
     }
 
     fn access_gic_distributor(&self, offset: u64, gicd_value: &mut u32, write: bool) -> Result<()> {
@@ -122,7 +122,7 @@ impl GICv2Access for KvmGICv2 {
         KvmDevice::kvm_device_access(
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
-            kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES as u64,
+            u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES),
             0,
             true,
         )

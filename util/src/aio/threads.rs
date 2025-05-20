@@ -63,7 +63,7 @@ impl ThreadsTasks {
         let aio_event = AioEvent {
             user_data: task.user_data,
             status: 0,
-            res: res as i64,
+            res: i64::from(res),
         };
         self.complete_lists.lock().unwrap().push(aio_event);
         self.notify_event

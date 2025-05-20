@@ -17,6 +17,7 @@ use std::process::Command;
 use std::rc::Rc;
 use std::{thread, time};
 
+use mod_test::utils::support_numa;
 use serde_json::json;
 
 use mod_test::libdriver::machine::TestStdMachine;
@@ -38,7 +39,7 @@ const ADDRESS_BASE: u64 = 0x4000_0000;
 
 fn read_lines(filename: String) -> io::Lines<BufReader<File>> {
     let file = File::open(filename).unwrap();
-    return io::BufReader::new(file).lines();
+    io::BufReader::new(file).lines()
 }
 
 fn get_hugesize() -> u64 {
@@ -47,12 +48,12 @@ fn get_hugesize() -> u64 {
     for line in lines {
         if let Ok(info) = line {
             if info.starts_with("HugePages_Free:") {
-                let free: Vec<&str> = info.split(":").collect();
+                let free: Vec<&str> = info.split(':').collect();
                 free_page = free[1].trim().parse::<u64>().unwrap();
             }
             if info.starts_with("Hugepagesize:") {
-                let huges: Vec<&str> = info.split(":").collect();
-                let sizes: Vec<&str> = huges[1].trim().split(" ").collect();
+                let huges: Vec<&str> = info.split(':').collect();
+                let sizes: Vec<&str> = huges[1].trim().split(' ').collect();
                 let size = sizes[0].trim().parse::<u64>().unwrap();
                 return free_page * size;
             }
@@ -90,7 +91,7 @@ impl VirtioBalloonTest {
         let mut extra_args: Vec<&str> = Vec::new();
         let mut fpr_switch = String::from("false");
         let mut auto_switch = String::from("false");
-        let mem_path = format!("-mem-path /tmp/stratovirt/hugepages");
+        let mem_path = "-mem-path /tmp/stratovirt/hugepages".to_string();
 
         let mut machine_args = MACHINE_TYPE_ARG.to_string();
         if shared {
@@ -125,12 +126,11 @@ impl VirtioBalloonTest {
         let machine = TestStdMachine::new_bymem(test_state.clone(), memsize * MBSIZE, page_size);
         let allocator = machine.allocator.clone();
 
-        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
         dev.borrow_mut().init(pci_slot, 0);
 
         let features = dev.borrow_mut().get_device_features();
-        let inf_queue;
-        let def_queue;
+
         let mut fpr_queue = None;
         let mut auto_queue = None;
         let mut que_num = 2_usize;
@@ -144,8 +144,8 @@ impl VirtioBalloonTest {
         let ques =
             dev.borrow_mut()
                 .init_device(test_state.clone(), allocator.clone(), features, que_num);
-        inf_queue = ques[0].clone();
-        def_queue = ques[1].clone();
+        let inf_queue = ques[0].clone();
+        let def_queue = ques[1].clone();
         if cfg.fpr {
             fpr_queue = Some(ques[idx].clone());
             idx += 1;
@@ -208,18 +208,16 @@ impl VirtioBalloonTest {
         let machine = TestStdMachine::new_bymem(test_state.clone(), 2 * MBSIZE, 4096);
         let allocator = machine.allocator.clone();
 
-        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
         dev.borrow_mut().init(4, 0);
 
         let features = dev.borrow_mut().get_device_features();
-        let inf_queue;
-        let def_queue;
 
         let ques = dev
             .borrow_mut()
             .init_device(test_state.clone(), allocator.clone(), features, 2);
-        inf_queue = ques[0].clone();
-        def_queue = ques[1].clone();
+        let inf_queue = ques[0].clone();
+        let def_queue = ques[1].clone();
 
         VirtioBalloonTest {
             device: dev,
@@ -326,18 +324,18 @@ fn balloon_fun(shared: bool, huge: bool) {
     let free_page = balloon
         .allocator
         .borrow_mut()
-        .alloc(page_num as u64 * PAGE_SIZE_UNIT);
+        .alloc(u64::from(page_num) * PAGE_SIZE_UNIT);
     let pfn = (free_page >> 12) as u32;
     let pfn_addr = balloon.allocator.borrow_mut().alloc(PAGE_SIZE_UNIT);
     while idx < page_num {
         balloon
             .state
             .borrow_mut()
-            .writel(pfn_addr + 4 * idx as u64, pfn + idx);
+            .writel(pfn_addr + 4 * u64::from(idx), pfn + idx);
         balloon
             .state
             .borrow_mut()
-            .writeb(free_page + PAGE_SIZE_UNIT * idx as u64, 1);
+            .writeb(free_page + PAGE_SIZE_UNIT * u64::from(idx), 1);
         idx += 1;
     }
 
@@ -347,7 +345,7 @@ fn balloon_fun(shared: bool, huge: bool) {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };
@@ -376,7 +374,7 @@ fn balloon_fun(shared: bool, huge: bool) {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };
@@ -569,12 +567,12 @@ fn balloon_feature_001() {
     let machine = TestStdMachine::new_bymem(test_state.clone(), 128 * MBSIZE, PAGE_SIZE_UNIT);
     let allocator = machine.allocator.clone();
 
-    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
     dev.borrow_mut().init(pci_slot, pci_fn);
 
     dev.borrow_mut().pci_dev.enable_msix(None);
     dev.borrow_mut()
-        .setup_msix_configuration_vector(allocator.clone(), 0);
+        .setup_msix_configuration_vector(allocator, 0);
 
     let features = dev.borrow_mut().get_device_features();
 
@@ -616,12 +614,12 @@ fn balloon_feature_002() {
     let machine = TestStdMachine::new_bymem(test_state.clone(), 128 * MBSIZE, PAGE_SIZE_UNIT);
     let allocator = machine.allocator.clone();
 
-    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+    let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
     dev.borrow_mut().init(pci_slot, pci_fn);
 
     dev.borrow_mut().pci_dev.enable_msix(None);
     dev.borrow_mut()
-        .setup_msix_configuration_vector(allocator.clone(), 0);
+        .setup_msix_configuration_vector(allocator, 0);
 
     let features = dev.borrow_mut().get_device_features();
 
@@ -654,18 +652,18 @@ fn balloon_fpr_fun(shared: bool) {
     let free_page = balloon
         .allocator
         .borrow_mut()
-        .alloc(page_num as u64 * PAGE_SIZE_UNIT);
+        .alloc(u64::from(page_num) * PAGE_SIZE_UNIT);
     let pfn = (free_page >> 12) as u32;
     let pfn_addr = balloon.allocator.borrow_mut().alloc(PAGE_SIZE_UNIT);
     while idx < page_num {
         balloon
             .state
             .borrow_mut()
-            .writel(pfn_addr + 4 * idx as u64, pfn + idx);
+            .writel(pfn_addr + 4 * u64::from(idx), pfn + idx);
         balloon
             .state
             .borrow_mut()
-            .writeb(free_page + PAGE_SIZE_UNIT * idx as u64, 1);
+            .writeb(free_page + PAGE_SIZE_UNIT * u64::from(idx), 1);
         idx += 1;
     }
     // balloon Illegal addresses
@@ -693,7 +691,7 @@ fn balloon_fpr_fun(shared: bool) {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: true,
         };
@@ -707,7 +705,7 @@ fn balloon_fpr_fun(shared: bool) {
         .kick_virtqueue(balloon.state.clone(), fpr.clone());
     balloon.device.borrow_mut().poll_used_elem(
         balloon.state.clone(),
-        fpr.clone(),
+        fpr,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -778,7 +776,7 @@ fn query() {
 
     assert_eq!(
         *ret.get("return").unwrap(),
-        json!({"actual": 2147483648 as u64})
+        json!({"actual": 2147483648_u64})
     );
 
     balloon.state.borrow_mut().stop();
@@ -834,10 +832,7 @@ fn balloon_config_001() {
     let ten_millis = time::Duration::from_millis(10);
     thread::sleep(ten_millis);
     let ret = balloon.state.borrow_mut().qmp_read();
-    assert_eq!(
-        *ret.get("data").unwrap(),
-        json!({"actual": 536870912 as u64})
-    );
+    assert_eq!(*ret.get("data").unwrap(), json!({"actual": 536870912_u64}));
 
     balloon
         .state
@@ -905,10 +900,7 @@ fn balloon_config_002() {
     let ten_millis = time::Duration::from_millis(10);
     thread::sleep(ten_millis);
     let ret = balloon.state.borrow_mut().qmp_read();
-    assert_eq!(
-        *ret.get("data").unwrap(),
-        json!({"actual": 536870912 as u64})
-    );
+    assert_eq!(*ret.get("data").unwrap(), json!({"actual": 536870912_u64}));
 
     balloon
         .state
@@ -939,7 +931,7 @@ fn balloon_deactive_001() {
     let balloon = VirtioBalloonTest::new(1024, PAGE_SIZE_UNIT, false, false, cfg);
 
     let bar = balloon.device.borrow().bar;
-    let common_base = balloon.device.borrow().common_base as u64;
+    let common_base = u64::from(balloon.device.borrow().common_base);
 
     balloon.device.borrow().pci_dev.io_writel(
         bar,
@@ -956,7 +948,7 @@ fn balloon_deactive_001() {
         .qmp("{\"execute\": \"query-balloon\"}");
     assert_eq!(
         *ret.get("return").unwrap(),
-        json!({"actual": 1073741824 as u64})
+        json!({"actual": 1073741824_u64})
     );
     balloon.state.borrow_mut().stop();
 }
@@ -1008,7 +1000,7 @@ fn auto_balloon_test_001() {
     balloon
         .state
         .borrow_mut()
-        .memwrite(msg_addr, &stat.as_bytes());
+        .memwrite(msg_addr, stat.as_bytes());
 
     let auto_queue = balloon.auto_queue.unwrap();
 
@@ -1024,7 +1016,7 @@ fn auto_balloon_test_001() {
         .kick_virtqueue(balloon.state.clone(), auto_queue.clone());
     balloon.device.borrow_mut().poll_used_elem(
         balloon.state.clone(),
-        auto_queue.clone(),
+        auto_queue,
         free_head,
         TIMEOUT_US,
         &mut None,
@@ -1054,6 +1046,10 @@ fn auto_balloon_test_001() {
 /// Expect:
 ///     1/2.Success
 fn balloon_numa1() {
+    if !support_numa() {
+        return;
+    }
+
     let page_num = 255_u32;
     let mut idx = 0_u32;
     let balloon = VirtioBalloonTest::numa_node_new();
@@ -1065,11 +1061,11 @@ fn balloon_numa1() {
         balloon
             .state
             .borrow_mut()
-            .writel(pfn_addr + 4 * idx as u64, pfn + idx);
+            .writel(pfn_addr + 4 * u64::from(idx), pfn + idx);
         balloon
             .state
             .borrow_mut()
-            .writeb(free_page + PAGE_SIZE_UNIT * idx as u64, 1);
+            .writeb(free_page + PAGE_SIZE_UNIT * u64::from(idx), 1);
         idx += 1;
     }
 
@@ -1079,7 +1075,7 @@ fn balloon_numa1() {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };
@@ -1108,7 +1104,7 @@ fn balloon_numa1() {
 
     while loop_num < page_num {
         let entry = TestVringDescEntry {
-            data: pfn_addr + (loop_num as u64 * 4),
+            data: pfn_addr + (u64::from(loop_num) * 4),
             len: 4,
             write: false,
         };

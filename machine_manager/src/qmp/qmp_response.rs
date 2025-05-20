@@ -226,7 +226,7 @@ mod tests {
             running: true,
             status: qmp_schema::RunState::running,
         };
-        let resp = Response::create_response(serde_json::to_value(&resp_value).unwrap(), None);
+        let resp = Response::create_response(serde_json::to_value(resp_value).unwrap(), None);
 
         let json_msg = r#"{"return":{"running":true,"singlestep":false,"status":"running"}}"#;
         assert_eq!(serde_json::to_string(&resp).unwrap(), json_msg);
@@ -273,7 +273,7 @@ mod tests {
         let msg = ErrorMessage::new(&err_cls);
         assert_eq!(msg.desc, strange_msg);
         assert_eq!(msg.errorkind, "KVMMissingCap".to_string());
-        let qmp_err = qmp_schema::QmpErrorClass::KVMMissingCap(strange_msg.clone());
+        let qmp_err = qmp_schema::QmpErrorClass::KVMMissingCap(strange_msg);
         let resp = Response::create_error_response(qmp_err, None);
         assert_eq!(resp.error, Some(msg));
     }

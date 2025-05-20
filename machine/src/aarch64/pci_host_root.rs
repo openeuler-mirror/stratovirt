@@ -10,18 +10,17 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, Weak};
 
 use anyhow::Result;
 
-use devices::pci::{
-    config::{
-        PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
-        REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
-    },
-    le_write_u16, PciBus, PciDevBase, PciDevOps,
+use devices::pci::config::{
+    PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
+    REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use devices::{Device, DeviceBase};
+use devices::pci::{le_write_u16, PciDevBase, PciDevOps};
+use devices::{Bus, Device, DeviceBase};
+use util::gen_base_func;
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
 
@@ -31,38 +30,22 @@ pub struct PciHostRoot {
 }
 
 impl PciHostRoot {
-    pub fn new(parent_bus: Weak<Mutex<PciBus>>) -> Self {
+    pub fn new(parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
         Self {
             base: PciDevBase {
-                base: DeviceBase::new("PCI Host Root".to_string(), false),
-                config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 0),
-                parent_bus,
+                base: DeviceBase::new("PCI Host Root".to_string(), false, Some(parent_bus)),
+                config: PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
+                bme: Arc::new(AtomicBool::new(false)),
             },
         }
     }
 }
 
 impl Device for PciHostRoot {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
-    }
-}
-
-impl PciDevOps for PciHostRoot {
-    fn pci_base(&self) -> &PciDevBase {
-        &self.base
-    }
-
-    fn pci_base_mut(&mut self) -> &mut PciDevBase {
-        &mut self.base
-    }
-
-    fn realize(mut self) -> Result<()> {
+    fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
         self.init_write_clear_mask(false)?;
 
@@ -83,14 +66,17 @@ impl PciDevOps for PciHostRoot {
         )?;
         le_write_u16(&mut self.base.config.config, REVISION_ID, 0)?;
 
-        let parent_bus = self.base.parent_bus.upgrade().unwrap();
-        parent_bus
-            .lock()
-            .unwrap()
-            .devices
-            .insert(0, Arc::new(Mutex::new(self)));
-        Ok(())
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let mut locked_bus = parent_bus.lock().unwrap();
+        let dev = Arc::new(Mutex::new(self));
+        locked_bus.attach_child(0, dev.clone())?;
+
+        Ok(dev)
     }
+}
+
+impl PciDevOps for PciHostRoot {
+    gen_base_func!(pci_base, pci_base_mut, PciDevBase, base);
 
     fn write_config(&mut self, offset: usize, data: &[u8]) {
         self.base.config.write(offset, data, 0, None);

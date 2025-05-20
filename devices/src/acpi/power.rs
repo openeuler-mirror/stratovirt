@@ -18,8 +18,8 @@ use anyhow::{Context, Result};
 use log::info;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AcpiError, AmlAddressSpaceType, AmlBuilder, AmlDevice, AmlField, AmlFieldAccessType,
     AmlFieldLockRule, AmlFieldUnit, AmlFieldUpdateRule, AmlIndex, AmlInteger, AmlMethod, AmlName,
@@ -30,6 +30,7 @@ use machine_manager::event_loop::EventLoop;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::num_ops::write_data_u32;
 
 const AML_ACAD_REG: &str = "ADPM";
@@ -80,8 +81,13 @@ pub struct PowerDev {
 }
 
 impl PowerDev {
-    pub fn new(ged_dev: Arc<Mutex<Ged>>) -> Self {
-        Self {
+    pub fn new(
+        ged_dev: Arc<Mutex<Ged>>,
+        sysbus: &Arc<Mutex<SysBus>>,
+        region_base: u64,
+        region_size: u64,
+    ) -> Result<Self> {
+        let mut pdev = Self {
             base: SysBusDevBase::default(),
             regs: vec![0; POWERDEV_REGS_SIZE],
             state: PowerDevState {
@@ -90,7 +96,11 @@ impl PowerDev {
                 last_bat_lvl: 0xffffffff,
             },
             ged: ged_dev,
-        }
+        };
+        pdev.set_sys_resource(sysbus, region_base, region_size, "PowerDev")
+            .with_context(|| AcpiError::Alignment(region_size as u32))?;
+        pdev.set_parent_bus(sysbus.clone());
+        Ok(pdev)
     }
 
     fn read_sysfs_power_props(
@@ -154,6 +164,8 @@ impl PowerDev {
         // unit: mW
         self.regs[REG_IDX_BAT_PRATE] =
             (self.regs[REG_IDX_BAT_PRATE] * self.regs[REG_IDX_BAT_PVOLT]) / 1000;
+
+        trace::power_status_read(&self.regs);
         Ok(())
     }
 
@@ -171,37 +183,6 @@ impl PowerDev {
 
     fn send_power_event(&self, evt: AcpiEvent) {
         self.ged.lock().unwrap().inject_acpi_event(evt);
-    }
-}
-
-impl PowerDev {
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-    ) -> Result<()> {
-        self.set_sys_resource(sysbus, region_base, region_size)
-            .with_context(|| AcpiError::Alignment(region_size as u32))?;
-
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "PowerDev")?;
-
-        let pdev_available: bool;
-        {
-            let mut pdev = dev.lock().unwrap();
-            pdev_available = pdev.power_battery_init_info().is_ok();
-            if pdev_available {
-                pdev.send_power_event(AcpiEvent::BatteryInf);
-            }
-        }
-        if pdev_available {
-            power_status_update(&dev.clone());
-        } else {
-            let mut pdev = dev.lock().unwrap();
-            pdev.power_load_static_status();
-        }
-        Ok(())
     }
 }
 
@@ -229,23 +210,35 @@ impl MigrationHook for PowerDev {
 }
 
 impl Device for PowerDev {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        let pdev_available: bool;
+        {
+            let mut pdev = dev.lock().unwrap();
+            pdev_available = pdev.power_battery_init_info().is_ok();
+            if pdev_available {
+                pdev.send_power_event(AcpiEvent::BatteryInf);
+            }
+        }
+        if pdev_available {
+            power_status_update(&dev);
+        } else {
+            let mut pdev = dev.lock().unwrap();
+            pdev.power_load_static_status();
+        }
+
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for PowerDev {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         let reg_idx: u64 = offset / 4;
@@ -253,15 +246,12 @@ impl SysBusDevOps for PowerDev {
             return false;
         }
         let value = self.regs[reg_idx as usize];
+        trace::power_read(reg_idx, value);
         write_data_u32(data, value)
     }
 
     fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
         true
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 
@@ -366,7 +356,7 @@ impl AmlBuilder for PowerDev {
         acpi_bat_dev.append_child(method);
 
         let mut bst_pkg = AmlPackage::new(4);
-        bst_pkg.append_child(AmlInteger(ACPI_BATTERY_STATE_CHARGING as u64));
+        bst_pkg.append_child(AmlInteger(u64::from(ACPI_BATTERY_STATE_CHARGING)));
         bst_pkg.append_child(AmlInteger(0xFFFFFFFF));
         bst_pkg.append_child(AmlInteger(0xFFFFFFFF));
         bst_pkg.append_child(AmlInteger(0xFFFFFFFF));
@@ -395,7 +385,7 @@ impl AmlBuilder for PowerDev {
         acpi_acad_dev
             .aml_bytes()
             .into_iter()
-            .chain(acpi_bat_dev.aml_bytes().into_iter())
+            .chain(acpi_bat_dev.aml_bytes())
             .collect()
     }
 }

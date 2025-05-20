@@ -75,7 +75,7 @@ fn env_prepare(temp: bool) -> (String, String, String) {
         .unwrap();
 
     Command::new("mknod")
-        .arg(virtiofs_test_character_device.clone())
+        .arg(virtiofs_test_character_device)
         .arg("c")
         .arg("1")
         .arg("1")
@@ -132,7 +132,7 @@ impl VirtioFsTest {
         let machine =
             TestStdMachine::new_bymem(test_state.clone(), memsize * 1024 * 1024, page_size);
         let allocator = machine.allocator.clone();
-        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus.clone())));
+        let dev = Rc::new(RefCell::new(TestVirtioPciDev::new(machine.pci_bus)));
         dev.borrow_mut().init(pci_slot, pci_fn);
         let features = virtio_fs_default_feature(dev.clone());
         let queues =
@@ -156,7 +156,7 @@ impl VirtioFsTest {
         if let Some(member) = reqmember {
             let member_size = member.len() as u64;
             let member_addr = self.allocator.borrow_mut().alloc(member_size);
-            self.state.borrow().memwrite(member_addr, &member);
+            self.state.borrow().memwrite(member_addr, member);
             data_entries.push(TestVringDescEntry {
                 data: member_addr,
                 len: member_size as u32,
@@ -288,7 +288,7 @@ impl VirtioFsTest {
     }
 
     fn testcase_end(&self, test_dir: String) {
-        self.testcase_check_and_end(None, test_dir.clone());
+        self.testcase_check_and_end(None, test_dir);
     }
 
     fn testcase_check_and_end(&self, absolute_virtiofs_sock: Option<String>, test_dir: String) {
@@ -297,9 +297,9 @@ impl VirtioFsTest {
             .destroy_device(self.allocator.clone(), self.queues.clone());
 
         if let Some(path) = absolute_virtiofs_sock {
-            let path_clone = path.clone();
+            let path_clone = path;
             let sock_path = Path::new(&path_clone);
-            assert_eq!(sock_path.exists(), true);
+            assert!(sock_path.exists());
             self.state.borrow_mut().stop();
         } else {
             self.state.borrow_mut().stop();
@@ -339,10 +339,10 @@ fn fuse_init(fs: &VirtioFsTest) -> (FuseOutHeader, FuseInitOut) {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_init_out = FuseInitOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_init_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_init_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_init_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_init_out.as_bytes(),
     );
 
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -356,15 +356,13 @@ fn fuse_destroy(fs: &VirtioFsTest) -> FuseOutHeader {
     let fuse_in_head = FuseInHeader::new(len as u32, FUSE_DESTROY, 0, 0, 0, 0, 0, 0);
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheaderaddr, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
         None,
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
-    let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr.unwrap());
-
-    out_header
+    read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr.unwrap())
 }
 
 fn fuse_lookup(fs: &VirtioFsTest, name: String) -> u64 {
@@ -375,10 +373,10 @@ fn fuse_lookup(fs: &VirtioFsTest, name: String) -> u64 {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_lookup_out = FuseEntryOut::default();
     let (_outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_lookup_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_lookup_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_lookup_out.as_bytes(),
     );
 
     let entry_out = read_obj::<FuseEntryOut>(fs.state.clone(), outbodyaddr);
@@ -396,10 +394,10 @@ fn fuse_open(fs: &VirtioFsTest, nodeid: u64) -> u64 {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_open_out = FuseOpenOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_open_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_open_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_open_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_open_out.as_bytes(),
     );
 
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -419,10 +417,10 @@ fn fuse_open_dir(fs: &VirtioFsTest, nodeid: u64) -> u64 {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_open_out = FuseOpenOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_open_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_open_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_open_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_open_out.as_bytes(),
     );
 
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -452,10 +450,10 @@ fn fuse_lseek(
     let len = (size_of::<FuseInHeader>() + trim_lseek_in_len) as u32;
     let fuse_in_head = FuseInHeader::new(len, FUSE_LSEEK, 0, nodeid, 0, 0, 0, 0);
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_lseek_in.as_bytes()[0..lseek_in_len - trim],
-        &fuse_out_head.as_bytes(),
-        &fuse_lseek_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_lseek_out.as_bytes(),
     );
 
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -475,10 +473,10 @@ fn fuse_getattr(fs: &VirtioFsTest, nodeid: u64, fh: u64) -> (FuseOutHeader, Fuse
     let fuse_out_head = FuseOutHeader::default();
     let fuse_getattr_out = FuseAttrOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_getattr_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_getattr_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_getattr_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_getattr_out.as_bytes(),
     );
 
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -568,10 +566,10 @@ fn mkdir_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_mkdir_out = FuseEntryOut::default();
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_mkdir_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_mkdir_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_mkdir_out.as_bytes(),
     );
 
     // Check.
@@ -582,7 +580,7 @@ fn mkdir_test() {
     linkpath.push_str("/shared/dir");
     let linkpath_clone = linkpath.clone();
     let link_path = Path::new(&linkpath_clone);
-    assert_eq!(link_path.is_dir(), true);
+    assert!(link_path.is_dir());
 
     // kill process and clean env.
     fs.testcase_end(virtiofs_test_dir);
@@ -619,9 +617,9 @@ fn sync_fun() {
     };
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
-        Some(&fuse_fallocate_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
+        Some(fuse_fallocate_in.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
@@ -654,9 +652,9 @@ fn syncdir_test() {
     };
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
-        Some(&fuse_fallocate_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
+        Some(fuse_fallocate_in.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
@@ -684,9 +682,9 @@ fn invalid_fuse_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fake_fuse_out_body = [0];
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fake_fuse_in_body,
-        &fuse_out_head.as_bytes(),
+        fuse_out_head.as_bytes(),
         &fake_fuse_out_body,
     );
 
@@ -805,9 +803,9 @@ fn ls_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_read_out = [0; DEFAULT_READ_SIZE];
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_read_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_read_in.as_bytes(),
+        fuse_out_head.as_bytes(),
         &fuse_read_out,
     );
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -820,10 +818,10 @@ fn ls_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_forget_out = FuseForgetOut::default();
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_read_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_forget_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_read_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_forget_out.as_bytes(),
     );
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
     assert_eq!(out_header.error, 0);
@@ -840,9 +838,9 @@ fn ls_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_read_out = [0_u8; DEFAULT_READ_SIZE];
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_read_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_read_in.as_bytes(),
+        fuse_out_head.as_bytes(),
         &fuse_read_out,
     );
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -858,9 +856,9 @@ fn ls_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_read_out = [0_u8; DEFAULT_READ_SIZE];
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_read_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_read_in.as_bytes(),
+        fuse_out_head.as_bytes(),
         &fuse_read_out,
     );
 
@@ -881,10 +879,10 @@ fn fuse_setattr(
     let fuse_out_head = FuseOutHeader::default();
     let fuse_attr_out = FuseAttrOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_setattr_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_attr_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_setattr_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_attr_out.as_bytes(),
     );
 
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -1012,10 +1010,10 @@ fn unlink_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_unlink_out = FuseEntryOut::default();
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_unlink_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_unlink_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_unlink_out.as_bytes(),
     );
 
     // Check.
@@ -1026,7 +1024,7 @@ fn unlink_test() {
     linkpath.push_str("/shared/testfile");
     let linkpath_clone = linkpath.clone();
     let link_path = Path::new(&linkpath_clone);
-    assert_eq!(link_path.exists(), false);
+    assert!(!link_path.exists());
 
     // kill process and clean env.
     fs.testcase_end(virtiofs_test_dir);
@@ -1060,10 +1058,10 @@ fn rmdir_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_unlink_out = FuseEntryOut::default();
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_unlink_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_unlink_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_unlink_out.as_bytes(),
     );
 
     // Check.
@@ -1074,7 +1072,7 @@ fn rmdir_test() {
     linkpath.push_str("/shared/dir");
     let linkpath_clone = linkpath.clone();
     let link_path = Path::new(&linkpath_clone);
-    assert_eq!(link_path.exists(), false);
+    assert!(!link_path.exists());
 
     // kill process and clean env.
     fs.testcase_end(virtiofs_test_dir);
@@ -1100,10 +1098,10 @@ fn symlink_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_init_out = FuseEntryOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_init_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_init_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_init_out.as_bytes(),
     );
 
     // Check.
@@ -1117,18 +1115,18 @@ fn symlink_test() {
     linkpath.push_str("/shared/link");
     let linkpath_clone = linkpath.clone();
     let link_path = Path::new(&linkpath_clone);
-    assert_eq!(link_path.is_symlink(), true);
+    assert!(link_path.is_symlink());
 
     // Read link
-    let node_id = fuse_lookup(&fs, linkname.clone());
+    let node_id = fuse_lookup(&fs, linkname);
     let len = size_of::<FuseInHeader>() as u32;
     let fuse_in_head = FuseInHeader::new(len, FUSE_READLINK, 8, node_id, 0, 0, 0, 0);
     let fuse_out_head = FuseOutHeader::default();
     let fuse_read_link_out = [0_u8; 1024];
     let (_, _, outheader, outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
         None,
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         Some(&fuse_read_link_out),
     );
 
@@ -1168,9 +1166,9 @@ fn fallocate_test() {
     };
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
-        Some(&fuse_fallocate_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
+        Some(fuse_fallocate_in.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
@@ -1214,10 +1212,10 @@ fn posix_file_lock_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_lk_out = FuseLkOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_lk_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_lk_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_lk_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_lk_out.as_bytes(),
     );
 
     // Check file is unlock.
@@ -1244,10 +1242,10 @@ fn posix_file_lock_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_lk_out = FuseLkOut::default();
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_lk_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_lk_out.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_lk_in.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_lk_out.as_bytes(),
     );
 
     // check.
@@ -1281,10 +1279,10 @@ fn mknod_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_init_out = FuseEntryOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_mknod_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_init_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_init_out.as_bytes(),
     );
 
     // Check.
@@ -1316,9 +1314,9 @@ fn get_xattr(fs: &VirtioFsTest, name: String, nodeid: u64) -> (FuseOutHeader, St
     let fuse_out_head = FuseOutHeader::default();
     let fuse_out = [0_u8; DEFAULT_XATTR_SIZE as usize];
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
+        fuse_out_head.as_bytes(),
         &fuse_out,
     );
 
@@ -1326,7 +1324,7 @@ fn get_xattr(fs: &VirtioFsTest, name: String, nodeid: u64) -> (FuseOutHeader, St
     let fuse_read_out = fs
         .state
         .borrow()
-        .memread(outbodyaddr, DEFAULT_XATTR_SIZE as u64);
+        .memread(outbodyaddr, u64::from(DEFAULT_XATTR_SIZE));
     let attr = String::from_utf8(fuse_read_out).unwrap();
 
     (out_header, attr)
@@ -1343,9 +1341,9 @@ fn flush_file(fs: &VirtioFsTest, nodeid: u64, fh: u64) {
     };
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
-        Some(&fuse_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
+        Some(fuse_in.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
@@ -1361,10 +1359,10 @@ fn write_file(fs: &VirtioFsTest, nodeid: u64, fh: u64, write_buf: String) {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_write_out = FuseWriteOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_write_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_write_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_write_out.as_bytes(),
     );
 
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
@@ -1384,9 +1382,9 @@ fn release_file(fs: &VirtioFsTest, nodeid: u64, fh: u64) {
     };
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
-        Some(&fuse_read_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
+        Some(fuse_read_in.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
@@ -1407,10 +1405,10 @@ fn create_file(fs: &VirtioFsTest, name: String) -> (FuseOutHeader, FuseCreateOut
     let fuse_out_head = FuseOutHeader::default();
     let fuse_out = FuseCreateOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_out.as_bytes(),
     );
 
     // Check.
@@ -1470,9 +1468,9 @@ fn read_file(fs: &VirtioFsTest, nodeid: u64, fh: u64) -> String {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_out = [0_u8; DEFAULT_READ_SIZE];
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
-        &fuse_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
+        fuse_in_head.as_bytes(),
+        fuse_in.as_bytes(),
+        fuse_out_head.as_bytes(),
         &fuse_out,
     );
 
@@ -1480,9 +1478,8 @@ fn read_file(fs: &VirtioFsTest, nodeid: u64, fh: u64) -> String {
     let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheaderaddr);
     assert_eq!(out_header.error, 0);
     let fuse_read_out = fs.state.borrow().memread(outbodyaddr, 5);
-    let str = String::from_utf8(fuse_read_out).unwrap();
 
-    str
+    String::from_utf8(fuse_read_out).unwrap()
 }
 
 #[test]
@@ -1495,7 +1492,7 @@ fn openfile_test() {
     // start vm.
     let fs = VirtioFsTest::new(TEST_MEM_SIZE, TEST_PAGE_SIZE, virtiofs_sock);
     fuse_init(&fs);
-    let nodeid = fuse_lookup(&fs, file.clone());
+    let nodeid = fuse_lookup(&fs, file);
 
     // open/write/flush/close/open/read/close
     let fh = fuse_open(&fs, nodeid);
@@ -1537,9 +1534,9 @@ fn rename_test() {
     let fuse_in_head = FuseInHeader::new(len, FUSE_RENAME, 0, PARENT_NODEID, 0, 0, 0, 0);
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
         Some(&fuse_rename_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
@@ -1575,10 +1572,10 @@ fn link_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_entry_out = FuseEntryOut::default();
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_rename_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
-        &fuse_entry_out.as_bytes(),
+        fuse_out_head.as_bytes(),
+        fuse_entry_out.as_bytes(),
     );
 
     // Check.
@@ -1607,10 +1604,10 @@ fn statfs_test() {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_statfs_out = FuseKstatfs::default();
     let (_, _, outheader, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
         None,
-        Some(&fuse_out_head.as_bytes()),
-        Some(&fuse_statfs_out.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
+        Some(fuse_statfs_out.as_bytes()),
     );
 
     // Check.
@@ -1640,9 +1637,9 @@ fn virtio_fs_fuse_ioctl_test() {
     let fuse_in_head = FuseInHeader::new(len, FUSE_IOCTL, 0, nodeid, 0, 0, 0, 0);
     let fuse_out_head = FuseOutHeader::default();
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &[0],
-        &fuse_out_head.as_bytes(),
+        fuse_out_head.as_bytes(),
         &[0],
     );
 
@@ -1670,9 +1667,9 @@ fn virtio_fs_fuse_abnormal_test() {
     let fuse_out_head = FuseOutHeader::default();
 
     let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &[0],
-        &fuse_out_head.as_bytes(),
+        fuse_out_head.as_bytes(),
         &[0],
     );
 
@@ -1716,15 +1713,13 @@ fn fuse_setxattr(fs: &VirtioFsTest, name: String, value: String, nodeid: u64) ->
     };
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
         Some(&fuse_setxattr_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
-    let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheader.unwrap());
-
-    out_header
+    read_obj::<FuseOutHeader>(fs.state.clone(), outheader.unwrap())
 }
 
 fn fuse_removexattr(fs: &VirtioFsTest, name: String, nodeid: u64) -> FuseOutHeader {
@@ -1733,14 +1728,13 @@ fn fuse_removexattr(fs: &VirtioFsTest, name: String, nodeid: u64) -> FuseOutHead
     let fuse_removexattr_in = FuseRemoveXattrIn { name };
     let fuse_out_head = FuseOutHeader::default();
     let (_, _, outheader, _outbodyaddr) = fs.do_virtio_request(
-        Some(&fuse_in_head.as_bytes()),
+        Some(fuse_in_head.as_bytes()),
         Some(&fuse_removexattr_in.as_bytes()),
-        Some(&fuse_out_head.as_bytes()),
+        Some(fuse_out_head.as_bytes()),
         None,
     );
 
-    let out_header = read_obj::<FuseOutHeader>(fs.state.clone(), outheader.unwrap());
-    out_header
+    read_obj::<FuseOutHeader>(fs.state.clone(), outheader.unwrap())
 }
 
 fn fuse_listxattr(fs: &VirtioFsTest, nodeid: u64) -> (FuseOutHeader, u64) {
@@ -1755,9 +1749,9 @@ fn fuse_listxattr(fs: &VirtioFsTest, nodeid: u64) -> (FuseOutHeader, u64) {
     let fuse_out_head = FuseOutHeader::default();
     let fuse_out = [0_u8; DEFAULT_XATTR_SIZE as usize];
     let (outheaderaddr, outbodyaddr) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &fuse_in.as_bytes(),
-        &fuse_out_head.as_bytes(),
+        fuse_out_head.as_bytes(),
         &fuse_out,
     );
 
@@ -1804,11 +1798,11 @@ fn regularfile_xattr_test() {
     let attr_list = fs
         .state
         .borrow()
-        .memread(outbodyaddr, DEFAULT_XATTR_SIZE as u64);
+        .memread(outbodyaddr, u64::from(DEFAULT_XATTR_SIZE));
     // The first attr is "security.selinux"
     let (_attr1, next1) = read_cstring(attr_list.clone(), 0);
     // The next attrs are what we set by FUSE_SETXATTR. Check it.
-    let (attr2, _next2) = read_cstring(attr_list.clone(), next1);
+    let (attr2, _next2) = read_cstring(attr_list, next1);
     assert_eq!(attr2.unwrap(), testattr_name);
 
     // REMOVEXATTR
@@ -1917,7 +1911,7 @@ fn fuse_batch_forget(fs: &VirtioFsTest, nodeid: u64, trim: usize) {
     ]
     .concat();
     let (_, _) = fs.virtiofs_do_virtio_request(
-        &fuse_in_head.as_bytes(),
+        fuse_in_head.as_bytes(),
         &data_bytes[0..data_bytes.len() - trim],
         &[0],
         &[0],
@@ -2009,9 +2003,9 @@ fn virtio_fs_fuse_setlkw_test() {
         }
 
         let (outheaderaddr, _outbodyaddr) = fs.virtiofs_do_virtio_request(
-            &fuse_in_head.as_bytes(),
-            &fuse_lk_in_bytes,
-            &fuse_out_head.as_bytes(),
+            fuse_in_head.as_bytes(),
+            fuse_lk_in_bytes,
+            fuse_out_head.as_bytes(),
             &[0],
         );
 

@@ -285,6 +285,14 @@ The SMBIOS specification defines the data structures and information that will e
 
 ```
 
+### 1.12 Hardware Signature
+This option is used for configuring ACPI Hardware Signature, which is used for VM S4 state. It's an 32 bit integer. For more information, please refer to https://uefi.org/htmlspecs/ACPI_Spec_6_4_html/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#firmware-acpi-control-structure-facs-table.
+
+```shell
+# cmdline
+-hardware-signature 1
+```
+
 ## 2. Device Configuration
 
 For machine type "microvm", only virtio-mmio and legacy devices are supported.
@@ -444,6 +452,8 @@ Eight properties are supported for virtio-net-device or virtio-net-pci.
 * id: unique net device id.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used.
 It has no effect when vhost is set.
+* rx-iothread: set the receiving task in this iothread, if not specified the former parameter iothread will be used.
+* tx-iothread: set the sending task in this iothread, if not specified the former parameter iothread will be used.
 * netdev: netdev of net device.
 * vhost: whether to run as a vhost-net device.
 * vhostfd: the file descriptor of opened tap device.
@@ -462,10 +472,10 @@ is a single function device, the function number should be set to zero.
 ```shell
 # virtio mmio net device
 -netdev tap,id=<netdevid>,ifname=<host_dev_name>
--device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,mac=<macaddr>]
+-device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,rx-iothread=<iothread2>][,tx-iothread=<iothread3>][,mac=<macaddr>]
 # virtio pci net device
 -netdev tap,id=<netdevid>,ifname=<host_dev_name>[,queues=<N>]
--device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
+-device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,rx-iothread=<iothread2>][,tx-iothread=<iothread3>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
 ```
 
 StratoVirt also supports vhost-net to get a higher performance in network. It can be set by
@@ -929,6 +939,22 @@ Note:
 
 Please see the [4. Build with features](docs/build_guide.md) if you want to enable usb-host.
 
+#### 2.13.7 USB Uas
+USB Mass Storage Device that is based on the USB Attached Scsi (UAS) protocol. It should be attached to USB controller.
+
+Three properties can be set for USB Uas.
+
+* id: unique device id.
+* file: the path of backend image file.
+* media: the media type of storage. Possible values are `disk` or `cdrom`. If not set, default is `disk`.
+
+```shell
+-device usb-uas,drive=<drive_id>,id=<uas_id>
+-drive id=<drive_id>,file=<path_on_host>[,media={disk|cdrom}],aio=off,direct=false
+```
+
+Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
@@ -938,7 +964,7 @@ Six properties can be set for Virtio-Scsi controller.
 * bus: bus number of the device.
 * addr: including slot number and function number.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
-* num-queues: the optional num-queues attribute controls the number of request queues to be used for the scsi controller. If not set, the default block queue number is 1. The max queues number supported is no more than 32. (optional)
+* num-queues: the optional num-queues attribute controls the number of request queues to be used for the scsi controller. If not set, the default queue number is the smaller one of vCPU count and the max queues number (e.g, min(vcpu_count, 32)). The max queues number supported is no more than 32. (optional)
 * queue-size: the optional virtqueue size for all the queues. Configuration range is (2, 1024] and queue size must be power of 2. Default queue size is 256.
 ```shell
 -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction={on|off}][,iothread=<iothread1>][,num-queues=<N>][,queue-size=<queuesize>]
@@ -1179,16 +1205,41 @@ Sample Configuration：
 
 Please see the [4. Build with features](docs/build_guide.md) if you want to enable pvpanic.
 
+### 2.22 virtio-input
+virtio-input is a virtualized input device can be used to create human interface devices such as tablet, mouse.
+
+Five properties are supported for virtio-input.
+* id: unique device id.
+* evdev: the path of character evdev device in host.
+
+For virtio-input-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it. As virtio pci input device is a
+single function device, the function number should be set to zero.
+
+Sample Configuration：
+```shell
+# virtio mmio input device
+-device virtio-input-device,id=<input_id>,evdev=<evdev0>
+# virtio pci input device
+-device virtio-input-pci,id=<input_id>,evdev=<evdev0>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]
+```
+
+Note:
+1. Only host evdev passthrough supported.
+
 ## 3. Trace
 
-Users can specify the configuration file which lists events to trace.
+Users can specify a configuration file which lists the traces that needs to be enabled, or specify the trace type that needs to be enabled. Setting both file and type is also allowed, so that traces with the specified type and traces listed in the file will all be enabled.
 
 One property can be set:
 
-* events: file lists events to trace.
+* file: specify the file containing the traces that needs to be enabled.
+* type: specify the traces type that needs to be enabled.
 
 ```shell
--trace file=<file>
+-trace file=<file>|type=<all|events|scopes>
 ```
 
 ## 4. Seccomp

@@ -131,6 +131,31 @@ pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATIO
 ///  @since 10
 pub type OHAudioStreamSourceType = ::std::os::raw::c_int;
 
+#[allow(unused)]
+pub const AUDIOSTREAM_INTERRUPT_FORCE: OHAudioInterruptSourceType = 0;
+#[allow(unused)]
+pub const AUDIOSTREAM_INTERRUPT_SHARE: OHAudioInterruptSourceType = 1;
+
+/// Defines the audio interrupt source type.
+///
+///  @since 10
+pub type OHAudioInterruptSourceType = ::std::os::raw::c_int;
+
+#[allow(unused)]
+pub const AUDIOSTREAM_INTERRUPT_HINT_RESUME: OHAudioInterruptHint = 1;
+pub const AUDIOSTREAM_INTERRUPT_HINT_PAUSE: OHAudioInterruptHint = 2;
+#[allow(unused)]
+pub const AUDIOSTREAM_INTERRUPT_HINT_STOP: OHAudioInterruptHint = 3;
+#[allow(unused)]
+pub const AUDIOSTREAM_INTERRUPT_HINT_DUCK: OHAudioInterruptHint = 4;
+#[allow(unused)]
+pub const AUDIOSTREAM_INTERRUPT_HINT_UNDUCK: OHAudioInterruptHint = 5;
+
+/// Defines the audio interrupt hint type.
+///
+///  @since 10
+pub type OHAudioInterruptHint = ::std::os::raw::c_int;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct OH_AudioStreamBuilderStruct {
@@ -183,7 +208,14 @@ pub struct OhAudioRendererCallbacks {
         ) -> i32,
     >,
     pub oh_audio_renderer_on_stream_event: PlaceHolderFn,
-    pub oh_audio_renderer_on_interrpt_event: PlaceHolderFn,
+    pub oh_audio_renderer_on_interrupt_event: ::std::option::Option<
+        extern "C" fn(
+            renderer: *mut OhAudioRenderer,
+            userData: *mut ::std::os::raw::c_void,
+            source_type: OHAudioInterruptSourceType,
+            hint: OHAudioInterruptHint,
+        ) -> i32,
+    >,
     pub oh_audio_renderer_on_error: PlaceHolderFn,
 }
 
@@ -204,7 +236,14 @@ pub struct OhAudioCapturerCallbacks {
         ) -> i32,
     >,
     pub oh_audio_capturer_on_stream_event: PlaceHolderFn,
-    pub oh_audio_capturer_on_interrpt_event: PlaceHolderFn,
+    pub oh_audio_capturer_on_interrupt_event: ::std::option::Option<
+        extern "C" fn(
+            capturer: *mut OhAudioCapturer,
+            userData: *mut ::std::os::raw::c_void,
+            source_type: OHAudioInterruptSourceType,
+            hint: OHAudioInterruptHint,
+        ) -> i32,
+    >,
     pub oh_audio_capturer_on_error: PlaceHolderFn,
 }
 
@@ -248,6 +287,10 @@ extern "C" {
     pub fn OH_AudioRenderer_GetEncodingType(
         renderer: *mut OhAudioRenderer,
         encodingType: *mut OhAudioStreamEncodingType,
+    ) -> OhAudioStreamResult;
+    pub fn OH_AudioStreamBuilder_SetFrameSizeInCallback(
+        builder: *mut OhAudioStreamBuilder,
+        size: i32,
     ) -> OhAudioStreamResult;
     /// Create a streamBuilder can be used to open a renderer or capturer client.
     ///

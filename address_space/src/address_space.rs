@@ -12,19 +12,17 @@
 
 use std::fmt;
 use std::fmt::Debug;
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use arc_swap::ArcSwap;
 use log::error;
 use once_cell::sync::OnceCell;
 
 use crate::{
-    AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener, ListenerReqType, Region,
-    RegionIoEventFd, RegionType,
+    AddressAttr, AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener,
+    ListenerReqType, Region, RegionIoEventFd, RegionType,
 };
-use migration::{migration::Migratable, MigrationManager};
 use util::aio::Iovec;
 use util::byte_code::ByteCode;
 
@@ -41,10 +39,23 @@ impl FlatView {
         }
     }
 
-    fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
+    fn read(
+        &self,
+        dst: &mut dyn std::io::Write,
+        addr: GuestAddress,
+        count: u64,
+        attr: AddressAttr,
+    ) -> Result<()> {
         let mut len = count;
         let mut l = count;
         let mut start = addr;
+        let region_type = match attr {
+            AddressAttr::Ram => RegionType::Ram,
+            AddressAttr::MMIO => RegionType::IO,
+            AddressAttr::RamDevice => RegionType::RamDevice,
+            AddressAttr::RomDevice => RegionType::RomDevice,
+            AddressAttr::RomDeviceForce => RegionType::RomDevice,
+        };
 
         loop {
             if let Some(fr) = self.find_flatrange(start) {
@@ -52,6 +63,19 @@ impl FlatView {
                 let region_offset = fr.offset_in_region + fr_offset;
                 let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
                 let fr_remain = fr.addr_range.size - fr_offset;
+
+                if !util::test_helper::is_test_enabled() && fr.owner.region_type() != region_type {
+                    // Read op RomDevice in I/O access mode as MMIO
+                    if region_type == RegionType::IO
+                        && fr.owner.region_type() == RegionType::RomDevice
+                    {
+                        if fr.owner.get_rom_device_romd().unwrap() {
+                            bail!("mismatch region type")
+                        }
+                    } else {
+                        bail!("mismatch region type")
+                    }
+                }
 
                 if fr.owner.region_type() == RegionType::Ram
                     || fr.owner.region_type() == RegionType::RamDevice
@@ -74,17 +98,42 @@ impl FlatView {
         }
     }
 
-    fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
+    fn write(
+        &self,
+        src: &mut dyn std::io::Read,
+        addr: GuestAddress,
+        count: u64,
+        attr: AddressAttr,
+    ) -> Result<()> {
         let mut l = count;
         let mut len = count;
         let mut start = addr;
 
+        let region_type = match attr {
+            AddressAttr::Ram => RegionType::Ram,
+            AddressAttr::MMIO => RegionType::IO,
+            AddressAttr::RamDevice => RegionType::RamDevice,
+            AddressAttr::RomDeviceForce => RegionType::RomDevice,
+            _ => {
+                bail!("Error write attr")
+            }
+        };
         loop {
             if let Some(fr) = self.find_flatrange(start) {
                 let fr_offset = start.offset_from(fr.addr_range.base);
                 let region_offset = fr.offset_in_region + fr_offset;
                 let region_base = fr.addr_range.base.unchecked_sub(fr.offset_in_region);
                 let fr_remain = fr.addr_range.size - fr_offset;
+
+                // Read/Write ops to RomDevice is MMIO.
+                if !util::test_helper::is_test_enabled()
+                    && fr.owner.region_type() != region_type
+                    && !(region_type == RegionType::IO
+                        && fr.owner.region_type() == RegionType::RomDevice)
+                {
+                    bail!("mismatch region type")
+                }
+
                 if fr.owner.region_type() == RegionType::Ram
                     || fr.owner.region_type() == RegionType::RamDevice
                 {
@@ -230,7 +279,7 @@ impl AddressSpace {
         }
         locked_listener.enable();
 
-        let mut idx = 0;
+        let mut idx = 0_usize;
         let mut mls = self.listeners.lock().unwrap();
         for ml in mls.iter() {
             if ml.lock().unwrap().priority() >= locked_listener.priority() {
@@ -381,8 +430,8 @@ impl AddressSpace {
     /// * `new_evtfds` - New `RegionIoEventFd` array.
     fn update_ioeventfds_pass(&self, new_evtfds: &[RegionIoEventFd]) -> Result<()> {
         let old_evtfds = self.ioeventfds.lock().unwrap();
-        let mut old_idx = 0;
-        let mut new_idx = 0;
+        let mut old_idx = 0_usize;
+        let mut new_idx = 0_usize;
 
         while old_idx < old_evtfds.len() || new_idx < new_evtfds.len() {
             let old_fd = old_evtfds.get(old_idx);
@@ -450,19 +499,27 @@ impl AddressSpace {
         Ok(())
     }
 
-    /// Return the host address according to the given `GuestAddress`.
+    /// Return the host address according to the given `GuestAddress`. It is dangerous to
+    /// read and write directly to hva. We strongly recommend that you use the read and
+    /// write interface provided by AddressSpace unless you know exactly what you need and
+    /// are sure it is safe.
     ///
     /// # Arguments
     ///
     /// * `addr` - Guest address.
-    pub fn get_host_address(&self, addr: GuestAddress) -> Option<u64> {
+    ///
+    /// # Safety
+    ///
+    /// Using this function, the caller needs to make it clear that hva is always in the ram
+    /// range of the virtual machine. And if you want to operate [hva,hva+size], the range
+    /// from hva to hva+size needs to be in the ram range.
+    pub unsafe fn get_host_address(&self, addr: GuestAddress, attr: AddressAttr) -> Option<u64> {
         let view = self.flat_view.load();
-
         view.find_flatrange(addr).and_then(|range| {
             let offset = addr.offset_from(range.addr_range.base);
             range
                 .owner
-                .get_host_address()
+                .get_host_address(attr)
                 .map(|host| host + range.offset_in_region + offset)
         })
     }
@@ -474,7 +531,7 @@ impl AddressSpace {
     /// * `addr` - Guest address.
     /// Return Error if the `addr` is not mapped.
     /// or return the HVA address and available mem length
-    pub fn addr_cache_init(&self, addr: GuestAddress) -> Option<(u64, u64)> {
+    pub fn addr_cache_init(&self, addr: GuestAddress, attr: AddressAttr) -> Option<(u64, u64)> {
         let view = self.flat_view.load();
 
         if let Some(flat_range) = view.find_flatrange(addr) {
@@ -484,12 +541,15 @@ impl AddressSpace {
             let region_remain = flat_range.owner.size() - region_offset;
             let fr_remain = flat_range.addr_range.size - fr_offset;
 
-            return flat_range.owner.get_host_address().map(|host| {
-                (
-                    host + region_offset,
-                    std::cmp::min(fr_remain, region_remain),
-                )
-            });
+            // SAFETY: addr and size is in ram region.
+            return unsafe {
+                flat_range.owner.get_host_address(attr).map(|host| {
+                    (
+                        host + region_offset,
+                        std::cmp::min(fr_remain, region_remain),
+                    )
+                })
+            };
         }
 
         None
@@ -503,6 +563,7 @@ impl AddressSpace {
     /// * `count` - Memory needed length
     pub fn get_address_map(
         &self,
+        cache: &Option<RegionCache>,
         addr: GuestAddress,
         count: u64,
         res: &mut Vec<Iovec>,
@@ -512,7 +573,7 @@ impl AddressSpace {
 
         loop {
             let io_vec = self
-                .addr_cache_init(start)
+                .get_host_address_from_cache(start, cache)
                 .map(|(hva, fr_len)| Iovec {
                     iov_base: hva,
                     iov_len: std::cmp::min(len, fr_len),
@@ -542,7 +603,7 @@ impl AddressSpace {
         cache: &Option<RegionCache>,
     ) -> Option<(u64, u64)> {
         if cache.is_none() {
-            return self.addr_cache_init(addr);
+            return self.addr_cache_init(addr, AddressAttr::Ram);
         }
         let region_cache = cache.unwrap();
         if addr.0 >= region_cache.start && addr.0 < region_cache.end {
@@ -551,7 +612,7 @@ impl AddressSpace {
                 region_cache.end - addr.0,
             ))
         } else {
-            self.addr_cache_init(addr)
+            self.addr_cache_init(addr, AddressAttr::Ram)
         }
     }
 
@@ -569,13 +630,14 @@ impl AddressSpace {
         })
     }
 
-    pub fn get_region_cache(&self, addr: GuestAddress) -> Option<RegionCache> {
+    pub fn get_region_cache(&self, addr: GuestAddress, attr: AddressAttr) -> Option<RegionCache> {
         let view = &self.flat_view.load();
         if let Some(range) = view.find_flatrange(addr) {
             let reg_type = range.owner.region_type();
             let start = range.addr_range.base.0;
             let end = range.addr_range.end_addr().0;
-            let host_base = self.get_host_address(GuestAddress(start)).unwrap_or(0);
+            // SAFETY: the size is in region range, and the type will be checked in get_host_address.
+            let host_base = unsafe { self.get_host_address(GuestAddress(start), attr) }?;
             let cache = RegionCache {
                 reg_type,
                 host_base,
@@ -609,10 +671,17 @@ impl AddressSpace {
     /// # Errors
     ///
     /// Return Error if the `addr` is not mapped.
-    pub fn read(&self, dst: &mut dyn std::io::Write, addr: GuestAddress, count: u64) -> Result<()> {
+    pub fn read(
+        &self,
+        dst: &mut dyn std::io::Write,
+        addr: GuestAddress,
+        count: u64,
+        attr: AddressAttr,
+    ) -> Result<()> {
+        trace::address_space_read(&addr, count);
         let view = self.flat_view.load();
 
-        view.read(dst, addr, count)?;
+        view.read(dst, addr, count, attr)?;
         Ok(())
     }
 
@@ -627,16 +696,25 @@ impl AddressSpace {
     /// # Errors
     ///
     /// Return Error if the `addr` is not mapped.
-    pub fn write(&self, src: &mut dyn std::io::Read, addr: GuestAddress, count: u64) -> Result<()> {
+    pub fn write(
+        &self,
+        src: &mut dyn std::io::Read,
+        addr: GuestAddress,
+        count: u64,
+        attr: AddressAttr,
+    ) -> Result<()> {
+        trace::address_space_write(&addr, count);
         let view = self.flat_view.load();
+
+        let mut buf = Vec::new();
+        src.read_to_end(&mut buf).unwrap();
 
         if !*self.hyp_ioevtfd_enabled.get_or_init(|| false) {
             let ioeventfds = self.ioeventfds.lock().unwrap();
-            if let Ok(index) = ioeventfds
-                .as_slice()
-                .binary_search_by(|ioevtfd| ioevtfd.addr_range.base.cmp(&addr))
-            {
-                let evtfd = &ioeventfds[index];
+            for evtfd in ioeventfds.as_slice() {
+                if evtfd.addr_range.base != addr {
+                    continue;
+                }
                 if count == evtfd.addr_range.size || evtfd.addr_range.size == 0 {
                     if !evtfd.data_match {
                         if let Err(e) = evtfd.fd.write(1) {
@@ -645,25 +723,27 @@ impl AddressSpace {
                         return Ok(());
                     }
 
-                    let mut buf = Vec::new();
-                    src.read_to_end(&mut buf).unwrap();
+                    let mut buf_temp = buf.clone();
 
-                    if buf.len() <= 8 {
-                        let data = u64::from_bytes(buf.as_slice()).unwrap();
+                    if buf_temp.len() <= 8 {
+                        buf_temp.resize(8, 0);
+                        let data = u64::from_bytes(buf_temp.as_slice()).unwrap();
                         if *data == evtfd.data {
                             if let Err(e) = evtfd.fd.write(1) {
                                 error!("Failed to write ioeventfd {:?}: {}", evtfd, e);
                             }
                             return Ok(());
+                        } else {
+                            continue;
                         }
                     }
-                    view.write(&mut buf.as_slice(), addr, count)?;
+                    view.write(&mut buf_temp.as_slice(), addr, count, attr)?;
                     return Ok(());
                 }
             }
         }
 
-        view.write(src, addr, count)?;
+        view.write(&mut buf.as_slice(), addr, count, attr)?;
         Ok(())
     }
 
@@ -676,30 +756,19 @@ impl AddressSpace {
     ///
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub fn write_object<T: ByteCode>(&self, data: &T, addr: GuestAddress) -> Result<()> {
-        self.write(&mut data.as_bytes(), addr, std::mem::size_of::<T>() as u64)
-            .with_context(|| "Failed to write object")
-    }
-
-    /// Write an object to memory via host address.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The object that will be written to the memory.
-    /// * `host_addr` - The start host address where the object will be written to.
-    ///
-    /// # Note
-    /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub fn write_object_direct<T: ByteCode>(&self, data: &T, host_addr: u64) -> Result<()> {
-        // Mark vmm dirty page manually if live migration is active.
-        MigrationManager::mark_dirty_log(host_addr, data.as_bytes().len() as u64);
-
-        // SAFETY: The host addr is managed by memory space, it has been verified.
-        let mut dst = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
-        };
-        dst.write_all(data.as_bytes())
-            .with_context(|| "Failed to write object via host address")
+    pub fn write_object<T: ByteCode>(
+        &self,
+        data: &T,
+        addr: GuestAddress,
+        attr: AddressAttr,
+    ) -> Result<()> {
+        self.write(
+            &mut data.as_bytes(),
+            addr,
+            std::mem::size_of::<T>() as u64,
+            attr,
+        )
+        .with_context(|| "Failed to write object")
     }
 
     /// Read some data from memory to form an object.
@@ -710,40 +779,21 @@ impl AddressSpace {
     ///
     /// # Note
     /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub fn read_object<T: ByteCode>(&self, addr: GuestAddress) -> Result<T> {
+    pub fn read_object<T: ByteCode>(&self, addr: GuestAddress, attr: AddressAttr) -> Result<T> {
         let mut obj = T::default();
         self.read(
             &mut obj.as_mut_bytes(),
             addr,
             std::mem::size_of::<T>() as u64,
+            attr,
         )
         .with_context(|| "Failed to read object")?;
         Ok(obj)
     }
 
-    /// Read some data from memory to form an object via host address.
-    ///
-    /// # Arguments
-    ///
-    /// * `hoat_addr` - The start host address where the data will be read from.
-    ///
-    /// # Note
-    /// To use this method, it is necessary to implement `ByteCode` trait for your object.
-    pub fn read_object_direct<T: ByteCode>(&self, host_addr: u64) -> Result<T> {
-        let mut obj = T::default();
-        let mut dst = obj.as_mut_bytes();
-        // SAFETY: host_addr is managed by address_space, it has been verified for legality.
-        let src = unsafe {
-            std::slice::from_raw_parts_mut(host_addr as *mut u8, std::mem::size_of::<T>())
-        };
-        dst.write_all(src)
-            .with_context(|| "Failed to read object via host address")?;
-
-        Ok(obj)
-    }
-
     /// Update the topology of memory.
     pub fn update_topology(&self) -> Result<()> {
+        trace::trace_scope_start!(address_update_topology);
         let old_fv = self.flat_view.load();
 
         let addr_range = AddressRange::new(GuestAddress(0), self.root.size());
@@ -775,7 +825,7 @@ mod test {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::{HostMemMapping, RegionOps};
+    use crate::{AddressAttr, HostMemMapping, RegionOps};
 
     #[derive(Default, Clone)]
     struct TestListener {
@@ -920,10 +970,10 @@ mod test {
         let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
         let listener4 = Arc::new(Mutex::new(ListenerPrior4::default()));
         let listener5 = Arc::new(Mutex::new(ListenerNeg::default()));
-        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener1).unwrap();
         space.register_listener(listener3.clone()).unwrap();
-        space.register_listener(listener5.clone()).unwrap();
-        space.register_listener(listener2.clone()).unwrap();
+        space.register_listener(listener5).unwrap();
+        space.register_listener(listener2).unwrap();
         space.register_listener(listener4.clone()).unwrap();
 
         let mut pre_prior = std::i32::MIN;
@@ -968,13 +1018,13 @@ mod test {
         let space = AddressSpace::new(root, "space", None).unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
-        space.register_listener(listener1.clone()).unwrap();
+        space.register_listener(listener1).unwrap();
         space.register_listener(listener2.clone()).unwrap();
 
         space.unregister_listener(listener2).unwrap();
         assert_eq!(space.listeners.lock().unwrap().len(), 1);
         for listener in space.listeners.lock().unwrap().iter() {
-            assert_eq!(listener.lock().unwrap().enabled(), true);
+            assert!(listener.lock().unwrap().enabled());
         }
     }
 
@@ -1014,7 +1064,7 @@ mod test {
                 .reqs
                 .lock()
                 .unwrap()
-                .get(0)
+                .first()
                 .unwrap()
                 .1,
             AddressRange::new(region_c.offset(), region_c.size())
@@ -1037,7 +1087,7 @@ mod test {
         assert_eq!(locked_listener.reqs.lock().unwrap().len(), 4);
         // delete flat-range 0~6000 first, belonging to region_c
         assert_eq!(
-            locked_listener.reqs.lock().unwrap().get(0).unwrap().1,
+            locked_listener.reqs.lock().unwrap().first().unwrap().1,
             AddressRange::new(region_c.offset(), region_c.size())
         );
         // add range 0~2000, belonging to region_c
@@ -1187,16 +1237,16 @@ mod test {
             ram2.start_address().unchecked_add(ram2.size())
         );
         assert!(space.address_in_memory(GuestAddress(0), 0));
-        assert_eq!(space.address_in_memory(GuestAddress(1000), 0), false);
-        assert_eq!(space.address_in_memory(GuestAddress(1500), 0), false);
+        assert!(!space.address_in_memory(GuestAddress(1000), 0));
+        assert!(!space.address_in_memory(GuestAddress(1500), 0));
         assert!(space.address_in_memory(GuestAddress(2900), 0));
 
         assert_eq!(
-            space.get_host_address(GuestAddress(500)),
+            unsafe { space.get_host_address(GuestAddress(500), AddressAttr::Ram) },
             Some(ram1.host_address() + 500)
         );
         assert_eq!(
-            space.get_host_address(GuestAddress(2500)),
+            unsafe { space.get_host_address(GuestAddress(2500), AddressAttr::Ram) },
             Some(ram2.host_address() + 500)
         );
 
@@ -1217,18 +1267,22 @@ mod test {
             ram2.start_address().unchecked_add(ram2.size())
         );
         assert!(space.address_in_memory(GuestAddress(0), 0));
-        assert_eq!(space.address_in_memory(GuestAddress(1000), 0), false);
-        assert_eq!(space.address_in_memory(GuestAddress(1500), 0), false);
-        assert_eq!(space.address_in_memory(GuestAddress(2400), 0), false);
+        assert!(!space.address_in_memory(GuestAddress(1000), 0));
+        assert!(!space.address_in_memory(GuestAddress(1500), 0));
+        assert!(!space.address_in_memory(GuestAddress(2400), 0));
         assert!(space.address_in_memory(GuestAddress(2900), 0));
 
         assert_eq!(
-            space.get_host_address(GuestAddress(500)),
+            unsafe { space.get_host_address(GuestAddress(500), AddressAttr::Ram) },
             Some(ram1.host_address() + 500)
         );
-        assert!(space.get_host_address(GuestAddress(2400)).is_none());
+        assert!(unsafe {
+            space
+                .get_host_address(GuestAddress(2400), AddressAttr::Ram)
+                .is_none()
+        });
         assert_eq!(
-            space.get_host_address(GuestAddress(2500)),
+            unsafe { space.get_host_address(GuestAddress(2500), AddressAttr::Ram) },
             Some(ram2.host_address() + 500)
         );
     }
@@ -1245,9 +1299,15 @@ mod test {
             .unwrap();
 
         let data: u64 = 10000;
-        assert!(space.write_object(&data, GuestAddress(992)).is_ok());
-        let data1: u64 = space.read_object(GuestAddress(992)).unwrap();
+        assert!(space
+            .write_object(&data, GuestAddress(992), AddressAttr::Ram)
+            .is_ok());
+        let data1: u64 = space
+            .read_object(GuestAddress(992), AddressAttr::Ram)
+            .unwrap();
         assert_eq!(data1, 10000);
-        assert!(space.write_object(&data, GuestAddress(993)).is_err());
+        assert!(space
+            .write_object(&data, GuestAddress(993), AddressAttr::Ram)
+            .is_err());
     }
 }

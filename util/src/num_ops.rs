@@ -35,7 +35,7 @@ use log::error;
 /// assert!(value == Some(1004));
 /// ```
 pub fn round_up(origin: u64, align: u64) -> Option<u64> {
-    match origin % align {
+    match origin.checked_rem(align)? {
         0 => Some(origin),
         diff => origin.checked_add(align - diff),
     }
@@ -58,7 +58,7 @@ pub fn round_up(origin: u64, align: u64) -> Option<u64> {
 /// assert!(value == Some(1000));
 /// ```
 pub fn round_down(origin: u64, align: u64) -> Option<u64> {
-    match origin % align {
+    match origin.checked_rem(align)? {
         0 => Some(origin),
         diff => origin.checked_sub(diff),
     }
@@ -81,14 +81,12 @@ pub fn round_down(origin: u64, align: u64) -> Option<u64> {
 /// assert!(value == Some(3));
 /// ```
 pub fn div_round_up(dividend: u64, divisor: u64) -> Option<u64> {
-    if let Some(res) = dividend.checked_div(divisor) {
-        if dividend % divisor == 0 {
-            return Some(res);
-        } else {
-            return Some(res + 1);
-        }
+    let res = dividend.checked_div(divisor)?;
+    if dividend.checked_rem(divisor)? == 0 {
+        Some(res)
+    } else {
+        Some(res + 1)
     }
-    None
 }
 
 /// Get the first half or second half of u64.
@@ -203,7 +201,7 @@ pub fn write_u64_high(origin: u64, value: u32) -> u64 {
 /// assert!(value == 0xfa);
 /// ```
 pub fn extract_u32(value: u32, start: u32, length: u32) -> Option<u32> {
-    if length > 32 - start {
+    if length > 32_u32.checked_sub(start)? {
         error!(
             "extract_u32: ( start {} length {} ) is out of range",
             start, length
@@ -235,7 +233,7 @@ pub fn extract_u32(value: u32, start: u32, length: u32) -> Option<u32> {
 /// assert!(value == 0xffff);
 /// ```
 pub fn extract_u64(value: u64, start: u32, length: u32) -> Option<u64> {
-    if length > 64 - start {
+    if length > 64_u32.checked_sub(start)? {
         error!(
             "extract_u64: ( start {} length {} ) is out of range",
             start, length
@@ -243,7 +241,7 @@ pub fn extract_u64(value: u64, start: u32, length: u32) -> Option<u64> {
         return None;
     }
 
-    Some((value >> start as u64) & (!(0_u64) >> (64 - length) as u64))
+    Some((value >> u64::from(start)) & (!(0_u64) >> u64::from(64 - length)))
 }
 
 ///  Deposit @fieldval into the 32 bit @value at the bit field specified
@@ -271,7 +269,7 @@ pub fn extract_u64(value: u64, start: u32, length: u32) -> Option<u64> {
 /// assert!(value == 0xffba);
 /// ```
 pub fn deposit_u32(value: u32, start: u32, length: u32, fieldval: u32) -> Option<u32> {
-    if length > 32 - start {
+    if length > 32_u32.checked_sub(start)? {
         error!(
             "deposit_u32: ( start {} length {} ) is out of range",
             start, length
@@ -371,8 +369,8 @@ pub fn write_data_u32(data: &mut [u8], value: u32) -> bool {
 /// ```
 pub fn read_data_u32(data: &[u8], value: &mut u32) -> bool {
     *value = match data.len() {
-        1 => data[0] as u32,
-        2 => LittleEndian::read_u16(data) as u32,
+        1 => u32::from(data[0]),
+        2 => u32::from(LittleEndian::read_u16(data)),
         4 => LittleEndian::read_u32(data),
         _ => {
             error!("Invalid data length: data len {}", data.len());
@@ -401,7 +399,7 @@ pub fn read_data_u32(data: &[u8], value: &mut u32) -> bool {
 /// ```
 pub fn read_data_u16(data: &[u8], value: &mut u16) -> bool {
     *value = match data.len() {
-        1 => data[0] as u16,
+        1 => u16::from(data[0]),
         2 => LittleEndian::read_u16(data),
         _ => {
             error!("Invalid data length: data len {}", data.len());
@@ -451,7 +449,7 @@ int_trait_impl!(Num for u8 u16 usize);
 /// assert!(value == 17);
 /// ```
 pub fn str_to_num<T: Num>(s: &str) -> Result<T> {
-    let mut base = 10;
+    let mut base: u32 = 10;
     if s.starts_with("0x") || s.starts_with("0X") {
         base = 16;
     }
@@ -496,13 +494,13 @@ mod test {
 
     #[test]
     fn round_up_test() {
-        let result = round_up(10001 as u64, 100 as u64);
+        let result = round_up(10001_u64, 100_u64);
         assert_eq!(result, Some(10100));
     }
 
     #[test]
     fn round_down_test() {
-        let result = round_down(10001 as u64, 100 as u64);
+        let result = round_down(10001_u64, 100_u64);
         assert_eq!(result, Some(10000));
     }
 

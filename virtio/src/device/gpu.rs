@@ -18,15 +18,16 @@ use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{ArgAction, Parser};
 use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
-    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default,
-    ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioDeviceQuirk, VirtioError,
-    VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO, VIRTIO_GPU_CMD_GET_EDID,
-    VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+    check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_read_object,
+    read_config_default, ElemIovec, Element, Queue, VirtioBase, VirtioDevice, VirtioDeviceQuirk,
+    VirtioError, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+    VIRTIO_GPU_CMD_GET_EDID, VIRTIO_GPU_CMD_MOVE_CURSOR, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
     VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_RESOURCE_UNREF, VIRTIO_GPU_CMD_SET_SCANOUT,
     VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_UPDATE_CURSOR, VIRTIO_GPU_FLAG_FENCE,
@@ -36,13 +37,14 @@ use crate::{
     VIRTIO_GPU_RESP_OK_EDID, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_TYPE_GPU,
 };
 use address_space::{AddressSpace, FileBackend, GuestAddress};
-use machine_manager::config::{GpuDevConfig, DEFAULT_VIRTQUEUE_SIZE, VIRTIO_GPU_MAX_OUTPUTS};
+use machine_manager::config::{get_pci_df, valid_id, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration_derive::ByteCode;
 use ui::console::{
     console_close, console_init, display_cursor_define, display_graphic_update,
     display_replace_surface, display_set_major_screen, get_run_stage, set_run_stage, ConsoleType,
     DisplayConsole, DisplayMouse, DisplaySurface, HardWareOperations, VmRunningStage,
+    DEFAULT_CURSOR_BPP, DEFAULT_CURSOR_HEIGHT, DEFAULT_CURSOR_WIDTH,
 };
 use ui::pixman::{
     create_pixman_image, get_image_data, get_image_format, get_image_height, get_image_stride,
@@ -51,6 +53,7 @@ use ui::pixman::{
 use util::aio::{iov_from_buf_direct, iov_to_buf_direct, Iovec};
 use util::byte_code::ByteCode;
 use util::edid::EdidInfo;
+use util::gen_base_func;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -71,6 +74,49 @@ const VIRTIO_GPU_RES_WIN_FRAMEBUF: u32 = 0x80000000;
 /// The flag indicates that the frame buffer only used in special bios phase for windows.
 const VIRTIO_GPU_RES_EFI_FRAMEBUF: u32 = 0x40000000;
 const VIRTIO_GPU_RES_FRAMEBUF: u32 = VIRTIO_GPU_RES_WIN_FRAMEBUF | VIRTIO_GPU_RES_EFI_FRAMEBUF;
+
+/// The maximum number of outputs.
+const VIRTIO_GPU_MAX_OUTPUTS: usize = 16;
+/// The default maximum memory 256M.
+const VIRTIO_GPU_DEFAULT_MAX_HOSTMEM: u64 = 0x10000000;
+
+#[derive(Parser, Clone, Debug, Default)]
+#[command(no_binary_name(true))]
+pub struct GpuDevConfig {
+    #[arg(long, value_parser = ["virtio-gpu-pci"])]
+    pub classtype: String,
+    #[arg(long, value_parser = valid_id)]
+    pub id: String,
+    #[arg(long)]
+    pub bus: String,
+    #[arg(long, value_parser = get_pci_df)]
+    pub addr: (u8, u8),
+    #[arg(long, alias = "max_outputs", default_value="1", value_parser = clap::value_parser!(u32).range(1..=VIRTIO_GPU_MAX_OUTPUTS as i64))]
+    pub max_outputs: u32,
+    #[arg(long, default_value="true", action = ArgAction::Append)]
+    pub edid: bool,
+    #[arg(long, default_value = "1024")]
+    pub xres: u32,
+    #[arg(long, default_value = "768")]
+    pub yres: u32,
+    // The default max_hostmem is 256M.
+    #[arg(long, alias = "max_hostmem", default_value="268435456", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_hostmem: u64,
+    #[arg(long, alias = "enable_bar0", default_value="false", action = ArgAction::Append)]
+    pub enable_bar0: bool,
+}
+
+impl GpuDevConfig {
+    pub fn check(&self) {
+        if self.max_hostmem < VIRTIO_GPU_DEFAULT_MAX_HOSTMEM {
+            warn!(
+                "max_hostmem should >= {}, allocating less than it may cause \
+                the GPU to fail to start or refresh.",
+                VIRTIO_GPU_DEFAULT_MAX_HOSTMEM
+            );
+        }
+    }
+}
 
 #[derive(Debug)]
 struct GpuResource {
@@ -373,13 +419,7 @@ impl VirtioGpuRequest {
             );
         }
 
-        let mut header = VirtioGpuCtrlHdr::default();
-        iov_to_buf(mem_space, &elem.out_iovec, header.as_mut_bytes()).and_then(|size| {
-            if size < size_of::<VirtioGpuCtrlHdr>() {
-                bail!("Invalid header for gpu request: len {}.", size)
-            }
-            Ok(())
-        })?;
+        let header = iov_read_object::<VirtioGpuCtrlHdr>(mem_space, &elem.out_iovec, &None)?;
 
         // Size of out_iovec is no less than size of VirtioGpuCtrlHdr, so
         // it is possible to get none back.
@@ -387,8 +427,8 @@ impl VirtioGpuRequest {
             iov_discard_front(&mut elem.out_iovec, size_of::<VirtioGpuCtrlHdr>() as u64)
                 .unwrap_or_default();
 
-        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space)?;
-        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space)?;
+        let (out_len, out_iovec) = gpa_hva_iovec_map(data_iovec, mem_space, &None)?;
+        let (in_len, in_iovec) = gpa_hva_iovec_map(&elem.in_iovec, mem_space, &None)?;
 
         // Note: in_iov and out_iov total len is no more than 1<<32, and
         // out_iov is more than 1, so in_len and out_len will not overflow.
@@ -631,8 +671,8 @@ pub fn cal_image_hostmem(format: u32, width: u32, height: u32) -> (Option<usize>
             }
         };
         let bpp = pixman_format_bpp(pixman_format as u32);
-        let stride = ((width as u64 * bpp as u64 + 0x1f) >> 5) * (size_of::<u32>() as u64);
-        match stride.checked_mul(height as u64) {
+        let stride = ((u64::from(width) * u64::from(bpp) + 0x1f) >> 5) * (size_of::<u32>() as u64);
+        match stride.checked_mul(u64::from(height)) {
             None => {
                 error!(
                     "stride * height is overflow: width {} height {} stride {} bpp {}",
@@ -675,7 +715,8 @@ impl GpuIoHandler {
     }
 
     fn get_request<T: ByteCode>(&mut self, header: &VirtioGpuRequest, req: &mut T) -> Result<()> {
-        iov_to_buf_direct(&header.out_iovec, 0, req.as_mut_bytes()).and_then(|size| {
+        // SAFETY: out_iovec is generated by address_space.
+        unsafe { iov_to_buf_direct(&header.out_iovec, 0, req.as_mut_bytes()) }.and_then(|size| {
             if size == size_of::<T>() {
                 Ok(())
             } else {
@@ -687,20 +728,14 @@ impl GpuIoHandler {
     fn complete_one_request(&mut self, index: u16, len: u32) -> Result<()> {
         let mut queue_lock = self.ctrl_queue.lock().unwrap();
 
-        queue_lock
-            .vring
-            .add_used(&self.mem_space, index, len)
-            .with_context(|| {
-                format!(
-                    "Failed to add used ring(gpu ctrl), index {}, len {}",
-                    index, len,
-                )
-            })?;
+        queue_lock.vring.add_used(index, len).with_context(|| {
+            format!(
+                "Failed to add used ring(gpu ctrl), index {}, len {}",
+                index, len,
+            )
+        })?;
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| "Failed to trigger interrupt(gpu ctrl)")?;
             trace::virtqueue_send_interrupt("Gpu", &*queue_lock as *const _ as u64);
@@ -721,7 +756,8 @@ impl GpuIoHandler {
             header.ctx_id = req.header.ctx_id;
         }
 
-        let len = iov_from_buf_direct(&req.in_iovec, resp.as_bytes())?;
+        // SAFETY: in_iovec is generated by address_space.
+        let len = unsafe { iov_from_buf_direct(&req.in_iovec, resp.as_bytes())? };
         if len != size_of::<T>() {
             error!(
                 "GuestError: An incomplete response will be used instead of the expected: expected \
@@ -758,6 +794,17 @@ impl GpuIoHandler {
         let scanout = &mut self.scanouts[scanout_id];
         display_replace_surface(&scanout.con, None)
             .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+
+        let mouse = DisplayMouse {
+            height: DEFAULT_CURSOR_WIDTH as u32,
+            width: DEFAULT_CURSOR_HEIGHT as u32,
+            hot_x: 0,
+            hot_y: 0,
+            data: vec![0_u8; DEFAULT_CURSOR_WIDTH * DEFAULT_CURSOR_HEIGHT * DEFAULT_CURSOR_BPP],
+        };
+        display_cursor_define(&scanout.con, &mouse)
+            .unwrap_or_else(|e| error!("Error occurs during display_cursor_define: {:?}", e));
+
         scanout.clear();
     }
 
@@ -1133,7 +1180,7 @@ impl GpuIoHandler {
         }
 
         let pixman_format = get_image_format(res.pixman_image);
-        let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+        let bpp = (u32::from(pixman_format_bpp(pixman_format as u32)) + 8 - 1) / 8;
         let pixman_stride = get_image_stride(res.pixman_image);
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
@@ -1181,6 +1228,12 @@ impl GpuIoHandler {
         scanout.y = info_set_scanout.rect.y_coord;
         scanout.width = info_set_scanout.rect.width;
         scanout.height = info_set_scanout.rect.height;
+
+        if (self.driver_features & (1 << VIRTIO_GPU_F_EDID)) == 0
+            && (info_set_scanout.resource_id & VIRTIO_GPU_RES_WIN_FRAMEBUF) != 0
+        {
+            self.change_run_stage()?;
+        }
 
         self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
     }
@@ -1256,10 +1309,10 @@ impl GpuIoHandler {
                 let extents = pixman_region_extents(final_reg_ptr);
                 display_graphic_update(
                     &scanout.con,
-                    (*extents).x1 as i32,
-                    (*extents).y1 as i32,
-                    ((*extents).x2 - (*extents).x1) as i32,
-                    ((*extents).y2 - (*extents).y1) as i32,
+                    i32::from((*extents).x1),
+                    i32::from((*extents).y1),
+                    i32::from((*extents).x2 - (*extents).x1),
+                    i32::from((*extents).y2 - (*extents).y1),
                 )?;
                 pixman_region_fini(rect_reg_ptr);
                 pixman_region_fini(final_reg_ptr);
@@ -1314,12 +1367,13 @@ impl GpuIoHandler {
         let res = &mut self.resources_list[res_idx];
         let pixman_format = get_image_format(res.pixman_image);
         let width = get_image_width(res.pixman_image) as u32;
-        let bpp = (pixman_format_bpp(pixman_format as u32) as u32 + 8 - 1) / 8;
+        let bpp = (u32::from(pixman_format_bpp(pixman_format as u32)) + 8 - 1) / 8;
         let stride = get_image_stride(res.pixman_image) as u32;
         let data = get_image_data(res.pixman_image).cast() as *mut u8;
 
         if res.format == VIRTIO_GPU_FORMAT_MONOCHROME {
-            let v = iov_to_buf_direct(&res.iov, 0, &mut res.monochrome_cursor)?;
+            // SAFETY: iov is generated by address_space.
+            let v = unsafe { iov_to_buf_direct(&res.iov, 0, &mut res.monochrome_cursor)? };
             if v != res.monochrome_cursor.len() {
                 error!("No enough data is copied for transfer_to_host_2d with monochrome");
             }
@@ -1332,7 +1386,8 @@ impl GpuIoHandler {
             let trans_size = (trans_info.rect.height * stride) as usize;
             // SAFETY: offset_dst and trans_size do not exceeds data size.
             let dst = unsafe { from_raw_parts_mut(data.add(offset_dst), trans_size) };
-            iov_to_buf_direct(&res.iov, trans_info.offset, dst).map(|v| {
+            // SAFETY: iov is generated by address_space.
+            unsafe { iov_to_buf_direct(&res.iov, trans_info.offset, dst) }.map(|v| {
                 if v < trans_size {
                     warn!("No enough data is copied for transfer_to_host_2d");
                 }
@@ -1349,7 +1404,8 @@ impl GpuIoHandler {
         for _ in 0..trans_info.rect.height {
             // SAFETY: offset_dst and line_size do not exceeds data size.
             let dst = unsafe { from_raw_parts_mut(data.add(offset_dst), line_size) };
-            iov_to_buf_direct(&res.iov, offset_src as u64, dst).map(|v| {
+            // SAFETY: iov is generated by address_space.
+            unsafe { iov_to_buf_direct(&res.iov, offset_src as u64, dst) }.map(|v| {
                 if v < line_size {
                     warn!("No enough data is copied for transfer_to_host_2d");
                 }
@@ -1407,9 +1463,9 @@ impl GpuIoHandler {
         }
 
         let entries = info_attach_backing.nr_entries;
-        let ents_size = size_of::<VirtioGpuMemEntry>() as u64 * entries as u64;
+        let ents_size = size_of::<VirtioGpuMemEntry>() as u64 * u64::from(entries);
         let head_size = size_of::<VirtioGpuResourceAttachBacking>() as u64;
-        if (req.out_len as u64) < (ents_size + head_size) {
+        if u64::from(req.out_len) < (ents_size + head_size) {
             error!(
                 "GuestError: The nr_entries {} in resource attach backing request is larger than total len {}.",
                 info_attach_backing.nr_entries, req.out_len,
@@ -1424,7 +1480,8 @@ impl GpuIoHandler {
         let ents_buf =
             // SAFETY: ents is guaranteed not be null and the range of ents_size has been limited.
             unsafe { from_raw_parts_mut(ents.as_mut_ptr() as *mut u8, ents_size as usize) };
-        let v = iov_to_buf_direct(&req.out_iovec, head_size, ents_buf)?;
+        // SAFETY: out_iovec is generated by address_space.
+        let v = unsafe { iov_to_buf_direct(&req.out_iovec, head_size, ents_buf)? };
         if v as u64 != ents_size {
             error!(
                 "Virtio-GPU: Load no enough ents buf when attach backing, {} vs {}",
@@ -1440,7 +1497,7 @@ impl GpuIoHandler {
                 len: ent.length,
             });
         }
-        match gpa_hva_iovec_map(&elemiovec, &self.mem_space) {
+        match gpa_hva_iovec_map(&elemiovec, &self.mem_space, &None) {
             Ok((_, iov)) => {
                 res.iov = iov;
                 self.response_nodata(VIRTIO_GPU_RESP_OK_NODATA, req)
@@ -1552,17 +1609,11 @@ impl GpuIoHandler {
                 }
             };
 
-            queue
-                .vring
-                .add_used(&self.mem_space, elem.index, 0)
-                .with_context(|| {
-                    format!("Failed to add used ring(cursor), index {}", elem.index)
-                })?;
+            queue.vring.add_used(elem.index, 0).with_context(|| {
+                format!("Failed to add used ring(cursor), index {}", elem.index)
+            })?;
 
-            if queue
-                .vring
-                .should_notify(&self.mem_space, self.driver_features)
-            {
+            if queue.vring.should_notify(self.driver_features) {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
                     .with_context(|| {
                         VirtioError::InterruptTrigger("gpu cursor", VirtioInterruptType::Vring)
@@ -1683,13 +1734,7 @@ impl Gpu {
 }
 
 impl VirtioDevice for Gpu {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn device_quirk(&self) -> Option<VirtioDeviceQuirk> {
         if self.cfg.enable_bar0 {
@@ -1841,5 +1886,52 @@ impl VirtioDevice for Gpu {
         let result = unregister_event_helper(None, &mut self.base.deactivate_evts);
         info!("virtio-gpu deactivate {:?}", result);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_parse_virtio_gpu_pci_cmdline() {
+        // Test1: Right.
+        let gpu_cmd = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=5,edid=false,\
+            xres=2048,yres=800,enable_bar0=true,max_hostmem=268435457";
+        let gpu_cfg = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd, true, false)).unwrap();
+        assert_eq!(gpu_cfg.id, "gpu_1");
+        assert_eq!(gpu_cfg.bus, "pcie.0");
+        assert_eq!(gpu_cfg.addr, (4, 0));
+        assert_eq!(gpu_cfg.max_outputs, 5);
+        assert_eq!(gpu_cfg.xres, 2048);
+        assert_eq!(gpu_cfg.yres, 800);
+        assert!(!gpu_cfg.edid);
+        assert_eq!(gpu_cfg.max_hostmem, 268435457);
+        assert!(gpu_cfg.enable_bar0);
+
+        // Test2: Default.
+        let gpu_cmd2 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0";
+        let gpu_cfg =
+            GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd2, true, false)).unwrap();
+        assert_eq!(gpu_cfg.max_outputs, 1);
+        assert_eq!(gpu_cfg.xres, 1024);
+        assert_eq!(gpu_cfg.yres, 768);
+        assert!(gpu_cfg.edid);
+        assert_eq!(gpu_cfg.max_hostmem, VIRTIO_GPU_DEFAULT_MAX_HOSTMEM);
+        assert!(!gpu_cfg.enable_bar0);
+
+        // Test3/4: max_outputs is illegal.
+        let gpu_cmd3 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=17";
+        let result = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd3, true, false));
+        assert!(result.is_err());
+        let gpu_cmd4 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=0";
+        let result = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd4, true, false));
+        assert!(result.is_err());
+
+        // Test5: max_hostmem is illegal.
+        let gpu_cmd5 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_hostmem=0";
+        let result = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd5, true, false));
+        assert!(result.is_err());
     }
 }

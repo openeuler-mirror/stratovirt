@@ -15,11 +15,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{debug, error};
-use vmm_sys_util::eventfd::EventFd;
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlEisaId, AmlExtendedInterrupt,
     AmlIntShare, AmlInteger, AmlIoDecode, AmlIoResource, AmlNameDecl, AmlResTemplate,
@@ -34,7 +33,8 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::gen_base_func;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
@@ -124,46 +124,25 @@ pub struct Serial {
 }
 
 impl Serial {
-    pub fn new(cfg: SerialConfig) -> Self {
-        Serial {
+    pub fn new(
+        cfg: SerialConfig,
+        sysbus: &Arc<Mutex<SysBus>>,
+        region_base: u64,
+        region_size: u64,
+    ) -> Result<Self> {
+        let mut serial = Serial {
             base: SysBusDevBase::new(SysBusDevType::Serial),
             paused: false,
             rbr: VecDeque::new(),
             state: SerialState::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
-        }
-    }
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-    ) -> Result<()> {
-        self.chardev
-            .lock()
-            .unwrap()
-            .realize()
-            .with_context(|| "Failed to realize chardev")?;
-        self.base.interrupt_evt = Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?));
-        self.set_sys_resource(sysbus, region_base, region_size)
+        };
+        serial.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
+        serial
+            .set_sys_resource(sysbus, region_base, region_size, "Serial")
             .with_context(|| LegacyError::SetSysResErr)?;
-
-        let dev = Arc::new(Mutex::new(self));
-        sysbus.attach_device(&dev, region_base, region_size, "Serial")?;
-
-        MigrationManager::register_device_instance(
-            SerialState::descriptor(),
-            dev.clone(),
-            SERIAL_SNAPSHOT_ID,
-        );
-        let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
-            None,
-        )
-        .with_context(|| LegacyError::RegNotifierErr)?;
-        Ok(())
+        serial.set_parent_bus(sysbus.clone());
+        Ok(serial)
     }
 
     fn unpause_rx(&mut self) {
@@ -297,19 +276,10 @@ impl Serial {
 
                         self.rbr.push_back(data);
                         self.state.lsr |= UART_LSR_DR;
-                    } else {
-                        let output = self.chardev.lock().unwrap().output.clone();
-                        if output.is_none() {
-                            self.update_iir();
-                            bail!("serial: failed to get output fd.");
-                        }
-                        let mut locked_output = output.as_ref().unwrap().lock().unwrap();
-                        locked_output
-                            .write_all(&[data])
-                            .with_context(|| "serial: failed to write.")?;
-                        locked_output
-                            .flush()
-                            .with_context(|| "serial: failed to flush.")?;
+                    } else if let Err(e) =
+                        self.chardev.lock().unwrap().fill_outbuf(vec![data], None)
+                    {
+                        bail!("Failed to append data to output buffer of chardev, {:?}", e);
                     }
 
                     self.update_iir();
@@ -381,23 +351,38 @@ impl InputReceiver for Serial {
 }
 
 impl Device for Serial {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        self.chardev
+            .lock()
+            .unwrap()
+            .realize()
+            .with_context(|| "Failed to realize chardev")?;
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus.attach_device(&dev)?;
+
+        MigrationManager::register_device_instance(
+            SerialState::descriptor(),
+            dev.clone(),
+            SERIAL_SNAPSHOT_ID,
+        );
+        let locked_dev = dev.lock().unwrap();
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
+            None,
+        )
+        .with_context(|| LegacyError::RegNotifierErr)?;
+        drop(locked_dev);
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for Serial {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         data[0] = self.read_internal(offset);
@@ -415,10 +400,6 @@ impl SysBusDevOps for Serial {
 
     fn get_irq(&self, _sysbus: &mut SysBus) -> Result<i32> {
         Ok(UART_IRQ)
-    }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
     }
 }
 
@@ -484,18 +465,22 @@ impl MigrationHook for Serial {}
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::sysbus_init;
     use machine_manager::config::{ChardevConfig, ChardevType};
 
     #[test]
     fn test_methods_of_serial() {
         // test new method
         let chardev_cfg = ChardevConfig {
-            id: "chardev".to_string(),
-            backend: ChardevType::Stdio,
+            classtype: ChardevType::Stdio {
+                id: "chardev".to_string(),
+            },
         };
-        let mut usart = Serial::new(SerialConfig {
+        let sysbus = sysbus_init();
+        let config = SerialConfig {
             chardev: chardev_cfg.clone(),
-        });
+        };
+        let mut usart = Serial::new(config, &sysbus, SERIAL_ADDR, 8).unwrap();
         assert_eq!(usart.state.ier, 0);
         assert_eq!(usart.state.iir, 1);
         assert_eq!(usart.state.lcr, 3);
@@ -545,12 +530,15 @@ mod test {
     #[test]
     fn test_serial_migration_interface() {
         let chardev_cfg = ChardevConfig {
-            id: "chardev".to_string(),
-            backend: ChardevType::Stdio,
+            classtype: ChardevType::Stdio {
+                id: "chardev".to_string(),
+            },
         };
-        let mut usart = Serial::new(SerialConfig {
+        let config = SerialConfig {
             chardev: chardev_cfg,
-        });
+        };
+        let sysbus = sysbus_init();
+        let mut usart = Serial::new(config, &sysbus, SERIAL_ADDR, 8).unwrap();
         // Get state vector for usart
         let serial_state_result = usart.get_state_vec();
         assert!(serial_state_result.is_ok());

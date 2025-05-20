@@ -159,6 +159,7 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_API_VERSION() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32);
     arch_ioctl_allow_list(bpf_rule)
 }

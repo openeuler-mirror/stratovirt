@@ -14,7 +14,10 @@ use std::{
     cell::RefCell,
     fs::File,
     io::{Seek, SeekFrom},
-    os::unix::prelude::{AsRawFd, RawFd},
+    os::{
+        linux::fs::MetadataExt,
+        unix::prelude::{AsRawFd, RawFd},
+    },
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering},
@@ -26,7 +29,7 @@ use anyhow::{Context, Result};
 use log::error;
 use vmm_sys_util::epoll::EventSet;
 
-use crate::{BlockIoErrorCallback, BlockProperty};
+use crate::{qcow2::DEFAULT_SECTOR_SIZE, BlockIoErrorCallback, BlockProperty};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::{
     aio::{Aio, AioCb, AioEngine, Iovec, OpCode},
@@ -52,7 +55,7 @@ impl CombineRequest {
 }
 
 pub struct FileDriver<T: Clone + 'static> {
-    pub file: File,
+    pub file: Arc<File>,
     aio: Rc<RefCell<Aio<T>>>,
     pub incomplete: Arc<AtomicU64>,
     delete_evts: Vec<RawFd>,
@@ -60,7 +63,7 @@ pub struct FileDriver<T: Clone + 'static> {
 }
 
 impl<T: Clone + 'static> FileDriver<T> {
-    pub fn new(file: File, aio: Aio<T>, block_prop: BlockProperty) -> Self {
+    pub fn new(file: Arc<File>, aio: Aio<T>, block_prop: BlockProperty) -> Self {
         Self {
             file,
             incomplete: aio.incomplete_cnt.clone(),
@@ -102,7 +105,7 @@ impl<T: Clone + 'static> FileDriver<T> {
         completecb: T,
     ) -> Result<()> {
         if req_list.is_empty() {
-            return self.complete_request(opcode, &Vec::new(), 0, 0, completecb);
+            return self.complete_request(opcode, 0, completecb);
         }
         let single_req = req_list.len() == 1;
         let cnt = Arc::new(AtomicU32::new(req_list.len() as u32));
@@ -127,16 +130,10 @@ impl<T: Clone + 'static> FileDriver<T> {
         self.process_request(OpCode::Preadv, req_list, completecb)
     }
 
-    fn complete_request(
-        &mut self,
-        opcode: OpCode,
-        iovec: &[Iovec],
-        offset: usize,
-        nbytes: u64,
-        completecb: T,
-    ) -> Result<()> {
-        let aiocb = self.package_aiocb(opcode, iovec.to_vec(), offset, nbytes, completecb);
-        (self.aio.borrow_mut().complete_func)(&aiocb, nbytes as i64)
+    pub fn complete_request(&mut self, opcode: OpCode, res: i64, completecb: T) -> Result<()> {
+        let iovec: Vec<Iovec> = Vec::new();
+        let aiocb = self.package_aiocb(opcode, iovec.to_vec(), 0, 0, completecb);
+        (self.aio.borrow_mut().complete_func)(&aiocb, res)
     }
 
     pub fn write_vectored(&mut self, req_list: Vec<CombineRequest>, completecb: T) -> Result<()> {
@@ -194,16 +191,22 @@ impl<T: Clone + 'static> FileDriver<T> {
         unregister_event_helper(self.block_prop.iothread.as_ref(), &mut self.delete_evts)
     }
 
+    pub fn actual_size(&mut self) -> Result<u64> {
+        let meta_data = self.file.metadata()?;
+        Ok(meta_data.st_blocks() * DEFAULT_SECTOR_SIZE)
+    }
+
     pub fn disk_size(&mut self) -> Result<u64> {
         let disk_size = self
             .file
+            .as_ref()
             .seek(SeekFrom::End(0))
             .with_context(|| "Failed to seek the end for file")?;
         Ok(disk_size)
     }
 
     pub fn extend_to_len(&mut self, len: u64) -> Result<()> {
-        let file_end = self.file.seek(SeekFrom::End(0))?;
+        let file_end = self.file.as_ref().seek(SeekFrom::End(0))?;
         if len > file_end {
             self.file.set_len(len)?;
         }

@@ -74,7 +74,7 @@ fn init_demo_dev(cfg: DemoDev, dev_num: u8) -> (Rc<RefCell<TestPciDev>>, Rc<RefC
     let mut args: Vec<&str> = "-D /tmp/oscar.log".split(' ').collect();
     demo_dev_args.append(&mut args);
 
-    let demo_str = fmt_demo_deves(cfg.clone(), dev_num);
+    let demo_str = fmt_demo_deves(cfg, dev_num);
     args = demo_str[..].split(' ').collect();
     demo_dev_args.append(&mut args);
 
@@ -82,7 +82,7 @@ fn init_demo_dev(cfg: DemoDev, dev_num: u8) -> (Rc<RefCell<TestPciDev>>, Rc<RefC
     let machine = Rc::new(RefCell::new(TestStdMachine::new(test_state.clone())));
     let _allocator = machine.borrow().allocator.clone();
 
-    let mut pci_dev = TestPciDev::new(machine.clone().borrow().pci_bus.clone());
+    let mut pci_dev = TestPciDev::new(machine.borrow().pci_bus.clone());
     let devfn = cfg.dev_num << 3;
     pci_dev.devfn = devfn;
 
@@ -121,14 +121,14 @@ impl RootPort {
         bus_num: u8,
         devfn: u8,
     ) -> Self {
-        let mut root_port = TestPciDev::new(machine.clone().borrow().pci_bus.clone());
+        let mut root_port = TestPciDev::new(machine.borrow().pci_bus.clone());
         root_port.set_bus_num(bus_num);
         root_port.devfn = devfn;
         assert_eq!(root_port.config_readw(PCI_SUB_CLASS_DEVICE), 0x0604);
 
         root_port.enable();
         root_port.enable_msix(None);
-        let root_port_msix = MsixVector::new(0, alloc.clone());
+        let root_port_msix = MsixVector::new(0, alloc);
         root_port.set_msix_vector(
             root_port_msix.msix_entry,
             root_port_msix.msix_addr,
@@ -169,7 +169,7 @@ fn build_root_port_args(root_port_nums: u8) -> Vec<String> {
         if multifunc {
             addr = bus / 8 + 1;
             func += 1;
-            func = func % 8;
+            func %= 8;
         } else {
             addr += 1;
             func = 0;
@@ -250,8 +250,8 @@ fn build_hotplug_blk_cmd(
     let add_blk_command = format!(
         "{{\"execute\": \"blockdev-add\", \
         \"arguments\": {{\"node-name\": \"drive-{}\", \"file\": {{\"driver\": \
-        \"file\", \"filename\": \"{}\", \"aio\": \"native\"}}, \
-        \"cache\": {{\"direct\": true}}, \"read-only\": false}}}}",
+        \"file\", \"filename\": \"{}\", \"aio\": \"off\"}}, \
+        \"cache\": {{\"direct\": false}}, \"read-only\": false}}}}",
         hotplug_blk_id, hotplug_image_path
     );
 
@@ -287,7 +287,7 @@ fn build_all_device_args(
 ) -> Vec<String> {
     let mut device_args: Vec<String> = Vec::new();
     let mut root_port_args = build_root_port_args(root_port_nums);
-    if root_port_args.len() != 0 {
+    if !root_port_args.is_empty() {
         device_args.append(&mut root_port_args);
     }
 
@@ -319,7 +319,7 @@ fn create_blk(
     pci_fn: u8,
 ) -> Rc<RefCell<TestVirtioPciDev>> {
     let virtio_blk = Rc::new(RefCell::new(TestVirtioPciDev::new(
-        machine.clone().borrow().pci_bus.clone(),
+        machine.borrow().pci_bus.clone(),
     )));
     virtio_blk.borrow_mut().pci_dev.set_bus_num(bus_num);
     virtio_blk.borrow_mut().init(pci_slot, pci_fn);
@@ -366,7 +366,7 @@ fn create_machine(
         .borrow()
         .pci_bus
         .borrow()
-        .pci_auto_bus_scan(root_port_nums as u8);
+        .pci_auto_bus_scan(root_port_nums);
     let allocator = machine.borrow().allocator.clone();
 
     (test_state, machine, allocator)
@@ -405,15 +405,14 @@ fn tear_down(
         blk.clone().unwrap().borrow_mut().pci_dev.disable_msix();
     }
     if vqs.is_some() {
-        blk.clone()
-            .unwrap()
+        blk.unwrap()
             .borrow_mut()
-            .destroy_device(alloc.clone(), vqs.unwrap());
+            .destroy_device(alloc, vqs.unwrap());
     }
 
     test_state.borrow_mut().stop();
     if let Some(img_paths) = image_paths {
-        img_paths.iter().enumerate().for_each(|(_i, image_path)| {
+        img_paths.iter().for_each(|image_path| {
             cleanup_img(image_path.to_string());
         })
     }
@@ -564,12 +563,7 @@ fn validate_blk_io_success(
         .borrow_mut()
         .init_device(test_state.clone(), alloc.clone(), features, 1);
 
-    validate_std_blk_io(
-        blk.clone(),
-        test_state.clone(),
-        virtqueues.clone(),
-        alloc.clone(),
-    );
+    validate_std_blk_io(blk.clone(), test_state, virtqueues.clone(), alloc.clone());
 
     blk.borrow_mut().pci_dev.disable_msix();
     blk.borrow()
@@ -583,14 +577,14 @@ fn simple_blk_io_req(
     alloc: Rc<RefCell<GuestAllocator>>,
 ) -> u32 {
     let (free_head, _req_addr) = add_blk_request(
-        test_state.clone(),
-        alloc.clone(),
+        test_state,
+        alloc,
         virtqueue.clone(),
         VIRTIO_BLK_T_OUT,
         0,
         false,
     );
-    blk.borrow().virtqueue_notify(virtqueue.clone());
+    blk.borrow().virtqueue_notify(virtqueue);
 
     free_head
 }
@@ -629,14 +623,7 @@ fn validate_std_blk_io(
         false,
     );
 
-    virtio_blk_read(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        virtqueues[0].clone(),
-        0,
-        false,
-    );
+    virtio_blk_read(blk, test_state, alloc, virtqueues[0].clone(), 0, false);
 }
 
 fn wait_root_port_msix(root_port: Rc<RefCell<RootPort>>) -> bool {
@@ -690,8 +677,8 @@ fn lookup_all_cap_addr(cap_id: u8, pci_dev: TestPciDev) -> Vec<u8> {
 fn get_msix_flag(pci_dev: TestPciDev) -> u16 {
     let addr = pci_dev.find_capability(PCI_CAP_ID_MSIX, 0);
     assert_ne!(addr, 0);
-    let old_value = pci_dev.config_readw(addr + PCI_MSIX_MSG_CTL);
-    old_value
+
+    pci_dev.config_readw(addr + PCI_MSIX_MSG_CTL)
 }
 
 fn set_msix_enable(pci_dev: TestPciDev) {
@@ -728,31 +715,26 @@ fn unmask_msix_global(pci_dev: TestPciDev) {
 }
 
 fn mask_msix_vector(pci_dev: TestPciDev, vector: u16) {
-    let offset: u64 = pci_dev.msix_table_off + (vector * PCI_MSIX_ENTRY_SIZE) as u64;
+    let offset: u64 = pci_dev.msix_table_off + u64::from(vector * PCI_MSIX_ENTRY_SIZE);
 
-    let vector_mask = pci_dev.io_readl(
-        pci_dev.msix_table_bar,
-        offset + PCI_MSIX_ENTRY_VECTOR_CTRL as u64,
-    );
+    let vector_mask = pci_dev.io_readl(pci_dev.msix_table_bar, offset + PCI_MSIX_ENTRY_VECTOR_CTRL);
 
     pci_dev.io_writel(
         pci_dev.msix_table_bar,
-        offset + PCI_MSIX_ENTRY_VECTOR_CTRL as u64,
+        offset + PCI_MSIX_ENTRY_VECTOR_CTRL,
         vector_mask | PCI_MSIX_ENTRY_CTRL_MASKBIT,
     );
 }
 
 fn unmask_msix_vector(pci_dev: TestPciDev, vector: u16) {
-    let offset: u64 = pci_dev.msix_table_off + (vector * PCI_MSIX_ENTRY_SIZE) as u64;
+    let offset: u64 = pci_dev.msix_table_off + u64::from(vector * PCI_MSIX_ENTRY_SIZE);
 
-    let vector_control = pci_dev.io_readl(
-        pci_dev.msix_table_bar,
-        offset + PCI_MSIX_ENTRY_VECTOR_CTRL as u64,
-    );
+    let vector_control =
+        pci_dev.io_readl(pci_dev.msix_table_bar, offset + PCI_MSIX_ENTRY_VECTOR_CTRL);
 
     pci_dev.io_writel(
         pci_dev.msix_table_bar,
-        offset + PCI_MSIX_ENTRY_VECTOR_CTRL as u64,
+        offset + PCI_MSIX_ENTRY_VECTOR_CTRL,
         vector_control & !PCI_MSIX_ENTRY_CTRL_MASKBIT,
     );
 }
@@ -771,7 +753,7 @@ fn hotplug_blk(
 
     // Hotplug a block device whose bdf is 2:0:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path.clone(), bus, slot, func);
+        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path, bus, slot, func);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
 
@@ -795,7 +777,7 @@ fn hotplug_blk(
 
     validate_hotplug(root_port.clone());
     handle_isr(root_port.clone());
-    power_on_device(root_port.clone());
+    power_on_device(root_port);
 }
 
 fn hotunplug_blk(
@@ -828,7 +810,7 @@ fn hotunplug_blk(
         "Wait for interrupt of root port timeout"
     );
     validate_cmd_complete(root_port.clone());
-    handle_isr(root_port.clone());
+    handle_isr(root_port);
     // Verify the vendor id for the virtio block device.
     validate_config_value_2byte(
         blk.borrow().pci_dev.pci_bus.clone(),
@@ -904,13 +886,13 @@ fn test_pci_device_discovery_001() {
     let (test_state, machine, alloc, image_paths) = set_up(blk_nums, root_port_nums, true, false);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // Verify the vendor id for non-existent devices.
     validate_config_value_2byte(
         blk.borrow().pci_dev.pci_bus.clone(),
         1,
-        1 << 3 | 0,
+        1 << 3,
         PCI_VENDOR_ID,
         0xFFFF,
         0xFFFF,
@@ -952,7 +934,7 @@ fn test_pci_device_discovery_002() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Create a root port whose bdf is 0:2:0.
@@ -960,7 +942,7 @@ fn test_pci_device_discovery_002() {
         machine.clone(),
         alloc.clone(),
         0,
-        2 << 3 | 0,
+        2 << 3,
     )));
 
     // Create a block device whose bdf is 1:0:0.
@@ -977,12 +959,12 @@ fn test_pci_device_discovery_002() {
     );
 
     // Hotplug a block device whose id is 0.
-    hotunplug_blk(test_state.clone(), blk.clone(), root_port_1.clone(), 0);
+    hotunplug_blk(test_state.clone(), blk, root_port_1, 0);
 
     // Hotplug a block device whose id is 1 and bdf is 2:0:0.
     hotplug_blk(
         test_state.clone(),
-        root_port_2.clone(),
+        root_port_2,
         &mut image_paths,
         1,
         2,
@@ -991,7 +973,7 @@ fn test_pci_device_discovery_002() {
     );
 
     // Create a block device whose bdf is 2:0:0.
-    let blk = create_blk(machine.clone(), 2, 0, 0);
+    let blk = create_blk(machine, 2, 0, 0);
     // Verify the vendor id for the virtio block device hotplugged.
     validate_config_value_2byte(
         blk.borrow().pci_dev.pci_bus.clone(),
@@ -1015,10 +997,10 @@ fn test_pci_device_discovery_003() {
 
     // Create a root port whose bdf is 0:1:0.
     let root_port = Rc::new(RefCell::new(RootPort::new(
-        machine.clone(),
+        machine,
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Verify the vendor id for the virtio block device hotplugged.
@@ -1037,7 +1019,7 @@ fn test_pci_device_discovery_003() {
 
     // Hotplug a block device whose bdf is 1:0:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(blk_id, hotplug_image_path.clone(), 1, 0, 0);
+        build_hotplug_blk_cmd(blk_id, hotplug_image_path, 1, 0, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     let ret = test_state.borrow().qmp(&add_device_command);
@@ -1069,12 +1051,12 @@ fn test_pci_device_discovery_004() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     let blk_id = 0;
     let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
-    image_paths.push(hotplug_image_path.clone());
+    image_paths.push(hotplug_image_path);
 
     // Hotplug a block device whose id is 0 and bdf is 1:0:0.
     hotplug_blk(
@@ -1088,10 +1070,10 @@ fn test_pci_device_discovery_004() {
     );
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // Hotunplug the virtio block device whose id is 0.
-    hotunplug_blk(test_state.clone(), blk.clone(), root_port.clone(), blk_id);
+    hotunplug_blk(test_state.clone(), blk, root_port, blk_id);
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
@@ -1104,7 +1086,7 @@ fn test_pci_type0_config() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // Verify that the vendor id of type0 device is read-only.
     validate_config_perm_2byte(
@@ -1249,7 +1231,7 @@ fn test_pci_type1_config() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a root port whose bdf is 0:1:0.
-    let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
+    let root_port = RootPort::new(machine, alloc.clone(), 0, 1 << 3);
 
     assert_eq!(root_port.rp_dev.config_readb(PCI_PRIMARY_BUS), 0);
     assert_ne!(root_port.rp_dev.config_readb(PCI_SECONDARY_BUS), 0);
@@ -1265,16 +1247,16 @@ fn test_pci_type1_reset() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a root port whose bdf is 0:1:0.
-    let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
+    let root_port = RootPort::new(machine, alloc.clone(), 0, 1 << 3);
 
     let command = root_port.rp_dev.config_readw(PCI_COMMAND);
-    let cmd_memory = command & PCI_COMMAND_MEMORY as u16;
+    let cmd_memory = command & u16::from(PCI_COMMAND_MEMORY);
 
     // Bitwise inversion of memory space enable.
     let write_cmd = if cmd_memory != 0 {
-        command & !PCI_COMMAND_MEMORY as u16
+        command & u16::from(!PCI_COMMAND_MEMORY)
     } else {
-        command | PCI_COMMAND_MEMORY as u16
+        command | u16::from(PCI_COMMAND_MEMORY)
     };
     root_port.rp_dev.config_writew(PCI_COMMAND, write_cmd);
     let old_command = root_port.rp_dev.config_readw(PCI_COMMAND);
@@ -1303,9 +1285,8 @@ fn test_out_boundary_config_access() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     let devfn = 1 << 3 | 1;
-    let addr = machine.borrow().pci_bus.borrow().ecam_alloc_ptr
-        + ((0 as u32) << 20 | (devfn as u32) << 12 | 0 as u32) as u64
-        - 1;
+    let addr =
+        machine.borrow().pci_bus.borrow().ecam_alloc_ptr + u64::from((devfn as u32) << 12) - 1;
 
     let write_value = u16::max_value();
     let buf = write_value.to_le_bytes();
@@ -1326,14 +1307,14 @@ fn test_out_size_config_access() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a root port whose bdf is 0:1:0.
-    let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
+    let root_port = RootPort::new(machine, alloc.clone(), 0, 1 << 3);
 
     let vendor_device_id = root_port.rp_dev.config_readl(PCI_VENDOR_ID);
     let command_status = root_port.rp_dev.config_readl(PCI_COMMAND);
     let value = root_port.rp_dev.config_readq(0);
     assert_ne!(
         value,
-        (vendor_device_id as u64) << 32 | command_status as u64
+        u64::from(vendor_device_id) << 32 | u64::from(command_status)
     );
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
@@ -1347,7 +1328,7 @@ fn test_out_boundary_msix_access() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a root port whose bdf is 0:1:0.
-    let root_port = RootPort::new(machine.clone(), alloc.clone(), 0, 1 << 3 | 0);
+    let root_port = RootPort::new(machine, alloc.clone(), 0, 1 << 3);
 
     // Out-of-bounds access to the msix table.
     let write_value = u32::max_value();
@@ -1377,7 +1358,7 @@ fn test_repeat_io_map_bar() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
@@ -1412,7 +1393,7 @@ fn test_pci_type0_msix_config() {
     let root_port_nums = 0;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, false, false);
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 0, 1, 0);
+    let blk = create_blk(machine, 0, 1, 0);
 
     // Verify that there is only one msix capability addr of the type0 pci device.
     let blk_cap_msix_addrs = lookup_all_cap_addr(PCI_CAP_ID_MSIX, blk.borrow().pci_dev.clone());
@@ -1478,7 +1459,7 @@ fn test_pci_msix_global_ctl() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -1552,7 +1533,7 @@ fn test_pci_msix_local_ctl() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -1592,7 +1573,7 @@ fn test_alloc_abnormal_vector() {
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // 1. Init device.
     blk.borrow_mut().reset();
@@ -1608,7 +1589,7 @@ fn test_alloc_abnormal_vector() {
 
     let virtqueue = blk
         .borrow()
-        .setup_virtqueue(test_state.clone(), alloc.clone(), 0 as u16);
+        .setup_virtqueue(test_state.clone(), alloc.clone(), 0_u16);
     blk.borrow()
         .setup_virtqueue_intr((queue_num + 2) as u16, alloc.clone(), virtqueue.clone());
     blk.borrow().set_driver_ok();
@@ -1633,7 +1614,7 @@ fn test_intx_basic() {
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // 1. Init device.
     blk.borrow_mut().reset();
@@ -1643,11 +1624,11 @@ fn test_intx_basic() {
     blk.borrow_mut().set_features_ok();
 
     set_msix_disable(blk.borrow().pci_dev.clone());
-    blk.borrow_mut().pci_dev.set_intx_irq_num(1 as u8);
+    blk.borrow_mut().pci_dev.set_intx_irq_num(1_u8);
 
     let virtqueue = blk
         .borrow()
-        .setup_virtqueue(test_state.clone(), alloc.clone(), 0 as u16);
+        .setup_virtqueue(test_state.clone(), alloc.clone(), 0_u16);
     blk.borrow().set_driver_ok();
 
     let free_head = simple_blk_io_req(
@@ -1692,7 +1673,7 @@ fn test_intx_disable() {
     let root_port_nums = 1;
     let (test_state, machine, alloc, image_paths) = set_up(root_port_nums, blk_nums, true, false);
 
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // 1. Init device.
     blk.borrow_mut().reset();
@@ -1702,11 +1683,11 @@ fn test_intx_disable() {
     blk.borrow_mut().set_features_ok();
 
     set_msix_disable(blk.borrow().pci_dev.clone());
-    blk.borrow_mut().pci_dev.set_intx_irq_num(1 as u8);
+    blk.borrow_mut().pci_dev.set_intx_irq_num(1_u8);
 
     let virtqueue = blk
         .borrow()
-        .setup_virtqueue(test_state.clone(), alloc.clone(), 0 as u16);
+        .setup_virtqueue(test_state.clone(), alloc.clone(), 0_u16);
     blk.borrow().set_driver_ok();
 
     // Disable INTx.
@@ -1784,22 +1765,14 @@ fn test_pci_hotplug_001() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Hotplug a block device whose id is 1 and bdf is 1:0:0.
-    hotplug_blk(
-        test_state.clone(),
-        root_port.clone(),
-        &mut image_paths,
-        0,
-        1,
-        0,
-        0,
-    );
+    hotplug_blk(test_state.clone(), root_port, &mut image_paths, 0, 1, 0, 0);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -1825,7 +1798,7 @@ fn test_pci_hotplug_002() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Create a root port whose bdf is 0:2:0.
@@ -1833,13 +1806,13 @@ fn test_pci_hotplug_002() {
         machine.clone(),
         alloc.clone(),
         0,
-        2 << 3 | 0,
+        2 << 3,
     )));
 
     // Hotplug a block device whose id is 1 and bdf is 1:0:0.
     hotplug_blk(
         test_state.clone(),
-        root_port_1.clone(),
+        root_port_1,
         &mut image_paths,
         1,
         1,
@@ -1851,17 +1824,17 @@ fn test_pci_hotplug_002() {
     // Hotplug a block device whose id is 2 and bdf is 2:0:0.
     hotplug_blk(
         test_state.clone(),
-        root_port_2.clone(),
+        root_port_2,
         &mut image_paths,
         2,
         2,
         0,
         0,
     );
-    let blk_2 = create_blk(machine.clone(), 2, 0, 0);
+    let blk_2 = create_blk(machine, 2, 0, 0);
 
-    validate_blk_io_success(blk_1.clone(), test_state.clone(), alloc.clone());
-    validate_blk_io_success(blk_2.clone(), test_state.clone(), alloc.clone());
+    validate_blk_io_success(blk_1, test_state.clone(), alloc.clone());
+    validate_blk_io_success(blk_2, test_state.clone(), alloc.clone());
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
@@ -1879,7 +1852,7 @@ fn test_pci_hotplug_003() {
 
     // Hotplug a block device whose id is 0, bdf is 1:1:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(0, hotplug_image_path.clone(), 1, 1, 0);
+        build_hotplug_blk_cmd(0, hotplug_image_path, 1, 1, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     // Verify that hotpluging the device in non-zero slot will fail.
@@ -1902,7 +1875,7 @@ fn test_pci_hotplug_004() {
 
     let hotplug_blk_id = 1;
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path.clone(), 0, 1, 0);
+        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path, 0, 1, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     let ret = test_state.borrow().qmp(&add_device_command);
@@ -1920,7 +1893,7 @@ fn test_pci_hotplug_005() {
         set_up(root_port_nums, blk_nums, true, false);
 
     let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
-    image_paths.push(hotplug_image_path.clone());
+    image_paths.push(hotplug_image_path);
 
     let hotplug_blk_id = 0;
     let (add_blk_command, add_device_command) =
@@ -1971,11 +1944,11 @@ fn test_pci_hotplug_007() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     set_msix_disable(root_port.borrow().rp_dev.clone());
-    root_port.borrow_mut().rp_dev.set_intx_irq_num(1 as u8);
+    root_port.borrow_mut().rp_dev.set_intx_irq_num(1_u8);
 
     // Hotplug a block device whose id is 1 and bdf is 1:0:0.
     let bus = 1;
@@ -1987,7 +1960,7 @@ fn test_pci_hotplug_007() {
 
     // Hotplug a block device whose bdf is 1:0:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path.clone(), bus, slot, 0);
+        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path, bus, slot, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
 
@@ -2011,10 +1984,10 @@ fn test_pci_hotplug_007() {
 
     validate_hotplug(root_port.clone());
     handle_isr(root_port.clone());
-    power_on_device(root_port.clone());
+    power_on_device(root_port);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -2039,14 +2012,14 @@ fn test_pci_hotunplug_001() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // Hotunplug the block device whose bdf is 1:0:0.
-    hotunplug_blk(test_state.clone(), blk.clone(), root_port.clone(), 0);
+    hotunplug_blk(test_state.clone(), blk, root_port, 0);
 
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
@@ -2080,11 +2053,11 @@ fn test_pci_hotunplug_003() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     let unplug_blk_id = 0;
     // Hotunplug the block device attaching the root port.
@@ -2135,7 +2108,7 @@ fn test_pci_hotunplug_003() {
     assert!(!(*ret.get("error").unwrap()).is_null());
 
     // The block device will be unplugged when indicator of power and slot is power off.
-    power_off_device(root_port.clone());
+    power_off_device(root_port);
     test_state.borrow().wait_qmp_event();
 
     // Verify the vendor id for the virtio block device.
@@ -2163,7 +2136,7 @@ fn test_pci_hotunplug_004() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Create root port whose bdf is 0:2:0.
@@ -2171,14 +2144,14 @@ fn test_pci_hotunplug_004() {
         machine.clone(),
         alloc.clone(),
         0,
-        2 << 3 | 0,
+        2 << 3,
     )));
 
     // Create a block device whose bdf is 1:0:0.
     let blk_1 = create_blk(machine.clone(), 1, 0, 0);
 
     // Create a block device whose bdf is 2:0:0.
-    let blk_2 = create_blk(machine.clone(), 2, 0, 0);
+    let blk_2 = create_blk(machine, 2, 0, 0);
 
     let unplug_blk_id = 0;
     let (delete_device_command, delete_blk_command_1) = build_hotunplug_blk_cmd(unplug_blk_id);
@@ -2200,10 +2173,10 @@ fn test_pci_hotunplug_004() {
         "Wait for interrupt of root port timeout"
     );
 
-    power_off_device(root_port_1.clone());
+    power_off_device(root_port_1);
     test_state.borrow().wait_qmp_event();
 
-    power_off_device(root_port_2.clone());
+    power_off_device(root_port_2);
     test_state.borrow().wait_qmp_event();
 
     // The block device will be unplugged when indicator of power and slot is power off.
@@ -2248,13 +2221,13 @@ fn test_pci_hotunplug_005() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // Hotplug the block device whose id is 0 and bdf is 1:0:0.
-    hotunplug_blk(test_state.clone(), blk.clone(), root_port.clone(), 0);
+    hotunplug_blk(test_state.clone(), blk, root_port, 0);
 
     let (delete_device_command, _delete_blk_command) = build_hotunplug_blk_cmd(0);
     let ret = test_state.borrow().qmp(&delete_device_command);
@@ -2291,11 +2264,11 @@ fn test_pci_hotunplug_007() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     let unplug_blk_id = 0;
     // Hotunplug the block device attaching the root port.
@@ -2309,7 +2282,7 @@ fn test_pci_hotunplug_007() {
     // The block device will be unplugged when indicator of power and slot is power off.
     power_off_device(root_port.clone());
     // Trigger a 2nd write to PIC/PCC, which will be ignored by the device, and causes no harm.
-    power_off_device(root_port.clone());
+    power_off_device(root_port);
 
     test_state.borrow().wait_qmp_event();
 
@@ -2338,14 +2311,14 @@ fn test_pci_hotunplug_008() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     set_msix_disable(root_port.borrow().rp_dev.clone());
-    root_port.borrow_mut().rp_dev.set_intx_irq_num(1 as u8);
+    root_port.borrow_mut().rp_dev.set_intx_irq_num(1_u8);
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     // Hotunplug the block device whose bdf is 1:0:0.
     let hotunplug_blk_id = 0;
@@ -2372,7 +2345,7 @@ fn test_pci_hotunplug_008() {
         "Wait for interrupt of root port timeout"
     );
     validate_cmd_complete(root_port.clone());
-    handle_isr(root_port.clone());
+    handle_isr(root_port);
     // Verify the vendor id for the virtio block device.
     validate_config_value_2byte(
         blk.borrow().pci_dev.pci_bus.clone(),
@@ -2399,7 +2372,7 @@ fn test_pci_hotplug_combine_001() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     let hotplug_blk_id = 0;
@@ -2408,7 +2381,7 @@ fn test_pci_hotplug_combine_001() {
 
     // Hotplug a block device whose bdf is 1:0:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path.clone(), 1, 0, 0);
+        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path, 1, 0, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     let ret = test_state.borrow().qmp(&add_device_command);
@@ -2431,7 +2404,7 @@ fn test_pci_hotplug_combine_001() {
         1,
     );
     // Verify that the function of the block device is normal.
-    validate_std_blk_io(blk.clone(), test_state.clone(), vqs.clone(), alloc.clone());
+    validate_std_blk_io(blk.clone(), test_state.clone(), vqs, alloc.clone());
 
     let (delete_device_command, delete_blk_command) = build_hotunplug_blk_cmd(hotplug_blk_id);
     let ret = test_state.borrow().qmp(&delete_device_command);
@@ -2464,7 +2437,7 @@ fn test_pci_hotplug_combine_001() {
 
     // Hotplug a block device whose bdf is 1:0:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path.clone(), 1, 0, 0);
+        build_hotplug_blk_cmd(hotplug_blk_id, hotplug_image_path, 1, 0, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     let ret = test_state.borrow().qmp(&add_device_command);
@@ -2488,7 +2461,7 @@ fn test_pci_hotplug_combine_001() {
         0xFFFF,
     );
 
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -2496,7 +2469,7 @@ fn test_pci_hotplug_combine_001() {
         1,
     );
     // Verify that the function of the block device is normal.
-    validate_std_blk_io(blk.clone(), test_state.clone(), vqs.clone(), alloc.clone());
+    validate_std_blk_io(blk.clone(), test_state.clone(), vqs, alloc.clone());
 
     let (delete_device_command, delete_blk_command) = build_hotunplug_blk_cmd(hotplug_blk_id);
     let ret = test_state.borrow().qmp(&delete_device_command);
@@ -2506,7 +2479,7 @@ fn test_pci_hotplug_combine_001() {
     );
 
     handle_isr(root_port.clone());
-    power_off_device(root_port.clone());
+    power_off_device(root_port);
 
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     test_state.borrow().wait_qmp_event();
@@ -2539,7 +2512,7 @@ fn test_pci_hotplug_combine_002() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     let hotplug_blk_id = 0;
@@ -2557,7 +2530,7 @@ fn test_pci_hotplug_combine_002() {
     power_indicator_off(root_port.clone());
 
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     validate_blk_io_success(blk.clone(), test_state.clone(), alloc.clone());
 
@@ -2597,7 +2570,7 @@ fn test_pci_hotplug_combine_002() {
     );
 
     handle_isr(root_port.clone());
-    power_off_device(root_port.clone());
+    power_off_device(root_port);
     test_state.borrow().wait_qmp_event();
 
     let ret = test_state.borrow().qmp(&delete_blk_command);
@@ -2629,7 +2602,7 @@ fn test_pci_hotplug_combine_003() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     let hotunplug_blk_id = 0;
@@ -2649,25 +2622,25 @@ fn test_pci_hotplug_combine_003() {
 
     // Hotplug a block device whose bdf is 1:0:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(hotunplug_blk_id, hotplug_image_path.clone(), 1, 0, 0);
+        build_hotplug_blk_cmd(hotunplug_blk_id, hotplug_image_path, 1, 0, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
     let ret = test_state.borrow().qmp(&add_device_command);
     assert!(!(*ret.get("error").unwrap()).is_null());
 
-    power_off_device(root_port.clone());
+    power_off_device(root_port);
     test_state.borrow().wait_qmp_event();
 
     let hotplug_image_path = create_img(TEST_IMAGE_SIZE, 1, &ImageType::Raw);
     image_paths.push(hotplug_image_path.clone());
     // Hotplug a block device whose bdf is 1:0:0.
     let (add_blk_command, add_device_command) =
-        build_hotplug_blk_cmd(hotunplug_blk_id, hotplug_image_path.clone(), 1, 0, 0);
+        build_hotplug_blk_cmd(hotunplug_blk_id, hotplug_image_path, 1, 0, 0);
     let ret = test_state.borrow().qmp(&add_blk_command);
     assert!(!(*ret.get("error").unwrap()).is_null());
     let ret = test_state.borrow().qmp(&add_device_command);
     assert_eq!(*ret.get("return").unwrap(), json!({}));
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
     let vqs = blk.borrow_mut().init_device(
         test_state.clone(),
         alloc.clone(),
@@ -2695,7 +2668,7 @@ fn test_pci_root_port_exp_cap() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
 
     let cap_exp_addr = root_port.borrow().rp_dev.find_capability(PCI_CAP_ID_EXP, 0);
@@ -2779,7 +2752,7 @@ fn test_pci_root_port_exp_cap() {
         0,
     );
     // Create a block device whose bdf is 1:0:0.
-    let blk = create_blk(machine.clone(), 1, 0, 0);
+    let blk = create_blk(machine, 1, 0, 0);
 
     let nlw_mask = PCI_EXP_LNKSTA_NLW;
     let negotiated_link_width = (root_port.borrow().rp_dev.pci_bus.borrow().config_readw(
@@ -2849,12 +2822,7 @@ fn test_pci_root_port_exp_cap() {
     );
 
     // Hotplug the block device whose id is 0 and bdf is 1:0:0.
-    hotunplug_blk(
-        test_state.clone(),
-        blk.clone(),
-        root_port.clone(),
-        hotplug_blk_id,
-    );
+    hotunplug_blk(test_state.clone(), blk, root_port.clone(), hotplug_blk_id);
 
     let dllla_mask = PCI_EXP_LNKSTA_DLLLA;
     validate_config_value_2byte(
@@ -2953,7 +2921,7 @@ fn test_pci_combine_001() {
 
     // set memory enabled = 0
     let mut val = dev_locked.config_readw(PCI_COMMAND);
-    val &= !(PCI_COMMAND_MEMORY as u16);
+    val &= !u16::from(PCI_COMMAND_MEMORY);
     dev_locked.config_writew(PCI_COMMAND, val);
 
     // mmio r/w stops working.
@@ -2962,7 +2930,7 @@ fn test_pci_combine_001() {
     assert_ne!(out, 10);
 
     // set memory enabled = 1
-    val |= PCI_COMMAND_MEMORY as u16;
+    val |= u16::from(PCI_COMMAND_MEMORY);
     dev_locked.config_writew(PCI_COMMAND, val);
 
     // mmio r/w gets back to work.
@@ -2987,7 +2955,7 @@ fn test_pci_combine_002() {
         machine.clone(),
         alloc.clone(),
         0,
-        1 << 3 | 0,
+        1 << 3,
     )));
     let blk = Rc::new(RefCell::new(TestVirtioPciDev::new(
         machine.borrow().pci_bus.clone(),
@@ -3007,7 +2975,7 @@ fn test_pci_combine_002() {
         wait_root_port_msix(root_port.clone()),
         "Wait for interrupt of root port timeout"
     );
-    power_off_device(root_port.clone());
+    power_off_device(root_port);
 
     // r/w mmio during hotunplug
     test_state.borrow().writeb(bar_addr, 5);

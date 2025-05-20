@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use super::super::VhostOps;
@@ -33,7 +33,8 @@ use crate::device::block::VirtioBlkConfig;
 use crate::VhostUser::message::VhostUserConfig;
 use crate::{virtio_has_feature, Queue, QueueConfig};
 use address_space::{
-    AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+    AddressAttr, AddressSpace, FileBackend, FlatRange, GuestAddress, Listener, ListenerReqType,
+    RegionIoEventFd,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use util::loop_context::{
@@ -234,14 +235,15 @@ impl VhostUserMemInfo {
 
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
-        let host_address = match fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        let host_address = match unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             Some(addr) => addr,
             None => bail!("Failed to get host address to add mem range for vhost user device"),
         };
         let file_back = match fr.owner.get_file_backend() {
             Some(file_back_) => file_back_,
             _ => {
-                info!("It is not share memory for vhost user device");
+                debug!("It is not share memory for vhost user device");
                 return Ok(());
             }
         };
@@ -281,13 +283,14 @@ impl VhostUserMemInfo {
 
         let file_back = match fr.owner.get_file_backend() {
             None => {
-                info!("fr {:?} backend is not file, ignored", fr);
+                debug!("fr {:?} backend is not file, ignored", fr);
                 return Ok(());
             }
             Some(fb) => fb,
         };
         let mut mem_regions = self.regions.lock().unwrap();
-        let host_address = match fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        let host_address = match unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             Some(addr) => addr,
             None => bail!("Failed to get host address to del mem range for vhost user device"),
         };
@@ -402,7 +405,6 @@ pub struct VhostUserClient {
     client: Arc<Mutex<ClientInternal>>,
     mem_info: VhostUserMemInfo,
     delete_evts: Vec<RawFd>,
-    mem_space: Arc<AddressSpace>,
     queues: Vec<Arc<Mutex<Queue>>>,
     queue_evts: Vec<Arc<EventFd>>,
     call_events: Vec<Arc<EventFd>>,
@@ -438,7 +440,6 @@ impl VhostUserClient {
             client,
             mem_info,
             delete_evts: Vec::new(),
-            mem_space: mem_space.clone(),
             queues: Vec::new(),
             queue_evts: Vec::new(),
             call_events: Vec::new(),
@@ -482,7 +483,7 @@ impl VhostUserClient {
             .with_context(|| "Failed to get protocol features for vhost-user blk")?;
         if virtio_has_feature(
             protocol_feature,
-            VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD as u32,
+            u32::from(VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD),
         ) {
             if self.inflight.is_none() {
                 // Expect 1 fd.
@@ -568,7 +569,7 @@ impl VhostUserClient {
                 })?;
             // When spdk/ovs has been killed, stratovirt can not get the last avail
             // index in spdk/ovs, it can only use used index as last avail index.
-            let last_avail_idx = queue.vring.get_used_idx(&self.mem_space)?;
+            let last_avail_idx = queue.vring.get_used_idx()?;
             self.set_vring_base(queue_index, last_avail_idx)
                 .with_context(|| {
                     format!(
@@ -903,7 +904,7 @@ impl VhostOps for VhostUserClient {
             size_of::<VhostUserVringState>() as u32,
         );
         let payload_opt: Option<&[u8]> = None;
-        let vring_state = VhostUserVringState::new(queue_idx as u32, num as u32);
+        let vring_state = VhostUserVringState::new(queue_idx as u32, u32::from(num));
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
@@ -982,7 +983,7 @@ impl VhostOps for VhostUserClient {
             size_of::<VhostUserVringState>() as u32,
         );
         let payload_opt: Option<&[u8]> = None;
-        let vring_state = VhostUserVringState::new(queue_idx as u32, last_avail_idx as u32);
+        let vring_state = VhostUserVringState::new(queue_idx as u32, u32::from(last_avail_idx));
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
@@ -1058,7 +1059,7 @@ impl VhostOps for VhostUserClient {
             size_of::<VhostUserVringState>() as u32,
         );
         let payload_opt: Option<&[u8]> = None;
-        let vring_state = VhostUserVringState::new(queue_idx as u32, status as u32);
+        let vring_state = VhostUserVringState::new(queue_idx as u32, u32::from(status));
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])

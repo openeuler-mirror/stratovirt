@@ -136,7 +136,7 @@ impl V4l2Backend {
             // 2. buf can be guaranteed not be null.
             let ret = unsafe {
                 libc::mmap(
-                    std::ptr::null_mut() as *mut libc::c_void,
+                    std::ptr::null_mut(),
                     buf.length as libc::size_t,
                     libc::PROT_WRITE | libc::PROT_READ,
                     libc::MAP_SHARED,
@@ -152,7 +152,7 @@ impl V4l2Backend {
                 );
             }
             locked_buf[i as usize].iov_base = ret as u64;
-            locked_buf[i as usize].iov_len = buf.length as u64;
+            locked_buf[i as usize].iov_len = u64::from(buf.length);
             // Queue buffer to get data.
             self.queue_buffer(&buf)?;
         }

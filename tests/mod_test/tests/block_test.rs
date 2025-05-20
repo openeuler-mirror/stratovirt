@@ -63,7 +63,7 @@ fn virtio_blk_discard_and_write_zeroes(
         TestVirtBlkReq::new(VIRTIO_BLK_T_WRITE_ZEROES, 1, 0, req_len)
     };
     blk_req.data = unsafe { String::from_utf8_unchecked(req_data.to_vec()) };
-    let req_addr = virtio_blk_request(test_state.clone(), alloc.clone(), blk_req, false);
+    let req_addr = virtio_blk_request(test_state.clone(), alloc, blk_req, false);
 
     let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
     data_entries.push(TestVringDescEntry {
@@ -89,7 +89,7 @@ fn virtio_blk_discard_and_write_zeroes(
     if need_poll_elem {
         blk.borrow().poll_used_elem(
             test_state.clone(),
-            virtqueue.clone(),
+            virtqueue,
             free_head,
             TIMEOUT_US,
             &mut None,
@@ -153,7 +153,7 @@ fn virtio_blk_get_id(
 ) {
     let (free_head, req_addr) = add_blk_request(
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         virtqueue.clone(),
         VIRTIO_BLK_T_GET_ID,
         0,
@@ -162,18 +162,19 @@ fn virtio_blk_get_id(
     blk.borrow().virtqueue_notify(virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
         true,
     );
 
-    let status_addr = round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+    let status_addr =
+        round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
     let status = test_state.borrow().readb(status_addr);
     assert_eq!(status, VIRTIO_BLK_S_OK);
 
-    let data_addr = round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap();
+    let data_addr = round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap();
     assert_eq!(
         String::from_utf8(
             test_state
@@ -194,7 +195,7 @@ fn virtio_blk_flush(
 ) {
     let (free_head, req_addr) = add_blk_request(
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         virtqueue.clone(),
         VIRTIO_BLK_T_FLUSH,
         sector,
@@ -203,14 +204,15 @@ fn virtio_blk_flush(
     blk.borrow().virtqueue_notify(virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
         true,
     );
 
-    let status_addr = round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+    let status_addr =
+        round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
     let status = test_state.borrow().readb(status_addr);
     assert_eq!(status, VIRTIO_BLK_S_OK);
 }
@@ -224,7 +226,7 @@ fn virtio_blk_illegal_req(
 ) {
     let (free_head, req_addr) = add_blk_request(
         test_state.clone(),
-        alloc.clone(),
+        alloc,
         virtqueue.clone(),
         req_type,
         0,
@@ -233,14 +235,15 @@ fn virtio_blk_illegal_req(
     blk.borrow().virtqueue_notify(virtqueue.clone());
     blk.borrow().poll_used_elem(
         test_state.clone(),
-        virtqueue.clone(),
+        virtqueue,
         free_head,
         TIMEOUT_US,
         &mut None,
         true,
     );
 
-    let status_addr = round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+    let status_addr =
+        round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
     let status = test_state.borrow().readb(status_addr);
     assert_eq!(status, VIRTIO_BLK_S_UNSUPP);
 }
@@ -265,7 +268,7 @@ fn blk_basic() {
                 .init_device(test_state.clone(), alloc.clone(), features, 1);
 
         let capacity = blk.borrow().config_readq(0);
-        assert_eq!(capacity, TEST_IMAGE_SIZE / REQ_DATA_LEN as u64);
+        assert_eq!(capacity, TEST_IMAGE_SIZE / u64::from(REQ_DATA_LEN));
 
         virtio_blk_write(
             blk.clone(),
@@ -436,7 +439,7 @@ fn blk_feature_ro() {
                 .init_device(test_state.clone(), alloc.clone(), features, 1);
 
         let capacity = blk.borrow().config_readq(0);
-        assert_eq!(capacity, TEST_IMAGE_SIZE / REQ_DATA_LEN as u64);
+        assert_eq!(capacity, TEST_IMAGE_SIZE / u64::from(REQ_DATA_LEN));
 
         virtio_blk_write(
             blk.clone(),
@@ -473,7 +476,7 @@ fn blk_feature_ro() {
                 .init_device(test_state.clone(), alloc.clone(), features, 1);
 
         let capacity = blk.borrow().config_readq(0);
-        assert_eq!(capacity, TEST_IMAGE_SIZE / REQ_DATA_LEN as u64);
+        assert_eq!(capacity, TEST_IMAGE_SIZE / u64::from(REQ_DATA_LEN));
 
         virtio_blk_read(
             blk.clone(),
@@ -503,7 +506,7 @@ fn blk_feature_ro() {
         );
 
         let status_addr =
-            round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
         let status = test_state.borrow().readb(status_addr);
         assert_eq!(status, VIRTIO_BLK_S_IOERR);
 
@@ -623,7 +626,7 @@ fn blk_feature_mq() {
                 true,
             ));
 
-            let data_addr = round_up(req_addr[i] + REQ_ADDR_LEN as u64, 512).unwrap();
+            let data_addr = round_up(req_addr[i] + u64::from(REQ_ADDR_LEN), 512).unwrap();
 
             let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
             data_entries.push(TestVringDescEntry {
@@ -637,7 +640,7 @@ fn blk_feature_mq() {
                 write: false,
             });
             data_entries.push(TestVringDescEntry {
-                data: data_addr + REQ_DATA_LEN as u64,
+                data: data_addr + u64::from(REQ_DATA_LEN),
                 len: REQ_STATUS_LEN,
                 write: true,
             });
@@ -666,8 +669,8 @@ fn blk_feature_mq() {
         }
 
         for i in 0..num_queues {
-            let status_addr =
-                round_up(req_addr[i] + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            let status_addr = round_up(req_addr[i] + u64::from(REQ_ADDR_LEN), 512).unwrap()
+                + u64::from(REQ_DATA_LEN);
             let status = test_state.borrow().readb(status_addr);
             assert_eq!(status, VIRTIO_BLK_S_OK);
         }
@@ -708,6 +711,11 @@ fn blk_all_features() {
         let device_args = Rc::new(String::from(
             ",multifunction=on,serial=111111,num-queues=4,bootindex=1,iothread=iothread1",
         ));
+        #[cfg(target_env = "ohos")]
+        let drive_args = Rc::new(String::from(
+            ",direct=false,readonly=off,throttling.iops-total=1024",
+        ));
+        #[cfg(not(target_env = "ohos"))]
         let drive_args = if aio_probe(AioEngine::IoUring).is_ok() {
             Rc::new(String::from(
                 ",direct=on,aio=io_uring,readonly=off,throttling.iops-total=1024",
@@ -793,13 +801,13 @@ fn blk_small_file_511b() {
                 .init_device(test_state.clone(), alloc.clone(), features, 1);
 
         let capacity = blk.borrow().config_readq(0);
-        assert_eq!(capacity, size / REQ_DATA_LEN as u64);
+        assert_eq!(capacity, size / u64::from(REQ_DATA_LEN));
 
         let mut blk_req = TestVirtBlkReq::new(VIRTIO_BLK_T_OUT, 1, 0, REQ_DATA_LEN as usize);
         blk_req.data.push_str("TEST");
 
         let req_addr = virtio_blk_request(test_state.clone(), alloc.clone(), blk_req, true);
-        let data_addr = round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap();
+        let data_addr = round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap();
 
         let mut data_entries: Vec<TestVringDescEntry> = Vec::with_capacity(3);
         data_entries.push(TestVringDescEntry {
@@ -813,7 +821,7 @@ fn blk_small_file_511b() {
             write: false,
         });
         data_entries.push(TestVringDescEntry {
-            data: data_addr + REQ_DATA_LEN as u64,
+            data: data_addr + u64::from(REQ_DATA_LEN),
             len: REQ_STATUS_LEN,
             write: true,
         });
@@ -833,7 +841,7 @@ fn blk_small_file_511b() {
         );
 
         let status_addr =
-            round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
         let status = test_state.borrow().readb(status_addr);
         assert_eq!(status, VIRTIO_BLK_S_IOERR);
 
@@ -858,7 +866,7 @@ fn blk_small_file_511b() {
         );
 
         let status_addr =
-            round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
         let status = test_state.borrow().readb(status_addr);
         assert_eq!(status, VIRTIO_BLK_S_IOERR);
 
@@ -996,7 +1004,7 @@ fn blk_iops() {
         }
 
         let status_addr =
-            round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
         let status = test_state.borrow().readb(status_addr);
         assert_ne!(status, VIRTIO_BLK_S_OK);
 
@@ -1006,16 +1014,15 @@ fn blk_iops() {
 
             if blk.borrow().queue_was_notified(virtqueues[0].clone())
                 && virtqueues[0].borrow_mut().get_buf(test_state.clone())
+                && virtqueues[0].borrow().desc_len.contains_key(&free_head)
             {
-                if virtqueues[0].borrow().desc_len.contains_key(&free_head) {
-                    break;
-                }
+                break;
             }
             assert!(Instant::now() <= time_out);
         }
 
         let status_addr =
-            round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
         let status = test_state.borrow().readb(status_addr);
         assert_eq!(status, VIRTIO_BLK_S_OK);
 
@@ -1038,21 +1045,23 @@ fn blk_iops() {
 ///   1/2/3: success.
 #[test]
 fn blk_with_different_aio() {
-    const BLOCK_DRIVER_CFG: [(ImageType, &str, AioEngine); 6] = [
+    let block_driver_cfg: Vec<(ImageType, &str, AioEngine)> = vec![
         (ImageType::Raw, "off", AioEngine::Off),
         (ImageType::Qcow2, "off", AioEngine::Off),
         (ImageType::Raw, "off", AioEngine::Threads),
         (ImageType::Qcow2, "off", AioEngine::Threads),
+        #[cfg(not(target_env = "ohos"))]
         (ImageType::Raw, "on", AioEngine::Native),
+        #[cfg(not(target_env = "ohos"))]
         (ImageType::Raw, "on", AioEngine::IoUring),
     ];
 
-    for (image_type, direct, aio_engine) in BLOCK_DRIVER_CFG {
+    for (image_type, direct, aio_engine) in block_driver_cfg {
         println!("Image type: {:?}", image_type);
         let image_path = Rc::new(create_img(TEST_IMAGE_SIZE_1M, 1, &image_type));
         let device_args = Rc::new(String::from(""));
         let drive_args = if aio_probe(aio_engine).is_ok() {
-            Rc::new(format!(",direct={},aio={}", direct, aio_engine.to_string()))
+            Rc::new(format!(",direct={},aio={}", direct, aio_engine))
         } else {
             continue;
         };
@@ -1106,6 +1115,7 @@ fn blk_with_different_aio() {
 ///   3. Destroy device.
 /// Expect:
 ///   1/2/3: success.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn blk_aio_io_uring() {
     for image_type in ImageType::IMAGE_TYPE {
@@ -1218,7 +1228,7 @@ fn blk_rw_config() {
                 .init_device(test_state.clone(), alloc.clone(), features, 1);
 
         let capacity = blk.borrow().config_readq(0);
-        assert_eq!(capacity, TEST_IMAGE_SIZE / REQ_DATA_LEN as u64);
+        assert_eq!(capacity, TEST_IMAGE_SIZE / u64::from(REQ_DATA_LEN));
 
         blk.borrow().config_writeq(0, 1024);
         let capacity = blk.borrow().config_readq(0);
@@ -1589,8 +1599,8 @@ fn blk_parallel_req() {
         );
 
         for i in 0..4 {
-            let status_addr =
-                round_up(req_addr_vec[i] + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            let status_addr = round_up(req_addr_vec[i] + u64::from(REQ_ADDR_LEN), 512).unwrap()
+                + u64::from(REQ_DATA_LEN);
             let status = test_state.borrow().readb(status_addr);
             assert_eq!(status, VIRTIO_BLK_S_OK);
         }
@@ -1625,7 +1635,7 @@ fn blk_exceed_capacity() {
                 .init_device(test_state.clone(), alloc.clone(), features, 1);
 
         let capacity = blk.borrow().config_readq(0);
-        assert_eq!(capacity, TEST_IMAGE_SIZE / REQ_DATA_LEN as u64);
+        assert_eq!(capacity, TEST_IMAGE_SIZE / u64::from(REQ_DATA_LEN));
 
         let (free_head, req_addr) = add_blk_request(
             test_state.clone(),
@@ -1647,7 +1657,7 @@ fn blk_exceed_capacity() {
         );
 
         let status_addr =
-            round_up(req_addr + REQ_ADDR_LEN as u64, 512).unwrap() + REQ_DATA_LEN as u64;
+            round_up(req_addr + u64::from(REQ_ADDR_LEN), 512).unwrap() + u64::from(REQ_DATA_LEN);
         let status = test_state.borrow().readb(status_addr);
         assert_eq!(status, VIRTIO_BLK_S_IOERR);
 
@@ -1759,16 +1769,16 @@ fn blk_feature_discard() {
             );
             if image_type == ImageType::Raw && status == VIRTIO_BLK_S_OK {
                 let image_size = get_disk_size(image_path.clone());
-                assert_eq!(image_size, full_disk_size - num_sectors as u64 / 2);
+                assert_eq!(image_size, full_disk_size - u64::from(num_sectors) / 2);
             } else if image_type == ImageType::Qcow2
                 && status == VIRTIO_BLK_S_OK
-                && (num_sectors as u64 * 512 & CLUSTER_SIZE - 1) == 0
+                && ((u64::from(num_sectors) * 512) & (CLUSTER_SIZE - 1)) == 0
             {
                 // If the disk format is equal to Qcow2.
                 // the length of the num sectors needs to be aligned with the cluster size,
                 // otherwise the calculated file size is not accurate.
                 let image_size = get_disk_size(image_path.clone());
-                let delete_num = (num_sectors as u64 * 512) >> 10;
+                let delete_num = (u64::from(num_sectors) * 512) >> 10;
                 assert_eq!(image_size, full_disk_size - delete_num);
             }
 
@@ -1895,7 +1905,7 @@ fn blk_feature_write_zeroes() {
                     test_state.clone(),
                     alloc.clone(),
                     virtqueues[0].clone(),
-                    &req_data.as_bytes().to_vec(),
+                    req_data.as_bytes(),
                     status,
                     true,
                     false,
@@ -1929,17 +1939,17 @@ fn blk_feature_write_zeroes() {
                 && (write_zeroes == "unmap" && discard == "unmap" && flags == 1 || len != wz_len)
             {
                 let image_size = get_disk_size(image_path.clone());
-                assert_eq!(image_size, full_disk_size - num_sectors as u64 / 2);
+                assert_eq!(image_size, full_disk_size - u64::from(num_sectors) / 2);
             } else if image_type == ImageType::Qcow2
                 && status == VIRTIO_BLK_S_OK
                 && (write_zeroes == "unmap" && discard == "unmap" && flags == 1 || len != wz_len)
-                && (num_sectors as u64 * 512 & CLUSTER_SIZE - 1) == 0
+                && ((u64::from(num_sectors) * 512) & (CLUSTER_SIZE - 1)) == 0
             {
                 // If the disk format is equal to Qcow2.
                 // the length of the num sectors needs to be aligned with the cluster size,
                 // otherwise the calculated file size is not accurate.
                 let image_size = get_disk_size(image_path.clone());
-                let delete_num = (num_sectors as u64 * 512) >> 10;
+                let delete_num = (u64::from(num_sectors) * 512) >> 10;
                 assert_eq!(image_size, full_disk_size - delete_num);
             }
 
@@ -1972,7 +1982,7 @@ fn blk_snapshot_basic() {
         .init_device(test_state.clone(), alloc.clone(), features, 1);
 
     create_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), true);
+    assert!(check_snapshot(test_state.clone(), "snap0"));
 
     virtio_blk_write(
         blk.clone(),
@@ -1992,7 +2002,7 @@ fn blk_snapshot_basic() {
     );
 
     delete_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), false);
+    assert!(!check_snapshot(test_state.clone(), "snap0"));
 
     virtio_blk_write(
         blk.clone(),
@@ -2011,13 +2021,7 @@ fn blk_snapshot_basic() {
         true,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        virtqueues,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, virtqueues, image_path);
 }
 
 /// Block device whose backend file has snapshot sends I/O request.
@@ -2041,14 +2045,8 @@ fn blk_snapshot_basic2() {
         .borrow_mut()
         .init_device(test_state.clone(), alloc.clone(), features, 1);
     create_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), true);
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        virtqueues,
-        Rc::new("".to_string()),
-    );
+    assert!(check_snapshot(test_state.clone(), "snap0"));
+    tear_down(blk, test_state, alloc, virtqueues, Rc::new("".to_string()));
 
     let device_args = Rc::new(String::from(""));
     let drive_args = Rc::new(String::from(",direct=false"));
@@ -2084,10 +2082,10 @@ fn blk_snapshot_basic2() {
     );
 
     create_snapshot(test_state.clone(), "drive0", "snap1");
-    assert_eq!(check_snapshot(test_state.clone(), "snap1"), true);
+    assert!(check_snapshot(test_state.clone(), "snap1"));
 
     delete_snapshot(test_state.clone(), "drive0", "snap0");
-    assert_eq!(check_snapshot(test_state.clone(), "snap0"), false);
+    assert!(!check_snapshot(test_state.clone(), "snap0"));
 
     virtio_blk_write(
         blk.clone(),
@@ -2106,11 +2104,5 @@ fn blk_snapshot_basic2() {
         true,
     );
 
-    tear_down(
-        blk.clone(),
-        test_state.clone(),
-        alloc.clone(),
-        virtqueues,
-        image_path.clone(),
-    );
+    tear_down(blk, test_state, alloc, virtqueues, image_path);
 }

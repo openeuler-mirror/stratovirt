@@ -13,17 +13,18 @@
 pub use crate::error::MachineError;
 
 use std::mem::size_of;
-use std::ops::Deref;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{error, info, warn};
-use vmm_sys_util::eventfd::EventFd;
+#[cfg(feature = "ramfb")]
+use clap::Parser;
 
+use super::pci_host_root::PciHostRoot;
+use crate::standard_common::syscall::syscall_whitelist;
 use crate::standard_common::{AcpiBuilder, StdMachineOps};
-use crate::{MachineBase, MachineOps};
+use crate::{register_shutdown_event, MachineBase, MachineOps, StdMachine};
 use acpi::{
     processor_append_priv_res, AcpiGicCpu, AcpiGicDistributor, AcpiGicIts, AcpiGicRedistributor,
     AcpiSratGiccAffinity, AcpiSratMemoryAffinity, AcpiTable, AmlBuilder, AmlDevice, AmlInteger,
@@ -38,37 +39,32 @@ use acpi::{
 };
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
-use address_space::{AddressSpace, GuestAddress, Region};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
-
-use super::pci_host_root::PciHostRoot;
-use crate::standard_common::syscall::syscall_whitelist;
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
-#[cfg(feature = "ramfb")]
-use devices::legacy::Ramfb;
 use devices::legacy::{
     FwCfgEntryType, FwCfgMem, FwCfgOps, LegacyError as DevErrorKind, PFlash, PL011, PL031,
 };
-use devices::pci::{PciDevOps, PciHost, PciIntxState};
-use devices::sysbus::SysBusDevType;
-use devices::{ICGICConfig, ICGICv3Config, GIC_IRQ_MAX};
+#[cfg(feature = "ramfb")]
+use devices::legacy::{Ramfb, RamfbConfig};
+use devices::pci::{PciBus, PciHost, PciIntxState};
+use devices::sysbus::{to_sysbusdevops, SysBusDevType};
+use devices::{
+    convert_bus_mut, Device, ICGICConfig, ICGICv3Config, GIC_IRQ_MAX, MUT_PCI_BUS, SYS_BUS_DEVICE,
+};
 use hypervisor::kvm::aarch64::*;
 use hypervisor::kvm::*;
 #[cfg(feature = "ramfb")]
-use machine_manager::config::parse_ramfb;
-use machine_manager::config::ShutdownAction;
+use machine_manager::config::str_slip_to_clap;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    parse_incoming_uri, BootIndexInfo, MigrateMode, NumaNode, PFlashConfig, SerialConfig, VmConfig,
+    BootIndexInfo, DriveConfig, MigrateMode, NumaNode, Param, SerialConfig, VmConfig,
 };
 use machine_manager::event;
-use machine_manager::machine::{
-    MachineExternalInterface, MachineInterface, MachineLifecycle, MachineTestInterface,
-    MigrateInterface, VmState,
-};
-use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
+use machine_manager::machine::{MachineLifecycle, VmState};
+use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
 use ui::gtk::gtk_display_init;
@@ -78,9 +74,9 @@ use ui::ohui_srv::{ohui_init, OhUiServer};
 use ui::vnc::vnc_init;
 use util::byte_code::ByteCode;
 use util::device_tree::{self, CompileFDT, FdtBuilder};
-use util::loop_context::EventLoopManager;
+use util::gen_base_func;
+use util::loop_context::create_new_eventfd;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
-use util::set_termi_canon_mode;
 
 /// The type of memory layout entry on aarch64
 pub enum LayoutEntryType {
@@ -134,31 +130,6 @@ const IRQ_MAP: &[(i32, i32)] = &[
     (16, 19), // Pcie
 ];
 
-/// Standard machine structure.
-pub struct StdMachine {
-    /// Machine base members.
-    base: MachineBase,
-    /// PCI/PCIe host bridge.
-    pci_host: Arc<Mutex<PciHost>>,
-    /// VM power button, handle VM `Shutdown` event.
-    pub power_button: Arc<EventFd>,
-    /// Shutdown request, handle VM `shutdown` event.
-    shutdown_req: Arc<EventFd>,
-    /// Reset request, handle VM `Reset` event.
-    reset_req: Arc<EventFd>,
-    /// Pause request, handle VM `Pause` event.
-    pause_req: Arc<EventFd>,
-    /// Resume request, handle VM `Resume` event.
-    resume_req: Arc<EventFd>,
-    /// Device Tree Blob.
-    dtb_vec: Vec<u8>,
-    /// List contains the boot order of boot devices.
-    boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
-    /// OHUI server
-    #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-    ohui_server: Option<Arc<OhUiServer>>,
-}
-
 impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
         let free_irqs = (
@@ -183,23 +154,23 @@ impl StdMachine {
                 IRQ_MAP[IrqEntryType::Pcie as usize].0,
             ))),
             power_button: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("power_button".to_string()))?,
             ),
             shutdown_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("shutdown_req".to_string()))?,
             ),
             reset_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("reset_req".to_string()))?,
             ),
             pause_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("pause_req".to_string()))?,
             ),
             resume_req: Arc::new(
-                EventFd::new(libc::EFD_NONBLOCK)
+                create_new_eventfd()
                     .with_context(|| MachineError::InitEventFdErr("resume_req".to_string()))?,
             ),
             dtb_vec: Vec::new(),
@@ -230,6 +201,7 @@ impl StdMachine {
                 &mut locked_vm.dtb_vec.as_slice(),
                 GuestAddress(fdt_addr),
                 locked_vm.dtb_vec.len() as u64,
+                AddressAttr::Ram,
             )
             .with_context(|| "Fail to write dtb into sysmem")?;
 
@@ -255,25 +227,6 @@ impl StdMachine {
         Ok(())
     }
 
-    pub fn handle_destroy_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
-        let locked_vm = vm.lock().unwrap();
-        let vmstate = {
-            let state = locked_vm.base.vm_state.deref().0.lock().unwrap();
-            *state
-        };
-
-        if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
-            warn!("Failed to destroy guest, destroy continue.");
-            if locked_vm.shutdown_req.write(1).is_err() {
-                error!("Failed to send shutdown request.")
-            }
-        }
-
-        info!("vm destroy");
-
-        Ok(())
-    }
-
     fn build_pptt_cores(&self, pptt: &mut AcpiTable, cluster_offset: u32, uid: &mut u32) {
         for core in 0..self.base.cpu_topo.cores {
             let mut priv_resources = vec![0; 3];
@@ -290,7 +243,7 @@ impl StdMachine {
             if self.base.cpu_topo.threads > 1 {
                 let core_offset = pptt.table_len();
                 let core_hierarchy_node =
-                    ProcessorHierarchyNode::new(0x0, cluster_offset, core as u32, 3);
+                    ProcessorHierarchyNode::new(0x0, cluster_offset, u32::from(core), 3);
                 pptt.append_child(&core_hierarchy_node.aml_bytes());
                 processor_append_priv_res(pptt, priv_resources);
                 for _thread in 0..self.base.cpu_topo.threads {
@@ -312,7 +265,7 @@ impl StdMachine {
         for cluster in 0..self.base.cpu_topo.clusters {
             let cluster_offset = pptt.table_len();
             let cluster_hierarchy_node =
-                ProcessorHierarchyNode::new(0x0, socket_offset, cluster as u32, 0);
+                ProcessorHierarchyNode::new(0x0, socket_offset, u32::from(cluster), 0);
             pptt.append_child(&cluster_hierarchy_node.aml_bytes());
             self.build_pptt_cores(pptt, cluster_offset as u32, uid);
         }
@@ -325,7 +278,7 @@ impl StdMachine {
             pptt.append_child(&cache_hierarchy_node.aml_bytes());
 
             let socket_offset = pptt.table_len();
-            let socket_hierarchy_node = ProcessorHierarchyNode::new(0x1, 0, socket as u32, 1);
+            let socket_hierarchy_node = ProcessorHierarchyNode::new(0x1, 0, u32::from(socket), 1);
             pptt.append_child(&socket_hierarchy_node.aml_bytes());
             processor_append_priv_res(pptt, priv_resources);
 
@@ -337,8 +290,9 @@ impl StdMachine {
         if let Some(vcpu) = self.get_cpus().get(vcpu_index) {
             let (cpu_state, _) = vcpu.state();
             let cpu_state = *cpu_state.lock().unwrap();
-            if cpu_state != CpuLifecycleState::Paused {
-                self.pause();
+            if cpu_state != CpuLifecycleState::Paused && !self.pause() {
+                self.notify_lifecycle(VmState::Paused, VmState::Running);
+                return None;
             }
 
             let value = match vcpu.hypervisor_cpu.get_one_reg(addr) {
@@ -357,10 +311,13 @@ impl StdMachine {
     #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
     fn add_ohui_server(&mut self, vm_config: &VmConfig) -> Result<()> {
         if let Some(dpy) = vm_config.display.as_ref() {
-            if !dpy.ohui_config.ohui {
+            if dpy.display_type != "ohui" {
                 return Ok(());
             }
-            self.ohui_server = Some(Arc::new(OhUiServer::new(dpy.get_ui_path())?));
+            self.ohui_server = Some(Arc::new(OhUiServer::new(
+                dpy.get_ui_path(),
+                dpy.get_sock_path(),
+            )?));
         }
         Ok(())
     }
@@ -368,7 +325,7 @@ impl StdMachine {
 
 impl StdMachineOps for StdMachine {
     fn init_pci_host(&self) -> Result<()> {
-        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().root_bus);
+        let root_bus = Arc::downgrade(&self.pci_host.lock().unwrap().child_bus().unwrap());
         let mmconfig_region_ops = PciHost::build_mmconfig_ops(self.pci_host.clone());
         let mmconfig_region = Region::init_io_region(
             MEM_LAYOUT[LayoutEntryType::HighPcieEcam as usize].1,
@@ -387,7 +344,8 @@ impl StdMachineOps for StdMachine {
         let pcihost_root = PciHostRoot::new(root_bus);
         pcihost_root
             .realize()
-            .with_context(|| "Failed to realize pcihost root device.")
+            .with_context(|| "Failed to realize pcihost root device.")?;
+        Ok(())
     }
 
     fn add_fwcfg_device(&mut self, nr_cpus: u8) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
@@ -395,7 +353,12 @@ impl StdMachineOps for StdMachine {
             return Ok(None);
         }
 
-        let mut fwcfg = FwCfgMem::new(self.base.sys_mem.clone());
+        let mut fwcfg = FwCfgMem::new(
+            self.base.sys_mem.clone(),
+            &self.base.sysbus,
+            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
+            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
+        )?;
         fwcfg
             .add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())
             .with_context(|| DevErrorKind::AddEntryErr("NbCpus".to_string()))?;
@@ -427,13 +390,9 @@ impl StdMachineOps for StdMachine {
             .add_file_entry("bios-geometry", bios_geometry)
             .with_context(|| DevErrorKind::AddEntryErr("bios-geometry".to_string()))?;
 
-        let fwcfg_dev = FwCfgMem::realize(
-            fwcfg,
-            &mut self.base.sysbus,
-            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].0,
-            MEM_LAYOUT[LayoutEntryType::FwCfg as usize].1,
-        )
-        .with_context(|| "Failed to realize fwcfg device")?;
+        let fwcfg_dev = fwcfg
+            .realize()
+            .with_context(|| "Failed to realize fwcfg device")?;
         self.base.fwcfg_dev = Some(fwcfg_dev.clone());
 
         Ok(Some(fwcfg_dev))
@@ -441,13 +400,7 @@ impl StdMachineOps for StdMachine {
 }
 
 impl MachineOps for StdMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
-    fn machine_base_mut(&mut self) -> &mut MachineBase {
-        &mut self.base
-    }
+    gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
@@ -487,57 +440,56 @@ impl MachineOps for StdMachine {
         self.base.irq_chip = Some(locked_hypervisor.create_interrupt_controller(&intc_conf)?);
         self.base.irq_chip.as_ref().unwrap().realize()?;
 
-        let root_bus = &self.pci_host.lock().unwrap().root_bus;
+        let root_bus = &self.pci_host.lock().unwrap().child_bus().unwrap();
+        MUT_PCI_BUS!(root_bus, locked_bus, root_pci_bus);
         let irq_manager = locked_hypervisor.create_irq_manager()?;
-        root_bus.lock().unwrap().msi_irq_manager = irq_manager.msi_irq_manager;
+        root_pci_bus.msi_irq_manager = irq_manager.msi_irq_manager;
         let line_irq_manager = irq_manager.line_irq_manager;
         if let Some(line_irq_manager) = line_irq_manager.clone() {
             let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
                 IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
                 line_irq_manager.clone(),
             ))));
-            root_bus.lock().unwrap().intx_state = irq_state;
+            root_pci_bus.intx_state = irq_state;
         } else {
             return Err(anyhow!(
                 "Failed to create intx state: legacy irq manager is none."
             ));
         }
-        self.base.sysbus.irq_manager = line_irq_manager;
+        self.base.sysbus.lock().unwrap().irq_manager = line_irq_manager;
 
         Ok(())
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
-        let rtc = PL031::default();
-        PL031::realize(
-            rtc,
-            &mut self.base.sysbus,
+        let rtc = PL031::new(
+            &self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
-        )
-        .with_context(|| "Failed to realize PL031")
+        )?;
+        rtc.realize().with_context(|| "Failed to realize PL031")?;
+        Ok(())
     }
 
     fn add_ged_device(&mut self) -> Result<()> {
         let battery_present = self.base.vm_config.lock().unwrap().machine_config.battery;
-        let ged = Ged::default();
-        let ged_dev = ged
-            .realize(
-                &mut self.base.sysbus,
-                GedEvent::new(self.power_button.clone()),
-                battery_present,
-                MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
-                MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
-            )
-            .with_context(|| "Failed to realize Ged")?;
+        let ged = Ged::new(
+            battery_present,
+            &self.base.sysbus,
+            MEM_LAYOUT[LayoutEntryType::Ged as usize].0,
+            MEM_LAYOUT[LayoutEntryType::Ged as usize].1,
+            GedEvent::new(self.power_button.clone()),
+        )?;
+        let ged_dev = ged.realize().with_context(|| "Failed to realize Ged")?;
         if battery_present {
-            let pdev = PowerDev::new(ged_dev);
-            pdev.realize(
-                &mut self.base.sysbus,
+            let pdev = PowerDev::new(
+                ged_dev,
+                &self.base.sysbus,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].0,
                 MEM_LAYOUT[LayoutEntryType::PowerDev as usize].1,
-            )
-            .with_context(|| "Failed to realize PowerDev")?;
+            )?;
+            pdev.realize()
+                .with_context(|| "Failed to realize PowerDev")?;
         }
         Ok(())
     }
@@ -545,16 +497,15 @@ impl MachineOps for StdMachine {
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
-
-        let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
-        pl011
-            .realize(
-                &mut self.base.sysbus,
-                region_base,
-                region_size,
-                &self.base.boot_source,
-            )
-            .with_context(|| "Failed to realize PL011")
+        let pl011 = PL011::new(config.clone(), &self.base.sysbus, region_base, region_size)
+            .with_context(|| "Failed to create PL011")?;
+        pl011.realize().with_context(|| "Failed to realize PL011")?;
+        let mut bs = self.base.boot_source.lock().unwrap();
+        bs.kernel_cmdline.push(Param {
+            param_type: "earlycon".to_string(),
+            value: format!("pl011,mmio,0x{:08x}", region_base),
+        });
+        Ok(())
     }
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
@@ -578,9 +529,8 @@ impl MachineOps for StdMachine {
         let nr_cpus = vm_config.machine_config.nr_cpus;
         let mut locked_vm = vm.lock().unwrap();
         locked_vm.init_global_config(vm_config)?;
-        locked_vm
-            .register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
-            .with_context(|| "Fail to register shutdown event")?;
+        register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Failed to register shutdown event")?;
         locked_vm
             .register_reset_event(locked_vm.reset_req.clone(), vm.clone())
             .with_context(|| "Fail to register reset event")?;
@@ -606,8 +556,16 @@ impl MachineOps for StdMachine {
             .with_context(|| MachineError::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
-        let boot_config = locked_vm
-            .load_boot_source(fwcfg.as_ref(), MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        let migrate = locked_vm.get_migrate_info();
+        let boot_config =
+            if migrate.0 == MigrateMode::Unknown {
+                Some(locked_vm.load_boot_source(
+                    fwcfg.as_ref(),
+                    MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+                )?)
+            } else {
+                None
+            };
         let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
@@ -632,21 +590,24 @@ impl MachineOps for StdMachine {
             .add_devices(vm_config)
             .with_context(|| "Failed to add devices")?;
 
-        let mut fdt_helper = FdtBuilder::new();
-        locked_vm
-            .generate_fdt_node(&mut fdt_helper)
-            .with_context(|| MachineError::GenFdtErr)?;
-        let fdt_vec = fdt_helper.finish()?;
-        locked_vm.dtb_vec = fdt_vec.clone();
-        locked_vm
-            .base
-            .sys_mem
-            .write(
-                &mut fdt_vec.as_slice(),
-                GuestAddress(boot_config.fdt_addr),
-                fdt_vec.len() as u64,
-            )
-            .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
+        if let Some(boot_cfg) = boot_config {
+            let mut fdt_helper = FdtBuilder::new();
+            locked_vm
+                .generate_fdt_node(&mut fdt_helper)
+                .with_context(|| MachineError::GenFdtErr)?;
+            let fdt_vec = fdt_helper.finish()?;
+            locked_vm.dtb_vec = fdt_vec.clone();
+            locked_vm
+                .base
+                .sys_mem
+                .write(
+                    &mut fdt_vec.as_slice(),
+                    GuestAddress(boot_cfg.fdt_addr),
+                    fdt_vec.len() as u64,
+                    AddressAttr::Ram,
+                )
+                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+        }
 
         // If it is direct kernel boot mode, the ACPI can not be enabled.
         if let Some(fw_cfg) = fwcfg {
@@ -670,10 +631,11 @@ impl MachineOps for StdMachine {
             .with_context(|| "Fail to init display")?;
 
         #[cfg(feature = "windows_emu_pid")]
-        locked_vm.watch_windows_emu_pid(
+        crate::watch_windows_emu_pid(
             vm_config,
             locked_vm.power_button.clone(),
             locked_vm.shutdown_req.clone(),
+            vm.clone(),
         );
 
         MigrationManager::register_vm_config(locked_vm.get_vm_config());
@@ -685,25 +647,35 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn add_pflash_device(&mut self, configs: &[PFlashConfig]) -> Result<()> {
+    fn add_pflash_device(&mut self, configs: &[DriveConfig]) -> Result<()> {
         let mut configs_vec = configs.to_vec();
-        configs_vec.sort_by_key(|c| c.unit);
+        configs_vec.sort_by_key(|c| c.unit.unwrap());
         let sector_len: u32 = 1024 * 256;
         let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
         let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
         for i in 0..=1 {
             let (fd, read_only) = if i < configs_vec.len() {
                 let path = &configs_vec[i].path_on_host;
-                let read_only = configs_vec[i].read_only;
+                let read_only = configs_vec[i].readonly;
                 let fd = self.fetch_drive_file(path)?;
                 (Some(fd), read_only)
             } else {
                 (None, false)
             };
 
-            let pflash = PFlash::new(flash_size, &fd, sector_len, 4, 2, read_only)
-                .with_context(|| MachineError::InitPflashErr)?;
-            PFlash::realize(pflash, &mut self.base.sysbus, flash_base, flash_size, fd)
+            let pflash = PFlash::new(
+                flash_size,
+                fd,
+                sector_len,
+                4,
+                2,
+                read_only,
+                &self.base.sysbus,
+                flash_base,
+            )
+            .with_context(|| MachineError::InitPflashErr)?;
+            pflash
+                .realize()
                 .with_context(|| MachineError::RlzPflashErr)?;
             flash_base += flash_size;
         }
@@ -718,7 +690,7 @@ impl MachineOps for StdMachine {
         #[cfg(any(feature = "gtk", all(target_env = "ohos", feature = "ohui_srv")))]
         match vm_config.display {
             #[cfg(feature = "gtk")]
-            Some(ref ds_cfg) if ds_cfg.gtk => {
+            Some(ref ds_cfg) if ds_cfg.display_type == "gtk" => {
                 let ui_context = UiContext {
                     vm_name: vm_config.guest_name.clone(),
                     power_button: Some(self.power_button.clone()),
@@ -731,7 +703,7 @@ impl MachineOps for StdMachine {
             }
             // OHUI server init.
             #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-            Some(ref ds_cfg) if ds_cfg.ohui_config.ohui => {
+            Some(ref ds_cfg) if ds_cfg.display_type == "ohui" => {
                 ohui_init(self.ohui_server.as_ref().unwrap().clone(), ds_cfg)
                     .with_context(|| "Failed to init OH UI server!")?;
             }
@@ -747,15 +719,16 @@ impl MachineOps for StdMachine {
 
     #[cfg(feature = "ramfb")]
     fn add_ramfb(&mut self, cfg_args: &str) -> Result<()> {
-        let install = parse_ramfb(cfg_args)?;
+        let config = RamfbConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let fwcfg_dev = self
             .get_fwcfg_dev()
             .with_context(|| "Ramfb device must be used UEFI to boot, please add pflash devices")?;
         let sys_mem = self.get_sys_mem();
-        let mut ramfb = Ramfb::new(sys_mem.clone(), install);
+        let mut ramfb = Ramfb::new(sys_mem.clone(), &self.base.sysbus, config.install);
 
         ramfb.ramfb_state.setup(&fwcfg_dev)?;
-        ramfb.realize(&mut self.base.sysbus)
+        ramfb.realize()?;
+        Ok(())
     }
 
     fn get_pci_host(&mut self) -> Result<&Arc<Mutex<PciHost>>> {
@@ -874,7 +847,7 @@ impl AcpiBuilder for StdMachine {
         dbg2.set_field(40, 1_u32);
 
         // Table 2. Debug Device Information structure format
-        let offset = 44;
+        let offset = 44_usize;
         // Revision
         dbg2.set_field(offset, 0_u8);
         // Length
@@ -962,7 +935,7 @@ impl AcpiBuilder for StdMachine {
         // Mapping counts of Root Complex Node
         iort.set_field(80, 1_u32);
         // Mapping offset of Root Complex Node
-        iort.set_field(84, ROOT_COMPLEX_ENTRY_SIZE as u32);
+        iort.set_field(84, u32::from(ROOT_COMPLEX_ENTRY_SIZE));
         // Cache of coherent device
         iort.set_field(88, 1_u32);
         // Memory flags of coherent device
@@ -999,10 +972,11 @@ impl AcpiBuilder for StdMachine {
         spcr.set_field(52, 1_u8 << 3);
         // Irq number used by the UART
         let mut uart_irq: u32 = 0;
-        for dev in self.base.sysbus.devices.iter() {
-            let locked_dev = dev.lock().unwrap();
-            if locked_dev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
-                uart_irq = locked_dev.sysbusdev_base().irq_state.irq as _;
+        let devices = self.get_sysbus_devices();
+        for dev in devices.values() {
+            SYS_BUS_DEVICE!(dev, locked_dev, sysbusdev);
+            if sysbusdev.sysbusdev_base().dev_type == SysBusDevType::PL011 {
+                uart_irq = sysbusdev.sysbusdev_base().irq_state.irq as _;
                 break;
             }
         }
@@ -1048,7 +1022,7 @@ impl AcpiBuilder for StdMachine {
         dsdt.append_child(sb_scope.aml_bytes().as_slice());
 
         // 3. Info of devices attached to system bus.
-        dsdt.append_child(self.base.sysbus.aml_bytes().as_slice());
+        dsdt.append_child(self.base.sysbus.lock().unwrap().aml_bytes().as_slice());
 
         let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
             .with_context(|| "Fail to add DSDT table to loader")?;
@@ -1125,7 +1099,7 @@ impl AcpiBuilder for StdMachine {
                     type_id: 3_u8,
                     length: size_of::<AcpiSratGiccAffinity>() as u8,
                     proximity_domain,
-                    process_uid: *cpu as u32,
+                    process_uid: u32::from(*cpu),
                     flags: 1,
                     clock_domain: 0_u32,
                 }
@@ -1185,116 +1159,16 @@ impl AcpiBuilder for StdMachine {
         loader: &mut TableLoader,
     ) -> Result<u64> {
         let mut pptt = AcpiTable::new(*b"PPTT", 2, *b"STRATO", *b"VIRTPPTT", 1);
-        let mut uid = 0;
+        let mut uid = 0_u32;
         self.build_pptt_sockets(&mut pptt, &mut uid);
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
             .with_context(|| "Fail to add PPTT table to loader")?;
         Ok(pptt_begin)
     }
-}
 
-impl MachineLifecycle for StdMachine {
-    fn pause(&self) -> bool {
-        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
-            event!(Stop);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn resume(&self) -> bool {
-        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
-            return false;
-        }
-        event!(Resume);
-        true
-    }
-
-    fn destroy(&self) -> bool {
-        if self.shutdown_req.write(1).is_err() {
-            error!("Failed to send shutdown request.");
-            return false;
-        }
-
-        true
-    }
-
-    fn powerdown(&self) -> bool {
-        if self.power_button.write(1).is_err() {
-            error!("ARM standard vm write power button failed");
-            return false;
-        }
-        true
-    }
-
-    fn get_shutdown_action(&self) -> ShutdownAction {
-        self.base
-            .vm_config
-            .lock()
-            .unwrap()
-            .machine_config
-            .shutdown_action
-    }
-
-    fn reset(&mut self) -> bool {
-        if self.reset_req.write(1).is_err() {
-            error!("ARM standard vm write reset req failed");
-            return false;
-        }
-        true
-    }
-
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(
-            &self.base.cpus,
-            &self.base.irq_chip,
-            &mut self.base.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        ) {
-            error!("VM state transfer failed: {:?}", e);
-            return false;
-        }
-        true
-    }
-}
-
-impl MigrateInterface for StdMachine {
-    fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
-            Ok((MigrateMode::File, path)) => migration::snapshot(path),
-            Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
-            Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
-            _ => Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
-                None,
-            ),
-        }
-    }
-
-    fn query_migrate(&self) -> Response {
-        migration::query_migrate()
-    }
-
-    fn cancel_migrate(&self) -> Response {
-        migration::cancel_migrate()
-    }
-}
-
-impl MachineInterface for StdMachine {}
-impl MachineExternalInterface for StdMachine {}
-impl MachineTestInterface for StdMachine {}
-
-impl EventLoopManager for StdMachine {
-    fn loop_should_exit(&self) -> bool {
-        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
-        *vmstate == VmState::Shutdown
-    }
-
-    fn loop_cleanup(&self) -> Result<()> {
-        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
-        Ok(())
+    fn get_hardware_signature(&self) -> Option<u32> {
+        let vm_config = self.machine_base().vm_config.lock().unwrap();
+        vm_config.hardware_signature
     }
 }
 
@@ -1428,7 +1302,11 @@ impl CompileFDTHelper for StdMachine {
         match &boot_source.initrd {
             Some(initrd) => {
                 fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
-                fdt.set_property_u64("linux,initrd-end", initrd.initrd_addr + initrd.initrd_size)?;
+                let initrd_end = initrd
+                    .initrd_addr
+                    .checked_add(initrd.initrd_size)
+                    .with_context(|| "initrd end overflow")?;
+                fdt.set_property_u64("linux,initrd-end", initrd_end)?;
             }
             None => {}
         }

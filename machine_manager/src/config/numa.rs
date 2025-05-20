@@ -12,28 +12,16 @@
 
 use std::cmp::max;
 use std::collections::{BTreeMap, HashSet};
+use std::str::FromStr;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
+use clap::Parser;
 
 use super::error::ConfigError;
-use crate::config::{CmdParser, IntegerList, VmConfig, MAX_NODES};
+use super::{get_class_type, str_slip_to_clap};
+use crate::config::{IntegerList, VmConfig, MAX_NODES};
 
 const MIN_NUMA_DISTANCE: u8 = 10;
-
-#[derive(Default, Debug)]
-pub struct NumaDistance {
-    pub destination: u32,
-    pub distance: u8,
-}
-
-#[derive(Default, Debug)]
-pub struct NumaConfig {
-    pub numa_id: u32,
-    pub cpus: Vec<u8>,
-    pub distances: Option<Vec<NumaDistance>>,
-    pub size: u64,
-    pub mem_dev: String,
-}
 
 #[derive(Default)]
 pub struct NumaNode {
@@ -109,56 +97,72 @@ pub fn complete_numa_node(numa_nodes: &mut NumaNodes, nr_cpus: u8, mem_size: u64
     Ok(())
 }
 
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+pub struct NumaNodeConfig {
+    #[arg(long, value_parser = ["node"])]
+    pub classtype: String,
+    #[arg(long, alias = "nodeid", value_parser = clap::value_parser!(u32).range(..MAX_NODES as i64))]
+    pub numa_id: u32,
+    #[arg(long, value_parser = get_cpus)]
+    pub cpus: ::std::vec::Vec<u8>,
+    #[arg(long, alias = "memdev")]
+    pub mem_dev: String,
+}
+
+fn get_cpus(cpus_str: &str) -> Result<Vec<u8>> {
+    let mut cpus = IntegerList::from_str(cpus_str)
+        .with_context(|| ConfigError::ConvertValueFailed(String::from("u8"), "cpus".to_string()))?
+        .0
+        .iter()
+        .map(|e| *e as u8)
+        .collect::<Vec<u8>>();
+
+    if cpus.is_empty() {
+        bail!("Got empty cpus list!");
+    }
+
+    cpus.sort_unstable();
+
+    Ok(cpus)
+}
+
 /// Parse the NUMA node memory parameters.
 ///
 /// # Arguments
 ///
 /// * `numa_config` - The NUMA node configuration.
-pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
-    let mut cmd_parser = CmdParser::new("numa");
-    cmd_parser
-        .push("")
-        .push("nodeid")
-        .push("cpus")
-        .push("memdev");
-    cmd_parser.parse(numa_config)?;
-
-    let mut config: NumaConfig = NumaConfig::default();
-    if let Some(node_id) = cmd_parser.get_value::<u32>("nodeid")? {
-        if node_id >= MAX_NODES {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "nodeid".to_string(),
-                0,
-                true,
-                MAX_NODES as u64,
-                false,
-            )));
-        }
-        config.numa_id = node_id;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "nodeid".to_string(),
-            "numa".to_string()
-        )));
-    }
-    if let Some(mut cpus) = cmd_parser
-        .get_value::<IntegerList>("cpus")
-        .with_context(|| ConfigError::ConvertValueFailed(String::from("u8"), "cpus".to_string()))?
-        .map(|v| v.0.iter().map(|e| *e as u8).collect::<Vec<u8>>())
-    {
-        cpus.sort_unstable();
-        config.cpus = cpus;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "cpus".to_string(),
-            "numa".to_string()
-        )));
-    }
-    config.mem_dev = cmd_parser
-        .get_value::<String>("memdev")?
-        .with_context(|| ConfigError::FieldIsMissing("memdev".to_string(), "numa".to_string()))?;
-
+pub fn parse_numa_mem(numa_config: &str) -> Result<NumaNodeConfig> {
+    let config = NumaNodeConfig::try_parse_from(str_slip_to_clap(numa_config, true, false))?;
     Ok(config)
+}
+
+#[derive(Parser)]
+#[command(no_binary_name(true))]
+pub struct NumaDistConfig {
+    #[arg(long, value_parser = ["dist"])]
+    pub classtype: String,
+    #[arg(long, alias = "src", value_parser = clap::value_parser!(u32).range(..MAX_NODES as i64))]
+    pub numa_id: u32,
+    #[arg(long, alias = "dst", value_parser = clap::value_parser!(u32).range(..MAX_NODES as i64))]
+    pub destination: u32,
+    #[arg(long, alias = "val", value_parser = clap::value_parser!(u8).range(MIN_NUMA_DISTANCE as i64..))]
+    pub distance: u8,
+}
+
+impl NumaDistConfig {
+    fn check(&self) -> Result<()> {
+        if self.numa_id == self.destination && self.distance != MIN_NUMA_DISTANCE {
+            bail!("Local distance of node {} should be 10.", self.numa_id);
+        }
+        if self.numa_id != self.destination && self.distance == MIN_NUMA_DISTANCE {
+            bail!(
+                "Remote distance of node {} should be more than 10.",
+                self.numa_id
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Parse the NUMA node distance parameters.
@@ -166,69 +170,10 @@ pub fn parse_numa_mem(numa_config: &str) -> Result<NumaConfig> {
 /// # Arguments
 ///
 /// * `numa_dist` - The NUMA node distance configuration.
-pub fn parse_numa_distance(numa_dist: &str) -> Result<(u32, NumaDistance)> {
-    let mut cmd_parser = CmdParser::new("numa");
-    cmd_parser.push("").push("src").push("dst").push("val");
-    cmd_parser.parse(numa_dist)?;
-
-    let mut dist: NumaDistance = NumaDistance::default();
-    let numa_id = if let Some(src) = cmd_parser.get_value::<u32>("src")? {
-        if src >= MAX_NODES {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "src".to_string(),
-                0,
-                true,
-                MAX_NODES as u64,
-                false,
-            )));
-        }
-        src
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "src".to_string(),
-            "numa".to_string()
-        )));
-    };
-    if let Some(dst) = cmd_parser.get_value::<u32>("dst")? {
-        if dst >= MAX_NODES {
-            return Err(anyhow!(ConfigError::IllegalValue(
-                "dst".to_string(),
-                0,
-                true,
-                MAX_NODES as u64,
-                false,
-            )));
-        }
-        dist.destination = dst;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "dst".to_string(),
-            "numa".to_string()
-        )));
-    }
-    if let Some(val) = cmd_parser.get_value::<u8>("val")? {
-        if val < MIN_NUMA_DISTANCE {
-            bail!("NUMA distance shouldn't be less than 10");
-        }
-        if numa_id == dist.destination && val != MIN_NUMA_DISTANCE {
-            bail!("Local distance of node {} should be 10.", numa_id);
-        }
-        if numa_id != dist.destination && val == MIN_NUMA_DISTANCE {
-            bail!(
-                "Remote distance of node {} should be more than 10.",
-                numa_id
-            );
-        }
-
-        dist.distance = val;
-    } else {
-        return Err(anyhow!(ConfigError::FieldIsMissing(
-            "val".to_string(),
-            "numa".to_string()
-        )));
-    }
-
-    Ok((numa_id, dist))
+pub fn parse_numa_distance(numa_dist: &str) -> Result<NumaDistConfig> {
+    let dist_cfg = NumaDistConfig::try_parse_from(str_slip_to_clap(numa_dist, true, false))?;
+    dist_cfg.check()?;
+    Ok(dist_cfg)
 }
 
 impl VmConfig {
@@ -238,13 +183,8 @@ impl VmConfig {
     ///
     /// * `numa_config` - The NUMA node configuration.
     pub fn add_numa(&mut self, numa_config: &str) -> Result<()> {
-        let mut cmd_params = CmdParser::new("numa");
-        cmd_params.push("");
-
-        cmd_params.get_parameters(numa_config)?;
-        if let Some(numa_type) = cmd_params.get_value::<String>("")? {
-            self.numa_nodes.push((numa_type, numa_config.to_string()));
-        }
+        let numa_type = get_class_type(numa_config).with_context(|| "Numa type not specified")?;
+        self.numa_nodes.push((numa_type, numa_config.to_string()));
 
         Ok(())
     }
@@ -258,20 +198,18 @@ mod tests {
     fn test_parse_numa_mem() {
         let mut vm_config = VmConfig::default();
         assert!(vm_config
-            .add_numa("-numa node,nodeid=0,cpus=0-1,memdev=mem0")
+            .add_numa("node,nodeid=0,cpus=0-1,memdev=mem0")
             .is_ok());
         assert!(vm_config
-            .add_numa("-numa node,nodeid=1,cpus=2-1,memdev=mem1")
+            .add_numa("node,nodeid=1,cpus=2-1,memdev=mem1")
             .is_ok());
+        assert!(vm_config.add_numa("node,nodeid=2,memdev=mem2").is_ok());
+        assert!(vm_config.add_numa("node,nodeid=3,cpus=3-4").is_ok());
         assert!(vm_config
-            .add_numa("-numa node,nodeid=2,memdev=mem2")
-            .is_ok());
-        assert!(vm_config.add_numa("-numa node,nodeid=3,cpus=3-4").is_ok());
-        assert!(vm_config
-            .add_numa("-numa node,nodeid=0,cpus=[0-1:3-5],memdev=mem0")
+            .add_numa("node,nodeid=0,cpus=[0-1:3-5],memdev=mem0")
             .is_ok());
 
-        let numa = vm_config.numa_nodes.get(0).unwrap();
+        let numa = vm_config.numa_nodes.first().unwrap();
         let numa_config = parse_numa_mem(numa.1.as_str()).unwrap();
         assert_eq!(numa_config.cpus, vec![0, 1]);
         assert_eq!(numa_config.mem_dev, "mem0");
@@ -291,17 +229,17 @@ mod tests {
     #[test]
     fn test_parse_numa_distance() {
         let mut vm_config = VmConfig::default();
-        assert!(vm_config.add_numa("-numa dist,src=0,dst=1,val=15").is_ok());
-        assert!(vm_config.add_numa("-numa dist,dst=1,val=10").is_ok());
-        assert!(vm_config.add_numa("-numa dist,src=0,val=10").is_ok());
-        assert!(vm_config.add_numa("-numa dist,src=0,dst=1").is_ok());
-        assert!(vm_config.add_numa("-numa dist,src=0,dst=1,val=10").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,dst=1,val=15").is_ok());
+        assert!(vm_config.add_numa("dist,dst=1,val=10").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,val=10").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,dst=1").is_ok());
+        assert!(vm_config.add_numa("dist,src=0,dst=1,val=10").is_ok());
 
-        let numa = vm_config.numa_nodes.get(0).unwrap();
-        let dist = parse_numa_distance(numa.1.as_str()).unwrap();
-        assert_eq!(dist.0, 0);
-        assert_eq!(dist.1.destination, 1);
-        assert_eq!(dist.1.distance, 15);
+        let numa = vm_config.numa_nodes.first().unwrap();
+        let dist_cfg = parse_numa_distance(numa.1.as_str()).unwrap();
+        assert_eq!(dist_cfg.numa_id, 0);
+        assert_eq!(dist_cfg.destination, 1);
+        assert_eq!(dist_cfg.distance, 15);
 
         let numa = vm_config.numa_nodes.get(1).unwrap();
         assert!(parse_numa_distance(numa.1.as_str()).is_err());

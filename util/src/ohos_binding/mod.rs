@@ -15,6 +15,8 @@ pub mod audio;
 #[cfg(feature = "usb_camera_oh")]
 pub mod camera;
 pub mod misc;
+#[cfg(feature = "usb_host")]
+pub mod usb;
 
 #[cfg(feature = "usb_camera_oh")]
 mod hwf_adapter;

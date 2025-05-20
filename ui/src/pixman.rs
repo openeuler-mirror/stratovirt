@@ -36,7 +36,7 @@ pub struct ColorInfo {
 
 impl ColorInfo {
     pub fn set_color_info(&mut self, shift: u8, max: u16) {
-        self.mask = (max as u32) << (shift as u32);
+        self.mask = u32::from(max) << u32::from(shift);
         self.shift = shift;
         self.max = if max == 0 { 0xFF } else { max as u8 };
         self.bits = max.popcnt() as u8;
@@ -84,10 +84,14 @@ impl PixelFormat {
         self.green.max = ((1 << self.green.bits) - 1) as u8;
         self.blue.max = ((1 << self.blue.bits) - 1) as u8;
 
-        self.alpha_chl.mask = self.alpha_chl.max.wrapping_shl(self.alpha_chl.shift as u32) as u32;
-        self.red.mask = self.red.max.wrapping_shl(self.red.shift as u32) as u32;
-        self.green.mask = self.green.max.wrapping_shl(self.green.shift as u32) as u32;
-        self.blue.mask = self.blue.max.wrapping_shl(self.blue.shift as u32) as u32;
+        self.alpha_chl.mask = u32::from(
+            self.alpha_chl
+                .max
+                .wrapping_shl(u32::from(self.alpha_chl.shift)),
+        );
+        self.red.mask = u32::from(self.red.max.wrapping_shl(u32::from(self.red.shift)));
+        self.green.mask = u32::from(self.green.max.wrapping_shl(u32::from(self.green.shift)));
+        self.blue.mask = u32::from(self.blue.max.wrapping_shl(u32::from(self.blue.shift)));
     }
 
     pub fn is_default_pixel_format(&self) -> bool {

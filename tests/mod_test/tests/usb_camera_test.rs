@@ -155,7 +155,7 @@ fn check_multi_frames(
             slot_id,
             VS_ENDPOINT_ID,
             frame_len,
-            UVC_HEADER_LEN as u32,
+            u32::from(UVC_HEADER_LEN),
             max_payload,
         );
         for buf in &payload_list {
@@ -234,7 +234,7 @@ fn qmp_plug_camera(test_state: &Rc<RefCell<TestState>>, id: &str, camdev: &str) 
     let test_state = test_state.borrow_mut();
     let cmd = r#"{"execute": "device_add", "arguments": {"id": "ID", "driver": "usb-camera", "cameradev": "CAMDEV"}}"#;
     let cmd = cmd.replace("ID", id);
-    let cmd = cmd.replace("CAMDEV", &camdev);
+    let cmd = cmd.replace("CAMDEV", camdev);
     test_state.qmp(&cmd)
 }
 
@@ -314,7 +314,7 @@ fn test_xhci_camera_invalid_frame_len() {
         slot_id,
         VS_ENDPOINT_ID,
         len as u32,
-        UVC_HEADER_LEN as u32,
+        u32::from(UVC_HEADER_LEN),
         cur.dwMaxPayloadTransferSize,
     );
     for item in payload_list {
@@ -553,13 +553,19 @@ fn test_xhci_camera_hotplug_invalid() {
         .with_config("auto_run", true)
         .build();
 
+    #[cfg(not(target_env = "ohos"))]
     qmp_cameradev_add(&test_state, "camdev0", "v4l2", "/tmp/not-existed");
+    #[cfg(target_env = "ohos")]
+    qmp_cameradev_add(&test_state, "camdev0", "ohcamera", "InvalidNum");
     // Invalid cameradev.
     let value = qmp_plug_camera(&test_state, "usbcam0", "camdev0");
     let desc = value["error"]["desc"].as_str().unwrap().to_string();
+    #[cfg(not(target_env = "ohos"))]
     assert_eq!(desc, "Failed to open v4l2 backend /tmp/not-existed.");
+    #[cfg(target_env = "ohos")]
+    assert_eq!(desc, "OH Camera: failed to init cameras");
     // Invalid device id.
-    let value = qmp_unplug_camera(&test_state.clone(), "usbcam0");
+    let value = qmp_unplug_camera(&test_state, "usbcam0");
     let desc = value["error"]["desc"].as_str().unwrap().to_string();
     assert_eq!(desc, "Failed to detach device: id usbcam0 not found");
     // Invalid cameradev id.

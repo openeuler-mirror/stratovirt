@@ -21,6 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+#[cfg(feature = "vfio_device")]
 use kvm_ioctls::DeviceFd;
 use log::info;
 use vmm_sys_util::eventfd::EventFd;
@@ -41,7 +42,7 @@ use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, Trigger
 use devices::{GICVersion, GICv3, ICGICConfig, InterruptController, GIC_IRQ_INTERNAL};
 use machine_manager::machine::HypervisorType;
 use migration::{MigrateMemSlot, MigrateOps};
-use util::test_helper::{IntxInfo, MsixMsg, TEST_INTX_LIST, TEST_MSIX_LIST};
+use util::test_helper::{add_msix_msg, IntxInfo, TEST_INTX_LIST};
 
 pub struct TestHypervisor {}
 
@@ -115,6 +116,7 @@ impl HypervisorOps for TestHypervisor {
         })
     }
 
+    #[cfg(feature = "vfio_device")]
     fn create_vfio_device(&self) -> Option<DeviceFd> {
         None
     }
@@ -153,7 +155,7 @@ impl CPUHypervisorOps for TestCpu {
     ) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         {
-            arch_cpu.lock().unwrap().mpidr = self.id as u64;
+            arch_cpu.lock().unwrap().mpidr = u64::from(self.id);
             arch_cpu.lock().unwrap().set_core_reg(boot_config);
         }
         Ok(())
@@ -301,19 +303,6 @@ impl TestInterruptManager {
     pub fn arch_map_irq(&self, gsi: u32) -> u32 {
         gsi + GIC_IRQ_INTERNAL
     }
-
-    pub fn add_msix_msg(addr: u64, data: u32) {
-        let new_msg = MsixMsg::new(addr, data);
-        let mut msix_list_lock = TEST_MSIX_LIST.lock().unwrap();
-
-        for msg in msix_list_lock.iter() {
-            if new_msg.addr == msg.addr && new_msg.data == msg.data {
-                return;
-            }
-        }
-
-        msix_list_lock.push(new_msg);
-    }
 }
 
 impl LineIrqManager for TestInterruptManager {
@@ -368,6 +357,10 @@ impl LineIrqManager for TestInterruptManager {
 }
 
 impl MsiIrqManager for TestInterruptManager {
+    fn irqfd_enable(&self) -> bool {
+        false
+    }
+
     fn allocate_irq(&self, _vector: MsiVector) -> Result<u32> {
         Err(anyhow!(
             "Failed to allocate irq, mst doesn't support irq routing feature."
@@ -399,9 +392,9 @@ impl MsiIrqManager for TestInterruptManager {
         _dev_id: u32,
     ) -> Result<()> {
         let data = vector.msg_data;
-        let mut addr: u64 = vector.msg_addr_hi as u64;
-        addr = (addr << 32) + vector.msg_addr_lo as u64;
-        TestInterruptManager::add_msix_msg(addr, data);
+        let mut addr: u64 = u64::from(vector.msg_addr_hi);
+        addr = (addr << 32) + u64::from(vector.msg_addr_lo);
+        add_msix_msg(addr, data);
         Ok(())
     }
 

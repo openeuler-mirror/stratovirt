@@ -13,12 +13,11 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use log::{debug, error};
-use vmm_sys_util::eventfd::EventFd;
+use log::error;
 
 use super::error::LegacyError;
-use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType, SysRes};
-use crate::{Device, DeviceBase};
+use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
+use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
     AmlActiveLevel, AmlBuilder, AmlDevice, AmlEdgeLevel, AmlExtendedInterrupt, AmlIntShare,
     AmlInteger, AmlMemory32Fixed, AmlNameDecl, AmlReadAndWrite, AmlResTemplate, AmlResourceUsage,
@@ -26,17 +25,16 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use chardev_backend::chardev::{Chardev, InputReceiver};
-use machine_manager::{
-    config::{BootSource, Param, SerialConfig},
-    event_loop::EventLoop,
-};
+use machine_manager::config::SerialConfig;
+use machine_manager::event_loop::EventLoop;
 use migration::{
     snapshot::PL011_SNAPSHOT_ID, DeviceStateDesc, FieldDesc, MigrationError, MigrationHook,
     MigrationManager, StateTransfer,
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::loop_context::EventNotifierHelper;
+use util::gen_base_func;
+use util::loop_context::{create_new_eventfd, EventNotifierHelper};
 use util::num_ops::read_data_u32;
 
 const PL011_FLAG_TXFE: u8 = 0x80;
@@ -99,7 +97,7 @@ impl PL011State {
     fn new() -> Self {
         PL011State {
             rfifo: [0; PL011_FIFO_SIZE],
-            flags: (PL011_FLAG_TXFE | PL011_FLAG_RXFE) as u32,
+            flags: u32::from(PL011_FLAG_TXFE | PL011_FLAG_RXFE),
             lcr: 0,
             rsr: 0,
             cr: 0x300,
@@ -131,17 +129,28 @@ pub struct PL011 {
 
 impl PL011 {
     /// Create a new `PL011` instance with default parameters.
-    pub fn new(cfg: SerialConfig) -> Result<Self> {
-        Ok(PL011 {
+    pub fn new(
+        cfg: SerialConfig,
+        sysbus: &Arc<Mutex<SysBus>>,
+        region_base: u64,
+        region_size: u64,
+    ) -> Result<Self> {
+        let mut pl011 = PL011 {
             base: SysBusDevBase {
                 dev_type: SysBusDevType::PL011,
-                interrupt_evt: Some(Arc::new(EventFd::new(libc::EFD_NONBLOCK)?)),
+                interrupt_evt: Some(Arc::new(create_new_eventfd()?)),
                 ..Default::default()
             },
             paused: false,
             state: PL011State::new(),
             chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
-        })
+        };
+        pl011
+            .set_sys_resource(sysbus, region_base, region_size, "PL011")
+            .with_context(|| "Failed to set system resource for PL011.")?;
+        pl011.set_parent_bus(sysbus.clone());
+
+        Ok(pl011)
     }
 
     fn interrupt(&mut self) {
@@ -152,45 +161,6 @@ impl PL011 {
             self.inject_interrupt();
             trace::pl011_interrupt(flag);
         }
-    }
-
-    pub fn realize(
-        mut self,
-        sysbus: &mut SysBus,
-        region_base: u64,
-        region_size: u64,
-        bs: &Arc<Mutex<BootSource>>,
-    ) -> Result<()> {
-        self.chardev
-            .lock()
-            .unwrap()
-            .realize()
-            .with_context(|| "Failed to realize chardev")?;
-        self.set_sys_resource(sysbus, region_base, region_size)
-            .with_context(|| "Failed to set system resource for PL011.")?;
-
-        let dev = Arc::new(Mutex::new(self));
-        sysbus
-            .attach_device(&dev, region_base, region_size, "PL011")
-            .with_context(|| "Failed to attach PL011 to system bus.")?;
-
-        bs.lock().unwrap().kernel_cmdline.push(Param {
-            param_type: "earlycon".to_string(),
-            value: format!("pl011,mmio,0x{:08x}", region_base),
-        });
-        MigrationManager::register_device_instance(
-            PL011State::descriptor(),
-            dev.clone(),
-            PL011_SNAPSHOT_ID,
-        );
-        let locked_dev = dev.lock().unwrap();
-        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
-        EventLoop::update_event(
-            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
-            None,
-        )
-        .with_context(|| LegacyError::RegNotifierErr)?;
-        Ok(())
     }
 
     fn unpause_rx(&mut self) {
@@ -204,20 +174,20 @@ impl PL011 {
 
 impl InputReceiver for PL011 {
     fn receive(&mut self, data: &[u8]) {
-        self.state.flags &= !PL011_FLAG_RXFE as u32;
+        self.state.flags &= u32::from(!PL011_FLAG_RXFE);
         for val in data {
             let mut slot = (self.state.read_pos + self.state.read_count) as usize;
             if slot >= PL011_FIFO_SIZE {
                 slot -= PL011_FIFO_SIZE;
             }
-            self.state.rfifo[slot] = *val as u32;
+            self.state.rfifo[slot] = u32::from(*val);
             self.state.read_count += 1;
             trace::pl011_receive(self.state.rfifo[slot], self.state.read_count);
         }
 
         // If in character-mode, or in FIFO-mode and FIFO is full, trigger the interrupt.
         if ((self.state.lcr & 0x10) == 0) || (self.state.read_count as usize == PL011_FIFO_SIZE) {
-            self.state.flags |= PL011_FLAG_RXFF as u32;
+            self.state.flags |= u32::from(PL011_FLAG_RXFF);
             trace::pl011_receive_full();
         }
         if self.state.read_count >= self.state.read_trigger {
@@ -237,23 +207,40 @@ impl InputReceiver for PL011 {
 }
 
 impl Device for PL011 {
-    fn device_base(&self) -> &DeviceBase {
-        &self.base.base
-    }
+    gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
-    fn device_base_mut(&mut self) -> &mut DeviceBase {
-        &mut self.base.base
+    fn realize(self) -> Result<Arc<Mutex<Self>>> {
+        self.chardev
+            .lock()
+            .unwrap()
+            .realize()
+            .with_context(|| "Failed to realize chardev")?;
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let dev = Arc::new(Mutex::new(self));
+        sysbus
+            .attach_device(&dev)
+            .with_context(|| "Failed to attach PL011 to system bus.")?;
+        drop(locked_bus);
+        MigrationManager::register_device_instance(
+            PL011State::descriptor(),
+            dev.clone(),
+            PL011_SNAPSHOT_ID,
+        );
+        let locked_dev = dev.lock().unwrap();
+        locked_dev.chardev.lock().unwrap().set_receiver(&dev);
+        EventLoop::update_event(
+            EventNotifierHelper::internal_notifiers(locked_dev.chardev.clone()),
+            None,
+        )
+        .with_context(|| LegacyError::RegNotifierErr)?;
+        drop(locked_dev);
+        Ok(dev)
     }
 }
 
 impl SysBusDevOps for PL011 {
-    fn sysbusdev_base(&self) -> &SysBusDevBase {
-        &self.base
-    }
-
-    fn sysbusdev_base_mut(&mut self) -> &mut SysBusDevBase {
-        &mut self.base
-    }
+    gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
         if data.len() > 4 {
@@ -267,7 +254,7 @@ impl SysBusDevOps for PL011 {
                 // Data register.
                 self.unpause_rx();
 
-                self.state.flags &= !(PL011_FLAG_RXFF as u32);
+                self.state.flags &= !u32::from(PL011_FLAG_RXFF);
                 let c = self.state.rfifo[self.state.read_pos as usize];
 
                 if self.state.read_count > 0 {
@@ -278,7 +265,7 @@ impl SysBusDevOps for PL011 {
                     }
                 }
                 if self.state.read_count == 0 {
-                    self.state.flags |= PL011_FLAG_RXFE as u32;
+                    self.state.flags |= u32::from(PL011_FLAG_RXFE);
                 }
                 if self.state.read_count == self.state.read_trigger - 1 {
                     self.state.int_level &= !INT_RX;
@@ -330,7 +317,7 @@ impl SysBusDevOps for PL011 {
             0x3f8..=0x400 => {
                 // Register 0xFE0~0xFFC is UART Peripheral Identification Registers
                 // and PrimeCell Identification Registers.
-                ret = *self.state.id.get(((offset - 0xfe0) >> 2) as usize).unwrap() as u32;
+                ret = u32::from(*self.state.id.get(((offset - 0xfe0) >> 2) as usize).unwrap());
             }
             _ => {
                 error!("Failed to read pl011: Invalid offset 0x{:x}", offset);
@@ -353,20 +340,10 @@ impl SysBusDevOps for PL011 {
         match offset >> 2 {
             0 => {
                 let ch = value as u8;
-
-                if let Some(output) = &mut self.chardev.lock().unwrap().output {
-                    let mut locked_output = output.lock().unwrap();
-                    if let Err(e) = locked_output.write_all(&[ch]) {
-                        debug!("Failed to write to pl011 output fd, error is {:?}", e);
-                    }
-                    if let Err(e) = locked_output.flush() {
-                        debug!("Failed to flush pl011, error is {:?}", e);
-                    }
-                } else {
-                    debug!("Failed to get output fd");
+                if let Err(e) = self.chardev.lock().unwrap().fill_outbuf(vec![ch], None) {
+                    error!("Failed to append pl011 data to outbuf of chardev, {:?}", e);
                     return false;
                 }
-
                 self.state.int_level |= INT_TX;
                 self.interrupt();
             }
@@ -425,10 +402,6 @@ impl SysBusDevOps for PL011 {
 
         true
     }
-
-    fn get_sys_resource_mut(&mut self) -> Option<&mut SysRes> {
-        Some(&mut self.base.res)
-    }
 }
 
 impl StateTransfer for PL011 {
@@ -481,18 +454,21 @@ impl AmlBuilder for PL011 {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::sysbus::sysbus_init;
     use machine_manager::config::{ChardevConfig, ChardevType};
 
     #[test]
     fn test_receive() {
         let chardev_cfg = ChardevConfig {
-            id: "chardev".to_string(),
-            backend: ChardevType::Stdio,
+            classtype: ChardevType::Stdio {
+                id: "chardev".to_string(),
+            },
         };
-        let mut pl011_dev = PL011::new(SerialConfig {
+        let config = SerialConfig {
             chardev: chardev_cfg,
-        })
-        .unwrap();
+        };
+        let sysbus = sysbus_init();
+        let mut pl011_dev = PL011::new(config, &sysbus, 0x0900_0000, 0x0000_1000).unwrap();
         assert_eq!(pl011_dev.state.rfifo, [0; PL011_FIFO_SIZE]);
         assert_eq!(pl011_dev.state.flags, 0x90);
         assert_eq!(pl011_dev.state.lcr, 0);
@@ -517,7 +493,7 @@ mod test {
         pl011_dev.receive(&data);
         assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
-            assert_eq!(pl011_dev.state.rfifo[i], data[i] as u32);
+            assert_eq!(pl011_dev.state.rfifo[i], u32::from(data[i]));
         }
         assert_eq!(pl011_dev.state.flags, 0xC0);
         assert_eq!(pl011_dev.state.int_level, INT_RX);

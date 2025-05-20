@@ -36,9 +36,11 @@ use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
 use kvm_bindings::kvm_userspace_memory_region as KvmMemSlot;
 use kvm_bindings::*;
+#[cfg(feature = "vfio_device")]
+use kvm_ioctls::DeviceFd;
 #[cfg(not(test))]
 use kvm_ioctls::VcpuExit;
-use kvm_ioctls::{Cap, DeviceFd, Kvm, VcpuFd, VmFd};
+use kvm_ioctls::{Cap, Kvm, VcpuFd, VmFd};
 use libc::{c_int, c_void, siginfo_t};
 use log::{error, info, warn};
 use vmm_sys_util::{
@@ -54,8 +56,6 @@ use crate::HypervisorError;
 #[cfg(target_arch = "aarch64")]
 use aarch64::cpu_caps::ArmCPUCaps as CPUCaps;
 use address_space::{AddressSpace, Listener};
-#[cfg(feature = "boot_time")]
-use cpu::capture_boot_signal;
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{
@@ -135,6 +135,7 @@ impl KvmHypervisor {
     }
 
     fn create_memory_listener(&self) -> Arc<Mutex<dyn Listener>> {
+        // Memslot will not exceed u32::MAX, so use as translate data type.
         Arc::new(Mutex::new(KvmMemoryListener::new(
             self.fd.as_ref().unwrap().get_nr_memslots() as u32,
             self.vm_fd.clone(),
@@ -229,7 +230,7 @@ impl HypervisorOps for KvmHypervisor {
             .vm_fd
             .as_ref()
             .unwrap()
-            .create_vcpu(vcpu_id as u64)
+            .create_vcpu(u64::from(vcpu_id))
             .with_context(|| "Create vcpu failed")?;
         Ok(Arc::new(KvmCpu::new(
             vcpu_id,
@@ -259,6 +260,7 @@ impl HypervisorOps for KvmHypervisor {
         })
     }
 
+    #[cfg(feature = "vfio_device")]
     fn create_vfio_device(&self) -> Option<DeviceFd> {
         let mut device = kvm_create_device {
             type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
@@ -297,7 +299,7 @@ impl MigrateOps for KvmHypervisor {
         self.vm_fd
             .as_ref()
             .unwrap()
-            .get_dirty_log(slot, mem_size as usize)
+            .get_dirty_log(slot, usize::try_from(mem_size)?)
             .with_context(|| {
                 format!(
                     "Failed to get dirty log, error is {}",
@@ -424,7 +426,7 @@ impl KvmCpu {
                     #[cfg(target_arch = "x86_64")]
                     VcpuExit::IoOut(addr, data) => {
                         #[cfg(feature = "boot_time")]
-                        capture_boot_signal(addr as u64, data);
+                        cpu::capture_boot_signal(u64::from(addr), data);
 
                         vm.lock().unwrap().pio_out(u64::from(addr), data);
                     }
@@ -433,7 +435,7 @@ impl KvmCpu {
                     }
                     VcpuExit::MmioWrite(addr, data) => {
                         #[cfg(all(target_arch = "aarch64", feature = "boot_time"))]
-                        capture_boot_signal(addr, data);
+                        cpu::capture_boot_signal(addr, data);
 
                         vm.lock().unwrap().mmio_write(addr, data);
                     }
@@ -466,7 +468,7 @@ impl KvmCpu {
                             return Ok(true);
                         } else {
                             error!(
-                            "Vcpu{} received unexpected system event with type 0x{:x}, flags 0x{:x}",
+                            "Vcpu{} received unexpected system event with type 0x{:x}, flags {:#x?}",
                             cpu.id(),
                             event,
                             flags
@@ -645,7 +647,9 @@ impl CPUHypervisorOps for KvmCpu {
         if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
             *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
             cvar.notify_one()
-        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Paused {
+        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Paused
+            && pause_signal.load(Ordering::SeqCst)
+        {
             return Ok(());
         }
 
@@ -662,10 +666,13 @@ impl CPUHypervisorOps for KvmCpu {
         }
 
         // It shall wait for the vCPU pause state from hypervisor exits.
-        loop {
-            if pause_signal.load(Ordering::SeqCst) {
-                break;
+        let mut sleep_times = 0u32;
+        while !pause_signal.load(Ordering::SeqCst) {
+            if sleep_times >= 5 {
+                bail!(CpuError::StopVcpu("timeout".to_string()));
             }
+            thread::sleep(Duration::from_millis(5));
+            sleep_times += 1;
         }
 
         Ok(())
@@ -816,6 +823,10 @@ impl LineIrqManager for KVMInterruptManager {
 }
 
 impl MsiIrqManager for KVMInterruptManager {
+    fn irqfd_enable(&self) -> bool {
+        self.irqfd_cap
+    }
+
     fn allocate_irq(&self, vector: MsiVector) -> Result<u32> {
         let mut locked_irq_route_table = self.irq_route_table.lock().unwrap();
         let gsi = locked_irq_route_table.allocate_gsi().map_err(|e| {
@@ -993,7 +1004,7 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_x86_64_kvm_cpu() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -1057,7 +1068,7 @@ mod test {
             vcpu_fd,
         ));
         let x86_cpu = Arc::new(Mutex::new(ArchCPU::new(0, 1)));
-        let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm.clone());
+        let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm);
         // test `set_boot_config` function
         assert!(hypervisor_cpu
             .set_boot_config(cpu.arch().clone(), &cpu_config)
@@ -1101,7 +1112,7 @@ mod test {
     #[test]
     #[allow(unused)]
     fn test_cpu_lifecycle_with_kvm() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
@@ -1119,7 +1130,7 @@ mod test {
             hypervisor_cpu.clone(),
             0,
             Arc::new(Mutex::new(ArchCPU::default())),
-            vm.clone(),
+            vm,
         );
         let (cpu_state, _) = &*cpu.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);

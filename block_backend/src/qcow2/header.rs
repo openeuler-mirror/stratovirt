@@ -138,7 +138,7 @@ impl QcowHeader {
         if !(MIN_CLUSTER_BIT..=MAX_CLUSTER_BIT).contains(&self.cluster_bits) {
             bail!("Invalid cluster bits {}", self.cluster_bits);
         }
-        if self.header_length as u64 > self.cluster_size() {
+        if u64::from(self.header_length) > self.cluster_size() {
             bail!(
                 "Header length {} over cluster size {}",
                 self.header_length,
@@ -168,7 +168,7 @@ impl QcowHeader {
         if self.refcount_table_clusters == 0 {
             bail!("Refcount table clusters is zero");
         }
-        if self.refcount_table_clusters as u64 > MAX_REFTABLE_SIZE / self.cluster_size() {
+        if u64::from(self.refcount_table_clusters) > MAX_REFTABLE_SIZE / self.cluster_size() {
             bail!(
                 "Refcount table size over limit {}",
                 self.refcount_table_clusters
@@ -181,7 +181,7 @@ impl QcowHeader {
             );
         }
         self.refcount_table_offset
-            .checked_add(self.refcount_table_clusters as u64 * self.cluster_size())
+            .checked_add(u64::from(self.refcount_table_clusters) * self.cluster_size())
             .with_context(|| {
                 format!(
                     "Invalid offset {} or refcount table clusters {}",
@@ -192,7 +192,7 @@ impl QcowHeader {
     }
 
     fn check_l1_table(&self) -> Result<()> {
-        if self.l1_size as u64 > MAX_L1TABLE_SIZE / ENTRY_SIZE {
+        if u64::from(self.l1_size) > MAX_L1TABLE_SIZE / ENTRY_SIZE {
             bail!("L1 table size over limit {}", self.l1_size);
         }
         if !self.cluster_aligned(self.l1_table_offset) {
@@ -201,7 +201,7 @@ impl QcowHeader {
         let size_per_l1_entry = self.cluster_size() * self.cluster_size() / ENTRY_SIZE;
         let l1_need_sz =
             div_round_up(self.size, size_per_l1_entry).with_context(|| "Failed to get l1 size")?;
-        if (self.l1_size as u64) < l1_need_sz {
+        if u64::from(self.l1_size) < l1_need_sz {
             bail!(
                 "L1 table is too small, l1 size {} expect {}",
                 self.l1_size,
@@ -209,7 +209,7 @@ impl QcowHeader {
             );
         }
         self.l1_table_offset
-            .checked_add(self.l1_size as u64 * ENTRY_SIZE)
+            .checked_add(u64::from(self.l1_size) * ENTRY_SIZE)
             .with_context(|| {
                 format!(
                     "Invalid offset {} or entry size {}",
@@ -320,21 +320,21 @@ mod test {
     fn invalid_header_list() -> Vec<(Vec<u8>, String)> {
         let mut list = Vec::new();
         // Invalid buffer length.
-        list.push((vec![0_u8; 16], format!("Invalid header len")));
+        list.push((vec![0_u8; 16], "Invalid header len".to_string()));
         // Invalid buffer length for v3.
         let buf = valid_header_v3();
         list.push((
             buf[0..90].to_vec(),
-            format!("Invalid header len for version 3"),
+            "Invalid header len for version 3".to_string(),
         ));
         // Invalid magic.
         let mut buf = valid_header_v2();
         BigEndian::write_u32(&mut buf[0..4], 1234);
-        list.push((buf, format!("Invalid format")));
+        list.push((buf, "Invalid format".to_string()));
         // Invalid version.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[4..8], 1);
-        list.push((buf, format!("Invalid version")));
+        list.push((buf, "Invalid version".to_string()));
         // Large header length.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[100..104], 0x10000000_u32);
@@ -345,23 +345,23 @@ mod test {
         // Small cluster bit.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[20..24], 0);
-        list.push((buf, format!("Invalid cluster bit")));
+        list.push((buf, "Invalid cluster bit".to_string()));
         // Large cluster bit.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[20..24], 65);
-        list.push((buf, format!("Invalid cluster bit")));
+        list.push((buf, "Invalid cluster bit".to_string()));
         // Invalid backing file offset.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[8..16], 0x2000);
-        list.push((buf, format!("Don't support backing file offset")));
+        list.push((buf, "Don't support backing file offset".to_string()));
         // Invalid refcount order.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[96..100], 5);
-        list.push((buf, format!("Invalid refcount order")));
+        list.push((buf, "Invalid refcount order".to_string()));
         // Refcount table offset is not aligned.
         let mut buf = valid_header_v3();
         BigEndian::write_u64(&mut buf[48..56], 0x1234);
-        list.push((buf, format!("Refcount table offset not aligned")));
+        list.push((buf, "Refcount table offset not aligned".to_string()));
         // Refcount table offset is large.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[36..40], 4 * 1024 * 1024);
@@ -377,15 +377,15 @@ mod test {
         // Invalid refcount table cluster.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[56..60], 256);
-        list.push((buf, format!("Refcount table size over limit")));
+        list.push((buf, "Refcount table size over limit".to_string()));
         // Refcount table cluster is 0.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[56..60], 0);
-        list.push((buf, format!("Refcount table clusters is zero")));
+        list.push((buf, "Refcount table clusters is zero".to_string()));
         // L1 table offset is not aligned.
         let mut buf = valid_header_v3();
         BigEndian::write_u64(&mut buf[40..48], 0x123456);
-        list.push((buf, format!("L1 table offset not aligned")));
+        list.push((buf, "L1 table offset not aligned".to_string()));
         // L1 table offset is large.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[36..40], 4 * 1024 * 1024);
@@ -401,12 +401,12 @@ mod test {
         // Invalid l1 table size.
         let mut buf = valid_header_v3();
         BigEndian::write_u32(&mut buf[36..40], 0xffff_0000_u32);
-        list.push((buf, format!("L1 table size over limit")));
+        list.push((buf, "L1 table size over limit".to_string()));
         // File size is large than l1 table size.
         let mut buf = valid_header_v3();
         BigEndian::write_u64(&mut buf[24..32], 0xffff_ffff_ffff_0000_u64);
         BigEndian::write_u32(&mut buf[36..40], 10);
-        list.push((buf, format!("L1 table is too small")));
+        list.push((buf, "L1 table is too small".to_string()));
         list
     }
 

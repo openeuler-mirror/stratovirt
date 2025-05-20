@@ -21,6 +21,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, RegionCache};
 use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
+use util::loop_context::create_new_eventfd;
 
 /// Split Virtqueue.
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
@@ -90,7 +91,9 @@ impl Element {
     pub fn iovec_size(iovec: &[ElemIovec]) -> u64 {
         let mut size: u64 = 0;
         for elem in iovec.iter() {
-            size += elem.len as u64;
+            // Note: iovec is part of elem.in_iovec/out_iovec which has been checked
+            // in pop_avail(). The sum of iov_len is not greater than u32::MAX.
+            size += u64::from(elem.len);
         }
         size
     }
@@ -123,32 +126,24 @@ pub trait VringOps {
     ///
     /// # Arguments
     ///
-    /// * `sys_mem` - Address space to which the vring belongs.
     /// * `index` - Index of descriptor in the virqueue descriptor table.
     /// * `len` - Total length of the descriptor chain which was used (written to).
-    fn add_used(&mut self, sys_mem: &Arc<AddressSpace>, index: u16, len: u32) -> Result<()>;
+    fn add_used(&mut self, index: u16, len: u32) -> Result<()>;
 
     /// Return true if guest needed to be notified.
     ///
     /// # Arguments
     ///
-    /// * `sys_mem` - Address space to which the vring belongs.
     /// * `features` - Bit mask of features negotiated by the backend and the frontend.
-    fn should_notify(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> bool;
+    fn should_notify(&mut self, features: u64) -> bool;
 
     /// Give guest a hint to suppress virtqueue notification.
     ///
     /// # Arguments
     ///
-    /// * `sys_mem` - Address space to which the vring belongs.
     /// * `features` - Bit mask of features negotiated by the backend and the frontend.
     /// * `suppress` - Suppress virtqueue notification or not.
-    fn suppress_queue_notify(
-        &mut self,
-        sys_mem: &Arc<AddressSpace>,
-        features: u64,
-        suppress: bool,
-    ) -> Result<()>;
+    fn suppress_queue_notify(&mut self, features: u64, suppress: bool) -> Result<()>;
 
     /// Get the actual size of the vring.
     fn actual_size(&self) -> u16;
@@ -157,13 +152,13 @@ pub trait VringOps {
     fn get_queue_config(&self) -> QueueConfig;
 
     /// The number of descriptor chains in the available ring.
-    fn avail_ring_len(&mut self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+    fn avail_ring_len(&mut self) -> Result<u16>;
 
     /// Get the avail index of the vring.
-    fn get_avail_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+    fn get_avail_idx(&self) -> Result<u16>;
 
     /// Get the used index of the vring.
-    fn get_used_idx(&self, sys_mem: &Arc<AddressSpace>) -> Result<u16>;
+    fn get_used_idx(&self) -> Result<u16>;
 
     /// Get the region cache information of the SplitVring.
     fn get_cache(&self) -> &Option<RegionCache>;
@@ -226,7 +221,7 @@ impl NotifyEventFds {
     pub fn new(queue_num: usize) -> Self {
         let mut events = Vec::new();
         for _i in 0..queue_num {
-            events.push(Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()));
+            events.push(Arc::new(create_new_eventfd().unwrap()));
         }
 
         NotifyEventFds { events }

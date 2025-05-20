@@ -83,7 +83,7 @@ fn cbw_phase(
     }
 
     let mut iovecs = Vec::new();
-    let ptr = guest_allocator.alloc(CBW_SIZE as u64);
+    let ptr = guest_allocator.alloc(u64::from(CBW_SIZE));
     xhci.mem_write(ptr, &cbw_buf);
 
     let iovec = TestIovec::new(ptr, len as usize, false);
@@ -104,10 +104,10 @@ fn data_phase(
 ) {
     let mut iovecs = Vec::new();
     let ptr = guest_allocator.alloc(buf.len() as u64);
-    let iovec = TestIovec::new(ptr, buf.len() as usize, false);
+    let iovec = TestIovec::new(ptr, buf.len(), false);
 
     if !to_host {
-        xhci.mem_write(ptr, &buf);
+        xhci.mem_write(ptr, buf);
     }
 
     iovecs.push(iovec);
@@ -142,7 +142,7 @@ fn csw_phase(
     sig_check: bool,
 ) -> u64 {
     let mut iovecs = Vec::new();
-    let ptr = guest_allocator.alloc(len as u64);
+    let ptr = guest_allocator.alloc(u64::from(len));
 
     let iovec = TestIovec::new(ptr, len as usize, false);
     iovecs.push(iovec);
@@ -335,7 +335,7 @@ fn usb_storage_functional_get_max_lun() {
     xhci.doorbell_write(slot_id, CONTROL_ENDPOINT_ID);
     let evt = xhci.fetch_event(PRIMARY_INTERRUPTER_ID).unwrap();
     assert_eq!(evt.ccode, TRBCCode::Success as u32);
-    let buf = xhci.get_transfer_data_indirect(evt.ptr - TRB_SIZE as u64, 1);
+    let buf = xhci.get_transfer_data_indirect(evt.ptr - u64::from(TRB_SIZE), 1);
 
     assert_eq!(buf, [0]);
 
@@ -878,7 +878,7 @@ fn usb_storage_cbw_invalid_endpoint() {
     LittleEndian::write_u32(&mut cbw_buf[0..4], cbw.sig);
 
     let mut iovecs = Vec::new();
-    let ptr = guest_allocator.borrow_mut().alloc(CBW_SIZE as u64);
+    let ptr = guest_allocator.borrow_mut().alloc(u64::from(CBW_SIZE));
     xhci.mem_write(ptr, &cbw_buf);
 
     let iovec = TestIovec::new(ptr, CBW_SIZE as usize, false);
@@ -927,7 +927,7 @@ fn usb_storage_csw_invalid_endpoint() {
 
     // Test 2: CSW phase.
     let mut iovecs = Vec::new();
-    let ptr = guest_allocator.borrow_mut().alloc(CSW_SIZE as u64);
+    let ptr = guest_allocator.borrow_mut().alloc(u64::from(CSW_SIZE));
 
     let iovec = TestIovec::new(ptr, CSW_SIZE as usize, false);
     iovecs.push(iovec);

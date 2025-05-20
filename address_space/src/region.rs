@@ -21,8 +21,8 @@ use log::{debug, warn};
 
 use crate::address_space::FlatView;
 use crate::{
-    AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress, HostMemMapping,
-    RegionOps,
+    AddressAttr, AddressRange, AddressSpace, AddressSpaceError, FileBackend, GuestAddress,
+    HostMemMapping, RegionOps,
 };
 use migration::{migration::Migratable, MigrationManager};
 
@@ -201,7 +201,7 @@ macro_rules! rw_multi_ops {
         let offset = $args.offset;
         let cnt = $args.count;
         let access_size = $args.access_size;
-        let mut pos = 0;
+        let mut pos = 0_u64;
         for _ in 0..(cnt / access_size) {
             if !$ops(
                 &mut $slice[pos as usize..(pos + access_size) as usize],
@@ -467,11 +467,21 @@ impl Region {
 
     /// Get the host address if this region is backed by host-memory,
     /// Return `None` if it is not a Ram-type region.
-    pub fn get_host_address(&self) -> Option<u64> {
-        if self.region_type != RegionType::Ram
-            && self.region_type != RegionType::RamDevice
-            && self.region_type != RegionType::RomDevice
-        {
+    ///
+    /// # Safety
+    ///
+    /// Need to make it clear that hva is always in the ram range of the virtual machine.
+    /// And if you want to operate [hva,hva+size], the range from hva to hva+size needs
+    /// to be in the ram range.
+    pub unsafe fn get_host_address(&self, attr: AddressAttr) -> Option<u64> {
+        let region_type = match attr {
+            AddressAttr::Ram => RegionType::Ram,
+            AddressAttr::MMIO => return None,
+            AddressAttr::RamDevice => RegionType::RamDevice,
+            AddressAttr::RomDevice | AddressAttr::RomDeviceForce => RegionType::RomDevice,
+        };
+
+        if self.region_type != region_type {
             return None;
         }
         self.mem_mapping.as_ref().map(|r| r.host_address())
@@ -1155,7 +1165,7 @@ mod test {
         assert_eq!(&data, &mut res_data);
 
         assert_eq!(
-            ram_region.get_host_address().unwrap(),
+            unsafe { ram_region.get_host_address(AddressAttr::Ram).unwrap() },
             mem_mapping.host_address()
         );
 
@@ -1208,7 +1218,7 @@ mod test {
             let mut device_locked = test_dev_clone.lock().unwrap();
             device_locked.read(data, addr, offset)
         };
-        let test_dev_clone = test_dev.clone();
+        let test_dev_clone = test_dev;
         let write_ops = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
             let mut device_locked = test_dev_clone.lock().unwrap();
             device_locked.write(data, addr, offset)
@@ -1219,7 +1229,7 @@ mod test {
             write: Arc::new(write_ops),
         };
 
-        let io_region = Region::init_io_region(16, test_dev_ops.clone(), "io_region");
+        let io_region = Region::init_io_region(16, test_dev_ops, "io_region");
         let data = [0x01u8; 8];
         let mut data_res = [0x0u8; 8];
         let count = data.len() as u64;
@@ -1235,7 +1245,7 @@ mod test {
             .is_ok());
         assert_eq!(data.to_vec(), data_res.to_vec());
 
-        assert!(io_region.get_host_address().is_none());
+        assert!(unsafe { io_region.get_host_address(AddressAttr::Ram).is_none() });
     }
 
     #[test]
@@ -1299,7 +1309,7 @@ mod test {
         };
 
         let io_region = Region::init_io_region(1 << 4, default_ops.clone(), "io1");
-        let io_region2 = Region::init_io_region(1 << 4, default_ops.clone(), "io2");
+        let io_region2 = Region::init_io_region(1 << 4, default_ops, "io2");
         io_region2.set_priority(10);
 
         // add duplicate io-region or ram-region will fail
@@ -1323,7 +1333,7 @@ mod test {
                 .subregions
                 .read()
                 .unwrap()
-                .get(0)
+                .first()
                 .unwrap()
                 .priority(),
             10
@@ -1364,9 +1374,9 @@ mod test {
             region_b.set_priority(2);
             region_c.set_priority(1);
             region_a.add_subregion(region_b.clone(), 2000).unwrap();
-            region_a.add_subregion(region_c.clone(), 0).unwrap();
-            region_b.add_subregion(region_d.clone(), 0).unwrap();
-            region_b.add_subregion(region_e.clone(), 2000).unwrap();
+            region_a.add_subregion(region_c, 0).unwrap();
+            region_b.add_subregion(region_d, 0).unwrap();
+            region_b.add_subregion(region_e, 2000).unwrap();
 
             let addr_range = AddressRange::from((0u64, region_a.size()));
             let view = region_a
@@ -1405,14 +1415,14 @@ mod test {
             let region_b = Region::init_container_region(5000, "region_b");
             let region_c = Region::init_io_region(1000, default_ops.clone(), "regionc");
             let region_d = Region::init_io_region(3000, default_ops.clone(), "region_d");
-            let region_e = Region::init_io_region(2000, default_ops.clone(), "region_e");
+            let region_e = Region::init_io_region(2000, default_ops, "region_e");
 
             region_a.add_subregion(region_b.clone(), 2000).unwrap();
-            region_a.add_subregion(region_c.clone(), 0).unwrap();
+            region_a.add_subregion(region_c, 0).unwrap();
             region_d.set_priority(2);
             region_e.set_priority(3);
-            region_b.add_subregion(region_d.clone(), 0).unwrap();
-            region_b.add_subregion(region_e.clone(), 2000).unwrap();
+            region_b.add_subregion(region_d, 0).unwrap();
+            region_b.add_subregion(region_e, 2000).unwrap();
 
             let addr_range = AddressRange::from((0u64, region_a.size()));
             let view = region_a

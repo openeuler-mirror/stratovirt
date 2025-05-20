@@ -22,7 +22,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use once_cell::sync::Lazy;
 
 use super::DeviceTypeOperation;
-use address_space::{AddressSpace, GuestAddress};
+use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use ui::input::{register_keyboard, register_pointer, Axis, InputType, KeyboardOpts, PointerOpts};
 
 static MEM_ADDR: Lazy<Arc<Mutex<MemSpace>>> = Lazy::new(|| {
@@ -51,12 +51,36 @@ impl MemSpace {
                 bail!("No memory allocated!")
             }
         };
-        sys_mem.write_object(&(msg.event_type as u8), address_space::GuestAddress(addr))?;
-        sys_mem.write_object(&msg.keycode, address_space::GuestAddress(addr + 1))?;
-        sys_mem.write_object(&msg.down, address_space::GuestAddress(addr + 3))?;
-        sys_mem.write_object(&msg.button, address_space::GuestAddress(addr + 4))?;
-        sys_mem.write_object(&msg.x, address_space::GuestAddress(addr + 8))?;
-        sys_mem.write_object(&msg.y, address_space::GuestAddress(addr + 12))?;
+        sys_mem.write_object(
+            &(msg.event_type as u8),
+            address_space::GuestAddress(addr),
+            AddressAttr::Ram,
+        )?;
+        sys_mem.write_object(
+            &msg.keycode,
+            address_space::GuestAddress(addr + 1),
+            AddressAttr::Ram,
+        )?;
+        sys_mem.write_object(
+            &msg.down,
+            address_space::GuestAddress(addr + 3),
+            AddressAttr::Ram,
+        )?;
+        sys_mem.write_object(
+            &msg.button,
+            address_space::GuestAddress(addr + 4),
+            AddressAttr::Ram,
+        )?;
+        sys_mem.write_object(
+            &msg.x,
+            address_space::GuestAddress(addr + 8),
+            AddressAttr::Ram,
+        )?;
+        sys_mem.write_object(
+            &msg.y,
+            address_space::GuestAddress(addr + 12),
+            AddressAttr::Ram,
+        )?;
 
         Ok(())
     }
@@ -94,7 +118,7 @@ impl KeyboardOpts for TestPciKbd {
         let msg = PointerMessage {
             event_type: InputEvent::KbdEvent,
             keycode,
-            down: down as u8,
+            down: u8::from(down),
             ..Default::default()
         };
         MEM_ADDR.lock().unwrap().send_kbdmouse_message(&msg)

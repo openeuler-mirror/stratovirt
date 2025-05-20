@@ -23,10 +23,10 @@ use super::descriptor::{
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
 use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
-use super::xhci::xhci_controller::XhciDevice;
+use super::xhci::xhci_controller::{endpoint_number_to_id, XhciDevice};
 use super::{
-    config::*, notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint,
-    UsbPacket, UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
+    config::*, notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket,
+    UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
 use machine_manager::config::valid_id;
 use ui::input::{
@@ -34,6 +34,7 @@ use ui::input::{
     INPUT_BUTTON_MASK, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
     INPUT_BUTTON_WHEEL_UP,
 };
+use util::gen_base_func;
 
 const INPUT_COORDINATES_MAX: u32 = 0x7fff;
 
@@ -44,7 +45,7 @@ static DESC_DEVICE_TABLET: Lazy<Arc<UsbDescDevice>> = Lazy::new(|| {
             bLength: USB_DT_DEVICE_SIZE,
             bDescriptorType: USB_DT_DEVICE,
             idVendor: 0x0627,
-            idProduct: 0x0001,
+            idProduct: USB_PRODUCT_ID_TABLET,
             bcdDevice: 0,
             iManufacturer: STR_MANUFACTURER_INDEX,
             iProduct: STR_PRODUCT_TABLET_INDEX,
@@ -114,8 +115,10 @@ const STR_SERIAL_TABLET_INDEX: u8 = 4;
 const DESC_STRINGS: [&str; 5] = ["", "StratoVirt", "StratoVirt USB Tablet", "HID Tablet", "2"];
 
 #[derive(Parser, Clone, Debug, Default)]
-#[command(name = "usb_tablet")]
+#[command(no_binary_name(true))]
 pub struct UsbTabletConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     id: String,
     #[arg(long)]
@@ -226,18 +229,14 @@ impl PointerOpts for UsbTabletAdapter {
         locked_tablet.hid.num += 1;
         drop(locked_tablet);
         let clone_tablet = self.tablet.clone();
-        notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDevice>>))
+        // Wakeup endpoint.
+        let ep_id = endpoint_number_to_id(true, 1);
+        notify_controller(&(clone_tablet as Arc<Mutex<dyn UsbDevice>>), ep_id)
     }
 }
 
 impl UsbDevice for UsbTablet {
-    fn usb_device_base(&self) -> &UsbDeviceBase {
-        &self.base
-    }
-
-    fn usb_device_base_mut(&mut self) -> &mut UsbDeviceBase {
-        &mut self.base
-    }
+    gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         self.base.reset_usb_endpoint();
@@ -260,6 +259,8 @@ impl UsbDevice for UsbTablet {
         Ok(())
     }
 
+    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+
     fn reset(&mut self) {
         info!("Tablet device reset");
         self.base.remote_wakeup = 0;
@@ -280,7 +281,7 @@ impl UsbDevice for UsbTablet {
                 }
             }
             Err(e) => {
-                warn!("Tablet descriptor error {:?}", e);
+                warn!("Received incorrect USB Tablet descriptor message: {:?}", e);
                 locked_packet.status = UsbPacketStatus::Stall;
                 return;
             }
@@ -300,9 +301,5 @@ impl UsbDevice for UsbTablet {
 
     fn get_controller(&self) -> Option<Weak<Mutex<XhciDevice>>> {
         self.cntlr.clone()
-    }
-
-    fn get_wakeup_endpoint(&self) -> &UsbEndpoint {
-        self.base.get_endpoint(true, 1)
     }
 }

@@ -20,12 +20,14 @@ use crate::ftrace::write_trace_marker;
 
 static mut TRACE_SCOPE_COUNTER: AtomicI32 = AtomicI32::new(i32::MIN);
 
+#[derive(Clone)]
 pub enum Scope {
     Common(TraceScope),
     Asyn(TraceScopeAsyn),
     None,
 }
 
+#[derive(Clone)]
 pub struct TraceScope {}
 
 impl TraceScope {
@@ -63,6 +65,7 @@ impl Drop for TraceScope {
     }
 }
 
+#[derive(Clone)]
 pub struct TraceScopeAsyn {
     value: String,
     id: i32,

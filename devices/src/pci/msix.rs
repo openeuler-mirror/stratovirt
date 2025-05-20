@@ -21,9 +21,10 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::pci::config::{CapId, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO};
 use crate::pci::{
-    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciDevBase,
+    le_read_u16, le_read_u32, le_read_u64, le_write_u16, le_write_u32, le_write_u64, PciBus,
+    PciDevBase,
 };
-use crate::MsiIrqManager;
+use crate::{convert_bus_ref, MsiIrqManager, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use migration::{
     DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
@@ -187,7 +188,7 @@ impl Msix {
 
     fn is_vector_pending(&self, vector: u16) -> bool {
         let offset: usize = vector as usize / 64;
-        let pending_bit: u64 = 1 << (vector as u64 % 64);
+        let pending_bit: u64 = 1 << (u64::from(vector) % 64);
         let value = le_read_u64(&self.pba, offset).unwrap();
         if value & pending_bit > 0 {
             return true;
@@ -197,14 +198,14 @@ impl Msix {
 
     fn set_pending_vector(&mut self, vector: u16) {
         let offset: usize = vector as usize / 64;
-        let pending_bit: u64 = 1 << (vector as u64 % 64);
+        let pending_bit: u64 = 1 << (u64::from(vector) % 64);
         let old_val = le_read_u64(&self.pba, offset).unwrap();
         le_write_u64(&mut self.pba, offset, old_val | pending_bit).unwrap();
     }
 
     fn clear_pending_vector(&mut self, vector: u16) {
         let offset: usize = vector as usize / 64;
-        let pending_bit: u64 = !(1 << (vector as u64 % 64));
+        let pending_bit: u64 = !(1 << (u64::from(vector) % 64));
         let old_val = le_read_u64(&self.pba, offset).unwrap();
         le_write_u64(&mut self.pba, offset, old_val & pending_bit).unwrap();
     }
@@ -230,7 +231,7 @@ impl Msix {
             msg_data: entry.data,
             masked: false,
             #[cfg(target_arch = "aarch64")]
-            dev_id: self.dev_id.load(Ordering::Acquire) as u32,
+            dev_id: u32::from(self.dev_id.load(Ordering::Acquire)),
         };
 
         let irq_manager = self.msi_irq_manager.as_ref().unwrap();
@@ -260,7 +261,7 @@ impl Msix {
             msg_data: entry.data,
             masked: false,
             #[cfg(target_arch = "aarch64")]
-            dev_id: self.dev_id.load(Ordering::Acquire) as u32,
+            dev_id: u32::from(self.dev_id.load(Ordering::Acquire)),
         };
 
         let irq_manager = self.msi_irq_manager.as_ref().unwrap();
@@ -300,7 +301,12 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let table_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
-            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+            let offset = offset as usize;
+            if offset
+                .checked_add(data.len())
+                .filter(|&sum| sum <= cloned_msix.lock().unwrap().table.len())
+                .is_none()
+            {
                 error!(
                     "It's forbidden to read out of the msix table(size: {}), with offset of {} and size of {}",
                     cloned_msix.lock().unwrap().table.len(),
@@ -309,13 +315,17 @@ impl Msix {
                 );
                 return false;
             }
-            let offset = offset as usize;
             data.copy_from_slice(&cloned_msix.lock().unwrap().table[offset..(offset + data.len())]);
             true
         };
         let cloned_msix = msix.clone();
         let table_write = move |data: &[u8], _addr: GuestAddress, offset: u64| -> bool {
-            if offset as usize + data.len() > cloned_msix.lock().unwrap().table.len() {
+            let offset = offset as usize;
+            if offset
+                .checked_add(data.len())
+                .filter(|&sum| sum <= cloned_msix.lock().unwrap().table.len())
+                .is_none()
+            {
                 error!(
                     "It's forbidden to write out of the msix table(size: {}), with offset of {} and size of {}",
                     cloned_msix.lock().unwrap().table.len(),
@@ -327,13 +337,14 @@ impl Msix {
             let mut locked_msix = cloned_msix.lock().unwrap();
             let vector: u16 = offset as u16 / MSIX_TABLE_ENTRY_SIZE;
             let was_masked: bool = locked_msix.is_vector_masked(vector);
-            let offset = offset as usize;
             locked_msix.table[offset..(offset + 4)].copy_from_slice(data);
 
             let is_masked: bool = locked_msix.is_vector_masked(vector);
-            if was_masked != is_masked && locked_msix.update_irq_routing(vector, is_masked).is_err()
-            {
-                return false;
+            if was_masked != is_masked {
+                if let Err(e) = locked_msix.update_irq_routing(vector, is_masked) {
+                    error!("Failed to update irq routing: {:?}", e);
+                    return false;
+                }
             }
 
             // Clear the pending vector just when it is pending. Otherwise, it
@@ -356,7 +367,12 @@ impl Msix {
 
         let cloned_msix = msix.clone();
         let pba_read = move |data: &mut [u8], _addr: GuestAddress, offset: u64| -> bool {
-            if offset as usize + data.len() > cloned_msix.lock().unwrap().pba.len() {
+            let offset = offset as usize;
+            if offset
+                .checked_add(data.len())
+                .filter(|&sum| sum <= cloned_msix.lock().unwrap().pba.len())
+                .is_none()
+            {
                 error!(
                     "Fail to read msi pba, illegal data length {}, offset {}",
                     data.len(),
@@ -364,7 +380,6 @@ impl Msix {
                 );
                 return false;
             }
-            let offset = offset as usize;
             data.copy_from_slice(&cloned_msix.lock().unwrap().pba[offset..(offset + data.len())]);
             true
         };
@@ -406,11 +421,11 @@ impl Msix {
             msg_data: msg.data,
             masked: false,
             #[cfg(target_arch = "aarch64")]
-            dev_id: dev_id as u32,
+            dev_id: u32::from(dev_id),
         };
 
         let irq_manager = self.msi_irq_manager.as_ref().unwrap();
-        if let Err(e) = irq_manager.trigger(None, msix_vector, dev_id as u32) {
+        if let Err(e) = irq_manager.trigger(None, msix_vector, u32::from(dev_id)) {
             error!("Send msix error: {:?}", e);
         };
     }
@@ -516,7 +531,7 @@ impl MigrationHook for Msix {
                     msg_data: msg.data,
                     masked: false,
                     #[cfg(target_arch = "aarch64")]
-                    dev_id: self.dev_id.load(Ordering::Acquire) as u32,
+                    dev_id: u32::from(self.dev_id.load(Ordering::Acquire)),
                 };
                 let irq_manager = self.msi_irq_manager.as_ref().unwrap();
                 irq_manager.allocate_irq(msi_vector)?;
@@ -552,8 +567,8 @@ pub fn init_msix(
     offset_opt: Option<(u32, u32)>,
 ) -> Result<()> {
     let config = &mut pcidev_base.config;
-    let parent_bus = &pcidev_base.parent_bus;
-    if vector_nr == 0 || vector_nr > MSIX_TABLE_SIZE_MAX as u32 + 1 {
+    let parent_bus = pcidev_base.base.parent.as_ref().unwrap();
+    if vector_nr == 0 || vector_nr > u32::from(MSIX_TABLE_SIZE_MAX) + 1 {
         bail!(
             "invalid msix vectors, which should be in [1, {}]",
             MSIX_TABLE_SIZE_MAX + 1
@@ -569,8 +584,8 @@ pub fn init_msix(
         MSIX_CAP_FUNC_MASK | MSIX_CAP_ENABLE,
     )?;
     offset = msix_cap_offset + MSIX_CAP_TABLE as usize;
-    let table_size = vector_nr * MSIX_TABLE_ENTRY_SIZE as u32;
-    let pba_size = ((round_up(vector_nr as u64, 64).unwrap() / 64) * 8) as u32;
+    let table_size = vector_nr * u32::from(MSIX_TABLE_ENTRY_SIZE);
+    let pba_size = ((round_up(u64::from(vector_nr), 64).unwrap() / 64) * 8) as u32;
     let (table_offset, pba_offset) = offset_opt.unwrap_or((0, table_size));
     if ranges_overlap(
         table_offset as usize,
@@ -586,9 +601,9 @@ pub fn init_msix(
     offset = msix_cap_offset + MSIX_CAP_PBA as usize;
     le_write_u32(&mut config.config, offset, pba_offset | bar_id as u32)?;
 
-    let msi_irq_manager = if let Some(pci_bus) = parent_bus.upgrade() {
-        let locked_pci_bus = pci_bus.lock().unwrap();
-        locked_pci_bus.get_msi_irq_manager()
+    let msi_irq_manager = if let Some(bus) = parent_bus.upgrade() {
+        PCI_BUS!(bus, locked_bus, pci_bus);
+        pci_bus.get_msi_irq_manager()
     } else {
         error!("Msi irq controller is none");
         None
@@ -606,19 +621,19 @@ pub fn init_msix(
             msix.clone(),
             region,
             dev_id,
-            table_offset as u64,
-            pba_offset as u64,
+            u64::from(table_offset),
+            u64::from(pba_offset),
         )?;
     } else {
-        let mut bar_size = ((table_size + pba_size) as u64).next_power_of_two();
+        let mut bar_size = u64::from(table_size + pba_size).next_power_of_two();
         bar_size = max(bar_size, MINIMUM_BAR_SIZE_FOR_MMIO as u64);
         let region = Region::init_container_region(bar_size, "Msix_region");
         Msix::register_memory_region(
             msix.clone(),
             &region,
             dev_id,
-            table_offset as u64,
-            pba_offset as u64,
+            u64::from(table_offset),
+            u64::from(pba_offset),
         )?;
         config.register_bar(bar_id, region, RegionType::Mem32Bit, false, bar_size)?;
     }
@@ -633,27 +648,29 @@ pub fn init_msix(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
+    use std::sync::atomic::AtomicBool;
 
     use super::*;
-    use crate::{
-        pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE},
-        DeviceBase,
-    };
+    use crate::pci::config::{PciConfig, PCI_CONFIG_SPACE_SIZE};
+    use crate::pci::host::tests::create_pci_host;
+    use crate::{Device, DeviceBase};
 
     #[test]
     fn test_init_msix() {
+        let pci_host = create_pci_host();
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
-            base: DeviceBase::new("msix".to_string(), false),
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
+            base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
+            config: PciConfig::new(1, PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
-            parent_bus: Weak::new(),
+            bme: Arc::new(AtomicBool::new(false)),
         };
         // Too many vectors.
         assert!(init_msix(
             &mut base,
             0,
-            MSIX_TABLE_SIZE_MAX as u32 + 2,
+            u32::from(MSIX_TABLE_SIZE_MAX) + 2,
             Arc::new(AtomicU16::new(0)),
             None,
             None,
@@ -666,7 +683,7 @@ mod tests {
         init_msix(&mut base, 1, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();
         let pci_config = base.config;
         let msix_cap_start = 64_u8;
-        assert_eq!(pci_config.last_cap_end, 64 + MSIX_CAP_SIZE as u16);
+        assert_eq!(pci_config.last_cap_end, 64 + u16::from(MSIX_CAP_SIZE));
         // Capabilities pointer
         assert_eq!(pci_config.config[0x34], msix_cap_start);
         assert_eq!(
@@ -690,7 +707,7 @@ mod tests {
     fn test_mask_vectors() {
         let nr_vector = 2_u32;
         let mut msix = Msix::new(
-            nr_vector * MSIX_TABLE_ENTRY_SIZE as u32,
+            nr_vector * u32::from(MSIX_TABLE_ENTRY_SIZE),
             64,
             64,
             Arc::new(AtomicU16::new(0)),
@@ -712,7 +729,7 @@ mod tests {
     #[test]
     fn test_pending_vectors() {
         let mut msix = Msix::new(
-            MSIX_TABLE_ENTRY_SIZE as u32,
+            u32::from(MSIX_TABLE_ENTRY_SIZE),
             64,
             64,
             Arc::new(AtomicU16::new(0)),
@@ -728,7 +745,7 @@ mod tests {
     #[test]
     fn test_get_message() {
         let mut msix = Msix::new(
-            MSIX_TABLE_ENTRY_SIZE as u32,
+            u32::from(MSIX_TABLE_ENTRY_SIZE),
             64,
             64,
             Arc::new(AtomicU16::new(0)),
@@ -746,11 +763,14 @@ mod tests {
 
     #[test]
     fn test_write_config() {
+        let pci_host = create_pci_host();
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
         let mut base = PciDevBase {
-            base: DeviceBase::new("msix".to_string(), false),
-            config: PciConfig::new(PCI_CONFIG_SPACE_SIZE, 2),
+            base: DeviceBase::new("msix".to_string(), false, Some(root_bus)),
+            config: PciConfig::new(1, PCI_CONFIG_SPACE_SIZE, 2),
             devfn: 1,
-            parent_bus: Weak::new(),
+            bme: Arc::new(AtomicBool::new(false)),
         };
         init_msix(&mut base, 0, 2, Arc::new(AtomicU16::new(0)), None, None).unwrap();
         let msix = base.config.msix.as_ref().unwrap();

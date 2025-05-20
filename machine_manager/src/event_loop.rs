@@ -12,16 +12,17 @@
 
 use std::collections::HashMap;
 use std::os::unix::prelude::RawFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::{process, thread};
 
 use anyhow::{bail, Result};
-use log::info;
+use log::{error, info};
 
 use super::config::IothreadConfig;
 use crate::machine::IOTHREADS;
 use crate::qmp::qmp_schema::IothreadInfo;
 use crate::signal_handler::get_signal;
+use crate::temp_cleaner::TempCleaner;
 use util::loop_context::{
     gen_delete_notifiers, get_notifiers_fds, EventLoopContext, EventLoopManager, EventNotifier,
 };
@@ -49,9 +50,18 @@ impl EventLoop {
     /// * `iothreads` - refer to `-iothread` params
     pub fn object_init(iothreads: &Option<Vec<IothreadConfig>>) -> Result<()> {
         let mut io_threads = HashMap::new();
+        let cnt = match iothreads {
+            Some(thrs) => thrs.len(),
+            None => 0,
+        };
+        let thread_exit_barrier = Arc::new(Barrier::new(cnt + 1));
+
         if let Some(thrs) = iothreads {
             for thr in thrs {
-                io_threads.insert(thr.id.clone(), EventLoopContext::new());
+                io_threads.insert(
+                    thr.id.clone(),
+                    EventLoopContext::new(thread_exit_barrier.clone()),
+                );
             }
         }
 
@@ -60,7 +70,7 @@ impl EventLoop {
         unsafe {
             if GLOBAL_EVENT_LOOP.is_none() {
                 GLOBAL_EVENT_LOOP = Some(EventLoop {
-                    main_loop: EventLoopContext::new(),
+                    main_loop: EventLoopContext::new(thread_exit_barrier),
                     io_threads,
                 });
 
@@ -75,11 +85,17 @@ impl EventLoop {
                                 id: id.to_string(),
                             };
                             IOTHREADS.lock().unwrap().push(iothread_info);
-                            while let Ok(ret) = ctx.iothread_run() {
-                                if !ret {
+                            while ctx.iothread_run().is_ok() {
+                                // If is_cleaned() is true, it means the main thread will exit.
+                                // So, exit the iothread.
+                                if TempCleaner::is_cleaned() {
                                     break;
                                 }
                             }
+                            if let Err(e) = ctx.clean_event_loop() {
+                                error!("Failed to clean event loop {:?}", e);
+                            }
+                            ctx.thread_exit_barrier.wait();
                         })?;
                     }
                 } else {
@@ -115,11 +131,16 @@ impl EventLoop {
     ///
     /// # Arguments
     ///
-    /// * `manager` - The main part to manager the event loop specified by name.
-    /// * `name` - specify which event loop to manage
-    pub fn set_manager(manager: Arc<Mutex<dyn EventLoopManager>>, name: Option<&String>) {
-        if let Some(ctx) = Self::get_ctx(name) {
-            ctx.set_manager(manager)
+    /// * `manager` - The main part to manager the event loop.
+    pub fn set_manager(manager: Arc<Mutex<dyn EventLoopManager>>) {
+        // SAFETY: All concurrently accessed data of EventLoopContext is protected.
+        unsafe {
+            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
+                event_loop.main_loop.set_manager(manager.clone());
+                for (_name, io_thread) in event_loop.io_threads.iter_mut() {
+                    io_thread.set_manager(manager.clone());
+                }
+            }
         }
     }
 
@@ -166,10 +187,25 @@ impl EventLoop {
     }
 
     pub fn loop_clean() {
+        EventLoop::kick_iothreads();
         // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
         // accessing.
         unsafe {
+            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
+                event_loop.main_loop.thread_exit_barrier.wait();
+            }
             GLOBAL_EVENT_LOOP = None;
+        }
+    }
+
+    pub fn kick_iothreads() {
+        // SAFETY: All concurrently accessed data of EventLoopContext is protected.
+        unsafe {
+            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
+                for (_name, io_thread) in event_loop.io_threads.iter_mut() {
+                    io_thread.kick();
+                }
+            }
         }
     }
 }

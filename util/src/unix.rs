@@ -19,8 +19,8 @@ use std::ptr::{copy_nonoverlapping, null_mut, write_unaligned};
 
 use anyhow::{anyhow, bail, Context, Result};
 use libc::{
-    c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, CMSG_LEN, CMSG_SPACE, MSG_NOSIGNAL,
-    MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
+    c_void, cmsghdr, iovec, msghdr, recvmsg, sendmsg, syscall, SYS_mbind, CMSG_LEN, CMSG_SPACE,
+    MSG_NOSIGNAL, MSG_WAITALL, SCM_RIGHTS, SOL_SOCKET,
 };
 use log::error;
 use nix::unistd::{sysconf, SysconfVar};
@@ -113,7 +113,7 @@ pub fn do_mmap(
     // SAFETY: The return value is checked.
     let hva = unsafe {
         libc::mmap(
-            std::ptr::null_mut() as *mut libc::c_void,
+            std::ptr::null_mut(),
             len as libc::size_t,
             prot,
             flags,
@@ -125,21 +125,62 @@ pub fn do_mmap(
         return Err(std::io::Error::last_os_error()).with_context(|| "Mmap failed.");
     }
     if !dump_guest_core {
-        set_memory_undumpable(hva, len);
+        // SAFETY: The hva and len are mmap-ed above and are verified.
+        unsafe { set_memory_undumpable(hva, len) };
     }
 
     Ok(hva as u64)
 }
 
-fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
-    // SAFETY: host_addr and size are valid and return value is checked.
-    let ret = unsafe { libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP) };
+unsafe fn set_memory_undumpable(host_addr: *mut libc::c_void, size: u64) {
+    let ret = libc::madvise(host_addr, size as libc::size_t, libc::MADV_DONTDUMP);
     if ret < 0 {
         error!(
             "Syscall madvise(with MADV_DONTDUMP) failed, OS error is {:?}",
             std::io::Error::last_os_error()
         );
     }
+}
+
+/// This function set memory policy for host NUMA node memory range.
+///
+/// * Arguments
+///
+/// * `addr` - The memory range starting with addr.
+/// * `len` - Length of the memory range.
+/// * `mode` - Memory policy mode.
+/// * `node_mask` - node_mask specifies physical node ID.
+/// * `max_node` - The max node.
+/// * `flags` - Mode flags.
+///
+/// # Safety
+///
+/// Caller should has valid params.
+pub unsafe fn mbind(
+    addr: u64,
+    len: u64,
+    mode: u32,
+    node_mask: Vec<u64>,
+    max_node: u64,
+    flags: u32,
+) -> Result<()> {
+    let res = syscall(
+        SYS_mbind,
+        addr as *mut c_void,
+        len,
+        mode,
+        node_mask.as_ptr(),
+        max_node + 1,
+        flags,
+    );
+    if res < 0 {
+        bail!(
+            "Failed to apply host numa node policy, error is {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    Ok(())
 }
 
 /// Unix socket is a data communication endpoint for exchanging data
@@ -187,10 +228,11 @@ impl UnixSock {
 
     /// The listener accepts incoming client connections.
     pub fn accept(&mut self) -> Result<()> {
-        let (sock, _addr) = self
+        let listener = self
             .listener
             .as_ref()
-            .unwrap()
+            .with_context(|| "UnixSock is not bound")?;
+        let (sock, _addr) = listener
             .accept()
             .with_context(|| format!("Failed to accept the socket {}", self.path))?;
         self.sock = Some(sock);
@@ -203,8 +245,12 @@ impl UnixSock {
     }
 
     pub fn server_connection_refuse(&mut self) -> Result<()> {
+        let listener = self
+            .listener
+            .as_ref()
+            .with_context(|| "UnixSock is not bound")?;
         // Refuse connection by finishing life cycle of stream fd from listener fd.
-        self.listener.as_ref().unwrap().accept().with_context(|| {
+        listener.accept().with_context(|| {
             format!(
                 "Failed to accept the socket for refused connection {}",
                 self.path
@@ -224,18 +270,21 @@ impl UnixSock {
     }
 
     pub fn listen_set_nonblocking(&self, nonblocking: bool) -> Result<()> {
-        self.listener
+        let listener = self
+            .listener
             .as_ref()
-            .unwrap()
+            .with_context(|| "UnixSock is not bound")?;
+        listener
             .set_nonblocking(nonblocking)
             .with_context(|| "couldn't set nonblocking for unix sock listener")
     }
 
     pub fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
-        self.sock
+        let sock = self
+            .sock
             .as_ref()
-            .unwrap()
-            .set_nonblocking(nonblocking)
+            .with_context(|| "UnixSock is not connected")?;
+        sock.set_nonblocking(nonblocking)
             .with_context(|| "couldn't set nonblocking")
     }
 
@@ -270,7 +319,9 @@ impl UnixSock {
         let nex_cmsg_pos = (next_cmsg as *mut u8).wrapping_sub(msghdr.msg_control as usize) as u64;
 
         // SAFETY: Parameter is constant.
-        if nex_cmsg_pos.wrapping_add(unsafe { CMSG_LEN(0) } as u64) > msghdr.msg_controllen as u64 {
+        if nex_cmsg_pos.wrapping_add(u64::from(unsafe { CMSG_LEN(0) }))
+            > msghdr.msg_controllen as u64
+        {
             null_mut()
         } else {
             next_cmsg
@@ -287,13 +338,13 @@ impl UnixSock {
     /// # Errors
     ///
     /// The socket file descriptor is broken.
-    pub fn send_msg(&self, iovecs: &mut [iovec], out_fds: &[RawFd]) -> std::io::Result<usize> {
+    pub fn send_msg(&self, iovecs: &mut [iovec], out_fds: &[RawFd]) -> Result<usize> {
         // SAFETY: We checked the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We checked the out_fds lens before.
-        let cmsg_len = unsafe { CMSG_LEN((std::mem::size_of_val(out_fds)) as u32) };
+        let cmsg_len = unsafe { CMSG_LEN(u32::try_from(std::mem::size_of_val(out_fds))?) };
         // SAFETY: We checked the out_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(out_fds)) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE(u32::try_from(std::mem::size_of_val(out_fds))?) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
@@ -331,17 +382,17 @@ impl UnixSock {
             msg.msg_controllen = cmsg_capacity as _;
         }
 
-        let write_count =
-            // SAFETY: msg parameters are valid.
-            unsafe { sendmsg(self.sock.as_ref().unwrap().as_raw_fd(), &msg, MSG_NOSIGNAL) };
+        let sock = self
+            .sock
+            .as_ref()
+            .with_context(|| "UnixSock is not connected")?;
+        // SAFETY: msg parameters are valid.
+        let write_count = unsafe { sendmsg(sock.as_raw_fd(), &msg, MSG_NOSIGNAL) };
 
-        if write_count == -1 {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Failed to send msg, err: {}",
-                    std::io::Error::last_os_error()
-                ),
+        if write_count < 0 {
+            Err(anyhow!(
+                "Failed to send msg, err: {}",
+                std::io::Error::last_os_error()
             ))
         } else {
             Ok(write_count as usize)
@@ -358,15 +409,11 @@ impl UnixSock {
     /// # Errors
     ///
     /// The socket file descriptor is broken.
-    pub fn recv_msg(
-        &self,
-        iovecs: &mut [iovec],
-        in_fds: &mut [RawFd],
-    ) -> std::io::Result<(usize, usize)> {
+    pub fn recv_msg(&self, iovecs: &mut [iovec], in_fds: &mut [RawFd]) -> Result<(usize, usize)> {
         // SAFETY: We check the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We check the in_fds lens before.
-        let cmsg_capacity = unsafe { CMSG_SPACE((std::mem::size_of_val(in_fds)) as u32) };
+        let cmsg_capacity = unsafe { CMSG_SPACE(u32::try_from(std::mem::size_of_val(in_fds))?) };
         let mut cmsg_buffer = vec![0_u64; cmsg_capacity as usize];
 
         // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
@@ -386,33 +433,25 @@ impl UnixSock {
             msg.msg_controllen = cmsg_capacity as _;
         }
 
+        let sock = self
+            .sock
+            .as_ref()
+            .with_context(|| "UnixSock is not connected")?;
         // SAFETY: msg parameters are valid.
-        let total_read = unsafe {
-            recvmsg(
-                self.sock.as_ref().unwrap().as_raw_fd(),
-                &mut msg,
-                MSG_WAITALL,
-            )
-        };
+        let total_read = unsafe { recvmsg(sock.as_raw_fd(), &mut msg, MSG_WAITALL) };
 
-        if total_read == -1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Failed to recv msg, err: {}",
-                    std::io::Error::last_os_error()
-                ),
-            ));
+        if total_read < 0 {
+            bail!(
+                "Failed to recv msg, err: {}",
+                std::io::Error::last_os_error()
+            );
         }
         if total_read == 0 && (msg.msg_controllen as u64) < size_of::<cmsghdr>() as u64 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "The length of control message is invalid, {} {}",
-                    msg.msg_controllen,
-                    size_of::<cmsghdr>()
-                ),
-            ));
+            bail!(
+                "The length of control message is invalid, {} {}",
+                msg.msg_controllen,
+                size_of::<cmsghdr>()
+            );
         }
 
         let mut cmsg_ptr = msg.msg_control as *mut cmsghdr;
@@ -420,23 +459,29 @@ impl UnixSock {
         while !cmsg_ptr.is_null() {
             // SAFETY: The pointer of cmsg_ptr was created in this function and
             // can be guaranteed not be null.
-            let cmsg = unsafe { (cmsg_ptr as *mut cmsghdr).read_unaligned() };
+            let cmsg = unsafe { cmsg_ptr.read_unaligned() };
 
             if cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS {
                 // SAFETY: Input parameter is constant.
-                let fd_count = (cmsg.cmsg_len as u64 - unsafe { CMSG_LEN(0) } as u64) as usize
+                let fd_count = (cmsg.cmsg_len as u64 - u64::from(unsafe { CMSG_LEN(0) })) as usize
                     / size_of::<RawFd>();
+                let new_in_fds_count = in_fds_count
+                    .checked_add(fd_count)
+                    .with_context(|| "fds count overflow")?;
+                if new_in_fds_count > in_fds.len() {
+                    bail!("in_fds is too small");
+                }
                 // SAFETY:
                 // 1. the pointer of cmsg_ptr was created in this function and can be guaranteed not be null.
                 // 2. the parameter of in_fds has been checked before.
                 unsafe {
                     copy_nonoverlapping(
                         self.cmsg_data(cmsg_ptr),
-                        in_fds[in_fds_count..(in_fds_count + fd_count)].as_mut_ptr(),
+                        in_fds[in_fds_count..new_in_fds_count].as_mut_ptr(),
                         fd_count,
                     );
                 }
-                in_fds_count += fd_count;
+                in_fds_count = new_in_fds_count;
             }
 
             cmsg_ptr = self.get_next_cmsg(&msg, &cmsg, cmsg_ptr);
@@ -490,7 +535,7 @@ mod tests {
         assert_ne!(stream.get_stream_raw_fd(), 0);
 
         assert!(listener.accept().is_ok());
-        assert_eq!(listener.is_accepted(), true);
+        assert!(listener.is_accepted());
 
         if sock_path.exists() {
             fs::remove_file("./test_socket1.sock").unwrap();

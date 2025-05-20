@@ -21,3 +21,15 @@ name = "camera_get_format_by_index"
 args = "format_index: u8, frame_index: u8, out: &dyn fmt::Debug"
 message = "V4l2 fmt {}, frm {}, info {:?}."
 enabled = true
+
+[[scopes]]
+name = "ohcam_get_frame"
+args = "offset: usize, len: usize"
+message = "ohcam get frame offset {} len {}"
+enabled = true
+
+[[scopes]]
+name = "ohcam_next_frame"
+args = "frame_id: u64"
+message = "ohcam next frame {}"
+enabled = true

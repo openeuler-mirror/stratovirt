@@ -27,3 +27,63 @@ name = "scream_setup_alsa_hwp"
 args = "name: &str, hwp: &dyn fmt::Debug"
 message = "scream {} setup hardware parameters: {:?}"
 enabled = true
+
+[[events]]
+name = "oh_scream_render_init"
+args = "context: &dyn fmt::Debug"
+message = "context: {:?}"
+enabled = true
+
+[[events]]
+name = "oh_scream_render_destroy"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "oh_scream_capture_init"
+args = "context: &dyn fmt::Debug"
+message = "context: {:?}"
+enabled = true
+
+[[events]]
+name = "oh_scream_capture_destroy"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
+name = "oh_scream_on_write_data_cb"
+args = "len: usize"
+message = "len: {}"
+enabled = true
+
+[[events]]
+name = "oh_scream_on_read_data_cb"
+args = "len: usize"
+message = "len: {}"
+enabled = true
+
+[[scopes]]
+name = "ohaudio_render_process"
+args = "data: &dyn fmt::Debug"
+message = "audio data {:?} to render"
+enabled = true
+
+[[scopes]]
+name = "ohaudio_capturer_process"
+args = "data: &dyn fmt::Debug"
+message = "audio data {:?} to capture"
+enabled = true
+
+[[scopes]]
+name = "ohaudio_write_cb"
+args = "to_copy: usize"
+message = "OH audio expect audio data {} bytes"
+enabled = true
+
+[[scopes]]
+name = "ohaudio_read_cb"
+args = "len: i32"
+message = "OH audio captured {} bytes"
+enabled = true

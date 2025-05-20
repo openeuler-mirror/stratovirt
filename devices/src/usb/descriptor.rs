@@ -132,7 +132,7 @@ impl ByteCode for UsbBOSDescriptor {}
 #[allow(non_snake_case)]
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
-struct UsbSuperSpeedCapDescriptor {
+pub struct UsbSuperSpeedCapDescriptor {
     pub bLength: u8,
     pub bDescriptorType: u8,
     pub bDevCapabilityType: u8,
@@ -163,11 +163,6 @@ impl ByteCode for UsbSuperSpeedEndpointCompDescriptor {}
 pub struct UsbDescDevice {
     pub device_desc: UsbDeviceDescriptor,
     pub configs: Vec<Arc<UsbDescConfig>>,
-}
-
-/// USB device qualifier descriptor.
-pub struct UsbDescDeviceQualifier {
-    pub qualifier_desc: UsbDeviceQualifierDescriptor,
 }
 
 /// USB config descriptor.
@@ -221,24 +216,24 @@ pub struct UsbDescEndpoint {
 /// USB Descriptor.
 pub struct UsbDescriptor {
     pub device_desc: Option<Arc<UsbDescDevice>>,
-    pub device_qualifier_desc: Option<Arc<UsbDescDeviceQualifier>>,
     pub configuration_selected: Option<Arc<UsbDescConfig>>,
     pub interfaces: Vec<Option<Arc<UsbDescIface>>>,
     pub altsetting: Vec<u32>,
     pub interface_number: u32,
     pub strings: Vec<String>,
+    pub capabilities: Vec<UsbSuperSpeedCapDescriptor>,
 }
 
 impl UsbDescriptor {
     pub fn new() -> Self {
         Self {
             device_desc: None,
-            device_qualifier_desc: None,
             configuration_selected: None,
             interfaces: vec![None; USB_MAX_INTERFACES as usize],
             altsetting: vec![0; USB_MAX_INTERFACES as usize],
             interface_number: 0,
             strings: Vec::new(),
+            capabilities: Vec::new(),
         }
     }
 
@@ -264,7 +259,7 @@ impl UsbDescriptor {
         let mut ifs = self.get_interfaces_descriptor(conf.interfaces.as_ref())?;
 
         config_desc.wTotalLength =
-            config_desc.bLength as u16 + iads.len() as u16 + ifs.len() as u16;
+            u16::from(config_desc.bLength) + iads.len() as u16 + ifs.len() as u16;
 
         let mut buf = config_desc.as_bytes().to_vec();
         buf.append(&mut iads);
@@ -349,11 +344,25 @@ impl UsbDescriptor {
     }
 
     fn get_device_qualifier_descriptor(&self) -> Result<Vec<u8>> {
-        if let Some(desc) = self.device_qualifier_desc.as_ref() {
-            Ok(desc.qualifier_desc.as_bytes().to_vec())
-        } else {
-            bail!("Device qualifier descriptor not found");
+        if self.device_desc.is_none() {
+            bail!("device qualifier descriptor not found");
         }
+
+        // SAFETY: device_desc has just been checked
+        let device_desc = &self.device_desc.as_ref().unwrap().device_desc;
+        let device_qualifier_desc = UsbDeviceQualifierDescriptor {
+            bLength: USB_DT_DEVICE_QUALIFIER_SIZE,
+            bDescriptorType: USB_DT_DEVICE_QUALIFIER,
+            bcdUSB: device_desc.bcdUSB,
+            bDeviceClass: device_desc.bDeviceClass,
+            bDeviceSubClass: device_desc.bDeviceSubClass,
+            bDeviceProtocol: device_desc.bDeviceProtocol,
+            bMaxPacketSize0: device_desc.bMaxPacketSize0,
+            bNumConfigurations: device_desc.bNumConfigurations,
+            bReserved: 0,
+        };
+
+        Ok(device_qualifier_desc.as_bytes().to_vec())
     }
 
     fn get_debug_descriptor(&self) -> Result<Vec<u8>> {
@@ -362,25 +371,32 @@ impl UsbDescriptor {
     }
 
     fn get_bos_descriptor(&self, speed: u32) -> Result<Vec<u8>> {
-        let mut total = USB_DT_BOS_SIZE as u16;
+        let mut total = u16::from(USB_DT_BOS_SIZE);
         let mut cap = Vec::new();
         let mut cap_num = 0;
 
         if speed == USB_SPEED_SUPER {
-            let super_cap = UsbSuperSpeedCapDescriptor {
-                bLength: USB_DT_SS_CAP_SIZE,
-                bDescriptorType: USB_DT_DEVICE_CAPABILITY,
-                bDevCapabilityType: USB_SS_DEVICE_CAP,
-                bmAttributes: 0,
-                wSpeedsSupported: USB_SS_DEVICE_SPEED_SUPPORTED_SUPER,
-                bFunctionalitySupport: USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER,
-                bU1DevExitLat: 0xa,
-                wU2DevExitLat: 0x20,
+            let default_cap = if self.capabilities.is_empty() {
+                vec![UsbSuperSpeedCapDescriptor {
+                    bLength: USB_DT_SS_CAP_SIZE,
+                    bDescriptorType: USB_DT_DEVICE_CAPABILITY,
+                    bDevCapabilityType: USB_SS_DEVICE_CAP,
+                    bmAttributes: 0,
+                    wSpeedsSupported: USB_SS_DEVICE_SPEED_SUPPORTED_SUPER,
+                    bFunctionalitySupport: USB_SS_DEVICE_FUNCTIONALITY_SUPPORT_SUPER,
+                    bU1DevExitLat: 0xa,
+                    wU2DevExitLat: 0x20,
+                }]
+            } else {
+                Vec::new()
             };
-            let mut super_buf = super_cap.as_bytes().to_vec();
-            cap_num += 1;
-            total += super_buf.len() as u16;
-            cap.append(&mut super_buf);
+
+            for desc in default_cap.iter().chain(self.capabilities.iter()) {
+                let mut super_buf = (*desc).as_bytes().to_vec();
+                cap_num += 1;
+                total += super_buf.len() as u16;
+                cap.append(&mut super_buf);
+            }
         }
 
         let bos = UsbBOSDescriptor {
@@ -400,8 +416,8 @@ impl UsbDescriptor {
         for i in 0..conf.iad_desc.len() {
             let ifaces = &conf.iad_desc[i].as_ref().itfs;
             for iface in ifaces {
-                if iface.interface_desc.bInterfaceNumber == nif as u8
-                    && iface.interface_desc.bAlternateSetting == alt as u8
+                if u32::from(iface.interface_desc.bInterfaceNumber) == nif
+                    && u32::from(iface.interface_desc.bAlternateSetting) == alt
                 {
                     return Some(iface.clone());
                 }
@@ -409,8 +425,8 @@ impl UsbDescriptor {
         }
         for i in 0..conf.interfaces.len() {
             let iface = conf.interfaces[i].as_ref();
-            if iface.interface_desc.bInterfaceNumber == nif as u8
-                && iface.interface_desc.bAlternateSetting == alt as u8
+            if u32::from(iface.interface_desc.bInterfaceNumber) == nif
+                && u32::from(iface.interface_desc.bAlternateSetting) == alt
             {
                 return Some(conf.interfaces[i].clone());
             }
@@ -435,6 +451,9 @@ pub trait UsbDescriptorOps {
 
     /// Set interface descriptor with the Interface and Alternate Setting.
     fn set_interface_descriptor(&mut self, index: u32, v: u32) -> Result<()>;
+
+    /// Set super speed capability descriptors.
+    fn set_capability_descriptors(&mut self, caps: Vec<UsbSuperSpeedCapDescriptor>);
 
     /// Init all endpoint descriptors and reset the USB endpoint.
     fn init_endpoint(&mut self) -> Result<()>;
@@ -476,7 +495,7 @@ impl UsbDescriptorOps for UsbDeviceBase {
             for i in 0..num as usize {
                 if desc.configs[i].config_desc.bConfigurationValue == v {
                     self.descriptor.interface_number =
-                        desc.configs[i].config_desc.bNumInterfaces as u32;
+                        u32::from(desc.configs[i].config_desc.bNumInterfaces);
                     self.descriptor.configuration_selected = Some(desc.configs[i].clone());
                     found = true;
                 }
@@ -508,6 +527,10 @@ impl UsbDescriptorOps for UsbDeviceBase {
         self.descriptor.interfaces[index as usize] = Some(iface);
         self.init_endpoint()?;
         Ok(())
+    }
+
+    fn set_capability_descriptors(&mut self, caps: Vec<UsbSuperSpeedCapDescriptor>) {
+        self.descriptor.capabilities = caps;
     }
 
     fn init_endpoint(&mut self) -> Result<()> {

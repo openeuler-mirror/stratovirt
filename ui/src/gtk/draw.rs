@@ -218,7 +218,7 @@ fn da_event_callback(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) -> 
 fn gd_cursor_move_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) -> Result<()> {
     let mut borrowed_gs = gs.borrow_mut();
     let (width, height) = match &borrowed_gs.cairo_image {
-        Some(image) => (image.width() as f64, image.height() as f64),
+        Some(image) => (f64::from(image.width()), f64::from(image.height())),
         None => return Ok(()),
     };
 
@@ -231,8 +231,8 @@ fn gd_cursor_move_event(gs: &Rc<RefCell<GtkDisplayScreen>>, event: &gdk::Event) 
     let standard_x = ((real_x * (ABS_MAX as f64)) / width) as u16;
     let standard_y = ((real_y * (ABS_MAX as f64)) / height) as u16;
 
-    input_move_abs(Axis::X, standard_x as u32)?;
-    input_move_abs(Axis::Y, standard_y as u32)?;
+    input_move_abs(Axis::X, u32::from(standard_x))?;
+    input_move_abs(Axis::Y, u32::from(standard_y))?;
     input_point_sync()
 }
 
@@ -304,7 +304,7 @@ fn da_draw_callback(gs: &Rc<RefCell<GtkDisplayScreen>>, cr: &cairo::Context) -> 
     let mut borrowed_gs = gs.borrow_mut();
     let scale_mode = borrowed_gs.scale_mode.clone();
     let (mut surface_width, mut surface_height) = match &borrowed_gs.cairo_image {
-        Some(image) => (image.width() as f64, image.height() as f64),
+        Some(image) => (f64::from(image.width()), f64::from(image.height())),
         None => return Ok(()),
     };
 

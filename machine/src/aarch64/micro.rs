@@ -15,18 +15,18 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 
 use crate::{micro_common::syscall::syscall_whitelist, MachineBase, MachineError};
-use crate::{LightMachine, MachineOps};
-use address_space::{AddressSpace, GuestAddress, Region};
+use crate::{register_shutdown_event, LightMachine, MachineOps};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, Region};
 use cpu::CPUTopology;
-use devices::{legacy::PL031, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
+use devices::legacy::{PL011, PL031};
+use devices::{Device, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor::kvm::aarch64::*;
-use machine_manager::config::{SerialConfig, VmConfig};
+use machine_manager::config::{MigrateMode, Param, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
-use util::{
-    device_tree::{self, CompileFDT, FdtBuilder},
-    seccomp::{BpfRule, SeccompCmpOpt},
-};
-use virtio::VirtioMmioDevice;
+use util::device_tree::{self, CompileFDT, FdtBuilder};
+use util::gen_base_func;
+use util::seccomp::{BpfRule, SeccompCmpOpt};
+use virtio::{VirtioDevice, VirtioMmioDevice};
 
 #[repr(usize)]
 pub enum LayoutEntryType {
@@ -54,13 +54,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
 ];
 
 impl MachineOps for LightMachine {
-    fn machine_base(&self) -> &MachineBase {
-        &self.base
-    }
-
-    fn machine_base_mut(&mut self) -> &mut MachineBase {
-        &mut self.base
-    }
+    gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
     fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
         let vm_ram = self.get_vm_ram();
@@ -107,41 +101,40 @@ impl MachineOps for LightMachine {
         self.base.irq_chip.as_ref().unwrap().realize()?;
 
         let irq_manager = locked_hypervisor.create_irq_manager()?;
-        self.base.sysbus.irq_manager = irq_manager.line_irq_manager;
+        self.base.sysbus.lock().unwrap().irq_manager = irq_manager.line_irq_manager;
         Ok(())
     }
 
     fn add_rtc_device(&mut self) -> Result<()> {
-        PL031::realize(
-            PL031::default(),
-            &mut self.base.sysbus,
+        let pl031 = PL031::new(
+            &self.base.sysbus,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].0,
             MEM_LAYOUT[LayoutEntryType::Rtc as usize].1,
-        )
-        .with_context(|| "Failed to realize pl031.")
+        )?;
+        pl031
+            .realize()
+            .with_context(|| "Failed to realize pl031.")?;
+        Ok(())
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
-        use devices::legacy::PL011;
-
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
-
-        let pl011 = PL011::new(config.clone()).with_context(|| "Failed to create PL011")?;
-        pl011
-            .realize(
-                &mut self.base.sysbus,
-                region_base,
-                region_size,
-                &self.base.boot_source,
-            )
-            .with_context(|| "Failed to realize PL011")
+        let pl011 = PL011::new(config.clone(), &self.base.sysbus, region_base, region_size)
+            .with_context(|| "Failed to create PL011")?;
+        pl011.realize().with_context(|| "Failed to realize PL011")?;
+        let mut bs = self.base.boot_source.lock().unwrap();
+        bs.kernel_cmdline.push(Param {
+            param_type: "earlycon".to_string(),
+            value: format!("pl011,mmio,0x{:08x}", region_base),
+        });
+        Ok(())
     }
 
     fn realize(vm: &Arc<Mutex<Self>>, vm_config: &mut VmConfig) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
 
-        trace::sysbus(&locked_vm.base.sysbus);
+        trace::sysbus(&locked_vm.base.sysbus.lock().unwrap());
         trace::vm_state(&locked_vm.base.vm_state);
 
         let topology = CPUTopology::new().set_topology((
@@ -160,8 +153,12 @@ impl MachineOps for LightMachine {
             vm_config.machine_config.nr_cpus,
         )?;
 
-        let boot_config =
-            locked_vm.load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        let migrate_info = locked_vm.get_migrate_info();
+        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+            Some(locked_vm.load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?)
+        } else {
+            None
+        };
         let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
@@ -186,20 +183,25 @@ impl MachineOps for LightMachine {
         locked_vm.add_devices(vm_config)?;
         trace::replaceable_info(&locked_vm.replaceable_info);
 
-        let mut fdt_helper = FdtBuilder::new();
-        locked_vm
-            .generate_fdt_node(&mut fdt_helper)
-            .with_context(|| MachineError::GenFdtErr)?;
-        let fdt_vec = fdt_helper.finish()?;
-        locked_vm
-            .base
-            .sys_mem
-            .write(
-                &mut fdt_vec.as_slice(),
-                GuestAddress(boot_config.fdt_addr),
-                fdt_vec.len() as u64,
-            )
-            .with_context(|| MachineError::WrtFdtErr(boot_config.fdt_addr, fdt_vec.len()))?;
+        if let Some(boot_cfg) = boot_config {
+            let mut fdt_helper = FdtBuilder::new();
+            locked_vm
+                .generate_fdt_node(&mut fdt_helper)
+                .with_context(|| MachineError::GenFdtErr)?;
+            let fdt_vec = fdt_helper.finish()?;
+            locked_vm
+                .base
+                .sys_mem
+                .write(
+                    &mut fdt_vec.as_slice(),
+                    GuestAddress(boot_cfg.fdt_addr),
+                    fdt_vec.len() as u64,
+                    AddressAttr::Ram,
+                )
+                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+        }
+        register_shutdown_event(locked_vm.shutdown_req.clone(), vm.clone())
+            .with_context(|| "Failed to register shutdown event")?;
 
         MigrationManager::register_vm_instance(vm.clone());
         MigrationManager::register_migration_instance(locked_vm.base.migration_hypervisor.clone());
@@ -218,11 +220,12 @@ impl MachineOps for LightMachine {
         self.add_virtio_mmio_block(vm_config, cfg_args)
     }
 
-    fn realize_virtio_mmio_device(
+    fn add_virtio_mmio_device(
         &mut self,
-        dev: VirtioMmioDevice,
+        name: String,
+        device: Arc<Mutex<dyn VirtioDevice>>,
     ) -> Result<Arc<Mutex<VirtioMmioDevice>>> {
-        self.realize_virtio_mmio_device(dev)
+        self.add_virtio_mmio_device(name, device)
     }
 
     fn syscall_whitelist(&self) -> Vec<BpfRule> {
@@ -235,6 +238,7 @@ pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_ONE_REG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DEVICE_ATTR() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REG_LIST() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_ONE_REG() as u32)
 }
 
 pub(crate) fn arch_syscall_whitelist() -> Vec<BpfRule> {
@@ -257,14 +261,33 @@ trait CompileFDTHelper {
 
 impl CompileFDTHelper for LightMachine {
     fn generate_memory_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
-        let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        let mem_size = self.base.sys_mem.memory_end_address().raw_value()
-            - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
-        let node = "memory";
-        let memory_node_dep = fdt.begin_node(node)?;
-        fdt.set_property_string("device_type", "memory")?;
-        fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
-        fdt.end_node(memory_node_dep)
+        if self.base.numa_nodes.is_none() {
+            let mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+            let mem_size = self.base.sys_mem.memory_end_address().raw_value()
+                - MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+            let node = "memory";
+            let memory_node_dep = fdt.begin_node(node)?;
+            fdt.set_property_string("device_type", "memory")?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
+            fdt.end_node(memory_node_dep)?;
+
+            return Ok(());
+        }
+
+        // Set NUMA node information.
+        let mut mem_base = MEM_LAYOUT[LayoutEntryType::Mem as usize].0;
+        for (id, node) in self.base.numa_nodes.as_ref().unwrap().iter().enumerate() {
+            let mem_size = node.1.size;
+            let node = format!("memory@{:x}", mem_base);
+            let memory_node_dep = fdt.begin_node(&node)?;
+            fdt.set_property_string("device_type", "memory")?;
+            fdt.set_property_array_u64("reg", &[mem_base, mem_size])?;
+            fdt.set_property_u32("numa-node-id", id as u32)?;
+            fdt.end_node(memory_node_dep)?;
+            mem_base += mem_size;
+        }
+
+        Ok(())
     }
 
     fn generate_chosen_node(&self, fdt: &mut FdtBuilder) -> Result<()> {
@@ -282,7 +305,11 @@ impl CompileFDTHelper for LightMachine {
         match &boot_source.initrd {
             Some(initrd) => {
                 fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
-                fdt.set_property_u64("linux,initrd-end", initrd.initrd_addr + initrd.initrd_size)?;
+                let initrd_end = initrd
+                    .initrd_addr
+                    .checked_add(initrd.initrd_size)
+                    .with_context(|| "initrd end overflow")?;
+                fdt.set_property_u64("linux,initrd-end", initrd_end)?;
             }
             None => {}
         }

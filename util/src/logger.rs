@@ -34,7 +34,7 @@ fn format_now() -> String {
         println!("{:?}", e);
         (0, 0)
     });
-    let format_time = get_format_time(sec as i64);
+    let format_time = get_format_time(sec);
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}",
@@ -63,7 +63,7 @@ impl FileRotate {
 
         self.current_size += Wrapping(size_inc);
         let sec = gettime()?.0;
-        let today = get_format_time(sec as i64)[2];
+        let today = get_format_time(sec)[2];
         if self.current_size < Wrapping(LOG_ROTATE_SIZE_MAX) && self.create_day == today {
             return Ok(());
         }
@@ -159,7 +159,7 @@ fn init_vm_logger(
         current_size = Wrapping(metadata.len() as usize);
         let mod_time = metadata.modified()?;
         let sec = mod_time.duration_since(UNIX_EPOCH)?.as_secs();
-        create_day = get_format_time(sec as i64)[2];
+        create_day = get_format_time(i64::try_from(sec)?)[2];
     };
     let rotate = Mutex::new(FileRotate {
         handler: logfile,
@@ -193,7 +193,6 @@ fn init_logger_with_env(logfile: Box<dyn Write + Send>, logfile_path: String) ->
 fn open_log_file(path: &str) -> Result<File> {
     std::fs::OpenOptions::new()
         .read(false)
-        .write(true)
         .append(true)
         .create(true)
         .mode(0o640)

@@ -22,7 +22,7 @@ use log::{debug, warn};
 
 use crate::HypervisorError;
 use address_space::{
-    AddressRange, AddressSpaceError, FlatRange, Listener, ListenerReqType, MemSlot,
+    AddressAttr, AddressRange, AddressSpaceError, FlatRange, Listener, ListenerReqType, MemSlot,
     RegionIoEventFd, RegionType,
 };
 use util::{num_ops::round_down, unix::host_page_size};
@@ -93,7 +93,7 @@ impl KvmMemoryListener {
 
         for (index, slot) in slots.iter_mut().enumerate() {
             if slot.size == 0 {
-                slot.index = index as u32;
+                slot.index = u32::try_from(index)?;
                 slot.guest_addr = guest_addr;
                 slot.size = size;
                 slot.host_addr = host_addr;
@@ -179,12 +179,12 @@ impl KvmMemoryListener {
             return Ok(());
         }
 
-        if flat_range.owner.region_type() != RegionType::Ram
-            && flat_range.owner.region_type() != RegionType::RomDevice
-            && flat_range.owner.region_type() != RegionType::RamDevice
-        {
-            return Ok(());
-        }
+        let attr = match flat_range.owner.region_type() {
+            address_space::RegionType::Ram => AddressAttr::Ram,
+            address_space::RegionType::RamDevice => AddressAttr::RamDevice,
+            address_space::RegionType::RomDevice => AddressAttr::RomDevice,
+            _ => return Ok(()),
+        };
 
         let (aligned_addr, aligned_size) =
             Self::align_mem_slot(flat_range.addr_range, host_page_size())
@@ -193,7 +193,8 @@ impl KvmMemoryListener {
         let align_adjust = aligned_addr.raw_value() - flat_range.addr_range.base.raw_value();
 
         // `unwrap()` won't fail because Ram-type Region definitely has hva
-        let aligned_hva = flat_range.owner.get_host_address().unwrap()
+        // SAFETY: size has been checked.
+        let aligned_hva = unsafe { flat_range.owner.get_host_address(attr).unwrap() }
             + flat_range.offset_in_region
             + align_adjust;
 
@@ -316,8 +317,8 @@ impl KvmMemoryListener {
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                2 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, u16::try_from(ioevtfd.data)?),
+                4 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, u32::try_from(ioevtfd.data)?),
                 8 => vm_fd.register_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
@@ -357,8 +358,8 @@ impl KvmMemoryListener {
         let ioctl_ret = if ioevtfd.data_match {
             let length = ioevtfd.addr_range.size;
             match length {
-                2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u16),
-                4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data as u32),
+                2 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, u16::try_from(ioevtfd.data)?),
+                4 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, u32::try_from(ioevtfd.data)?),
                 8 => vm_fd.unregister_ioevent(&ioevtfd.fd, &io_addr, ioevtfd.data),
                 _ => bail!("Unexpected ioeventfd data length {}", length),
             }
@@ -628,12 +629,12 @@ mod test {
 
     #[test]
     fn test_alloc_slot() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
 
-        let kml = KvmMemoryListener::new(4, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(4, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let host_addr = 0u64;
 
         assert_eq!(kml.get_free_slot(0, 100, host_addr).unwrap(), 0);
@@ -652,12 +653,12 @@ mod test {
 
     #[test]
     fn test_add_del_ram_region() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let ram_size = host_page_size();
         let ram_fr1 = create_ram_range(0, ram_size, 0);
 
@@ -678,12 +679,12 @@ mod test {
 
     #[test]
     fn test_add_region_align() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         // flat-range not aligned
         let page_size = host_page_size();
         let ram_fr2 = create_ram_range(page_size, 2 * page_size, 1000);
@@ -700,12 +701,12 @@ mod test {
 
     #[test]
     fn test_add_del_ioeventfd() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(kml
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)
@@ -746,12 +747,12 @@ mod test {
 
     #[test]
     fn test_ioeventfd_with_data_match() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
 
-        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots.clone());
+        let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let evtfd_addr = 0x1000_u64;
         let mut evtfd = generate_region_ioeventfd(evtfd_addr, 64_u32);
         evtfd.addr_range.size = 3_u64;
@@ -767,7 +768,7 @@ mod test {
 
         // Delete ioeventfd with wrong address will cause an error.
         let mut evtfd_to_del = evtfd.clone();
-        evtfd_to_del.addr_range.base.0 = evtfd_to_del.addr_range.base.0 - 2;
+        evtfd_to_del.addr_range.base.0 -= 2;
         assert!(kml
             .handle_request(None, Some(&evtfd_to_del), ListenerReqType::DeleteIoeventfd)
             .is_err());
@@ -800,12 +801,12 @@ mod test {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_kvm_io_listener() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
+        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
         if kvm_hyp.vm_fd.is_none() {
             return;
         }
 
-        let iol = KvmIoListener::new(kvm_hyp.vm_fd.clone());
+        let iol = KvmIoListener::new(kvm_hyp.vm_fd);
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)

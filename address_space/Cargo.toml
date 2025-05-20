@@ -10,7 +10,7 @@ description = "provide memory management for VM"
 libc = "0.2"
 log = "0.4"
 nix = { version = "0.26.2", default-features = false, features = ["fs", "feature"] }
-vmm-sys-util = "0.11.1"
+vmm-sys-util = "0.12.1"
 arc-swap = "1.6.0"
 thiserror = "1.0"
 anyhow = "1.0"
@@ -19,3 +19,4 @@ machine_manager = { path = "../machine_manager" }
 migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
+trace = { path = "../trace" }

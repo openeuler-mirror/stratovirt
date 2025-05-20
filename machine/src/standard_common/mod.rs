@@ -12,11 +12,7 @@
 
 pub mod syscall;
 
-#[cfg(target_arch = "aarch64")]
-pub use crate::aarch64::standard::StdMachine;
 pub use crate::error::MachineError;
-#[cfg(target_arch = "x86_64")]
-pub use crate::x86_64::standard::StdMachine;
 
 use std::mem::size_of;
 use std::ops::Deref;
@@ -28,7 +24,9 @@ use std::sync::{Arc, Mutex};
 use std::u64;
 
 use anyhow::{bail, Context, Result};
-use log::error;
+use log::{error, warn};
+use serde_json::json;
+use util::set_termi_canon_mode;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -40,7 +38,7 @@ use crate::x86_64::ich9_lpc::{
 };
 #[cfg(target_arch = "x86_64")]
 use crate::x86_64::standard::{LayoutEntryType, MEM_LAYOUT};
-use crate::MachineOps;
+use crate::{MachineBase, MachineOps};
 #[cfg(target_arch = "x86_64")]
 use acpi::AcpiGenericAddress;
 use acpi::{
@@ -48,7 +46,8 @@ use acpi::{
     ACPI_TABLE_LOADER_FILE, TABLE_CHECKSUM_OFFSET,
 };
 use address_space::{
-    AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd, RegionOps,
+    AddressAttr, AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd,
+    RegionOps,
 };
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 #[cfg(target_arch = "x86_64")]
@@ -57,32 +56,76 @@ use devices::legacy::FwCfgOps;
 #[cfg(feature = "scream")]
 use devices::misc::scream::set_record_authority;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
-use devices::pci::PciBus;
+use devices::pci::{PciBus, PciHost};
+use devices::Device;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_config;
-#[cfg(feature = "windows_emu_pid")]
-use machine_manager::config::VmConfig;
+#[cfg(target_arch = "aarch64")]
+use machine_manager::config::ShutdownAction;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, memory_unit_conversion, ConfigCheck, DiskFormat,
-    DriveConfig, ExBool, NumaNode, NumaNodes, M,
+    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_incoming_uri,
+    BootIndexInfo, ConfigCheck, DiskFormat, DriveConfig, ExBool, MigrateMode, NumaNode, NumaNodes,
+    M,
 };
+use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{
-    DeviceInterface, MachineAddressInterface, MachineLifecycle, VmState,
+    DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
+    MachineLifecycle, MachineTestInterface, MigrateInterface, VmState,
 };
 use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
+use machine_manager::state_query::query_workloads;
 #[cfg(feature = "gtk")]
 use ui::gtk::qmp_query_display_image;
 use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis};
+#[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
+use ui::ohui_srv::OhUiServer;
 #[cfg(feature = "vnc")]
 use ui::vnc::qmp_query_vnc;
 use util::aio::{AioEngine, WriteZeroesState};
 use util::byte_code::ByteCode;
-use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
+use util::loop_context::{
+    create_new_eventfd, read_fd, EventLoopManager, EventNotifier, NotifierCallback,
+    NotifierOperation,
+};
 use virtio::{qmp_balloon, qmp_query_balloon};
 
 const MAX_REGION_SIZE: u64 = 65536;
+
+/// Standard machine structure.
+pub struct StdMachine {
+    /// Machine base members.
+    pub(crate) base: MachineBase,
+    /// PCI/PCIe host bridge.
+    pub(crate) pci_host: Arc<Mutex<PciHost>>,
+    /// Reset request, handle VM `Reset` event.
+    pub(crate) reset_req: Arc<EventFd>,
+    /// Shutdown request, handle VM `shutdown` event.
+    pub(crate) shutdown_req: Arc<EventFd>,
+    /// VM power button, handle VM `Shutdown` event.
+    pub(crate) power_button: Arc<EventFd>,
+    /// List contains the boot order of boot devices.
+    pub(crate) boot_order_list: Arc<Mutex<Vec<BootIndexInfo>>>,
+    /// CPU Resize request, handle vm cpu hot(un)plug event.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) cpu_resize_req: Arc<EventFd>,
+    /// Cpu Controller.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) cpu_controller: Option<Arc<Mutex<CpuController>>>,
+    /// Pause request, handle VM `Pause` event.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) pause_req: Arc<EventFd>,
+    /// Resume request, handle VM `Resume` event.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) resume_req: Arc<EventFd>,
+    /// Device Tree Blob.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) dtb_vec: Vec<u8>,
+    /// OHUI server
+    #[cfg(all(target_arch = "aarch64", target_env = "ohos", feature = "ohui_srv"))]
+    pub(crate) ohui_server: Option<Arc<OhUiServer>>,
+}
 
 pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn init_pci_host(&self) -> Result<()>;
@@ -102,7 +145,8 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
 
         let mut xsdt_entries = Vec::new();
 
-        let facs_addr = Self::build_facs_table(&acpi_tables)
+        let facs_addr = self
+            .build_facs_table(&acpi_tables)
             .with_context(|| "Failed to build ACPI FACS table")?;
 
         let dsdt_addr = self
@@ -265,7 +309,10 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
         let reset_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             read_fd(reset_req_fd);
             if let Err(e) = StdMachine::handle_reset_request(&clone_vm) {
-                error!("Fail to reboot standard VM, {:?}", e);
+                warn!("Fail to reboot standard VM, {:?}, try again", e);
+                if reset_req.write(1).is_err() {
+                    error!("Failed to send VM reset request");
+                }
             }
 
             None
@@ -281,6 +328,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             .with_context(|| "Failed to register event notifier.")
     }
 
+    #[cfg(target_arch = "aarch64")]
     fn register_pause_event(
         &self,
         pause_req: Arc<EventFd>,
@@ -290,7 +338,10 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
         let pause_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
             let _ret = pause_req.read();
             if !clone_vm.lock().unwrap().pause() {
-                error!("VM pause failed");
+                warn!("VM pause failed, try again");
+                if pause_req.write(1).is_err() {
+                    error!("Failed to send VM pause request");
+                }
             }
             None
         });
@@ -306,6 +357,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             .with_context(|| "Failed to register event notifier.")
     }
 
+    #[cfg(target_arch = "aarch64")]
     fn register_resume_event(
         &self,
         resume_req: Arc<EventFd>,
@@ -326,33 +378,6 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             None,
             EventSet::IN,
             vec![resume_req_handler],
-        );
-        EventLoop::update_event(vec![notifier], None)
-            .with_context(|| "Failed to register event notifier.")
-    }
-
-    fn register_shutdown_event(
-        &self,
-        shutdown_req: Arc<EventFd>,
-        clone_vm: Arc<Mutex<StdMachine>>,
-    ) -> Result<()> {
-        use util::loop_context::gen_delete_notifiers;
-
-        let shutdown_req_fd = shutdown_req.as_raw_fd();
-        let shutdown_req_handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
-            let _ret = shutdown_req.read();
-            if StdMachine::handle_destroy_request(&clone_vm).is_ok() {
-                Some(gen_delete_notifiers(&[shutdown_req_fd]))
-            } else {
-                None
-            }
-        });
-        let notifier = EventNotifier::new(
-            NotifierOperation::AddShared,
-            shutdown_req_fd,
-            None,
-            EventSet::IN,
-            vec![shutdown_req_handler],
         );
         EventLoop::update_event(vec![notifier], None)
             .with_context(|| "Failed to register event notifier.")
@@ -385,12 +410,13 @@ pub(crate) trait AcpiBuilder {
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // table_begin is much less than u32::MAX, will not overflow.
             table_begin + TABLE_CHECKSUM_OFFSET,
             table_begin,
             table_end - table_begin,
         )?;
 
-        Ok(table_begin as u64)
+        Ok(u64::from(table_begin))
     }
 
     /// Build ACPI DSDT table, returns the offset of ACPI DSDT table in `acpi_data`.
@@ -523,7 +549,7 @@ pub(crate) trait AcpiBuilder {
     {
         let mut mcfg = AcpiTable::new(*b"MCFG", 1, *b"STRATO", *b"VIRTMCFG", 1);
         // Bits 20~28 (totally 9 bits) in PCIE ECAM represents bus number.
-        let bus_number_mask = (1 << 9) - 1;
+        let bus_number_mask = (1u64 << 9) - 1;
         let ecam_addr: u64;
         let max_nr_bus: u64;
         #[cfg(target_arch = "x86_64")]
@@ -544,8 +570,8 @@ pub(crate) trait AcpiBuilder {
         mcfg.append_child(ecam_addr.as_bytes());
         // PCI Segment Group Number
         mcfg.append_child(0_u16.as_bytes());
-        // Start Bus Number and End Bus Number
-        mcfg.append_child(&[0_u8, (max_nr_bus - 1) as u8]);
+        // Start Bus Number and End Bus Number. max_nr_bus is no less than 1.
+        mcfg.append_child(&[0_u8, u8::try_from(max_nr_bus - 1)?]);
         // Reserved
         mcfg.append_child(&[0_u8; 4]);
 
@@ -557,11 +583,12 @@ pub(crate) trait AcpiBuilder {
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // mcfg_begin is much less than u32::MAX, will not overflow.
             mcfg_begin + TABLE_CHECKSUM_OFFSET,
             mcfg_begin,
             mcfg_end - mcfg_begin,
         )?;
-        Ok(mcfg_begin as u64)
+        Ok(u64::from(mcfg_begin))
     }
 
     /// Build ACPI FADT table, returns the offset of ACPI FADT table in `acpi_data`.
@@ -586,31 +613,31 @@ pub(crate) trait AcpiBuilder {
         fadt.set_table_len(208_usize);
         // PM1A_EVENT bit, offset is 56.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(56, 0x600);
+        fadt.set_field(56, 0x600_u32);
         // PM1A_CONTROL bit, offset is 64.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(64, 0x604);
+        fadt.set_field(64, 0x604_u32);
         // PM_TMR_BLK bit, offset is 76.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(76, 0x608);
+        fadt.set_field(76, 0x608_u32);
         // PM1_EVT_LEN, offset is 88.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(88, 4);
+        fadt.set_field(88, 4_u8);
         // PM1_CNT_LEN, offset is 89.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(89, 2);
+        fadt.set_field(89, 2_u8);
         // PM_TMR_LEN, offset is 91.
         #[cfg(target_arch = "x86_64")]
-        fadt.set_field(91, 4);
+        fadt.set_field(91, 4_u8);
         #[cfg(target_arch = "aarch64")]
         {
-            // FADT flag: enable HW_REDUCED_ACPI and LOW_POWER_S0_IDLE_CAPABLE bit on aarch64 plantform.
-            fadt.set_field(112, 1 << 21 | 1 << 20 | 1 << 10 | 1 << 8);
+            // FADT flag: enable HW_REDUCED_ACPI bit on aarch64 plantform.
+            fadt.set_field(112, 1_u32 << 20 | 1_u32 << 10 | 1_u32 << 8);
             // ARM Boot Architecture Flags
             fadt.set_field(129, 0x3_u16);
         }
         // FADT minor revision
-        fadt.set_field(131, 3);
+        fadt.set_field(131, 3_u8);
         // X_PM_TMR_BLK bit, offset is 208.
         #[cfg(target_arch = "x86_64")]
         fadt.append_child(&AcpiGenericAddress::new_io_address(0x608_u32).aml_bytes());
@@ -620,28 +647,28 @@ pub(crate) trait AcpiBuilder {
         #[cfg(target_arch = "x86_64")]
         {
             // FADT flag: disable HW_REDUCED_ACPI bit on x86 plantform.
-            fadt.set_field(112, 1 << 10 | 1 << 8);
+            fadt.set_field(112, 1_u32 << 10 | 1_u32 << 8);
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);
-            fadt.set_field(120, RST_CTRL_OFFSET as u64);
+            fadt.set_field(120, u64::from(RST_CTRL_OFFSET));
             fadt.set_field(128, 0x0F_u8);
             // PM1a event register bit, offset is 148.
             fadt.set_field(148, 0x01_u8);
             fadt.set_field(149, 0x20_u8);
-            fadt.set_field(152, PM_EVENT_OFFSET as u64);
+            fadt.set_field(152, u64::from(PM_EVENT_OFFSET));
             // PM1a control register bit, offset is 172.
             fadt.set_field(172, 0x01_u8);
             fadt.set_field(173, 0x10_u8);
-            fadt.set_field(176, PM_CTRL_OFFSET as u64);
+            fadt.set_field(176, u64::from(PM_CTRL_OFFSET));
             // Sleep control register, offset is 244.
             fadt.set_field(244, 0x01_u8);
             fadt.set_field(245, 0x08_u8);
-            fadt.set_field(248, SLEEP_CTRL_OFFSET as u64);
+            fadt.set_field(248, u64::from(SLEEP_CTRL_OFFSET));
             // Sleep status tegister, offset is 256.
             fadt.set_field(256, 0x01_u8);
             fadt.set_field(257, 0x08_u8);
-            fadt.set_field(260, SLEEP_CTRL_OFFSET as u64);
+            fadt.set_field(260, u64::from(SLEEP_CTRL_OFFSET));
         }
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
@@ -656,10 +683,11 @@ pub(crate) trait AcpiBuilder {
         let facs_size = 4_u8;
         loader.add_pointer_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + facs_offset,
             facs_size,
             ACPI_TABLE_FILE,
-            facs_addr as u32,
+            u32::try_from(facs_addr)?,
         )?;
 
         // xDSDT address field's offset in FADT.
@@ -668,28 +696,33 @@ pub(crate) trait AcpiBuilder {
         let xdsdt_size = 8_u8;
         loader.add_pointer_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + xdsdt_offset,
             xdsdt_size,
             ACPI_TABLE_FILE,
-            dsdt_addr as u32,
+            u32::try_from(dsdt_addr)?,
         )?;
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // fadt_begin is much less than u32::MAX, will not overflow.
             fadt_begin + TABLE_CHECKSUM_OFFSET,
             fadt_begin,
             fadt_end - fadt_begin,
         )?;
 
-        Ok(fadt_begin as u64)
+        Ok(u64::from(fadt_begin))
     }
+
+    /// Get the Hardware Signature used to build FACS table.
+    fn get_hardware_signature(&self) -> Option<u32>;
 
     /// Build ACPI FACS table, returns the offset of ACPI FACS table in `acpi_data`.
     ///
     /// # Arguments
     ///
     /// `acpi_data` - Bytes streams that ACPI tables converts to.
-    fn build_facs_table(acpi_data: &Arc<Mutex<Vec<u8>>>) -> Result<u64>
+    fn build_facs_table(&self, acpi_data: &Arc<Mutex<Vec<u8>>>) -> Result<u64>
     where
         Self: Sized,
     {
@@ -702,12 +735,21 @@ pub(crate) trait AcpiBuilder {
         // FACS table length.
         facs_data[4] = 0x40;
 
+        // FACS table Hardware Signature.
+        if let Some(signature) = self.get_hardware_signature() {
+            let signature = signature.as_bytes();
+            facs_data[8] = signature[0];
+            facs_data[9] = signature[1];
+            facs_data[10] = signature[2];
+            facs_data[11] = signature[3];
+        }
+
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let facs_begin = locked_acpi_data.len() as u32;
         locked_acpi_data.extend(facs_data);
         drop(locked_acpi_data);
 
-        Ok(facs_begin as u64)
+        Ok(u64::from(facs_begin))
     }
 
     /// Build ACPI SRAT CPU table.
@@ -797,6 +839,7 @@ pub(crate) trait AcpiBuilder {
     {
         let mut xsdt = AcpiTable::new(*b"XSDT", 1, *b"STRATO", *b"VIRTXSDT", 1);
 
+        // usize is enough for storing table len.
         xsdt.set_table_len(xsdt.table_len() + size_of::<u64>() * xsdt_entries.len());
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
@@ -812,22 +855,25 @@ pub(crate) trait AcpiBuilder {
         for entry in xsdt_entries {
             loader.add_pointer_entry(
                 ACPI_TABLE_FILE,
+                // xsdt_begin is much less than u32::MAX, will not overflow.
                 xsdt_begin + entry_offset,
                 entry_size,
                 ACPI_TABLE_FILE,
-                entry as u32,
+                u32::try_from(entry)?,
             )?;
+            // u32 is enough for storing offset.
             entry_offset += u32::from(entry_size);
         }
 
         loader.add_cksum_entry(
             ACPI_TABLE_FILE,
+            // xsdt_begin is much less than u32::MAX, will not overflow.
             xsdt_begin + TABLE_CHECKSUM_OFFSET,
             xsdt_begin,
             xsdt_end - xsdt_begin,
         )?;
 
-        Ok(xsdt_begin as u64)
+        Ok(u64::from(xsdt_begin))
     }
 
     /// Build ACPI RSDP and add it to FwCfg as file-entry.
@@ -853,7 +899,7 @@ pub(crate) trait AcpiBuilder {
             xsdt_offset,
             xsdt_size,
             ACPI_TABLE_FILE,
-            xsdt_addr as u32,
+            u32::try_from(xsdt_addr)?,
         )?;
 
         let cksum_offset = 8_u32;
@@ -872,26 +918,6 @@ impl StdMachine {
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
         self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)
-    }
-
-    /// When windows emu exits, stratovirt should exits too.
-    #[cfg(feature = "windows_emu_pid")]
-    pub(crate) fn watch_windows_emu_pid(
-        &self,
-        vm_config: &VmConfig,
-        power_button: Arc<EventFd>,
-        shutdown_req: Arc<EventFd>,
-    ) {
-        let emu_pid = vm_config.windows_emu_pid.as_ref();
-        if emu_pid.is_none() {
-            return;
-        }
-        log::info!("Watching on windows emu lifetime");
-        crate::check_windows_emu_pid(
-            "/proc/".to_owned() + emu_pid.unwrap(),
-            power_button,
-            shutdown_req,
-        );
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -915,6 +941,7 @@ impl StdMachine {
                 bail!("Cpu-id {} already exist.", cpu_id)
             }
             if cpu_id >= max_cpus {
+                // max_cpus is no less than 1.
                 bail!("Max cpu-id is {}", max_cpus - 1)
             }
 
@@ -925,6 +952,114 @@ impl StdMachine {
         } else {
             bail!("Argument cpu-id is required.")
         }
+    }
+}
+
+impl MachineLifecycle for StdMachine {
+    fn pause(&self) -> bool {
+        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
+            event!(Stop);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn resume(&self) -> bool {
+        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
+            return false;
+        }
+        event!(Resume);
+        true
+    }
+
+    fn destroy(&self) -> bool {
+        if self.shutdown_req.write(1).is_err() {
+            error!("Failed to send shutdown request.");
+            return false;
+        }
+
+        true
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn powerdown(&self) -> bool {
+        if self.power_button.write(1).is_err() {
+            error!("Standard vm write power button failed");
+            return false;
+        }
+        true
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn get_shutdown_action(&self) -> ShutdownAction {
+        self.base
+            .vm_config
+            .lock()
+            .unwrap()
+            .machine_config
+            .shutdown_action
+    }
+
+    fn reset(&mut self) -> bool {
+        if self.reset_req.write(1).is_err() {
+            error!("Standard vm write reset request failed");
+            return false;
+        }
+        true
+    }
+
+    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
+        if let Err(e) = self.vm_state_transfer(
+            &self.base.cpus,
+            #[cfg(target_arch = "aarch64")]
+            &self.base.irq_chip,
+            &mut self.base.vm_state.0.lock().unwrap(),
+            old,
+            new,
+        ) {
+            error!("VM state transfer failed: {:?}", e);
+            return false;
+        }
+        true
+    }
+}
+
+impl MigrateInterface for StdMachine {
+    fn migrate(&self, uri: String) -> Response {
+        match parse_incoming_uri(&uri) {
+            Ok((MigrateMode::File, path)) => migration::snapshot(path),
+            Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
+            Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
+            _ => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
+                None,
+            ),
+        }
+    }
+
+    fn query_migrate(&self) -> Response {
+        migration::query_migrate()
+    }
+
+    fn cancel_migrate(&self) -> Response {
+        migration::cancel_migrate()
+    }
+}
+
+impl MachineInterface for StdMachine {}
+impl MachineExternalInterface for StdMachine {}
+impl MachineTestInterface for StdMachine {}
+
+impl EventLoopManager for StdMachine {
+    fn loop_should_exit(&self) -> bool {
+        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
+        *vmstate == VmState::Shutdown
+    }
+
+    fn loop_cleanup(&self) -> Result<()> {
+        set_termi_canon_mode().with_context(|| "Failed to set terminal to canonical mode")?;
+        Ok(())
     }
 }
 
@@ -976,7 +1111,7 @@ impl DeviceInterface for StdMachine {
         for cpu_index in 0..cpu_topo.max_cpus {
             if cpu_topo.get_mask(cpu_index as usize) == 1 {
                 let thread_id = cpus[cpu_index as usize].tid();
-                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index as usize);
+                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index);
                 let cpu_common = qmp_schema::CpuInfoCommon {
                     current: true,
                     qom_path: String::from("/machine/unattached/device[")
@@ -1094,6 +1229,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            #[cfg(feature = "virtio_scsi")]
             "virtio-scsi-pci" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_scsi(&mut vm_config_clone, &cfg_args, true) {
@@ -1106,6 +1242,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            #[cfg(feature = "vhostuser_block")]
             "vhost-user-blk-pci" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vhost_user_blk_pci(&mut vm_config_clone, &cfg_args, true) {
@@ -1130,6 +1267,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            #[cfg(feature = "vfio_device")]
             "vfio-pci" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vfio_device(&cfg_args, true) {
@@ -1141,7 +1279,7 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
-            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" | "usb-storage" => {
+            "usb-kbd" | "usb-tablet" | "usb-camera" | "usb-host" | "usb-storage" | "usb-uas" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_usb_device(&mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
@@ -1176,7 +1314,9 @@ impl DeviceInterface for StdMachine {
 
         // It's safe to call get_pci_host().unwrap() because it has been checked before.
         let locked_pci_host = self.get_pci_host().unwrap().lock().unwrap();
-        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &args.id) {
+        if let Some((bus, dev)) =
+            PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), &args.id)
+        {
             match handle_plug(&bus, &dev) {
                 Ok(()) => Response::create_empty_response(),
                 Err(e) => {
@@ -1213,7 +1353,9 @@ impl DeviceInterface for StdMachine {
         };
 
         let locked_pci_host = pci_host.lock().unwrap();
-        if let Some((bus, dev)) = PciBus::find_attached_bus(&locked_pci_host.root_bus, &device_id) {
+        if let Some((bus, dev)) =
+            PciBus::find_attached_bus(&locked_pci_host.child_bus().unwrap(), &device_id)
+        {
             return match handle_unplug_pci_request(&bus, &dev) {
                 Ok(()) => {
                     let locked_dev = dev.lock().unwrap();
@@ -1272,7 +1414,7 @@ impl DeviceInterface for StdMachine {
         if let Err(e) = self.register_drive_file(
             &config.id,
             &args.file.filename,
-            config.read_only,
+            config.readonly,
             config.direct,
         ) {
             error!("{:?}", e);
@@ -1485,6 +1627,7 @@ impl DeviceInterface for StdMachine {
                 }
 
                 for (i, data) in data.iter_mut().enumerate().take(std::mem::size_of::<u64>()) {
+                    // i is less than 8, multiply will not overflow.
                     *data = (self.head >> (8 * i)) as u8;
                 }
                 true
@@ -1533,13 +1676,13 @@ impl DeviceInterface for StdMachine {
         let mut fd = None;
         if args.region_type.eq("rom_device_region") || args.region_type.eq("ram_device_region") {
             if let Some(file_name) = args.device_fd_path {
-                fd = Some(
+                fd = Some(Arc::new(
                     std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
                         .open(file_name)
                         .unwrap(),
-                );
+                ));
             }
         }
 
@@ -1549,7 +1692,7 @@ impl DeviceInterface for StdMachine {
                 region = Region::init_io_region(args.size, dummy_dev_ops, "UpdateRegionTest");
                 if args.ioeventfd.is_some() && args.ioeventfd.unwrap() {
                     let ioeventfds = vec![RegionIoEventFd {
-                        fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap()),
+                        fd: Arc::new(create_new_eventfd().unwrap()),
                         addr_range: AddressRange::from((
                             0,
                             args.ioeventfd_size.unwrap_or_default(),
@@ -1603,6 +1746,12 @@ impl DeviceInterface for StdMachine {
             }
         };
 
+        if i32::try_from(args.priority).is_err() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("priority illegal".to_string()),
+                None,
+            );
+        }
         region.set_priority(args.priority as i32);
         if let Some(read_only) = args.romd {
             if region.set_rom_device_romd(read_only).is_err() {
@@ -1672,12 +1821,7 @@ impl DeviceInterface for StdMachine {
                         None,
                     );
                 }
-                let drive_cfg = match self
-                    .get_vm_config()
-                    .lock()
-                    .unwrap()
-                    .add_block_drive(cmd_args[2])
-                {
+                let drive_cfg = match self.get_vm_config().lock().unwrap().add_drive(cmd_args[2]) {
                     Ok(cfg) => cfg,
                     Err(ref e) => {
                         return Response::create_error_response(
@@ -1689,7 +1833,7 @@ impl DeviceInterface for StdMachine {
                 if let Err(e) = self.register_drive_file(
                     &drive_cfg.id,
                     &drive_cfg.path_on_host,
-                    drive_cfg.read_only,
+                    drive_cfg.readonly,
                     drive_cfg.direct,
                 ) {
                     error!("{:?}", e);
@@ -1734,7 +1878,7 @@ impl DeviceInterface for StdMachine {
                 }
 
                 let qcow2_list = QCOW2_LIST.lock().unwrap();
-                if qcow2_list.len() == 0 {
+                if qcow2_list.is_empty() {
                     return Response::create_response(
                         serde_json::to_value("There is no snapshot available.\r\n").unwrap(),
                         None,
@@ -1897,7 +2041,7 @@ impl DeviceInterface for StdMachine {
         match self
             .machine_base()
             .sys_mem
-            .read_object::<u32>(GuestAddress(gpa))
+            .read_object::<u32>(GuestAddress(gpa), AddressAttr::Ram)
         {
             Ok(val) => {
                 Response::create_response(serde_json::to_value(format!("{:X}", val)).unwrap(), None)
@@ -1910,13 +2054,30 @@ impl DeviceInterface for StdMachine {
             ),
         }
     }
+
+    fn query_workloads(&self) -> Response {
+        let workloads = query_workloads();
+
+        if !workloads.is_empty() {
+            let status = workloads
+                .iter()
+                .map(|(module, state)| json!({ "module": module, "state": state }))
+                .collect();
+
+            Response::create_response(serde_json::Value::Array(status), None)
+        } else {
+            Response::create_empty_response()
+        }
+    }
 }
 
 fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
     let mut config = DriveConfig {
         id: args.node_name.clone(),
+        drive_type: "none".to_string(),
+        unit: None,
         path_on_host: args.file.filename.clone(),
-        read_only: args.read_only.unwrap_or(false),
+        readonly: args.read_only.unwrap_or(false),
         direct: true,
         iops: args.iops,
         aio: args.file.aio,

@@ -10,11 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fmt::Display;
 use std::net::IpAddr;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
@@ -25,16 +28,14 @@ use super::qmp_schema::QmpCommand;
 use super::{qmp_channel::QmpChannel, qmp_response::QmpGreeting, qmp_response::Response};
 use crate::event;
 use crate::event_loop::EventLoop;
-use crate::machine::MachineExternalInterface;
+use crate::machine::{MachineExternalInterface, VmState};
 use crate::socket::SocketHandler;
 use crate::socket::SocketRWHandler;
-use crate::temp_cleaner::TempCleaner;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-use util::set_termi_canon_mode;
 use util::socket::{SocketListener, SocketStream};
 use util::unix::parse_unix_uri;
 
@@ -60,13 +61,13 @@ impl QmpSocketPath {
     }
 }
 
-impl ToString for QmpSocketPath {
-    fn to_string(&self) -> String {
+impl Display for QmpSocketPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             QmpSocketPath::Tcp { host, port } => {
-                format!("{}:{}", &host, &port)
+                write!(f, "{}:{}", &host, &port)
             }
-            QmpSocketPath::Unix { path } => path.clone(),
+            QmpSocketPath::Unix { path } => write!(f, "{}", path),
         }
     }
 }
@@ -372,7 +373,7 @@ fn handle_qmp(
 
     // If flow over `LEAK_BUCKET_LIMIT` per seconds, discard the request and return
     // a `OperationThrottled` error.
-    if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), 1_u64) {
+    if leak_bucket.throttled(EventLoop::get_ctx(None).unwrap(), 1_u32) {
         qmp_service.discard()?;
         let err_resp = qmp_schema::QmpErrorClass::OperationThrottled(LEAK_BUCKET_LIMIT);
         qmp_service
@@ -399,10 +400,6 @@ fn handle_qmp(
                     reason: "host-qmp-quit".to_string(),
                 };
                 event!(Shutdown; shutdown_msg);
-                TempCleaner::clean();
-                set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
-
-                std::process::exit(0);
             }
 
             Ok(())
@@ -431,7 +428,6 @@ fn qmp_command_exec(
     // Use macro create match to cover most Qmp command
     let mut id = create_command_matches!(
         qmp_command.clone(); controller.lock().unwrap(); qmp_response;
-        (stop, pause),
         (cont, resume),
         (system_powerdown, powerdown),
         (system_reset, reset),
@@ -465,7 +461,8 @@ fn qmp_command_exec(
         (query_vnc, query_vnc),
         (query_display_image, query_display_image),
         (list_type, list_type),
-        (query_hotpluggable_cpus, query_hotpluggable_cpus);
+        (query_hotpluggable_cpus, query_hotpluggable_cpus),
+        (query_workloads, query_workloads);
         (input_event, input_event, key, value),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
@@ -492,6 +489,27 @@ fn qmp_command_exec(
     // Handle the Qmp command which macro can't cover
     if id.is_none() {
         id = match qmp_command {
+            QmpCommand::stop { arguments: _, id } => {
+                let now = Instant::now();
+                while !controller.lock().unwrap().pause() {
+                    thread::sleep(Duration::from_millis(5));
+                    if now.elapsed() > Duration::from_secs(2) {
+                        // Not use resume() to avoid unnecessary qmp event.
+                        controller
+                            .lock()
+                            .unwrap()
+                            .notify_lifecycle(VmState::Paused, VmState::Running);
+                        qmp_response = Response::create_error_response(
+                            qmp_schema::QmpErrorClass::GenericError(
+                                "Failed to pause VM".to_string(),
+                            ),
+                            None,
+                        );
+                        break;
+                    }
+                }
+                id
+            }
             QmpCommand::quit { id, .. } => {
                 controller.lock().unwrap().destroy();
                 shutdown_flag = true;
@@ -568,7 +586,7 @@ mod tests {
     // Environment Recovery for UnixSocket
     fn recover_unix_socket_environment(socket_id: &str) {
         let socket_name: String = format!("test_{}.sock", socket_id);
-        std::fs::remove_file(&socket_name).unwrap();
+        std::fs::remove_file(socket_name).unwrap();
     }
 
     #[test]
@@ -579,20 +597,20 @@ mod tests {
 
         // life cycle test
         // 1.Unconnected
-        assert_eq!(socket.is_connected(), false);
+        assert!(!socket.is_connected());
 
         // 2.Connected
         socket.bind_stream(server);
-        assert_eq!(socket.is_connected(), true);
+        assert!(socket.is_connected());
 
         // 3.Unbind SocketStream, reset state
         socket.drop_stream();
-        assert_eq!(socket.is_connected(), false);
+        assert!(!socket.is_connected());
 
         // 4.Accept and reconnect a new UnixStream
         let _new_client = UnixStream::connect("test_04.sock");
         socket.accept();
-        assert_eq!(socket.is_connected(), true);
+        assert!(socket.is_connected());
 
         // After test. Environment Recover
         recover_unix_socket_environment("04");
@@ -640,7 +658,7 @@ mod tests {
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         match qmp_event {
             qmp_schema::QmpEvent::Shutdown { data, timestamp: _ } => {
-                assert_eq!(data.guest, true);
+                assert!(data.guest);
                 assert_eq!(data.reason, "guest-shutdown".to_string());
             }
             _ => assert!(false),
@@ -669,7 +687,7 @@ mod tests {
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_greeting = QmpGreeting::create_greeting(1, 0, 5);
         assert_eq!(qmp_greeting, qmp_response);
-        assert_eq!(res.is_err(), false);
+        assert!(res.is_ok());
 
         // 2.send empty response
         let res = socket.send_response(false);
@@ -678,7 +696,7 @@ mod tests {
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
         let qmp_empty_response = Response::create_empty_response();
         assert_eq!(qmp_empty_response, qmp_response);
-        assert_eq!(res.is_err(), false);
+        assert!(res.is_ok());
 
         // After test. Environment Recover
         recover_unix_socket_environment("07");

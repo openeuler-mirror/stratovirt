@@ -14,7 +14,8 @@ use anyhow::Result;
 
 use crate::MachineBase;
 use cpu::PMU_INTR;
-use devices::sysbus::{SysBusDevType, SysRes};
+use devices::sysbus::{to_sysbusdevops, SysBusDevType, SysRes};
+use devices::{Bus, SYS_BUS_DEVICE};
 use util::device_tree::{self, FdtBuilder};
 
 /// Function that helps to generate arm pmu in device-tree.
@@ -265,23 +266,24 @@ impl CompileFDTHelper for MachineBase {
         fdt.set_property_string("method", "hvc")?;
         fdt.end_node(psci_node_dep)?;
 
-        for dev in self.sysbus.devices.iter() {
-            let locked_dev = dev.lock().unwrap();
-            match locked_dev.sysbusdev_base().dev_type {
+        let devices = self.sysbus.lock().unwrap().child_devices();
+        for dev in devices.values() {
+            SYS_BUS_DEVICE!(dev, locked_dev, sysbusdev);
+            match sysbusdev.sysbusdev_base().dev_type {
                 SysBusDevType::PL011 => {
-                    generate_serial_device_node(fdt, &locked_dev.sysbusdev_base().res)?
+                    generate_serial_device_node(fdt, &sysbusdev.sysbusdev_base().res)?
                 }
                 SysBusDevType::Rtc => {
-                    generate_rtc_device_node(fdt, &locked_dev.sysbusdev_base().res)?
+                    generate_rtc_device_node(fdt, &sysbusdev.sysbusdev_base().res)?
                 }
                 SysBusDevType::VirtioMmio => {
-                    generate_virtio_devices_node(fdt, &locked_dev.sysbusdev_base().res)?
+                    generate_virtio_devices_node(fdt, &sysbusdev.sysbusdev_base().res)?
                 }
                 SysBusDevType::FwCfg => {
-                    generate_fwcfg_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
+                    generate_fwcfg_device_node(fdt, &sysbusdev.sysbusdev_base().res)?;
                 }
                 SysBusDevType::Flash => {
-                    generate_flash_device_node(fdt, &locked_dev.sysbusdev_base().res)?;
+                    generate_flash_device_node(fdt, &sysbusdev.sysbusdev_base().res)?;
                 }
                 _ => (),
             }
@@ -309,7 +311,7 @@ impl CompileFDTHelper for MachineBase {
                 let dist: u32 = if id as u32 == *i {
                     10
                 } else if let Some(distance) = distances.get(i) {
-                    *distance as u32
+                    u32::from(*distance)
                 } else {
                     20
                 };

@@ -31,7 +31,8 @@ use crate::{
     VIRTIO_TYPE_BALLOON,
 };
 use address_space::{
-    AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd, RegionType,
+    AddressAttr, AddressSpace, FlatRange, GuestAddress, Listener, ListenerReqType, RegionIoEventFd,
+    RegionType,
 };
 use machine_manager::{
     config::{get_pci_df, parse_bool, DEFAULT_VIRTQUEUE_SIZE},
@@ -41,17 +42,15 @@ use machine_manager::{
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::BalloonInfo,
 };
-use util::{
-    bitmap::Bitmap,
-    byte_code::ByteCode,
-    loop_context::{
-        read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-    },
-    num_ops::round_down,
-    offset_of,
-    seccomp::BpfRule,
-    unix::host_page_size,
+use util::bitmap::Bitmap;
+use util::byte_code::ByteCode;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
+use util::num_ops::round_down;
+use util::seccomp::BpfRule;
+use util::unix::host_page_size;
+use util::{gen_base_func, offset_of};
 
 const VIRTIO_BALLOON_F_DEFLATE_ON_OOM: u32 = 2;
 const VIRTIO_BALLOON_F_REPORTING: u32 = 5;
@@ -162,7 +161,11 @@ fn iov_to_buf<T: ByteCode>(
         return None;
     }
 
-    match address_space.read_object::<T>(GuestAddress(iov.iov_base.raw_value() + offset)) {
+    // GPAChecked: the iov has been checked in pop_avail().
+    match address_space.read_object::<T>(
+        GuestAddress(iov.iov_base.raw_value() + offset),
+        AddressAttr::Ram,
+    ) {
         Ok(dat) => Some(dat),
         Err(ref e) => {
             error!("Read virtioqueue failed: {:?}", e);
@@ -171,9 +174,8 @@ fn iov_to_buf<T: ByteCode>(
     }
 }
 
-fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int) {
-    // SAFETY: The memory to be freed is allocated by guest.
-    if unsafe { libc::madvise(addr, len, advice) } != 0 {
+unsafe fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int) {
+    if libc::madvise(addr, len, advice) != 0 {
         let evt_type = match advice {
             libc::MADV_DONTNEED => "DONTNEED".to_string(),
             libc::MADV_REMOVE => "REMOVE".to_string(),
@@ -220,7 +222,7 @@ impl Request {
         for elem_iov in iovec {
             request.iovec.push(GuestIovec {
                 iov_base: elem_iov.addr,
-                iov_len: elem_iov.len as u64,
+                iov_len: u64::from(elem_iov.len),
             });
             request.elem_cnt += elem_iov.len;
         }
@@ -239,11 +241,14 @@ impl Request {
             } else if hva == last_addr + BALLOON_PAGE_SIZE {
                 free_len += 1;
             } else {
-                memory_advise(
-                    start_addr as *const libc::c_void as *mut _,
-                    (free_len * BALLOON_PAGE_SIZE) as usize,
-                    libc::MADV_WILLNEED,
-                );
+                // SAFETY: The memory to be freed is allocated by guest.
+                unsafe {
+                    memory_advise(
+                        start_addr as *const libc::c_void as *mut _,
+                        (free_len * BALLOON_PAGE_SIZE) as usize,
+                        libc::MADV_WILLNEED,
+                    )
+                };
                 free_len = 1;
                 start_addr = hva;
             }
@@ -252,11 +257,14 @@ impl Request {
         }
 
         if free_len != 0 {
-            memory_advise(
-                start_addr as *const libc::c_void as *mut _,
-                (free_len * BALLOON_PAGE_SIZE) as usize,
-                libc::MADV_WILLNEED,
-            );
+            // SAFETY: The memory to be freed is allocated by guest.
+            unsafe {
+                memory_advise(
+                    start_addr as *const libc::c_void as *mut _,
+                    (free_len * BALLOON_PAGE_SIZE) as usize,
+                    libc::MADV_WILLNEED,
+                )
+            };
         }
     }
     /// Mark balloon page with `MADV_DONTNEED` or `MADV_WILLNEED`.
@@ -278,11 +286,11 @@ impl Request {
         let mut hvaset = Vec::new();
 
         for iov in self.iovec.iter() {
-            let mut offset = 0;
+            let mut offset = 0_u64;
 
             while let Some(pfn) = iov_to_buf::<u32>(address_space, iov, offset) {
                 offset += std::mem::size_of::<u32>() as u64;
-                let gpa: GuestAddress = GuestAddress((pfn as u64) << VIRTIO_BALLOON_PFN_SHIFT);
+                let gpa: GuestAddress = GuestAddress(u64::from(pfn) << VIRTIO_BALLOON_PFN_SHIFT);
                 let (hva, shared) = match mem.lock().unwrap().get_host_address(gpa) {
                     Some((addr, mem_share)) => (addr, mem_share),
                     None => {
@@ -301,7 +309,7 @@ impl Request {
         }
 
         let host_page_size = host_page_size();
-        let mut advice = 0;
+        let mut advice = 0_i32;
         // If host_page_size equals BALLOON_PAGE_SIZE and have the same share properties,
         // we can directly call the madvise function without any problem. And if the advice is
         // MADV_WILLNEED, we just hint the whole host page it lives on, since we can't do
@@ -320,11 +328,14 @@ impl Request {
                 } else if hva == last_addr + BALLOON_PAGE_SIZE && last_share == share {
                     free_len += 1;
                 } else {
-                    memory_advise(
-                        start_addr as *const libc::c_void as *mut _,
-                        (free_len * BALLOON_PAGE_SIZE) as usize,
-                        advice,
-                    );
+                    // SAFETY: The memory to be freed is allocated by guest.
+                    unsafe {
+                        memory_advise(
+                            start_addr as *const libc::c_void as *mut _,
+                            (free_len * BALLOON_PAGE_SIZE) as usize,
+                            advice,
+                        )
+                    };
                     free_len = 1;
                     start_addr = hva;
                     last_share = share;
@@ -338,11 +349,14 @@ impl Request {
                 last_addr = hva;
             }
             if free_len != 0 {
-                memory_advise(
-                    start_addr as *const libc::c_void as *mut _,
-                    (free_len * BALLOON_PAGE_SIZE) as usize,
-                    advice,
-                );
+                // SAFETY: The memory to be freed is allocated by guest.
+                unsafe {
+                    memory_advise(
+                        start_addr as *const libc::c_void as *mut _,
+                        (free_len * BALLOON_PAGE_SIZE) as usize,
+                        advice,
+                    )
+                };
             }
         } else {
             let mut host_page_bitmap = BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
@@ -376,11 +390,14 @@ impl Request {
                     } else {
                         advice = libc::MADV_DONTNEED;
                     }
-                    memory_advise(
-                        host_page_bitmap.base_address as *const libc::c_void as *mut _,
-                        host_page_size as usize,
-                        advice,
-                    );
+                    // SAFETY: The memory to be freed is allocated by guest.
+                    unsafe {
+                        memory_advise(
+                            host_page_bitmap.base_address as *const libc::c_void as *mut _,
+                            host_page_size as usize,
+                            advice,
+                        )
+                    };
                     host_page_bitmap = BalloonedPageBitmap::new(host_page_size / BALLOON_PAGE_SIZE);
                 }
             }
@@ -402,11 +419,14 @@ impl Request {
             } else {
                 libc::MADV_DONTNEED
             };
-            memory_advise(
-                hva as *const libc::c_void as *mut _,
-                iov.iov_len as usize,
-                advice,
-            );
+            // SAFETY: The memory to be freed is allocated by guest.
+            unsafe {
+                memory_advise(
+                    hva as *const libc::c_void as *mut _,
+                    iov.iov_len as usize,
+                    advice,
+                )
+            };
         }
     }
 }
@@ -442,17 +462,17 @@ impl BlnMemInfo {
 
     fn get_host_address(&self, addr: GuestAddress) -> Option<(u64, bool)> {
         let all_regions = self.regions.lock().unwrap();
-        for i in 0..all_regions.len() {
-            if addr.raw_value() < all_regions[i].guest_phys_addr + all_regions[i].memory_size
-                && addr.raw_value() >= all_regions[i].guest_phys_addr
+        for region in all_regions.iter() {
+            if addr.raw_value() < region.guest_phys_addr + region.memory_size
+                && addr.raw_value() >= region.guest_phys_addr
             {
                 return Some((
-                    all_regions[i].userspace_addr + addr.raw_value()
-                        - all_regions[i].guest_phys_addr,
-                    all_regions[i].mem_share,
+                    region.userspace_addr + addr.raw_value() - region.guest_phys_addr,
+                    region.mem_share,
                 ));
             }
         }
+
         None
     }
 
@@ -471,7 +491,8 @@ impl BlnMemInfo {
     fn add_mem_range(&self, fr: &FlatRange) {
         let guest_phys_addr = fr.addr_range.base.raw_value();
         let memory_size = fr.addr_range.size;
-        if let Some(host_addr) = fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        if let Some(host_addr) = unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             let userspace_addr = host_addr + fr.offset_in_region;
             let reg_page_size = fr.owner.get_region_page_size();
             self.regions.lock().unwrap().push(BlnMemoryRegion {
@@ -489,7 +510,8 @@ impl BlnMemInfo {
 
     fn delete_mem_range(&self, fr: &FlatRange) {
         let mut mem_regions = self.regions.lock().unwrap();
-        if let Some(host_addr) = fr.owner.get_host_address() {
+        // SAFETY: memory_size is range's size, so we make sure [hva, hva+size] is in ram range.
+        if let Some(host_addr) = unsafe { fr.owner.get_host_address(AddressAttr::Ram) } {
             let reg_page_size = fr.owner.get_region_page_size();
             let target = BlnMemoryRegion {
                 guest_phys_addr: fr.addr_range.base.raw_value(),
@@ -616,7 +638,7 @@ impl BalloonIoHandler {
             trace::virtio_receive_request("Balloon".to_string(), "to inflate".to_string());
             &self.inf_queue
         } else {
-            trace::virtio_receive_request("Balloon".to_string(), "to inflate".to_string());
+            trace::virtio_receive_request("Balloon".to_string(), "to deflate".to_string());
             &self.def_queue
         };
         let mut locked_queue = queue.lock().unwrap();
@@ -636,7 +658,7 @@ impl BalloonIoHandler {
             }
             locked_queue
                 .vring
-                .add_used(&self.mem_space, req.desc_index, req.elem_cnt)
+                .add_used(req.desc_index, req.elem_cnt)
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
@@ -648,6 +670,7 @@ impl BalloonIoHandler {
     }
 
     fn reporting_evt_handler(&mut self) -> Result<()> {
+        trace::reporting_evt_handler();
         let queue = self
             .report_queue
             .as_ref()
@@ -670,7 +693,7 @@ impl BalloonIoHandler {
             }
             locked_queue
                 .vring
-                .add_used(&self.mem_space, req.desc_index, req.elem_cnt)
+                .add_used(req.desc_index, req.elem_cnt)
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
@@ -682,6 +705,7 @@ impl BalloonIoHandler {
     }
 
     fn auto_msg_evt_handler(&mut self) -> Result<()> {
+        trace::auto_msg_evt_handler();
         let queue = self
             .msg_queue
             .as_ref()
@@ -701,14 +725,13 @@ impl BalloonIoHandler {
                 .with_context(|| "Fail to parse available descriptor chain")?;
             // SAFETY: There is no confliction when writing global variable BALLOON_DEV, in other
             // words, this function will not be called simultaneously.
-            if let Some(dev) = unsafe { &BALLOON_DEV } {
+            if let Some(dev) = unsafe { BALLOON_DEV.as_ref() } {
                 let mut balloon_dev = dev.lock().unwrap();
                 for iov in req.iovec.iter() {
                     if let Some(stat) = iov_to_buf::<BalloonStat>(&self.mem_space, iov, 0) {
-                        let ram_size = (balloon_dev.mem_info.lock().unwrap().get_ram_size()
-                            >> VIRTIO_BALLOON_PFN_SHIFT)
-                            as u32;
-                        balloon_dev.set_num_pages(cmp::min(stat._val as u32, ram_size));
+                        let ram_size = balloon_dev.mem_info.lock().unwrap().get_ram_size()
+                            >> VIRTIO_BALLOON_PFN_SHIFT;
+                        balloon_dev.set_num_pages(cmp::min(stat._val, ram_size) as u32);
                     }
                 }
                 balloon_dev
@@ -718,7 +741,7 @@ impl BalloonIoHandler {
 
             locked_queue
                 .vring
-                .add_used(&self.mem_space, req.desc_index, req.elem_cnt)
+                .add_used(req.desc_index, req.elem_cnt)
                 .with_context(|| "Failed to add balloon response into used queue")?;
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&locked_queue), false)
                 .with_context(|| {
@@ -741,7 +764,7 @@ impl BalloonIoHandler {
 
     /// Get the memory size of balloon.
     fn get_balloon_memory_size(&self) -> u64 {
-        (self.balloon_actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
+        u64::from(self.balloon_actual.load(Ordering::Acquire)) << VIRTIO_BALLOON_PFN_SHIFT
     }
 }
 
@@ -882,8 +905,10 @@ impl EventNotifierHelper for BalloonIoHandler {
 }
 
 #[derive(Parser, Debug, Clone, Default)]
-#[command(name = "balloon")]
+#[command(no_binary_name(true))]
 pub struct BalloonConfig {
+    #[arg(long)]
+    pub classtype: String,
     #[arg(long, value_parser = valid_id)]
     pub id: String,
     #[arg(long)]
@@ -914,9 +939,9 @@ impl ConfigCheck for BalloonConfig {
         {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "balloon membuf-percent".to_string(),
-                MEM_BUFFER_PERCENT_MIN as u64,
+                u64::from(MEM_BUFFER_PERCENT_MIN),
                 false,
-                MEM_BUFFER_PERCENT_MAX as u64,
+                u64::from(MEM_BUFFER_PERCENT_MAX),
                 false,
             )));
         }
@@ -925,9 +950,9 @@ impl ConfigCheck for BalloonConfig {
         {
             return Err(anyhow!(ConfigError::IllegalValue(
                 "balloon monitor-interval".to_string(),
-                MONITOR_INTERVAL_SECOND_MIN as u64,
+                u64::from(MONITOR_INTERVAL_SECOND_MIN),
                 false,
-                MONITOR_INTERVAL_SECOND_MAX as u64,
+                u64::from(MONITOR_INTERVAL_SECOND_MAX),
                 false,
             )));
         }
@@ -1017,11 +1042,11 @@ impl Balloon {
         if host_page_size > BALLOON_PAGE_SIZE && !self.mem_info.lock().unwrap().has_huge_page() {
             warn!("Balloon used with backing page size > 4kiB, this may not be reliable");
         }
-        let target = (size >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
+        let target = size >> VIRTIO_BALLOON_PFN_SHIFT;
         let address_space_ram_size =
-            (self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT) as u32;
+            self.mem_info.lock().unwrap().get_ram_size() >> VIRTIO_BALLOON_PFN_SHIFT;
         let vm_target = cmp::min(target, address_space_ram_size);
-        self.num_pages = address_space_ram_size - vm_target;
+        self.num_pages = (address_space_ram_size - vm_target) as u32;
         self.signal_config_change().with_context(|| {
             "Failed to notify about configuration change after setting balloon memory"
         })?;
@@ -1034,7 +1059,7 @@ impl Balloon {
 
     /// Get the size of memory that reclaimed by balloon.
     fn get_balloon_memory_size(&self) -> u64 {
-        (self.actual.load(Ordering::Acquire) as u64) << VIRTIO_BALLOON_PFN_SHIFT
+        u64::from(self.actual.load(Ordering::Acquire)) << VIRTIO_BALLOON_PFN_SHIFT
     }
 
     /// Get the actual memory size of guest.
@@ -1048,13 +1073,7 @@ impl Balloon {
 }
 
 impl VirtioDevice for Balloon {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         self.bln_cfg.check()?;
@@ -1204,7 +1223,7 @@ impl VirtioDevice for Balloon {
 pub fn qmp_balloon(target: u64) -> bool {
     // SAFETY: there is no confliction when writing global variable BALLOON_DEV, in other
     // words, this function will not be called simultaneously.
-    if let Some(dev) = unsafe { &BALLOON_DEV } {
+    if let Some(dev) = unsafe { BALLOON_DEV.as_ref() } {
         match dev.lock().unwrap().set_guest_memory_size(target) {
             Ok(()) => {
                 return true;
@@ -1222,7 +1241,7 @@ pub fn qmp_balloon(target: u64) -> bool {
 pub fn qmp_query_balloon() -> Option<u64> {
     // SAFETY: There is no confliction when writing global variable BALLOON_DEV, in other
     // words, this function will not be called simultaneously.
-    if let Some(dev) = unsafe { &BALLOON_DEV } {
+    if let Some(dev) = unsafe { BALLOON_DEV.as_ref() } {
         let unlocked_dev = dev.lock().unwrap();
         return Some(unlocked_dev.get_guest_memory_size());
     }
@@ -1240,38 +1259,13 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
 
 #[cfg(test)]
 mod tests {
-    pub use super::*;
-    pub use crate::*;
+    use super::*;
+    use crate::tests::{address_space_init, MEMORY_SIZE};
+    use crate::*;
+    use address_space::{AddressAttr, AddressRange, HostMemMapping, Region};
+    use machine_manager::event_loop::EventLoop;
 
-    use address_space::{AddressRange, HostMemMapping, Region};
-
-    const MEMORY_SIZE: u64 = 1024 * 1024;
     const QUEUE_SIZE: u16 = 256;
-
-    fn address_space_init() -> Arc<AddressSpace> {
-        let root = Region::init_container_region(1 << 36, "space");
-        let sys_space = AddressSpace::new(root, "space", None).unwrap();
-        let host_mmap = Arc::new(
-            HostMemMapping::new(
-                GuestAddress(0),
-                None,
-                MEMORY_SIZE,
-                None,
-                false,
-                false,
-                false,
-            )
-            .unwrap(),
-        );
-        sys_space
-            .root()
-            .add_subregion(
-                Region::init_ram_region(host_mmap.clone(), "space"),
-                host_mmap.start_address().raw_value(),
-            )
-            .unwrap();
-        sys_space
-    }
 
     fn create_flat_range(addr: u64, size: u64, offset_in_region: u64) -> FlatRange {
         let mem_mapping = Arc::new(
@@ -1320,13 +1314,13 @@ mod tests {
         bln.base.device_features = 1 | 1 << 32;
         bln.set_driver_features(0, 1);
         assert_eq!(bln.base.driver_features, 1);
-        assert_eq!(bln.base.driver_features, bln.driver_features(0) as u64);
+        assert_eq!(bln.base.driver_features, u64::from(bln.driver_features(0)));
         bln.base.driver_features = 1 << 32;
         bln.set_driver_features(1, 1);
         assert_eq!(bln.base.driver_features, 1 << 32);
         assert_eq!(
             bln.base.driver_features,
-            (bln.driver_features(1) as u64) << 32
+            u64::from(bln.driver_features(1)) << 32
         );
 
         // Test methods of balloon.
@@ -1444,33 +1438,45 @@ mod tests {
 
         let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
         queue_config_inf.desc_table = GuestAddress(0x100);
-        queue_config_inf.addr_cache.desc_table_host = mem_space
-            .get_host_address(queue_config_inf.desc_table)
-            .unwrap();
+        queue_config_inf.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.avail_ring = GuestAddress(0x300);
-        queue_config_inf.addr_cache.avail_ring_host = mem_space
-            .get_host_address(queue_config_inf.avail_ring)
-            .unwrap();
+        queue_config_inf.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.used_ring = GuestAddress(0x600);
-        queue_config_inf.addr_cache.used_ring_host = mem_space
-            .get_host_address(queue_config_inf.used_ring)
-            .unwrap();
+        queue_config_inf.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_inf.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_inf.ready = true;
         queue_config_inf.size = QUEUE_SIZE;
 
         let mut queue_config_def = QueueConfig::new(QUEUE_SIZE);
         queue_config_def.desc_table = GuestAddress(0x1100);
-        queue_config_def.addr_cache.desc_table_host = mem_space
-            .get_host_address(queue_config_def.desc_table)
-            .unwrap();
+        queue_config_def.addr_cache.desc_table_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.desc_table, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.avail_ring = GuestAddress(0x1300);
-        queue_config_def.addr_cache.avail_ring_host = mem_space
-            .get_host_address(queue_config_def.avail_ring)
-            .unwrap();
+        queue_config_def.addr_cache.avail_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.avail_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.used_ring = GuestAddress(0x1600);
-        queue_config_def.addr_cache.used_ring_host = mem_space
-            .get_host_address(queue_config_def.used_ring)
-            .unwrap();
+        queue_config_def.addr_cache.used_ring_host = unsafe {
+            mem_space
+                .get_host_address(queue_config_def.used_ring, AddressAttr::Ram)
+                .unwrap()
+        };
         queue_config_def.ready = true;
         queue_config_def.size = QUEUE_SIZE;
 
@@ -1484,7 +1490,7 @@ mod tests {
             driver_features: bln.base.driver_features,
             mem_space: mem_space.clone(),
             inf_queue: queue1,
-            inf_evt: event_inf.clone(),
+            inf_evt: event_inf,
             def_queue: queue2,
             def_evt: event_def,
             report_queue: None,
@@ -1514,7 +1520,11 @@ mod tests {
 
         // Set desc table.
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_inf.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config_inf.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         let ele = GuestIovec {
@@ -1522,13 +1532,21 @@ mod tests {
             iov_len: std::mem::size_of::<GuestIovec>() as u64,
         };
         mem_space
-            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x2000), AddressAttr::Ram)
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_inf.avail_ring.0 + 4 as u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config_inf.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_inf.avail_ring.0 + 2 as u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config_inf.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_INFLATE_EVENT).is_ok());
@@ -1544,17 +1562,29 @@ mod tests {
         };
 
         mem_space
-            .write_object::<SplitVringDesc>(&desc, GuestAddress(queue_config_def.desc_table.0))
+            .write_object::<SplitVringDesc>(
+                &desc,
+                GuestAddress(queue_config_def.desc_table.0),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         mem_space
-            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000))
+            .write_object::<GuestIovec>(&ele, GuestAddress(0x3000), AddressAttr::Ram)
             .unwrap();
         mem_space
-            .write_object::<u16>(&0, GuestAddress(queue_config_def.avail_ring.0 + 4 as u64))
+            .write_object::<u16>(
+                &0,
+                GuestAddress(queue_config_def.avail_ring.0 + 4_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
         mem_space
-            .write_object::<u16>(&1, GuestAddress(queue_config_def.avail_ring.0 + 2 as u64))
+            .write_object::<u16>(
+                &1,
+                GuestAddress(queue_config_def.avail_ring.0 + 2_u64),
+                AddressAttr::Ram,
+            )
             .unwrap();
 
         assert!(handler.process_balloon_queue(BALLOON_DEFLATE_EVENT).is_ok());
@@ -1562,6 +1592,8 @@ mod tests {
 
     #[test]
     fn test_balloon_activate() {
+        EventLoop::object_init(&None).unwrap();
+
         let mem_space = address_space_init();
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
         let interrupt_status = Arc::new(AtomicU32::new(0));
@@ -1578,18 +1610,20 @@ mod tests {
             },
         ) as VirtioInterrupt);
 
-        let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
-        queue_config_inf.desc_table = GuestAddress(0);
-        queue_config_inf.avail_ring = GuestAddress(4096);
-        queue_config_inf.used_ring = GuestAddress(8192);
-        queue_config_inf.ready = true;
-        queue_config_inf.size = QUEUE_SIZE;
-
         let mut queues: Vec<Arc<Mutex<Queue>>> = Vec::new();
-        let queue1 = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
-        queues.push(queue1);
-        let event_inf = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
-        let queue_evts: Vec<Arc<EventFd>> = vec![event_inf.clone()];
+        let mut queue_evts: Vec<Arc<EventFd>> = Vec::new();
+        for i in 0..QUEUE_NUM_BALLOON as u64 {
+            let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
+            queue_config_inf.desc_table = GuestAddress(12288 * i);
+            queue_config_inf.avail_ring = GuestAddress(12288 * i + 4096);
+            queue_config_inf.used_ring = GuestAddress(12288 * i + 8192);
+            queue_config_inf.ready = true;
+            queue_config_inf.size = QUEUE_SIZE;
+            let queue = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
+            queues.push(queue);
+            let event_inf = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+            queue_evts.push(event_inf);
+        }
 
         let bln_cfg = BalloonConfig {
             id: "bln".to_string(),
@@ -1598,7 +1632,9 @@ mod tests {
         };
         let mut bln = Balloon::new(bln_cfg, mem_space.clone());
         bln.base.queues = queues;
-        assert!(bln.activate(mem_space, interrupt_cb, queue_evts).is_err());
+        assert!(bln.activate(mem_space, interrupt_cb, queue_evts).is_ok());
+
+        EventLoop::loop_clean();
     }
 
     #[test]

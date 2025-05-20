@@ -14,7 +14,10 @@ pub mod balloon;
 pub mod block;
 #[cfg(feature = "virtio_gpu")]
 pub mod gpu;
+pub mod input;
 pub mod net;
+#[cfg(feature = "virtio_rng")]
 pub mod rng;
+#[cfg(feature = "virtio_scsi")]
 pub mod scsi_cntlr;
 pub mod serial;

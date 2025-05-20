@@ -65,14 +65,16 @@ use std::cell::RefCell;
 use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info, warn};
 use nix::unistd::gettid;
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
-use machine_manager::machine::{HypervisorType, MachineInterface};
+use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
@@ -118,7 +120,7 @@ pub trait CPUInterface {
     /// Realize `CPU` structure, set registers value for `CPU`.
     fn realize(
         &self,
-        boot: &CPUBootConfig,
+        boot: &Option<CPUBootConfig>,
         topology: &CPUTopology,
         #[cfg(target_arch = "aarch64")] features: &CPUFeatures,
     ) -> Result<()>;
@@ -283,6 +285,7 @@ impl CPU {
     /// Set thread id for `CPU`.
     pub fn set_tid(&self, tid: Option<u64>) {
         if tid.is_none() {
+            // Cast is safe as tid is not negative.
             *self.tid.lock().unwrap() = Some(gettid().as_raw() as u64);
         } else {
             *self.tid.lock().unwrap() = tid;
@@ -310,7 +313,7 @@ impl CPU {
 impl CPUInterface for CPU {
     fn realize(
         &self,
-        boot: &CPUBootConfig,
+        boot: &Option<CPUBootConfig>,
         topology: &CPUTopology,
         #[cfg(target_arch = "aarch64")] config: &CPUFeatures,
     ) -> Result<()> {
@@ -323,14 +326,16 @@ impl CPUInterface for CPU {
             ))));
         }
 
-        self.hypervisor_cpu
-            .set_boot_config(
-                self.arch_cpu.clone(),
-                boot,
-                #[cfg(target_arch = "aarch64")]
-                config,
-            )
-            .with_context(|| "Failed to realize arch cpu")?;
+        if let Some(boot) = boot {
+            self.hypervisor_cpu
+                .set_boot_config(
+                    self.arch_cpu.clone(),
+                    boot,
+                    #[cfg(target_arch = "aarch64")]
+                    config,
+                )
+                .with_context(|| "Failed to realize arch cpu")?;
+        }
 
         self.arch_cpu
             .lock()
@@ -412,7 +417,17 @@ impl CPUInterface for CPU {
                     vm.lock().unwrap().destroy();
                 }
                 ShutdownActionPause => {
-                    vm.lock().unwrap().pause();
+                    let now = Instant::now();
+                    while !vm.lock().unwrap().pause() {
+                        thread::sleep(Duration::from_millis(5));
+                        if now.elapsed() > Duration::from_secs(2) {
+                            // Not use resume() to avoid unnecessary qmp event.
+                            vm.lock()
+                                .unwrap()
+                                .notify_lifecycle(VmState::Paused, VmState::Running);
+                            bail!("Failed to pause VM");
+                        }
+                    }
                 }
             }
         } else {
@@ -450,7 +465,7 @@ pub struct CPUThreadWorker {
 }
 
 impl CPUThreadWorker {
-    thread_local!(static LOCAL_THREAD_VCPU: RefCell<Option<CPUThreadWorker>> = RefCell::new(None));
+    thread_local!(static LOCAL_THREAD_VCPU: RefCell<Option<CPUThreadWorker>> = const { RefCell::new(None) });
 
     /// Allocates a new `CPUThreadWorker`.
     fn new(thread_cpu: Arc<CPU>) -> Self {
@@ -589,16 +604,18 @@ impl CpuTopology {
     /// # Arguments
     ///
     /// * `vcpu_id` - ID of vcpu.
-    fn get_topo_item(&self, vcpu_id: usize) -> (u8, u8, u8, u8, u8) {
-        let socketid: u8 = vcpu_id as u8 / (self.dies * self.clusters * self.cores * self.threads);
-        let dieid: u8 = (vcpu_id as u8 / (self.clusters * self.cores * self.threads)) % self.dies;
-        let clusterid: u8 = (vcpu_id as u8 / (self.cores * self.threads)) % self.clusters;
-        let coreid: u8 = (vcpu_id as u8 / self.threads) % self.cores;
-        let threadid: u8 = vcpu_id as u8 % self.threads;
+    fn get_topo_item(&self, vcpu_id: u8) -> (u8, u8, u8, u8, u8) {
+        // nr_cpus is no more than u8::MAX, multiply will not overflow.
+        // nr_xxx is no less than 1, div and mod operations will not panic.
+        let socketid: u8 = vcpu_id / (self.dies * self.clusters * self.cores * self.threads);
+        let dieid: u8 = (vcpu_id / (self.clusters * self.cores * self.threads)) % self.dies;
+        let clusterid: u8 = (vcpu_id / (self.cores * self.threads)) % self.clusters;
+        let coreid: u8 = (vcpu_id / self.threads) % self.cores;
+        let threadid: u8 = vcpu_id % self.threads;
         (socketid, dieid, clusterid, coreid, threadid)
     }
 
-    pub fn get_topo_instance_for_qmp(&self, cpu_index: usize) -> qmp_schema::CpuInstanceProperties {
+    pub fn get_topo_instance_for_qmp(&self, cpu_index: u8) -> qmp_schema::CpuInstanceProperties {
         let (socketid, _dieid, _clusterid, coreid, threadid) = self.get_topo_item(cpu_index);
         qmp_schema::CpuInstanceProperties {
             node_id: None,

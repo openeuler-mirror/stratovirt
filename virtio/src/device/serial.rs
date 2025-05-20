@@ -20,18 +20,19 @@ use std::{cmp, usize};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, info, warn};
+use machine_manager::config::ChardevConfig;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::{
-    gpa_hva_iovec_map, iov_discard_front, iov_to_buf, read_config_default, report_virtio_error,
+    gpa_hva_iovec_map, iov_read_object, iov_to_buf, read_config_default, report_virtio_error,
     Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType,
     VIRTIO_CONSOLE_F_MULTIPORT, VIRTIO_CONSOLE_F_SIZE, VIRTIO_F_VERSION_1, VIRTIO_TYPE_CONSOLE,
 };
-use address_space::AddressSpace;
+use address_space::{AddressAttr, AddressSpace};
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
-    config::{ChardevType, VirtioSerialInfo, VirtioSerialPort, DEFAULT_VIRTQUEUE_SIZE},
+    config::{ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
@@ -39,6 +40,7 @@ use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, Sta
 use migration_derive::{ByteCode, Desc};
 use util::aio::iov_from_buf_direct;
 use util::byte_code::ByteCode;
+use util::gen_base_func;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
@@ -191,7 +193,7 @@ impl Serial {
 }
 
 pub fn get_max_nr(ports: &Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>) -> u32 {
-    let mut max = 0;
+    let mut max: u32 = 0;
     for port in ports.lock().unwrap().iter() {
         let nr = port.lock().unwrap().nr;
         if nr > max {
@@ -214,13 +216,7 @@ pub fn find_port_by_nr(
 }
 
 impl VirtioDevice for Serial {
-    fn virtio_base(&self) -> &VirtioBase {
-        &self.base
-    }
-
-    fn virtio_base_mut(&mut self) -> &mut VirtioBase {
-        &mut self.base
-    }
+    gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
         self.init_config_features()?;
@@ -354,17 +350,21 @@ pub struct SerialPort {
 }
 
 impl SerialPort {
-    pub fn new(port_cfg: VirtioSerialPort) -> Self {
+    pub fn new(port_cfg: VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Self {
         // Console is default host connected. And pty chardev has opened by default in realize()
         // function.
-        let host_connected = port_cfg.is_console || port_cfg.chardev.backend == ChardevType::Pty;
+        let is_console = matches!(port_cfg.classtype.as_str(), "virtconsole");
+        let mut host_connected = is_console;
+        if let ChardevType::Pty { .. } = chardev_cfg.classtype {
+            host_connected = true;
+        }
 
         SerialPort {
             name: Some(port_cfg.id),
             paused: false,
-            chardev: Arc::new(Mutex::new(Chardev::new(port_cfg.chardev))),
-            nr: port_cfg.nr,
-            is_console: port_cfg.is_console,
+            chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg))),
+            nr: port_cfg.nr.unwrap(),
+            is_console,
             guest_connected: false,
             host_connected,
             ctrl_handler: None,
@@ -455,6 +455,14 @@ impl SerialPortHandler {
         let mut queue_lock = self.output_queue.lock().unwrap();
 
         loop {
+            if let Some(port) = self.port.as_ref() {
+                let locked_port = port.lock().unwrap();
+                let locked_cdev = locked_port.chardev.lock().unwrap();
+                if locked_cdev.outbuf_is_full() {
+                    break;
+                }
+            }
+
             let elem = queue_lock
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -464,40 +472,36 @@ impl SerialPortHandler {
 
             // Discard requests when there is no port using this queue. Popping elements without
             // processing means discarding the request.
-            if self.port.is_some() {
-                let mut iovec = elem.out_iovec;
-                let mut iovec_size = Element::iovec_size(&iovec);
-                while iovec_size > 0 {
-                    let mut buffer = [0_u8; BUF_SIZE];
-                    let size = iov_to_buf(&self.mem_space, &iovec, &mut buffer)? as u64;
+            if let Some(port) = self.port.as_ref() {
+                let iovec = elem.out_iovec;
+                let iovec_size = Element::iovec_size(&iovec);
+                let mut buf = vec![0u8; iovec_size as usize];
+                let cache = queue_lock.vring.get_cache();
+                let size = iov_to_buf(&self.mem_space, cache, &iovec, &mut buf[..])? as u64;
 
-                    self.write_chardev_msg(&buffer, size as usize);
-
-                    iovec = iov_discard_front(&mut iovec, size)
-                        .unwrap_or_default()
-                        .to_vec();
-                    // Safety: iovec follows the iov_discard_front operation and
-                    // iovec_size always equals Element::iovec_size(&iovec).
-                    iovec_size -= size;
-                    trace::virtio_serial_output_data(iovec_size, size);
+                let locked_port = port.lock().unwrap();
+                if locked_port.host_connected {
+                    if let Err(e) = locked_port
+                        .chardev
+                        .lock()
+                        .unwrap()
+                        .fill_outbuf(buf, Some(self.output_queue_evt.clone()))
+                    {
+                        error!("Failed to append elem buffer to chardev with error {:?}", e);
+                    }
                 }
+                trace::virtio_serial_output_data(iovec_size, size);
             }
 
-            queue_lock
-                .vring
-                .add_used(&self.mem_space, elem.index, 0)
-                .with_context(|| {
-                    format!(
-                        "Failed to add used ring for virtio serial port output, index: {} len: {}",
-                        elem.index, 0,
-                    )
-                })?;
+            queue_lock.vring.add_used(elem.index, 0).with_context(|| {
+                format!(
+                    "Failed to add used ring for virtio serial port output, index: {} len: {}",
+                    elem.index, 0,
+                )
+            })?;
         }
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(
@@ -509,30 +513,6 @@ impl SerialPortHandler {
         }
 
         Ok(())
-    }
-
-    fn write_chardev_msg(&self, buffer: &[u8], write_len: usize) {
-        let port_locked = self.port.as_ref().unwrap().lock().unwrap();
-        // Discard output buffer if this port's chardev is not connected.
-        if !port_locked.host_connected {
-            return;
-        }
-
-        if let Some(output) = &mut port_locked.chardev.lock().unwrap().output {
-            let mut locked_output = output.lock().unwrap();
-            // To do:
-            // If the buffer is not fully written to chardev, the incomplete part will be discarded.
-            // This may occur when chardev is abnormal. Consider optimizing this logic in the
-            // future.
-            if let Err(e) = locked_output.write_all(&buffer[..write_len]) {
-                error!("Port {} failed to write msg to chardev: {:?}", self.nr, e);
-            }
-            if let Err(e) = locked_output.flush() {
-                error!("Port {} failed to flush msg to chardev: {:?}", self.nr, e);
-            }
-        } else {
-            error!("Port {} failed to get output fd", self.nr);
-        };
     }
 
     fn get_input_avail_bytes(&mut self, max_size: usize) -> usize {
@@ -569,10 +549,9 @@ impl SerialPortHandler {
         }
 
         let mut queue_lock = self.input_queue.lock().unwrap();
-        let _ =
-            queue_lock
-                .vring
-                .suppress_queue_notify(&self.mem_space, self.driver_features, !enable);
+        let _ = queue_lock
+            .vring
+            .suppress_queue_notify(self.driver_features, !enable);
     }
 
     fn input_handle_internal(&mut self, buffer: &[u8]) -> Result<()> {
@@ -603,8 +582,14 @@ impl SerialPortHandler {
                 let write_end = written_count + len;
                 let mut source_slice = &buffer[written_count..write_end];
 
+                // GPAChecked: the elem_iov has been checked in pop_avail().
                 self.mem_space
-                    .write(&mut source_slice, elem_iov.addr, len as u64)
+                    .write(
+                        &mut source_slice,
+                        elem_iov.addr,
+                        len as u64,
+                        AddressAttr::Ram,
+                    )
                     .with_context(|| {
                         format!(
                             "Failed to write slice for virtio serial port input: addr {:X} len {}",
@@ -622,7 +607,7 @@ impl SerialPortHandler {
 
             queue_lock
                 .vring
-                .add_used(&self.mem_space, elem.index, once_count as u32)
+                .add_used(elem.index, once_count as u32)
                 .with_context(|| {
                     format!(
                         "Failed to add used ring for virtio serial port input: index {} len {}",
@@ -630,10 +615,7 @@ impl SerialPortHandler {
                     )
                 })?;
 
-            if queue_lock
-                .vring
-                .should_notify(&self.mem_space, self.driver_features)
-            {
+            if queue_lock.vring.should_notify(self.driver_features) {
                 (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                     .with_context(|| {
                         VirtioError::InterruptTrigger(
@@ -754,17 +736,11 @@ impl SerialControlHandler {
                 break;
             }
 
-            let mut req = VirtioConsoleControl::default();
-            iov_to_buf(&self.mem_space, &elem.out_iovec, req.as_mut_bytes()).and_then(|size| {
-                if size < size_of::<VirtioConsoleControl>() {
-                    bail!(
-                        "Invalid length for request: get {}, expected {}",
-                        size,
-                        size_of::<VirtioConsoleControl>(),
-                    );
-                }
-                Ok(())
-            })?;
+            let mut req = iov_read_object::<VirtioConsoleControl>(
+                &self.mem_space,
+                &elem.out_iovec,
+                queue_lock.vring.get_cache(),
+            )?;
             req.id = LittleEndian::read_u32(req.id.as_bytes());
             req.event = LittleEndian::read_u16(req.event.as_bytes());
             req.value = LittleEndian::read_u16(req.value.as_bytes());
@@ -775,21 +751,15 @@ impl SerialControlHandler {
             );
             self.handle_control_message(&mut req);
 
-            queue_lock
-                .vring
-                .add_used(&self.mem_space, elem.index, 0)
-                .with_context(|| {
-                    format!(
-                        "Failed to add used ring for control port, index: {} len: {}.",
-                        elem.index, 0
-                    )
-                })?;
+            queue_lock.vring.add_used(elem.index, 0).with_context(|| {
+                format!(
+                    "Failed to add used ring for control port, index: {} len: {}.",
+                    elem.index, 0
+                )
+            })?;
         }
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(
@@ -904,7 +874,8 @@ impl SerialControlHandler {
             return Ok(());
         }
 
-        let (in_size, ctrl_vec) = gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space)?;
+        let cache = queue_lock.vring.get_cache();
+        let (in_size, ctrl_vec) = gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space, cache)?;
         let len = size_of::<VirtioConsoleControl>() + extra.len();
         if in_size < len as u64 {
             bail!(
@@ -921,7 +892,8 @@ impl SerialControlHandler {
             msg_data.extend(extra);
         }
 
-        iov_from_buf_direct(&ctrl_vec, &msg_data).and_then(|size| {
+        // SAFETY: ctrl_vec is generated by address_space.
+        unsafe { iov_from_buf_direct(&ctrl_vec, &msg_data) }.and_then(|size| {
             if size != len {
                 bail!(
                     "Expected send msg length is {}, actual send length {}.",
@@ -934,7 +906,7 @@ impl SerialControlHandler {
 
         queue_lock
             .vring
-            .add_used(&self.mem_space, elem.index, len as u32)
+            .add_used(elem.index, len as u32)
             .with_context(|| {
                 format!(
                     "Failed to add used ring(serial input control queue), index {}, len {}",
@@ -942,10 +914,7 @@ impl SerialControlHandler {
                 )
             })?;
 
-        if queue_lock
-            .vring
-            .should_notify(&self.mem_space, self.driver_features)
-        {
+        if queue_lock.vring.should_notify(self.driver_features) {
             (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue_lock), false)
                 .with_context(|| {
                     VirtioError::InterruptTrigger(
@@ -1018,20 +987,17 @@ impl ChardevNotifyDevice for SerialPort {
 
 #[cfg(test)]
 mod tests {
-    pub use super::*;
-
-    use machine_manager::config::PciBdf;
+    use super::*;
 
     #[test]
     fn test_set_driver_features() {
         let mut serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
             id: "serial".to_string(),
-            pci_bdf: Some(PciBdf {
-                bus: "pcie.0".to_string(),
-                addr: (0, 0),
-            }),
-            multifunction: false,
+            multifunction: Some(false),
             max_ports: 31,
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
         });
 
         // If the device feature is 0, all driver features are not supported.
@@ -1040,13 +1006,13 @@ mod tests {
         let page = 0_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(serial.base.driver_features, 0_u64);
-        assert_eq!(serial.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(serial.driver_features(page)), 0_u64);
 
         let driver_feature: u32 = 0xFF;
         let page = 1_u32;
         serial.set_driver_features(page, driver_feature);
         assert_eq!(serial.base.driver_features, 0_u64);
-        assert_eq!(serial.driver_features(page) as u64, 0_u64);
+        assert_eq!(u64::from(serial.driver_features(page)), 0_u64);
 
         // If both the device feature bit and the front-end driver feature bit are
         // supported at the same time, this driver feature bit is supported.
@@ -1059,7 +1025,7 @@ mod tests {
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         assert_eq!(
-            serial.driver_features(page) as u64,
+            u64::from(serial.driver_features(page)),
             (1_u64 << VIRTIO_CONSOLE_F_SIZE)
         );
         serial.base.driver_features = 0;
@@ -1094,25 +1060,24 @@ mod tests {
     fn test_read_config() {
         let max_ports: u8 = 31;
         let serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
             id: "serial".to_string(),
-            pci_bdf: Some(PciBdf {
-                bus: "pcie.0".to_string(),
-                addr: (0, 0),
-            }),
-            multifunction: false,
-            max_ports: max_ports as u32,
+            multifunction: Some(false),
+            max_ports: u32::from(max_ports),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
         });
 
         // The offset of configuration that needs to be read exceeds the maximum.
         let offset = size_of::<VirtioConsoleConfig>() as u64;
         let mut read_data: Vec<u8> = vec![0; 8];
-        assert_eq!(serial.read_config(offset, &mut read_data).is_ok(), false);
+        assert!(serial.read_config(offset, &mut read_data).is_err());
 
         // Check the configuration that needs to be read.
         let offset = 0_u64;
         let mut read_data: Vec<u8> = vec![0; 12];
         let expect_data: Vec<u8> = vec![0, 0, 0, 0, max_ports, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(serial.read_config(offset, &mut read_data).is_ok(), true);
+        assert!(serial.read_config(offset, &mut read_data).is_ok());
         assert_eq!(read_data, expect_data);
     }
 }

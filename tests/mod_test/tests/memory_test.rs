@@ -16,6 +16,7 @@ use std::process::Command;
 use std::rc::Rc;
 use std::string::String;
 
+use mod_test::utils::support_numa;
 use serde_json::{json, Value::String as JsonString};
 
 use mod_test::{
@@ -76,7 +77,7 @@ impl MemoryTest {
         let test_state = Rc::new(RefCell::new(test_init(extra_args)));
         let machine =
             TestStdMachine::new_bymem(test_state.clone(), memsize * 1024 * 1024, page_size);
-        let allocator = machine.allocator.clone();
+        let allocator = machine.allocator;
 
         MemoryTest {
             state: test_state,
@@ -97,7 +98,7 @@ fn ram_read_write(memory_test: &MemoryTest) {
         .state
         .borrow_mut()
         .memread(addr, str.len() as u64);
-    assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
+    assert_eq!(str, String::from_utf8(ret).unwrap());
 
     memory_test.state.borrow_mut().stop();
 }
@@ -269,7 +270,7 @@ fn rom_device_region_readwrite() {
     // Add a dummy rom device by qmp. The function of the device is to multiply the written value by
     // 2 through the write interface and save it, and read the saved value through the read
     // interface.
-    let file = File::create(&ROM_DEV_PATH).unwrap();
+    let file = File::create(ROM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",
@@ -308,7 +309,7 @@ fn rom_device_region_readwrite() {
     // device. The device can set the write mode to writable according to the device status during
     // the write operation, or directly return an error indicating that the write is not allowed.
     // The read operation is the same as that of IO region.
-    let file = File::create(&ROM_DEV_PATH).unwrap();
+    let file = File::create(ROM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",
@@ -351,7 +352,7 @@ fn ram_device_region_readwrite() {
     let memory_test = MemoryTest::new(MEM_SIZE, PAGE_SIZE, false, false, None, None);
     let addr = 0x1_0000_0000; // 4GB
 
-    let file = File::create(&RAM_DEV_PATH).unwrap();
+    let file = File::create(RAM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",
@@ -474,6 +475,7 @@ fn prealloc_ram_read_write() {
 ///   4. Destroy device.
 /// Expect:
 ///   1/2/3/4: success.
+#[cfg(not(target_env = "ohos"))]
 #[test]
 fn hugepage_ram_read_write() {
     // crate hugetlbfs directory
@@ -609,6 +611,10 @@ fn ram_readwrite_exception() {
 ///   1/2/3/4: success.
 #[test]
 fn ram_readwrite_numa() {
+    if !support_numa() {
+        return;
+    }
+
     let mut args: Vec<&str> = Vec::new();
     let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
@@ -649,7 +655,7 @@ fn ram_readwrite_numa() {
     let ret = test_state
         .borrow_mut()
         .memread(start_base, str.len() as u64);
-    assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
+    assert_eq!(str, String::from_utf8(ret).unwrap());
 
     test_state.borrow_mut().stop();
 }
@@ -665,6 +671,10 @@ fn ram_readwrite_numa() {
 ///   1/2/3/4: success.
 #[test]
 fn ram_readwrite_numa1() {
+    if !support_numa() {
+        return;
+    }
+
     let mut args: Vec<&str> = Vec::new();
     let mut extra_args: Vec<&str> = MACHINE_TYPE_ARG.split(' ').collect();
     args.append(&mut extra_args);
@@ -706,10 +716,10 @@ fn ram_readwrite_numa1() {
     let ret = test_state
         .borrow_mut()
         .memread(start_base, str.len() as u64);
-    assert_eq!(str, String::from_utf8(ret.clone()).unwrap());
+    assert_eq!(str, String::from_utf8(ret).unwrap());
     test_state.borrow_mut().qmp("{\"execute\": \"query-mem\"}");
 
-    let file = File::create(&RAM_DEV_PATH).unwrap();
+    let file = File::create(RAM_DEV_PATH).unwrap();
     file.set_len(PAGE_SIZE).unwrap();
     let qmp_str = format!(
         "{{ \"execute\": \"update_region\",
