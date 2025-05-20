@@ -303,11 +303,8 @@ impl InputIoHandler {
                 locked_status_queue.vring.get_cache(),
             )?
             .to_evt();
-            match &self.evdev_fd.clone() {
-                Some(evdev_fd) => {
-                    let _ = evdev_fd.as_ref().write(evt.as_bytes());
-                }
-                None => {}
+            if let Some(evdev_fd) = &self.evdev_fd.clone() {
+                let _ = evdev_fd.as_ref().write(evt.as_bytes());
             }
             locked_status_queue
                 .vring

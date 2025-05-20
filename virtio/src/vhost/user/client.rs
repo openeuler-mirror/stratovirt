@@ -390,12 +390,12 @@ pub enum VhostBackendType {
     TypeFs,
 }
 
-impl ToString for VhostBackendType {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for VhostBackendType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VhostBackendType::TypeNet => String::from("net"),
-            VhostBackendType::TypeBlock => String::from("block"),
-            VhostBackendType::TypeFs => String::from("fs"),
+            VhostBackendType::TypeNet => write!(f, "net"),
+            VhostBackendType::TypeBlock => write!(f, "block"),
+            VhostBackendType::TypeFs => write!(f, "fs"),
         }
     }
 }

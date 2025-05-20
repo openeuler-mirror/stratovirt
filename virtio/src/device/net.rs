@@ -1695,7 +1695,7 @@ impl VirtioDevice for Net {
             let features = self.driver_features(0_u32);
             let flags = get_tap_offload_flags(u64::from(features));
             if let Some(taps) = &self.taps {
-                for (_, tap) in taps.iter().enumerate() {
+                for tap in taps.iter() {
                     tap.set_offload(flags)
                         .with_context(|| "Failed to set tap offload")?;
                 }
