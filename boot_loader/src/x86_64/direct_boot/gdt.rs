@@ -92,7 +92,7 @@ impl From<GdtEntry> for u64 {
 
 fn write_gdt_table(table: &[u64], guest_mem: &Arc<AddressSpace>) -> Result<()> {
     let mut boot_gdt_addr = BOOT_GDT_OFFSET;
-    for (_, entry) in table.iter().enumerate() {
+    for entry in table.iter() {
         guest_mem
             .write_object(entry, GuestAddress(boot_gdt_addr), AddressAttr::Ram)
             .with_context(|| format!("Failed to load gdt to 0x{:x}", boot_gdt_addr))?;

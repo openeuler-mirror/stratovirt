@@ -38,11 +38,11 @@ use util::byte_code::ByteCode;
 /// According to Linux `Documentation/x86/boot.txt`, bzImage includes two parts:
 /// * the setup
 /// * the compressed kernel
-/// The setup `RealModeKernelHeader` can be load at offset `0x01f1` in bzImage kernel image.
-/// The compressed kernel will be loaded into guest memory at `code32_start` in
-/// `RealModeKernelHeader`.
-/// The start address of compressed kernel is the loader address + 0x200. It will be
-/// set in `kernel_start` in `BootLoader` structure set.
+///   The setup `RealModeKernelHeader` can be load at offset `0x01f1` in bzImage kernel image.
+///   The compressed kernel will be loaded into guest memory at `code32_start` in
+///   `RealModeKernelHeader`.
+///   The start address of compressed kernel is the loader address + 0x200. It will be
+///   set in `kernel_start` in `BootLoader` structure set.
 ///
 /// # Arguments
 ///
