@@ -379,9 +379,9 @@ pub fn set_option(opt: u32) -> Result<()> {
     // SAFETY: This function will only configure a specific option within libusb, null for ctx is valid.
     let err = unsafe {
         libusb_set_option(
-            std::ptr::null_mut() as *mut libusb_context,
+            std::ptr::null_mut::<libusb_context>(),
             opt,
-            std::ptr::null_mut() as *mut c_void,
+            std::ptr::null_mut::<c_void>(),
         )
     };
     if err != LIBUSB_SUCCESS {

@@ -394,7 +394,7 @@ impl FwCfgCommon {
     ) -> Result<()> {
         let key = (key as u16) & FW_CFG_ENTRY_MASK;
 
-        if key >= self.max_entry() || data.len() >= std::u32::MAX as usize {
+        if key >= self.max_entry() || data.len() >= u32::MAX as usize {
             return Err(anyhow!(LegacyError::InvalidFwCfgEntry(key)));
         }
 
@@ -424,7 +424,7 @@ impl FwCfgCommon {
 
     // Update a FwCfgEntry
     fn update_entry_data(&mut self, key: u16, mut data: Vec<u8>) -> Result<()> {
-        if key >= self.max_entry() || data.len() >= std::u32::MAX as usize {
+        if key >= self.max_entry() || data.len() >= u32::MAX as usize {
             return Err(anyhow!(LegacyError::InvalidFwCfgEntry(key)));
         }
 
@@ -761,7 +761,7 @@ impl FwCfgCommon {
 
     fn common_realize(&mut self) -> Result<()> {
         // Firmware configurations add Signature item
-        let sig = &[b'Q', b'E', b'M', b'U'];
+        let sig = b"QEMU";
         self.add_entry(FwCfgEntryType::Signature, None, None, sig.to_vec(), false)?;
 
         self.add_entry(

@@ -106,7 +106,7 @@ impl PowerDev {
     fn read_sysfs_power_props(
         &self,
         dir_name: &str,
-        sysfs_props: &Vec<&str>,
+        sysfs_props: &[&str],
         pdev_props: &mut [u32],
     ) -> Result<()> {
         for i in 0..sysfs_props.len() {

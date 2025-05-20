@@ -125,7 +125,7 @@ pub fn init_intx(
     devfn: u8,
 ) -> Result<()> {
     if config.config[INTERRUPT_PIN as usize] == 0 {
-        let (irq, intx_state) = (std::u32::MAX, None);
+        let (irq, intx_state) = (u32::MAX, None);
         let intx = Arc::new(Mutex::new(Intx::new(name, irq, intx_state)));
         config.intx = Some(intx);
         return Ok(());
@@ -151,13 +151,13 @@ pub fn init_intx(
                         Some(pci_bus.intx_state.as_ref().unwrap().clone()),
                     )
                 } else {
-                    (std::u32::MAX, None)
+                    (u32::MAX, None)
                 }
             }
         };
         (irq, intx_state)
     } else {
-        (std::u32::MAX, None)
+        (u32::MAX, None)
     };
 
     let intx = Arc::new(Mutex::new(Intx::new(name, irq, intx_state)));
