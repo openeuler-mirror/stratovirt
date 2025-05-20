@@ -81,13 +81,13 @@ impl FromStr for HypervisorType {
 ///
 /// **Notice**:
 ///    1. Migrate state(`Migrated` and `InMigrating`),
-///    not include in Life cycle, both migrate state should deal like `PAUSED`
-///    state.
+///       not include in Life cycle, both migrate state should deal like `PAUSED`
+///       state.
 ///
 ///    2. Snapshot state deal with `PAUSED` state.
 ///
 ///    3. every one concern with VM or Device state need to implement this trait,
-///    will be notified when VM state changed through `lifecycle_notify` hook.
+///       will be notified when VM state changed through `lifecycle_notify` hook.
 pub trait MachineLifecycle {
     /// Start VM or Device, VM or Device enter running state after this call return.
     fn start(&self) -> bool {

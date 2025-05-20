@@ -142,6 +142,7 @@ define_qmp_command_enum!(
 );
 
 /// Command trait for Deserialize and find back Response.
+#[allow(dead_code)]
 trait Command: Serialize {
     type Res: DeserializeOwned;
     fn back(self) -> Self::Res;
@@ -1025,7 +1026,7 @@ generate_command_impl!(switch_audio_record, Empty);
 ///
 /// # Returns
 ///
-/// `BalloonInfo` includs the actual size of memory.
+/// `BalloonInfo` includes the actual size of memory.
 ///
 /// # Examples
 ///
@@ -2257,7 +2258,7 @@ mod tests {
         let ret_msg = r#"ok"#;
         assert!(err_msg.contains(ret_msg));
 
-        // unknow arguments for device_add.
+        // unknown arguments for device_add.
         let json_msg = r#"
         {
             "execute": "device_add" ,
@@ -2265,7 +2266,7 @@ mod tests {
                 "id":"net-0",
                 "driver":"virtio-net-mmio",
                 "addr":"0x0",
-                "UnknowArg": "should go to error"
+                "UnknownArg": "should go to error"
             }
         }
         "#;
@@ -2273,7 +2274,7 @@ mod tests {
             Ok(_) => "ok".to_string(),
             Err(e) => e.to_string(),
         };
-        let ret_msg = r#"unknown field `UnknowArg`"#;
+        let ret_msg = r#"unknown field `UnknownArg`"#;
         assert!(err_msg.contains(ret_msg));
 
         // wrong spelling arguments for device_add.
@@ -2323,9 +2324,9 @@ mod tests {
             Ok(_) => "ok".to_string(),
             Err(e) => e.to_string(),
         };
-        let unknow_msg = r#"unknown field `value`"#;
+        let unknown_msg = r#"unknown field `value`"#;
         let expect_msg = r#"expected `id`"#;
-        assert!(err_msg.contains(unknow_msg));
+        assert!(err_msg.contains(unknown_msg));
         assert!(err_msg.contains(expect_msg));
 
         // missing arguments for getfd.
@@ -2429,7 +2430,7 @@ mod tests {
         let part_msg = r#"unknown variant `hello-world`"#;
         assert!(err_msg.contains(part_msg));
 
-        // unsupported qmp command, and unknow field.
+        // unsupported qmp command, and unknown field.
         let json_msg = r#"
         {
             "execute": "hello-world" ,

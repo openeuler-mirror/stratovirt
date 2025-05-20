@@ -366,9 +366,9 @@ impl SocketHandler {
     pub fn send_str(&mut self, s: &str) -> std::io::Result<()> {
         self.stream.flush().unwrap();
         let msg = s.to_string() + "\r";
-        match self.stream.write(msg.as_bytes()) {
+        match self.stream.write_all(msg.as_bytes()) {
             Ok(_) => {
-                let _ = self.stream.write(&[b'\n'])?;
+                let _ = self.stream.write(b"\n")?;
                 Ok(())
             }
             Err(_) => Err(Error::new(

@@ -330,7 +330,7 @@ impl VmConfig {
                 self.add_smbios_type17(smbios_args)?;
             }
             _ => {
-                bail!("Unknow smbios type: {:?}", &smbios_type);
+                bail!("Unknown smbios type: {:?}", &smbios_type);
             }
         }
 

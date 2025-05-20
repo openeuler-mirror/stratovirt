@@ -278,7 +278,7 @@ impl VmConfig {
                 self.add_flashdev(drive_cfg.clone())?;
             }
             _ => {
-                bail!("Unknow 'if' argument: {:?}", &drive_cfg.drive_type);
+                bail!("Unknown 'if' argument: {:?}", &drive_cfg.drive_type);
             }
         }
 

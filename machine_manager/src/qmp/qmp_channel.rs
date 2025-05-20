@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{error, info, warn};
@@ -23,7 +23,7 @@ use super::qmp_schema::{self as schema};
 use crate::socket::SocketRWHandler;
 use util::time::NANOSECONDS_PER_SECOND;
 
-static mut QMP_CHANNEL: Option<Arc<QmpChannel>> = None;
+static QMP_CHANNEL: OnceLock<Arc<QmpChannel>> = OnceLock::new();
 
 /// Macro `event!`: send event to qmp-client.
 ///
@@ -96,14 +96,12 @@ impl QmpChannel {
     pub fn object_init() {
         // SAFETY: Global variable QMP_CHANNEL is only used in the main thread,
         // so there are no competition or synchronization.
-        unsafe {
-            if QMP_CHANNEL.is_none() {
-                QMP_CHANNEL = Some(Arc::new(QmpChannel {
-                    event_writer: RwLock::new(None),
-                    fds: Arc::new(RwLock::new(BTreeMap::new())),
-                }));
-            }
-        }
+        QMP_CHANNEL.get_or_init(|| {
+            Arc::new(QmpChannel {
+                event_writer: RwLock::new(None),
+                fds: Arc::new(RwLock::new(BTreeMap::new())),
+            })
+        });
     }
 
     /// Bind a `SocketRWHandler` to `QMP_CHANNEL`.
@@ -171,14 +169,7 @@ impl QmpChannel {
     fn inner() -> &'static std::sync::Arc<QmpChannel> {
         // SAFETY: Global variable QMP_CHANNEL is only used in the main thread,
         // so there are no competition or synchronization.
-        unsafe {
-            match &QMP_CHANNEL {
-                Some(channel) => channel,
-                None => {
-                    panic!("Qmp channel not initialized");
-                }
-            }
-        }
+        QMP_CHANNEL.get().expect("Qmp channel not initialized")
     }
 }
 
