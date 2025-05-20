@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 #[cfg(all(target_env = "ohos", feature = "trace_to_hitrace"))]
@@ -18,7 +19,9 @@ use crate::hitrace::{finish_trace, finish_trace_async, start_trace, start_trace_
 #[cfg(feature = "trace_to_ftrace")]
 use crate::ftrace::write_trace_marker;
 
-static mut TRACE_SCOPE_COUNTER: AtomicI32 = AtomicI32::new(i32::MIN);
+lazy_static! {
+    static ref TRACE_SCOPE_COUNTER: AtomicI32 = AtomicI32::new(i32::MIN);
+}
 
 #[derive(Clone)]
 pub enum Scope {
@@ -75,13 +78,11 @@ impl TraceScopeAsyn {
     #[allow(unused_variables)]
     pub fn new(value: String) -> Self {
         // SAFETY: AtomicI32 can be safely shared between threads.
-        let id = unsafe {
-            TRACE_SCOPE_COUNTER
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                    Some(x.wrapping_add(1))
-                })
-                .unwrap()
-        };
+        let id = TRACE_SCOPE_COUNTER
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                Some(x.wrapping_add(1))
+            })
+            .unwrap();
         #[cfg(feature = "trace_to_logger")]
         {
             log::trace!("[SCOPE_START(id={})]{}", id, value);
