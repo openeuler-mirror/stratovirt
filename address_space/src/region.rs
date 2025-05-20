@@ -696,7 +696,7 @@ impl Region {
                     .with_context(|| "Failed to write buffer to Ram")?;
             }
             RegionType::RomDevice | RegionType::IO => {
-                if count >= std::usize::MAX as u64 {
+                if count >= usize::MAX as u64 {
                     return Err(anyhow!(AddressSpaceError::Overflow(count)));
                 }
                 let mut slice = vec![0_u8; count as usize];

@@ -141,18 +141,18 @@ impl From<(u64, u64)> for AddressRange {
 /// Implement PartialOrd trait for AddressRange.
 impl PartialOrd for AddressRange {
     fn partial_cmp(&self, other: &AddressRange) -> Option<Ordering> {
-        if self.base != other.base {
-            self.base.partial_cmp(&other.base)
-        } else {
-            self.size.partial_cmp(&other.size)
-        }
+        Some(self.cmp(other))
     }
 }
 
 /// Implement Ord trait for AddressRange.
 impl Ord for AddressRange {
     fn cmp(&self, other: &AddressRange) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        if self.base != other.base {
+            self.base.cmp(&other.base)
+        } else {
+            self.size.cmp(&other.size)
+        }
     }
 }
 
