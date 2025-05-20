@@ -210,7 +210,7 @@ impl StdMachine {
             .with_context(|| "Fail to reset all devices")?;
         locked_vm
             .reset_fwcfg_boot_order()
-            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
+            .with_context(|| "Fail to update boot order information to FwCfg device")?;
 
         if QmpChannel::is_connected() {
             let reset_msg = qmp_schema::Reset { guest: true };
@@ -624,7 +624,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .reset_fwcfg_boot_order()
-            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
+            .with_context(|| "Fail to update boot order information to FwCfg device")?;
 
         locked_vm
             .display_init(vm_config)
@@ -1299,16 +1299,13 @@ impl CompileFDTHelper for StdMachine {
             format!("/pl011@{:x}", MEM_LAYOUT[LayoutEntryType::Uart as usize].0);
         fdt.set_property_string("stdout-path", &pl011_property_string)?;
 
-        match &boot_source.initrd {
-            Some(initrd) => {
-                fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
-                let initrd_end = initrd
-                    .initrd_addr
-                    .checked_add(initrd.initrd_size)
-                    .with_context(|| "initrd end overflow")?;
-                fdt.set_property_u64("linux,initrd-end", initrd_end)?;
-            }
-            None => {}
+        if let Some(initrd) = &boot_source.initrd {
+            fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
+            let initrd_end = initrd
+                .initrd_addr
+                .checked_add(initrd.initrd_size)
+                .with_context(|| "initrd end overflow")?;
+            fdt.set_property_u64("linux,initrd-end", initrd_end)?;
         }
         fdt.end_node(chosen_node_dep)
     }
