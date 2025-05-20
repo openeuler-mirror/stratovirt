@@ -2209,7 +2209,7 @@ fn test_pci_hotunplug_004() {
     tear_down(None, test_state, alloc, None, Some(image_paths));
 }
 
-/// Repeate hotunplug the same device.
+/// Repeat hotunplug the same device.
 #[test]
 fn test_pci_hotunplug_005() {
     let blk_nums = 1;
