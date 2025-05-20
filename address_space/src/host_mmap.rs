@@ -112,6 +112,7 @@ impl FileBackend {
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(false)
                 .open(path)
                 .with_context(|| format!("Failed to open file: {}", file_path))?
         };
@@ -351,9 +352,8 @@ fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConf
     let nodes = zone.host_numa_nodes.as_ref().unwrap();
     let mut max_node = nodes[nodes.len() - 1] as usize;
 
-    let mut nmask: Vec<u64> = Vec::new();
     // Upper limit of max_node is MAX_NODES.
-    nmask.resize(max_node / 64 + 1, 0);
+    let mut nmask: Vec<u64> = vec![0; max_node / 64 + 1];
     for node in nodes.iter() {
         nmask[(*node / 64) as usize] |= 1_u64 << (*node % 64);
     }
