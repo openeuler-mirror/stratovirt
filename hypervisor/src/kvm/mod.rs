@@ -776,9 +776,8 @@ impl LineIrqManager for KVMInterruptManager {
 
         match trigger_mode {
             TriggerMode::Edge => {
-                self.vm_fd.register_irqfd(&irq_fd, irq).map_err(|e| {
+                self.vm_fd.register_irqfd(&irq_fd, irq).inspect_err(|e| {
                     error!("Failed to register irq, error is {:?}", e);
-                    e
                 })?;
             }
             _ => {
@@ -790,9 +789,8 @@ impl LineIrqManager for KVMInterruptManager {
     }
 
     fn unregister_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
-        self.vm_fd.unregister_irqfd(&irq_fd, irq).map_err(|e| {
+        self.vm_fd.unregister_irqfd(&irq_fd, irq).inspect_err(|e| {
             error!("Failed to unregister irq, error is {:?}", e);
-            e
         })?;
 
         Ok(())
@@ -863,9 +861,8 @@ impl MsiIrqManager for KVMInterruptManager {
 
     fn register_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
         trace::kvm_register_irqfd(&irq_fd, irq);
-        self.vm_fd.register_irqfd(&irq_fd, irq).map_err(|e| {
+        self.vm_fd.register_irqfd(&irq_fd, irq).inspect_err(|e| {
             error!("Failed to register irq, error is {:?}", e);
-            e
         })?;
 
         Ok(())
@@ -873,9 +870,8 @@ impl MsiIrqManager for KVMInterruptManager {
 
     fn unregister_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
         trace::kvm_unregister_irqfd(&irq_fd, irq);
-        self.vm_fd.unregister_irqfd(&irq_fd, irq).map_err(|e| {
+        self.vm_fd.unregister_irqfd(&irq_fd, irq).inspect_err(|e| {
             error!("Failed to unregister irq, error is {:?}", e);
-            e
         })?;
 
         Ok(())
@@ -1134,7 +1130,7 @@ mod test {
         );
         let (cpu_state, _) = &*cpu.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Created);
-        drop(cpu_state);
+        let _ = cpu_state;
 
         let cpus_thread_barrier = Arc::new(Barrier::new(2));
         let cpu_thread_barrier = cpus_thread_barrier.clone();
@@ -1163,7 +1159,7 @@ mod test {
         cpus_thread_barrier.wait();
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
-        drop(cpu_state);
+        let _ = cpu_state;
 
         assert!(cpu_arc.resume().is_ok());
 
@@ -1171,7 +1167,7 @@ mod test {
         std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
-        drop(cpu_state);
+        let _ = cpu_state;
 
         assert!(cpu_arc.pause().is_ok());
 
@@ -1179,7 +1175,7 @@ mod test {
         std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
-        drop(cpu_state);
+        let _ = cpu_state;
 
         assert!(cpu_arc.resume().is_ok());
         // Wait for CPU finish state change.
@@ -1191,6 +1187,6 @@ mod test {
         std::thread::sleep(Duration::from_millis(50));
         let (cpu_state, _) = &*cpu_arc.state;
         assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Stopped);
-        drop(cpu_state);
+        let _ = cpu_state;
     }
 }
