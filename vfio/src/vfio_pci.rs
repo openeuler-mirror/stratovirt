@@ -511,7 +511,6 @@ impl VfioPciDevice {
         let parent_bus = self.parent_bus().unwrap().clone();
         let dev_id = self.dev_id.clone();
         let devfn = self.base.devfn;
-        let cloned_msix = msix.clone();
         let write = move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
             let mut locked_msix = msix.lock().unwrap();
             locked_msix.table[offset as usize..(offset as usize + data.len())]
@@ -541,8 +540,7 @@ impl VfioPciDevice {
                 gsi_route.irq_fd = Some(Arc::new(irq_fd));
             }
             let irq_fd = gsi_route.irq_fd.clone();
-            let msi_irq_manager = &cloned_msix.lock().unwrap().msi_irq_manager;
-            let irq_manager = msi_irq_manager.as_ref().unwrap();
+            let irq_manager = &locked_msix.msi_irq_manager.as_ref().unwrap();
             if gsi_route.gsi == -1 {
                 gsi_route.gsi = match irq_manager.allocate_irq(msix_vector) {
                     Ok(g) => g as i32,
