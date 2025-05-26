@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fmt::Debug;
 use std::io::Error;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -18,7 +19,6 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use std::{fmt, i32};
 
 use anyhow::{anyhow, Context, Result};
 use libc::{c_void, read, EFD_CLOEXEC, EFD_NONBLOCK};
@@ -92,6 +92,12 @@ pub struct EventNotifier {
     /// Event status
     status: Arc<Mutex<EventStatus>>,
 }
+
+// SAFETY: Logically the EventNotifier structure will not be used
+// in multiple threads at the same time
+unsafe impl Sync for EventNotifier {}
+// SAFETY: Same as above
+unsafe impl Send for EventNotifier {}
 
 impl fmt::Debug for EventNotifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -178,6 +184,12 @@ struct Timer {
     /// Timer id.
     id: u64,
 }
+
+// SAFETY: Logically the Timer structure will not be used
+// in multiple threads at the same time
+unsafe impl Sync for Timer {}
+// SAFETY: Same as above
+unsafe impl Send for Timer {}
 
 impl Timer {
     /// Construct function

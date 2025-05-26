@@ -199,7 +199,7 @@ impl RefCount {
     /// * `start_idx` - alloc space for the new refcount table starting from the start index.
     /// * `new_table_clusters` - number of clusters for new refcount table.
     /// * `new_block_clusters` - number of clusters for refcount block, the size of refcount blocks
-    /// should be guaranteed to record all newly added clusters.
+    ///   should be guaranteed to record all newly added clusters.
     fn extend_refcount_table(
         &mut self,
         header: &mut QcowHeader,
@@ -304,9 +304,8 @@ impl RefCount {
 
             let rb_addr = self.refcount_table[rt_idx as usize];
             if rb_addr == 0 {
-                self.alloc_refcount_block(rt_idx).map_err(|e| {
+                self.alloc_refcount_block(rt_idx).inspect_err(|_e| {
                     self.refcount_table[rt_idx as usize] = 0;
-                    e
                 })?;
             }
         }
@@ -649,7 +648,8 @@ impl RefCount {
 /// * `cluster_size` - size of cluster in bytes.
 /// * `refcount_order` - refcount bits power of 2 exponent.
 /// * `is_reserve` - if this parameter set true, the refcount table size
-///  will have 50% more entries than necessary, which can avoid growing again soon.
+///   will have 50% more entries than necessary, which can avoid growing again soon.
+///
 /// Returns: (clusters of new refcount table, clusters of refcount block)
 pub fn refcount_metadata_size(
     nb_clusters: u64,

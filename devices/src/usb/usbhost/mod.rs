@@ -84,6 +84,13 @@ pub struct UsbHostRequest {
     pub is_control: bool,
 }
 
+// SAFETY: The UsbHostRequest is created in main thread and then be passed to the
+// libUSB thread. Once this data is processed, it is cleaned up. So there will be
+// no problem with data sharing or synchronization.
+unsafe impl Sync for UsbHostRequest {}
+// SAFETY: The reason is same as above.
+unsafe impl Send for UsbHostRequest {}
+
 impl UsbHostRequest {
     pub fn new(
         hostbus: u8,
@@ -167,13 +174,6 @@ impl UsbHostRequest {
         }
     }
 }
-
-// SAFETY: The UsbHostRequest is created in main thread and then be passed to the
-// libUSB thread. Once this data is processed, it is cleaned up. So there will be
-// no problem with data sharing or synchronization.
-unsafe impl Sync for UsbHostRequest {}
-// SAFETY: The reason is same as above.
-unsafe impl Send for UsbHostRequest {}
 
 pub struct IsoTransfer {
     host_transfer: *mut libusb_transfer,

@@ -48,7 +48,7 @@
 //! ```
 //!
 //! 2. The `ByteCode` derive to auto add `ByteCode` trait and its relying trait for
-//! struct, such as `Default`, `Sync`, `Send`.
+//!    struct, such as `Default`, `Sync`, `Send`.
 
 mod attr_parser;
 mod field_parser;

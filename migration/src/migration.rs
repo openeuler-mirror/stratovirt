@@ -33,8 +33,8 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `fd` - The fd implements `Read` and `Write` trait object. it
-    /// will send source VM memory data and devices state to destination VM.
-    /// And, it will receive confirmation from destination VM.
+    ///   will send source VM memory data and devices state to destination VM.
+    ///   And, it will receive confirmation from destination VM.
     pub fn send_migration<T>(fd: &mut T) -> Result<()>
     where
         T: Read + Write,
@@ -97,8 +97,8 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `fd` - The fd implements `Read` and `Write` trait object. it
-    /// will receive source VM memory data and devices state. And,
-    /// it will send confirmation to source VM.
+    ///   will receive source VM memory data and devices state. And,
+    ///   it will send confirmation to source VM.
     pub fn recv_migration<T>(fd: &mut T) -> Result<()>
     where
         T: Read + Write,
@@ -375,9 +375,7 @@ impl MigrationManager {
             // SAFETY:
             // 1. The pointer of blocks can be guaranteed not null.
             // 2. The len is constant.
-            unsafe {
-                std::slice::from_raw_parts(blocks.as_ptr() as *const MemBlock as *const u8, len)
-            },
+            unsafe { std::slice::from_raw_parts(blocks.as_ptr() as *const u8, len) },
         )?;
 
         if let Some(locked_memory) = &MIGRATION_MANAGER.vmm.read().unwrap().memory {

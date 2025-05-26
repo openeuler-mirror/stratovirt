@@ -27,6 +27,12 @@ pub struct List<T> {
     marker: PhantomData<Box<Node<T>>>,
 }
 
+// SAFETY: Implementing Send and Sync is safe for List<T>
+// because only locked access(r/w) is permitted
+unsafe impl<T> Sync for List<T> {}
+// SAFETY: Same as above
+unsafe impl<T> Send for List<T> {}
+
 impl<T> Drop for List<T> {
     fn drop(&mut self) {
         while self.pop_head().is_some() {}

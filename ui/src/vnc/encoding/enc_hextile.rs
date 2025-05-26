@@ -389,7 +389,7 @@ mod tests {
         let client_be = false;
         let enc = ENCODING_HEXTILE;
         let client_dpm = DisplayMode::new(enc, client_be, convert, pf);
-        let image_data = IMAGE_DATA_SINGLE_PIXEL;
+        let image_data = &IMAGE_DATA_SINGLE_PIXEL.0;
         let target_data = TARGET_DATA_SINGLE_PIXEL;
         let image_width: i32 = 32;
         let image_height: i32 = 32;
@@ -420,7 +420,7 @@ mod tests {
         let client_be = false;
         let enc = ENCODING_HEXTILE;
         let client_dpm = DisplayMode::new(enc, client_be, convert, pf);
-        let image_data = IMAGE_DATA_TWO_PIXEL;
+        let image_data = &IMAGE_DATA_TWO_PIXEL.0;
         let target_data = TARGET_DATA_TWO_PIXEL;
         let image_width: i32 = 40;
         let image_height: i32 = 40;
@@ -451,7 +451,7 @@ mod tests {
         let client_be = false;
         let enc = ENCODING_HEXTILE;
         let client_dpm = DisplayMode::new(enc, client_be, convert, pf);
-        let image_data = IMAGE_DATA_MULTI_PIXELS;
+        let image_data = &IMAGE_DATA_MULTI_PIXELS.0;
         let target_data = TARGET_DATA_MULTI_PIXELS;
         let image_width: i32 = 40;
         let image_height: i32 = 40;

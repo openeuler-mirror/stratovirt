@@ -76,7 +76,7 @@
 //! f.read(&mut buffer).unwrap();
 //! println!("{}", String::from_utf8_lossy(&buffer));
 //! ```
-//! This programe will be trapped.
+//! This program will be trapped.
 
 use anyhow::{bail, Result};
 
@@ -188,7 +188,7 @@ impl From<SeccompOpt> for u32 {
     }
 }
 
-/// The format of BPF programe executes over.
+/// The format of BPF program executes over.
 ///
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/seccomp.h#L56
 #[repr(C, packed)]

@@ -1131,9 +1131,8 @@ impl XhciDevice {
         if !self.running() {
             return Ok(());
         }
-        self.check_bme_valid().map_err(|e| {
+        self.check_bme_valid().inspect_err(|_e| {
             self.host_controller_error();
-            e
         })?;
 
         let mut evt = XhciEvent::new(TRBType::ErPortStatusChange, TRBCCode::Success);
@@ -1837,9 +1836,8 @@ impl XhciDevice {
             return Ok(());
         }
 
-        self.check_bme_valid().map_err(|e| {
+        self.check_bme_valid().inspect_err(|_e| {
             self.host_controller_error();
-            e
         })?;
 
         trace::usb_xhci_ep_kick(&slot_id, &ep_id, &ring.get_dequeue_ptr());
@@ -2376,9 +2374,8 @@ impl XhciDevice {
             return Ok(());
         }
 
-        self.check_bme_valid().map_err(|e| {
+        self.check_bme_valid().inspect_err(|_e| {
             self.host_controller_error();
-            e
         })?;
 
         let mut seg = XhciEventRingSeg::new(&self.mem_space);

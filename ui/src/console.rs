@@ -178,6 +178,12 @@ pub struct DisplayChangeListener {
     pub dpy_opts: Arc<dyn DisplayChangeListenerOperations>,
 }
 
+// SAFETY: Implementing Send and Sync is safe for DisplayChangeListener
+// because only locked access(r/w) is permitted
+unsafe impl Sync for DisplayChangeListener {}
+// SAFETY: Same as above
+unsafe impl Send for DisplayChangeListener {}
+
 impl DisplayChangeListener {
     pub fn new(con_id: Option<usize>, dpy_opts: Arc<dyn DisplayChangeListenerOperations>) -> Self {
         Self {
@@ -205,6 +211,12 @@ pub struct DisplayConsole {
     pub timer_id: Option<u64>,
     pub active: bool,
 }
+
+// SAFETY: Implementing Send and Sync is safe for DisplayConsole
+// because only locked access(r/w) is permitted
+unsafe impl Sync for DisplayConsole {}
+// SAFETY: Same as above
+unsafe impl Send for DisplayConsole {}
 
 impl DisplayConsole {
     pub fn new(
@@ -645,7 +657,7 @@ pub fn unregister_display(dcl: &Option<Weak<Mutex<DisplayChangeListener>>>) -> R
     Ok(())
 }
 
-/// Create a console and add into a global list. Then returen a console id
+/// Create a console and add into a global list. Then return a console id
 /// for later finding the assigned console.
 pub fn console_init(
     dev_name: String,

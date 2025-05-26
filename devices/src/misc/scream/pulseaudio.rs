@@ -86,9 +86,9 @@ impl PulseStreamData {
         let buffer_attr = BufferAttr {
             maxlength: ss.usec_to_bytes(MicroSeconds(u64::from(MAX_LATENCY_MS) * 1000)) as u32,
             tlength: ss.usec_to_bytes(MicroSeconds(u64::from(TARGET_LATENCY_MS) * 1000)) as u32,
-            prebuf: std::u32::MAX,
-            minreq: std::u32::MAX,
-            fragsize: std::u32::MAX,
+            prebuf: u32::MAX,
+            minreq: u32::MAX,
+            fragsize: u32::MAX,
         };
 
         let pa_dir = dir.transform();

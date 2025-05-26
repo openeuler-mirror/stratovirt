@@ -983,7 +983,7 @@ fn scsi_command_emulate_vpd_page(
             // Byte[16-19] = 0: Maximum Prefetch Length.
             // Byte[20-23]: Maximum unmap lba count.
             // Byte[24-27]: Maximum unmap block descriptor count.
-            // Byte[28-31]: Optimal unmap granulatity.
+            // Byte[28-31]: Optimal unmap granularity.
             // Byte[32-35] = 0: Unmap Granularity alignment.
             // Byte[36-43]: Maximum write same length.
             // Bytes[44-47] = 0: Maximum atomic Transfer length.

@@ -88,7 +88,6 @@ impl LogRotate {
 fn open_log_file(path: &PathBuf) -> Result<File> {
     OpenOptions::new()
         .read(false)
-        .write(true)
         .append(true)
         .create(true)
         .mode(0o640)

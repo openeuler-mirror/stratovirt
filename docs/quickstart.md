@@ -19,7 +19,7 @@ have KVM module on your platform.
 
 ## 2. Get the StratoVirt Binary
 
-StratoVirt is offerred by openEuler 20.09 or later. You can install by yum directly.
+StratoVirt is offered by openEuler 20.09 or later. You can install by yum directly.
 
 ```shell
 $ sudo yum install stratovirt

@@ -42,7 +42,6 @@ use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
 use std::thread;
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
-use std::u64;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;

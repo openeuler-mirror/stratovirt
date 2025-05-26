@@ -235,9 +235,8 @@ impl<T: Clone + 'static> FileIoHandler<T> {
 
     fn aio_complete_handler(&mut self) -> Result<bool> {
         let error_cb = self.error_cb.clone();
-        self.aio.borrow_mut().handle_complete().map_err(|e| {
+        self.aio.borrow_mut().handle_complete().inspect_err(|_e| {
             error_cb();
-            e
         })
     }
 }

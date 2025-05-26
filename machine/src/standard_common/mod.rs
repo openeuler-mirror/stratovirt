@@ -21,7 +21,6 @@ use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
 use std::string::String;
 use std::sync::{Arc, Mutex};
-use std::u64;
 
 use anyhow::{bail, Context, Result};
 use log::{error, warn};
@@ -665,7 +664,7 @@ pub(crate) trait AcpiBuilder {
             fadt.set_field(244, 0x01_u8);
             fadt.set_field(245, 0x08_u8);
             fadt.set_field(248, u64::from(SLEEP_CTRL_OFFSET));
-            // Sleep status tegister, offset is 256.
+            // Sleep status register, offset is 256.
             fadt.set_field(256, 0x01_u8);
             fadt.set_field(257, 0x08_u8);
             fadt.set_field(260, u64::from(SLEEP_CTRL_OFFSET));

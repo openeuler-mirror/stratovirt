@@ -104,6 +104,12 @@ pub struct Socket {
     performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
 }
 
+// SAFETY: Implementing Send and Sync is safe for Socket
+// because only locked access(r/w) is permitted
+unsafe impl Sync for Socket {}
+// SAFETY: Same as above
+unsafe impl Send for Socket {}
+
 impl Socket {
     /// Allocates a new `Socket` with `SocketListener`.
     ///

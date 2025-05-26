@@ -159,10 +159,7 @@ impl Default for KeyBoardState {
 impl KeyBoardState {
     /// Get the corresponding keyboard modifier.
     fn keyboard_modifier_get(&self, key_mod: KeyboardModifier) -> bool {
-        match self.keymods.contain(key_mod as usize) {
-            Ok(res) => res,
-            Err(_e) => false,
-        }
+        self.keymods.contain(key_mod as usize).unwrap_or_default()
     }
 
     /// Reset all keyboard modifier state.
@@ -272,7 +269,7 @@ impl Inputs {
     }
 
     fn unregister_kbd(&mut self, device: &str) {
-        self.kbd_lists.remove(&device.to_string());
+        self.kbd_lists.remove(device);
         let len = self.kbd_ids.len();
         for i in 0..len {
             if self.kbd_ids[i] == device {
@@ -288,7 +285,7 @@ impl Inputs {
     }
 
     fn unregister_mouse(&mut self, device: &str) {
-        self.tablet_lists.remove(&device.to_string());
+        self.tablet_lists.remove(device);
         let len = self.tablet_ids.len();
         for i in 0..len {
             if self.tablet_ids[i] == device {

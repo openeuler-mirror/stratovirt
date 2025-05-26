@@ -465,7 +465,10 @@ pub struct CPUThreadWorker {
 }
 
 impl CPUThreadWorker {
-    thread_local!(static LOCAL_THREAD_VCPU: RefCell<Option<CPUThreadWorker>> = const { RefCell::new(None) });
+    thread_local! {
+        #[allow(clippy::missing_const_for_thread_local)]
+        static LOCAL_THREAD_VCPU: RefCell<Option<CPUThreadWorker>> = const { RefCell::new(None) };
+    }
 
     /// Allocates a new `CPUThreadWorker`.
     fn new(thread_cpu: Arc<CPU>) -> Self {
