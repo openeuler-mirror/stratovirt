@@ -18,13 +18,13 @@
 //! which allows applications to control a VM instance.
 //! It has three feature:
 //! 1. Qmp server is no-async service as well as Qemu's.
-//! Command + events can replace asynchronous command.
+//!    Command + events can replace asynchronous command.
 //! 2. Qmp server can only be connected a client at one time.
-//! It's no situation where be communicated with many clients.
-//! When it must use, can use other communication way not QMP.
+//!    It's no situation where be communicated with many clients.
+//!    When it must use, can use other communication way not QMP.
 //! 3. Qmp's message structure base is transformed by scripts from Qemu's
-//! `qmp-schema.json`. It's can be compatible by Qemu's zoology. Those
-//! transformed structures can be found in `machine_manager/src/qmp/qmp_schema.rs`
+//!    `qmp-schema.json`. It's can be compatible by Qemu's zoology. Those
+//!    transformed structures can be found in `machine_manager/src/qmp/qmp_schema.rs`
 
 pub mod qmp_channel;
 pub mod qmp_response;

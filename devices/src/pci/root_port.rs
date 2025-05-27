@@ -113,7 +113,7 @@ impl RootPort {
         let devfn = cfg.addr.0 << 3 | cfg.addr.1;
         #[cfg(target_arch = "x86_64")]
         let io_region = Region::init_container_region(1 << 16, "RootPortIo");
-        let mem_region = Region::init_container_region(u64::max_value(), "RootPortMem");
+        let mem_region = Region::init_container_region(u64::MAX, "RootPortMem");
         let child_bus = Arc::new(Mutex::new(PciBus::new(
             cfg.id.clone(),
             #[cfg(target_arch = "x86_64")]
@@ -637,7 +637,7 @@ impl HotplugOps for RootPort {
         if ((sltctl & PCI_EXP_SLTCTL_PIC) == PCI_EXP_SLTCTL_PWR_IND_OFF)
             && ((sltctl & PCI_EXP_SLTCTL_PCC) == PCI_EXP_SLTCTL_PWR_OFF)
         {
-            // if the slot has already been unpluged, skip notifing the guest.
+            // if the slot has already been unpluged, skip notifying the guest.
             return Ok(());
         }
 

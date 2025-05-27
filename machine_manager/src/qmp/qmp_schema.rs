@@ -54,7 +54,7 @@ impl QmpErrorClass {
 }
 
 macro_rules! define_qmp_command_enum {
-    ($($command:ident($name:expr, $args_type:ty, $need_strum:ident $(, $serde_default:ident)?)),*) => {
+    ($($command:ident($name:expr, $args_type:ty $(, $serde_default:ident)?)),*) => {
         /// A enum to store all command struct
         #[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
         #[serde(tag = "execute")]
@@ -62,7 +62,7 @@ macro_rules! define_qmp_command_enum {
         pub enum QmpCommand {
             $(
                 #[serde(rename = $name)]
-                #[cfg_attr($need_strum, strum(serialize = $name))]
+                #[strum(serialize = $name)]
                 $command {
                     $(#[serde($serde_default)])?
                     arguments: $args_type,
@@ -76,72 +76,73 @@ macro_rules! define_qmp_command_enum {
 
 // QMP command enum definition example: command("name", arguments, ..)
 define_qmp_command_enum!(
-    qmp_capabilities("qmp_capabilities", qmp_capabilities, FALSE, default),
-    quit("quit", quit, FALSE, default),
-    stop("stop", stop, FALSE, default),
-    cont("cont", cont, FALSE, default),
-    system_powerdown("system_powerdown", system_powerdown, FALSE, default),
-    system_reset("system_reset", system_reset, FALSE, default),
-    device_add("device_add", Box<device_add>, FALSE),
-    device_del("device_del", device_del, FALSE),
-    chardev_add("chardev-add", chardev_add, FALSE),
-    chardev_remove("chardev-remove", chardev_remove, FALSE),
-    netdev_add("netdev_add", Box<netdev_add>, FALSE),
-    netdev_del("netdev_del", netdev_del, FALSE),
-    cameradev_add("cameradev_add", cameradev_add, FALSE),
-    cameradev_del("cameradev_del", cameradev_del, FALSE),
-    query_hotpluggable_cpus("query-hotpluggable-cpus", query_hotpluggable_cpus, TRUE, default),
-    query_cpus("query-cpus", query_cpus, TRUE, default),
-    query_status("query-status", query_status, FALSE, default),
-    getfd("getfd", getfd, FALSE),
-    blockdev_add("blockdev-add", Box<blockdev_add>, FALSE),
-    blockdev_del("blockdev-del", blockdev_del, FALSE),
-    balloon("balloon", balloon, FALSE, default),
-    query_mem("query-mem", query_mem, FALSE, default),
-    query_mem_gpa("query-mem-gpa", query_mem_gpa, FALSE, default),
-    query_balloon("query-balloon", query_balloon, FALSE, default),
-    query_vnc("query-vnc", query_vnc, TRUE, default),
-    query_display_image("query-display-image", query_display_image, FALSE, default),
-    switch_audio_record("switch-audio-record", switch_audio_record, FALSE),
-    migrate("migrate", migrate, FALSE),
-    query_migrate("query-migrate", query_migrate, FALSE, default),
-    cancel_migrate("migrate_cancel", cancel_migrate, FALSE, default),
-    query_version("query-version", query_version, FALSE, default),
-    query_commands("query-commands", query_commands, FALSE, default),
-    query_target("query-target", query_target, FALSE, default),
-    query_kvm("query-kvm", query_kvm, FALSE, default),
-    query_machines("query-machines", query_machines, FALSE, default),
-    query_events("query-events", query_events, TRUE, default),
-    list_type("qom-list-types", list_type, FALSE, default),
-    device_list_properties("device-list-properties", device_list_properties, FALSE, default),
-    block_commit("block-commit", block_commit, TRUE, default),
-    query_tpm_models("query-tpm-models", query_tpm_models, FALSE, default),
-    query_tpm_types("query-tpm-types", query_tpm_types, FALSE, default),
-    query_command_line_options("query-command-line-options", query_command_line_options, FALSE, default),
-    query_migrate_capabilities("query-migrate-capabilities", query_migrate_capabilities, FALSE, default),
-    query_qmp_schema("query-qmp-schema", query_qmp_schema, FALSE, default),
-    query_sev_capabilities("query-sev-capabilities", query_sev_capabilities, FALSE, default),
-    query_chardev("query-chardev", query_chardev, TRUE, default),
-    qom_list("qom-list", qom_list, TRUE, default),
-    qom_get("qom-get", qom_get, TRUE, default),
-    query_block("query-block", query_block, TRUE, default),
-    query_named_block_nodes("query-named-block-nodes", query_named_block_nodes, TRUE, default),
-    query_blockstats("query-blockstats", query_blockstats, TRUE, default),
-    query_block_jobs("query-block-jobs", query_block_jobs, TRUE, default),
-    query_gic_capabilities("query-gic-capabilities", query_gic_capabilities, TRUE, default),
-    query_iothreads("query-iothreads", query_iothreads, TRUE, default),
-    update_region("update_region", update_region, TRUE, default),
-    input_event("input_event", input_event, FALSE, default),
-    human_monitor_command("human-monitor-command", human_monitor_command, FALSE),
-    blockdev_snapshot_internal_sync("blockdev-snapshot-internal-sync", blockdev_snapshot_internal, FALSE),
-    blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal, FALSE),
-    query_vcpu_reg("query-vcpu-reg", query_vcpu_reg, FALSE),
-    trace_get_state("trace-get-state", trace_get_state, FALSE),
-    trace_set_state("trace-set-state", trace_set_state, FALSE),
-    query_workloads("query-workloads", query_workloads, FALSE)
+    qmp_capabilities("qmp_capabilities", qmp_capabilities, default),
+    quit("quit", quit, default),
+    stop("stop", stop, default),
+    cont("cont", cont, default),
+    system_powerdown("system_powerdown", system_powerdown, default),
+    system_reset("system_reset", system_reset, default),
+    device_add("device_add", Box<device_add>),
+    device_del("device_del", device_del),
+    chardev_add("chardev-add", chardev_add),
+    chardev_remove("chardev-remove", chardev_remove),
+    netdev_add("netdev_add", Box<netdev_add>),
+    netdev_del("netdev_del", netdev_del),
+    cameradev_add("cameradev_add", cameradev_add),
+    cameradev_del("cameradev_del", cameradev_del),
+    query_hotpluggable_cpus("query-hotpluggable-cpus", query_hotpluggable_cpus, default),
+    query_cpus("query-cpus", query_cpus, default),
+    query_status("query-status", query_status, default),
+    getfd("getfd", getfd),
+    blockdev_add("blockdev-add", Box<blockdev_add>),
+    blockdev_del("blockdev-del", blockdev_del),
+    balloon("balloon", balloon, default),
+    query_mem("query-mem", query_mem, default),
+    query_mem_gpa("query-mem-gpa", query_mem_gpa, default),
+    query_balloon("query-balloon", query_balloon, default),
+    query_vnc("query-vnc", query_vnc, default),
+    query_display_image("query-display-image", query_display_image, default),
+    switch_audio_record("switch-audio-record", switch_audio_record),
+    migrate("migrate", migrate),
+    query_migrate("query-migrate", query_migrate, default),
+    cancel_migrate("migrate_cancel", cancel_migrate, default),
+    query_version("query-version", query_version, default),
+    query_commands("query-commands", query_commands, default),
+    query_target("query-target", query_target, default),
+    query_kvm("query-kvm", query_kvm, default),
+    query_machines("query-machines", query_machines, default),
+    query_events("query-events", query_events, default),
+    list_type("qom-list-types", list_type, default),
+    device_list_properties("device-list-properties", device_list_properties, default),
+    block_commit("block-commit", block_commit, default),
+    query_tpm_models("query-tpm-models", query_tpm_models, default),
+    query_tpm_types("query-tpm-types", query_tpm_types, default),
+    query_command_line_options("query-command-line-options", query_command_line_options, default),
+    query_migrate_capabilities("query-migrate-capabilities", query_migrate_capabilities, default),
+    query_qmp_schema("query-qmp-schema", query_qmp_schema, default),
+    query_sev_capabilities("query-sev-capabilities", query_sev_capabilities, default),
+    query_chardev("query-chardev", query_chardev, default),
+    qom_list("qom-list", qom_list, default),
+    qom_get("qom-get", qom_get, default),
+    query_block("query-block", query_block, default),
+    query_named_block_nodes("query-named-block-nodes", query_named_block_nodes, default),
+    query_blockstats("query-blockstats", query_blockstats, default),
+    query_block_jobs("query-block-jobs", query_block_jobs, default),
+    query_gic_capabilities("query-gic-capabilities", query_gic_capabilities, default),
+    query_iothreads("query-iothreads", query_iothreads, default),
+    update_region("update_region", update_region, default),
+    input_event("input_event", input_event, default),
+    human_monitor_command("human-monitor-command", human_monitor_command),
+    blockdev_snapshot_internal_sync("blockdev-snapshot-internal-sync", blockdev_snapshot_internal),
+    blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal),
+    query_vcpu_reg("query-vcpu-reg", query_vcpu_reg),
+    trace_get_state("trace-get-state", trace_get_state),
+    trace_set_state("trace-set-state", trace_set_state),
+    query_workloads("query-workloads", query_workloads)
 );
 
 /// Command trait for Deserialize and find back Response.
+#[allow(dead_code)]
 trait Command: Serialize {
     type Res: DeserializeOwned;
     fn back(self) -> Self::Res;
@@ -1025,7 +1026,7 @@ generate_command_impl!(switch_audio_record, Empty);
 ///
 /// # Returns
 ///
-/// `BalloonInfo` includs the actual size of memory.
+/// `BalloonInfo` includes the actual size of memory.
 ///
 /// # Examples
 ///
@@ -2257,7 +2258,7 @@ mod tests {
         let ret_msg = r#"ok"#;
         assert!(err_msg.contains(ret_msg));
 
-        // unknow arguments for device_add.
+        // unknown arguments for device_add.
         let json_msg = r#"
         {
             "execute": "device_add" ,
@@ -2265,7 +2266,7 @@ mod tests {
                 "id":"net-0",
                 "driver":"virtio-net-mmio",
                 "addr":"0x0",
-                "UnknowArg": "should go to error"
+                "UnknownArg": "should go to error"
             }
         }
         "#;
@@ -2273,7 +2274,7 @@ mod tests {
             Ok(_) => "ok".to_string(),
             Err(e) => e.to_string(),
         };
-        let ret_msg = r#"unknown field `UnknowArg`"#;
+        let ret_msg = r#"unknown field `UnknownArg`"#;
         assert!(err_msg.contains(ret_msg));
 
         // wrong spelling arguments for device_add.
@@ -2323,9 +2324,9 @@ mod tests {
             Ok(_) => "ok".to_string(),
             Err(e) => e.to_string(),
         };
-        let unknow_msg = r#"unknown field `value`"#;
+        let unknown_msg = r#"unknown field `value`"#;
         let expect_msg = r#"expected `id`"#;
-        assert!(err_msg.contains(unknow_msg));
+        assert!(err_msg.contains(unknown_msg));
         assert!(err_msg.contains(expect_msg));
 
         // missing arguments for getfd.
@@ -2429,7 +2430,7 @@ mod tests {
         let part_msg = r#"unknown variant `hello-world`"#;
         assert!(err_msg.contains(part_msg));
 
-        // unsupported qmp command, and unknow field.
+        // unsupported qmp command, and unknown field.
         let json_msg = r#"
         {
             "execute": "hello-world" ,

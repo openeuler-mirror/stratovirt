@@ -529,6 +529,7 @@ impl AddressSpace {
     /// # Arguments
     ///
     /// * `addr` - Guest address.
+    ///
     /// Return Error if the `addr` is not mapped.
     /// or return the HVA address and available mem length
     pub fn addr_cache_init(&self, addr: GuestAddress, attr: AddressAttr) -> Option<(u64, u64)> {

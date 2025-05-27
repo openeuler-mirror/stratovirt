@@ -849,6 +849,7 @@ mod test {
     const M: u64 = 1024 * 1024;
     const G: u64 = 1024 * 1024 * 1024;
 
+    #[allow(dead_code)]
     pub struct TestQcow2Image {
         pub header: QcowHeader,
         pub cluster_bits: u64,
@@ -2383,8 +2384,8 @@ mod test {
     fn test_image_convert_from_qcow2_to_raw() {
         let src_path = "/tmp/test_image_convert_src.qcow2";
         let dst_path = "/tmp/test_image_convert_dst.raw";
-        let _ = remove_file(src_path.clone());
-        let _ = remove_file(dst_path.clone());
+        let _ = remove_file(src_path);
+        let _ = remove_file(dst_path);
 
         let test_image = TestQcow2Image::create(16, 16, src_path, "10G");
         let mut src_driver = test_image.create_driver();
@@ -2438,7 +2439,7 @@ mod test {
         assert_eq!(img_info.actual_size, 3 * M);
 
         // Clean.
-        assert!(remove_file(dst_path.clone()).is_ok());
+        assert!(remove_file(dst_path).is_ok());
     }
 
     /// Test image convert parameters parsing.
@@ -2453,8 +2454,8 @@ mod test {
     fn test_image_convert_parameters_parsing() {
         let src_path = "/tmp/test_image_convert_paring_src.qcow2";
         let dst_path = "/tmp/test_image_convert_paring_dst.raw";
-        let _ = remove_file(src_path.clone());
-        let _ = remove_file(dst_path.clone());
+        let _ = remove_file(src_path);
+        let _ = remove_file(dst_path);
 
         let test_image = TestQcow2Image::create(16, 16, src_path, "1G");
         let mut src_driver = test_image.create_driver();
@@ -2510,7 +2511,7 @@ mod test {
         // detecting the alignment length.
         assert_eq!(img_info.actual_size, 4 * K + 8 * K); // 4K allocated filled first part + 8K data.
         drop(dst_driver);
-        assert!(remove_file(dst_path.clone()).is_ok());
+        assert!(remove_file(dst_path).is_ok());
 
         // test2: The destination file already exists.
         let existed_raw = TestRawImage::create(dst_path.to_string(), "1G".to_string());
@@ -2545,6 +2546,6 @@ mod test {
         // Will not create holes here.
         assert_eq!(img_info.actual_size, 4 * K + 16 * K);
         drop(dst_driver);
-        assert!(remove_file(dst_path.clone()).is_ok());
+        assert!(remove_file(dst_path).is_ok());
     }
 }

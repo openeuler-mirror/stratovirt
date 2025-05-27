@@ -234,7 +234,7 @@ impl VmConfig {
                 self.add_saslauth(object_args)?;
             }
             _ => {
-                bail!("Unknow object type: {:?}", &object_type);
+                bail!("Unknown object type: {:?}", &object_type);
             }
         }
 
@@ -446,7 +446,7 @@ pub fn parse_bool(s: &str) -> Result<bool> {
     match s {
         "true" | "on" | "yes" | "unmap" => Ok(true),
         "false" | "off" | "no" | "ignore" => Ok(false),
-        _ => Err(anyhow!("Unknow bool value {s}")),
+        _ => Err(anyhow!("Unknown bool value {s}")),
     }
 }
 
@@ -626,16 +626,16 @@ fn concat_classtype(args: &str, concat: bool) -> String {
 /// Stratovirt command line may use the first parameter as class type.
 /// Eg:
 /// 1. drive config: "-drive file=<your file path>,if=pflash,unit=0"
-///   This cmdline has no class type.
+///     This cmdline has no class type.
 /// 2. device config: "-device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>"
-///   This cmdline sets device type `virtio-balloon-pci` as the first parameter.
+///     This cmdline sets device type `virtio-balloon-pci` as the first parameter.
 ///
 /// Use first_pos_is_type to indicate whether the first parameter is a type class which needs a separate analysis.
 /// Eg:
 /// 1. drive config: "-drive file=<your file path>,if=pflash,unit=0"
-///   Set first_pos_is_type false for this cmdline has no class type.
+///     Set first_pos_is_type false for this cmdline has no class type.
 /// 2. device config: "-device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>"
-///   Set first_pos_is_type true for this cmdline has device type "virtio-balloon-pci" as the first parameter.
+///     Set first_pos_is_type true for this cmdline has device type "virtio-balloon-pci" as the first parameter.
 ///
 /// Use first_pos_is_subcommand to indicate whether the first parameter is a subclass.
 /// Eg:
@@ -643,7 +643,7 @@ fn concat_classtype(args: &str, concat: bool) -> String {
 /// in the same `ChardevConfig` structure by using `enum`. So, we will use class type as a subcommand to indicate which subtype
 /// will be used to store the configuration in enumeration type. Subcommand in `clap` doesn't need `--` in parameter.
 /// 1. -serial file,path=<file_path>
-///   Set first_pos_is_subcommand true for first parameter `file` is the subclass type for chardev.
+///     Set first_pos_is_subcommand true for first parameter `file` is the subclass type for chardev.
 pub fn str_slip_to_clap(
     args: &str,
     first_pos_is_type: bool,

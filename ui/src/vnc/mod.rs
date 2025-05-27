@@ -557,10 +557,11 @@ pub fn write_pixel(
     buf: &mut Vec<u8>,
 ) {
     if !client_dpm.convert {
+        let data_ptr_local = data_ptr;
         let mut con = vec![0; copy_bytes];
         // SAFETY: Tt can be ensure the raw pointer will not exceed the range.
         unsafe {
-            ptr::copy(data_ptr as *mut u8, con.as_mut_ptr(), copy_bytes);
+            ptr::copy(data_ptr_local, con.as_mut_ptr(), copy_bytes);
         }
         buf.append(&mut con);
     } else if client_dpm.convert && bytes_per_pixel() == 4 {

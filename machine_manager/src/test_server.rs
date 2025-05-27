@@ -30,6 +30,13 @@ pub struct TestSock {
     controller: Arc<Mutex<dyn MachineTestInterface>>,
 }
 
+// SAFETY: Send and Sync is not auto-implemented for dynamic trait type,
+// implementing them is safe because field of controller won't change
+// once initialized, only locked access(r/w) is permitted
+unsafe impl Sync for TestSock {}
+// SAFETY: Same as above
+unsafe impl Send for TestSock {}
+
 impl TestSock {
     pub fn new(path: &str, controller: Arc<Mutex<dyn MachineTestInterface>>) -> Self {
         let stream = match UnixStream::connect(path) {

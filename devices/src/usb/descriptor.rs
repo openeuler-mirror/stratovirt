@@ -453,6 +453,7 @@ pub trait UsbDescriptorOps {
     fn set_interface_descriptor(&mut self, index: u32, v: u32) -> Result<()>;
 
     /// Set super speed capability descriptors.
+    #[cfg(feature = "usb_uas")]
     fn set_capability_descriptors(&mut self, caps: Vec<UsbSuperSpeedCapDescriptor>);
 
     /// Init all endpoint descriptors and reset the USB endpoint.
@@ -529,6 +530,7 @@ impl UsbDescriptorOps for UsbDeviceBase {
         Ok(())
     }
 
+    #[cfg(feature = "usb_uas")]
     fn set_capability_descriptors(&mut self, caps: Vec<UsbSuperSpeedCapDescriptor>) {
         self.descriptor.capabilities = caps;
     }

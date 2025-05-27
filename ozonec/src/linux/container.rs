@@ -11,7 +11,6 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
-    collections::HashMap,
     fs::{self, canonicalize, create_dir_all, OpenOptions},
     io::Write,
     os::unix::net::UnixStream,
@@ -627,11 +626,7 @@ impl Container for LinuxContainer {
                 .to_string(),
             None => bail!("Failed to get bundle directory"),
         };
-        let annotations = if let Some(a) = self.config.annotations.clone() {
-            a
-        } else {
-            HashMap::new()
-        };
+        let annotations = self.config.annotations.clone().unwrap_or_default();
         Ok(OciState {
             ociVersion: self.config.ociVersion.clone(),
             id: self.id.clone(),
@@ -795,6 +790,7 @@ impl Container for LinuxContainer {
 
 #[cfg(test)]
 pub mod tests {
+    use std::collections::HashMap;
     use std::ffi::CStr;
 
     use chrono::DateTime;

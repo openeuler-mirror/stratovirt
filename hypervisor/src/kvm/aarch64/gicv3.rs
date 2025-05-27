@@ -68,7 +68,7 @@ impl GICv3Access for KvmGICv3 {
                 &self.fd,
                 kvm_bindings::KVM_DEV_ARM_VGIC_GRP_ADDR,
                 u64::from(kvm_bindings::KVM_VGIC_V3_ADDR_TYPE_REDIST),
-                &redist_regions.get(0).unwrap().base as *const u64 as u64,
+                &redist_regions.first().unwrap().base as *const u64 as u64,
                 true,
             )
             .with_context(|| "Failed to set GICv3 attribute: redistributor address")?;

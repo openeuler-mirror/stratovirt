@@ -148,7 +148,7 @@ pub fn get_image_stride(image: *mut pixman_image_t) -> i32 {
 
 pub fn get_image_data(image: *mut pixman_image_t) -> *mut u32 {
     if image.is_null() {
-        return ptr::null_mut() as *mut u32;
+        return ptr::null_mut();
     }
 
     // SAFETY: The reason is the same as above.
@@ -174,9 +174,10 @@ pub fn create_pixman_image(
     if !(0..MAX_IMAGE_SIZE).contains(&width) || !(0..MAX_IMAGE_SIZE).contains(&height) {
         return ptr::null_mut() as *mut pixman_image_t;
     }
+    let image_data_local = image_data;
 
     // SAFETY: The reason is the same as above.
-    unsafe { pixman_image_create_bits(image_format, width, height, image_data as *mut u32, stride) }
+    unsafe { pixman_image_create_bits(image_format, width, height, image_data_local, stride) }
 }
 
 /// Bpp: bit per pixel

@@ -560,7 +560,7 @@ impl MachineOps for StdMachine {
 
         locked_vm
             .reset_fwcfg_boot_order()
-            .with_context(|| "Fail to update boot order imformation to FwCfg device")?;
+            .with_context(|| "Fail to update boot order information to FwCfg device")?;
 
         locked_vm
             .display_init(vm_config)

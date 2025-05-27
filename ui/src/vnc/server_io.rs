@@ -303,6 +303,12 @@ pub struct VncSurface {
     pub guest_format: pixman_format_code_t,
 }
 
+// SAFETY: Implementing Send and Sync is safe for VncSurface
+// because only locked access(r/w) is permitted
+unsafe impl Sync for VncSurface {}
+// SAFETY: Same as above
+unsafe impl Send for VncSurface {}
+
 impl VncSurface {
     fn new(guest_image: *mut pixman_image_t) -> Self {
         VncSurface {

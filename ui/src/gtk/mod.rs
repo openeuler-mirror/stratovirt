@@ -253,7 +253,7 @@ impl GtkDisplay {
     fn get_current_display(&self) -> Result<Rc<RefCell<GtkDisplayScreen>>> {
         let page_num = self.gtk_menu.note_book.current_page();
         let gs = match page_num {
-            Some(num) if self.pagenum2ds.get(&num).is_some() => self.pagenum2ds.get(&num).unwrap(),
+            Some(num) if self.pagenum2ds.contains_key(&num) => self.pagenum2ds.get(&num).unwrap(),
             _ => bail!("No active display"),
         };
         Ok(gs.clone())
@@ -445,6 +445,7 @@ impl GtkDisplayScreen {
     /// In some situation:
     /// 1. Image is scaled.
     /// 2. There may be unfilled areas between the window and the image.
+    ///
     /// Input: relative coordinates of window.
     /// Output: relative coordinates of images.
     fn convert_coord(&mut self, mut x: f64, mut y: f64) -> Result<(f64, f64)> {
@@ -683,8 +684,9 @@ fn gs_show_menu_callback(
 /// There is a situation:
 /// 1. Switch operation 1, the gtk display should change the image from a to b.
 /// 2. Switch operation 2, the gtk display should change the image from b to c, but
-/// the channel between stratovirt mainloop and gtk mainloop lost the event.
+///    the channel between stratovirt mainloop and gtk mainloop lost the event.
 /// 3. The gtk display always show the image.
+///
 /// So, the refresh operation will always check if the image has been switched, if
 /// the result is yes, then use the switch operation to switch the latest image.
 fn do_refresh_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
@@ -901,7 +903,7 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         // 2. The copy range will not exceed the image data.
         unsafe {
             ImageSurface::create_for_data_unsafe(
-                data as *mut u8,
+                data,
                 Format::Rgb24,
                 surface_width,
                 surface_height,
@@ -925,7 +927,7 @@ fn do_switch_event(gs: &Rc<RefCell<GtkDisplayScreen>>) -> Result<()> {
         // 2. The copy range will not exceed the image data.
         unsafe {
             ImageSurface::create_for_data_unsafe(
-                data as *mut u8,
+                data,
                 Format::Rgb24,
                 surface_width,
                 surface_height,

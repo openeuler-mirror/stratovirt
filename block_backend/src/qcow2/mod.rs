@@ -1431,9 +1431,8 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
         // when creating snapshot failed.
         self.flush()?;
         self.qcow2_create_snapshot(name, vm_clock_nsec)
-            .map_err(|e| {
+            .inspect_err(|_e| {
                 self.drop_dirty_caches();
-                e
             })
     }
 
@@ -1441,17 +1440,15 @@ impl<T: Clone + 'static> InternalSnapshotOps for Qcow2Driver<T> {
         // Flush the dirty metadata first, so it can drop dirty caches for reverting
         // when deleting snapshot failed.
         self.flush()?;
-        self.qcow2_delete_snapshot(name).map_err(|e| {
+        self.qcow2_delete_snapshot(name).inspect_err(|_e| {
             self.drop_dirty_caches();
-            e
         })
     }
 
     fn apply_snapshot(&mut self, name: String) -> Result<()> {
         self.flush()?;
-        self.qcow2_apply_snapshot(name).map_err(|e| {
+        self.qcow2_apply_snapshot(name).inspect_err(|_e| {
             self.drop_dirty_caches();
-            e
         })
     }
 
@@ -1880,7 +1877,7 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for Qcow2Driver<T> {
         let offset_end = std::cmp::min(offset_start + nbytes, file_size);
         let mut total_bytes = offset_end.checked_sub(offset_start).with_context(|| {
             format!(
-                "Write zeroes: ofset: {} nbytes: {} out of range",
+                "Write zeroes: offset: {} nbytes: {} out of range",
                 offset, nbytes
             )
         })?;

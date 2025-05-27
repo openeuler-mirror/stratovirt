@@ -402,7 +402,7 @@ pub fn devices_register_sysbusdevops_type() -> Result<()> {
     #[cfg(target_arch = "aarch64")]
     {
         register_sysbusdevops_type::<FwCfgMem>()?;
-        #[cfg(all(feature = "ramfb"))]
+        #[cfg(feature = "ramfb")]
         register_sysbusdevops_type::<Ramfb>()?;
         register_sysbusdevops_type::<PL011>()?;
         register_sysbusdevops_type::<PL031>()?;

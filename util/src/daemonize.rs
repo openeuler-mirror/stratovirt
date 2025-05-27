@@ -20,15 +20,15 @@
 //! waiting for some event to occur, or waiting to perform some specified task
 //! on a periodic basis. A typical daemon program will:
 //! 1. Close all open file descriptors(especially standard input, standard
-//! output and standard error).
+//!    output and standard error).
 //! 2. Change its working directory to the root filesystem, to ensure that it
-//! doesn't tie up another filesystem and prevent it from being unmounted.
+//!    doesn't tie up another filesystem and prevent it from being unmounted.
 //! 3. Reset its umask value.
 //! 4. Run in the background(i.e., fork).
 //! 5. Ignore all terminal I/O signals.
 //! 6. Disassociate from the control terminal.
 //! 7. Disassociate from its process group, to insulate itself from signals
-//! sent to the process group.
+//!    sent to the process group.
 //! 8. Handle any `SIGCLD` signals.
 
 use std::cmp::Ordering;

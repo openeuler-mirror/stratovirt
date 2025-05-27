@@ -83,9 +83,8 @@ impl MigrationManager {
         }
 
         // 2. read header according to its length
-        let mut header_bytes = Vec::new();
-        // SAFETY: upper limit of header_len is HEADER_LENGTH - 8.
-        header_bytes.resize(header_len as usize, 0);
+        // upper limit of header_len is HEADER_LENGTH - 8.
+        let mut header_bytes = vec![0; header_len as usize];
         fd.read_exact(&mut header_bytes)?;
 
         // 3. change the binary format header into struct
@@ -113,9 +112,8 @@ impl MigrationManager {
     /// Write all `DeviceStateDesc` in `desc_db` hashmap to `Write` trait object.
     pub fn save_desc_db(fd: &mut dyn Write) -> Result<()> {
         let length = Self::desc_db_len()?;
-        let mut buffer = Vec::new();
-        // SAFETY: desc db length is under control.
-        buffer.resize(length, 0);
+        // desc db length is under control.
+        let mut buffer = vec![0; length];
         let mut start = 0;
 
         let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
@@ -136,9 +134,8 @@ impl MigrationManager {
         fd: &mut dyn Read,
         desc_length: usize,
     ) -> Result<HashMap<u64, DeviceStateDesc>> {
-        let mut desc_buffer = Vec::new();
         // SAFETY: desc_length has been checked in check_header().
-        desc_buffer.resize(desc_length, 0);
+        let mut desc_buffer = vec![0; desc_length];
         fd.read_exact(&mut desc_buffer)?;
         let mut snapshot_desc_db = HashMap::<u64, DeviceStateDesc>::new();
 
@@ -187,9 +184,8 @@ impl MigrationManager {
             .get(&snap_desc.name)
             .with_context(|| "Failed to get snap_desc name")?;
 
-        let mut state_data = Vec::new();
         // SAFETY: size has been checked in restore_desc_db().
-        state_data.resize(snap_desc.size as usize, 0);
+        let mut state_data = vec![0; snap_desc.size as usize];
         fd.read_exact(&mut state_data)?;
 
         match current_desc.check_version(snap_desc) {
