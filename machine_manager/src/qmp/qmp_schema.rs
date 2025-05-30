@@ -98,6 +98,7 @@ define_qmp_command_enum!(
     blockdev_del("blockdev-del", blockdev_del),
     balloon("balloon", balloon, default),
     set_viomem("set-viomem", Box<set_viomem>),
+    get_viomem("get-viomem", Box<get_viomem>),
     query_mem("query-mem", query_mem, default),
     query_mem_gpa("query-mem-gpa", query_mem_gpa, default),
     query_balloon("query-balloon", query_balloon, default),
@@ -732,6 +733,44 @@ pub struct set_viomem {
 
 pub type SetViomemArgument = set_viomem;
 generate_command_impl!(set_viomem, Empty);
+
+/// get-viomem
+///
+/// Query virtio-mem device status.
+///
+/// # Arguments
+///
+/// * `id` - The device's ID, must be unique.
+///
+/// # Examples
+///
+/// ```test
+/// -> { "execute" : "get-viomem" ,
+///      "arguments" : { "id" : "viomem0"} }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct get_viomem {
+    pub id: String,
+}
+
+pub type GetViomemArgument = get_viomem;
+generate_command_impl!(get_viomem, ViomemInfo);
+
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct ViomemInfo {
+    pub node: u16,
+    #[serde(rename = "size")]
+    pub region_size: usize,
+    #[serde(rename = "block-size")]
+    pub block_size: usize,
+    #[serde(rename = "requested-size")]
+    pub requested_size: usize,
+    #[serde(rename = "plugged-size")]
+    pub plugged_size: usize,
+}
 
 /// query-hotpluggable-cpus
 ///

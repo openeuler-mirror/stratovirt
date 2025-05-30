@@ -24,7 +24,7 @@ use crate::qmp::qmp_response::{Response, Version};
 use crate::qmp::qmp_schema::{
     BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
-    Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
+    Events, GetViomemArgument, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
     MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent,
     QueryMemGpaArgument, QueryVcpuRegArgument, SetViomemArgument, Target, TypeLists,
     UpdateRegionArgument,
@@ -238,8 +238,11 @@ pub trait DeviceInterface {
     /// Query display of stratovirt.
     fn query_display_image(&self) -> Response;
 
-    /// Update a virtio-mem device.
+    /// Set requested-size of a virtio-mem device.
     fn set_viomem(&mut self, args: Box<SetViomemArgument>) -> Response;
+
+    /// Get information of a virtio-mem device.
+    fn get_viomem(&self, args: Box<GetViomemArgument>) -> Response;
 
     /// Query state.
     fn query_workloads(&self) -> Response {
