@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use log::error;
+use log::{error, info};
 
 use crate::acpi::ged::{AcpiEvent, Ged};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
@@ -27,6 +27,7 @@ use acpi::{
 };
 use address_space::GuestAddress;
 use machine_manager::event_loop::EventLoop;
+use machine_manager::notifier::register_vm_pause_notifier;
 use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
@@ -78,6 +79,7 @@ pub struct PowerDev {
     regs: Vec<u32>,
     state: PowerDevState,
     ged: Arc<Mutex<Ged>>,
+    timer_id: Option<u64>,
 }
 
 impl PowerDev {
@@ -96,6 +98,7 @@ impl PowerDev {
                 last_bat_lvl: 0xffffffff,
             },
             ged: ged_dev,
+            timer_id: None,
         };
         pdev.set_sys_resource(sysbus, region_base, region_size, "PowerDev")
             .with_context(|| AcpiError::Alignment(region_size as u32))?;
@@ -205,6 +208,8 @@ impl Device for PowerDev {
         MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
+
+        register_pause_notifier(dev.clone());
 
         let mut pdev = dev.lock().unwrap();
         pdev.power_battery_init_info()?;
@@ -370,12 +375,8 @@ impl AmlBuilder for PowerDev {
 }
 
 fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
-    let cdev = dev.clone();
-    let update_func = Box::new(move || {
-        power_status_update(&cdev);
-    });
-
     let mut pdev = dev.lock().unwrap();
+    pdev.timer_id = Some(add_power_status_timer(dev.clone()));
 
     if let Err(e) = pdev.power_status_read() {
         error!("Failed to read power status: {:?}", e);
@@ -393,8 +394,33 @@ fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
             pdev.state.last_bat_lvl = pdev.regs[REG_IDX_BAT_RCAP];
         }
     }
+}
+
+fn add_power_status_timer(dev: Arc<Mutex<PowerDev>>) -> u64 {
+    let update_func = Box::new(move || {
+        power_status_update(&dev);
+    });
+
     // Check the power status every 5 seconds.
     EventLoop::get_ctx(None)
         .unwrap()
-        .timer_add(update_func, Duration::from_secs(5));
+        .timer_add(update_func, Duration::from_secs(5))
+}
+
+fn register_pause_notifier(dev: Arc<Mutex<PowerDev>>) {
+    let pause_notify = Arc::new(move |paused: bool| {
+        info!("Set vm pause state {:?} for power device", paused);
+        let mut pdev = dev.lock().unwrap();
+        if paused {
+            if let Some(timer_id) = pdev.timer_id {
+                info!("Delete timer for power status");
+                EventLoop::get_ctx(None).unwrap().timer_del(timer_id);
+            }
+            pdev.timer_id = None;
+        } else {
+            info!("Add timer for power status");
+            pdev.timer_id = Some(add_power_status_timer(dev.clone()));
+        }
+    });
+    register_vm_pause_notifier(pause_notify);
 }
