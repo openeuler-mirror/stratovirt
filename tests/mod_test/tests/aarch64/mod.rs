@@ -13,4 +13,5 @@
 mod acpi_test;
 mod ged_test;
 mod pl031_test;
+mod power_test;
 mod ramfb_test;
