@@ -22,16 +22,19 @@ migration = { path = "../migration" }
 migration_derive = { path = "../migration/migration_derive" }
 util = { path = "../util" }
 acpi = { path = "../acpi" }
-devices = {path = "../devices"}
-block_backend = {path = "../block_backend"}
-chardev_backend = {path = "../chardev_backend" }
-ui = { path = "../ui", features = ["console"], optional = true }
-trace = {path = "../trace"}
-clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
+devices = { path = "../devices" }
+block_backend = { path = "../block_backend" }
+chardev_backend = { path = "../chardev_backend" }
+ui = { path = "../ui", features = ["console"] }
+trace = { path = "../trace" }
+clap = { version = "=4.1.4", default-features = false, features = [
+    "std",
+    "derive",
+] }
 
 [features]
 default = []
-virtio_gpu = ["ui", "machine_manager/virtio_gpu", "util/pixman"]
+virtio_gpu = ["machine_manager/virtio_gpu", "util/pixman"]
 virtio_rng = []
 virtio_scsi = []
 ohui_srv = []

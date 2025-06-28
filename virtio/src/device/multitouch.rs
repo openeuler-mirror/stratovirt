@@ -17,7 +17,7 @@ use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser};
 use ui::input::{
     register_mt_handler, unregister_mt_handler, MultiTouchAbsData, MultiTouchEventKind,
-    MultitouchOps,
+    MultitouchOps, MultitouchType,
 };
 
 use crate::VirtioBase;
@@ -170,6 +170,7 @@ impl VirtioDevice for Multitouch {
             self.x_max as i32,
             self.y_max as i32,
             ABS_MT_TRACKING_ID_MAX,
+            MultitouchType::Screen,
         )?;
 
         register_event_helper(
@@ -184,12 +185,12 @@ impl VirtioDevice for Multitouch {
 
     fn deactivate(&mut self) -> Result<()> {
         unregister_event_helper(None, &mut self.device.deactivate_evts)?;
-        unregister_mt_handler();
+        unregister_mt_handler(MultitouchType::Screen);
         Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {
-        unregister_mt_handler();
+        unregister_mt_handler(MultitouchType::Screen);
         Ok(())
     }
 }
@@ -213,7 +214,7 @@ impl MultitouchOps for InputIoHandler {
 
                 for evt in &evts {
                     if !self.send_event(evt) {
-                        unregister_mt_handler();
+                        unregister_mt_handler(MultitouchType::Screen);
                         bail!("Failed to inject multitouch event");
                     }
                 }
@@ -226,7 +227,7 @@ impl MultitouchOps for InputIoHandler {
 
                 for evt in &evts {
                     if !self.send_event(evt) {
-                        unregister_mt_handler();
+                        unregister_mt_handler(MultitouchType::Screen);
                         bail!("Failed to inject multitouch event");
                     }
                 }
@@ -236,12 +237,20 @@ impl MultitouchOps for InputIoHandler {
         Ok(())
     }
 
+    fn send_raw_event(&mut self, evt: &InputEvent) -> Result<()> {
+        if !self.send_event(evt) {
+            unregister_mt_handler(MultitouchType::Screen);
+            bail!("Failed to send raw input event");
+        }
+        Ok(())
+    }
+
     fn send_sync(&mut self) -> Result<()> {
         let evt = InputEvent::new(EV_SYN, SYN_REPORT, 0);
         if self.send_event(&evt) {
             Ok(())
         } else {
-            unregister_mt_handler();
+            unregister_mt_handler(MultitouchType::Screen);
             bail!("Failed to send multitouch sync event");
         }
     }

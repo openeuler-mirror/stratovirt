@@ -12,7 +12,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, MutexGuard, RwLock},
+    sync::{Arc, LazyLock, Mutex, MutexGuard, RwLock},
 };
 
 use anyhow::{bail, Result};
@@ -20,6 +20,7 @@ use log::debug;
 use once_cell::sync::Lazy;
 
 use util::bitmap::Bitmap;
+use util::evdev::InputEvent as RawInputEvent;
 
 // Logical window size for mouse.
 pub const ABS_MAX: u64 = 0x7fff;
@@ -574,15 +575,52 @@ pub trait ConsumerOpts: Send {
 //
 // the code for multitouch
 //
-static MT_OPS_HANDLER: Lazy<Mutex<Option<MultiTouchDevice>>> = Lazy::new(|| Mutex::new(None));
+#[derive(Clone, Copy, Debug, Default)]
+pub enum MultitouchType {
+    #[default]
+    Screen,
+    Pad,
+}
+
+impl From<MultitouchType> for usize {
+    fn from(val: MultitouchType) -> usize {
+        match val {
+            MultitouchType::Screen => 0,
+            MultitouchType::Pad => 1,
+        }
+    }
+}
+
+static MT_OPS_HANDLER: LazyLock<Vec<Mutex<Option<MultiTouchDevice>>>> = LazyLock::new(|| {
+    vec![
+        // Screen
+        Mutex::new(None),
+        // Pad
+        Mutex::new(None),
+    ]
+});
 
 #[inline]
-fn get_mt_handler() -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
-    let locked_handler = MT_OPS_HANDLER.lock().unwrap();
+fn get_mt_handler(
+    touchtype: MultitouchType,
+) -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
+    let locked_handler = MT_OPS_HANDLER[Into::<usize>::into(touchtype)]
+        .lock()
+        .unwrap();
     if locked_handler.is_none() {
-        bail!("no multitouch device");
+        bail!("no multitouch {:?} device", touchtype);
     }
     Ok(locked_handler)
+}
+
+#[inline]
+fn get_mt_screen_handler() -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
+    get_mt_handler(MultitouchType::Screen)
+}
+
+#[inline]
+fn get_mt_pad_handler() -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
+    get_mt_handler(MultitouchType::Pad)
 }
 
 pub fn register_mt_handler(
@@ -590,6 +628,7 @@ pub fn register_mt_handler(
     x_max: i32,
     y_max: i32,
     slot_max: u32,
+    touchtype: MultitouchType,
 ) -> Result<()> {
     let mt_state = MultiTouchDevice {
         ops,
@@ -599,19 +638,22 @@ pub fn register_mt_handler(
         slots: vec![MultiTouchAbsData::default(); (slot_max + 1) as usize],
     };
 
-    let mut locked_handler = MT_OPS_HANDLER.lock().unwrap();
+    let idx: usize = touchtype.into();
+    let mut locked_handler = MT_OPS_HANDLER[idx].lock().unwrap();
     if locked_handler.is_some() {
-        bail!("only support one multitouch device");
+        bail!("The same multitouch device supports only one");
     }
-
     *locked_handler = Some(mt_state);
-    input_state_changed(InputStateChangeReason::MultitouchRegister);
+    drop(locked_handler);
+
+    input_state_changed(touchtype, InputStateChangeReason::MultitouchRegister);
     Ok(())
 }
 
-pub fn unregister_mt_handler() {
-    input_state_changed(InputStateChangeReason::MultitouchUnregister);
-    *MT_OPS_HANDLER.lock().unwrap() = None;
+pub fn unregister_mt_handler(touchtype: MultitouchType) {
+    input_state_changed(touchtype, InputStateChangeReason::MultitouchUnregister);
+    let idx: usize = touchtype.into();
+    *MT_OPS_HANDLER[idx].lock().unwrap() = None;
 }
 
 #[derive(Clone)]
@@ -690,6 +732,10 @@ struct MultiTouchDevice {
 }
 
 impl MultiTouchDevice {
+    fn get_max_size(&self) -> (i32, i32) {
+        (self.x_max, self.y_max)
+    }
+
     fn send_event(
         &mut self,
         evt: &mut MultiTouchAbsData,
@@ -727,6 +773,14 @@ impl MultiTouchDevice {
         Ok(())
     }
 
+    fn send_raw_input_events(&mut self, evts: &[RawInputEvent]) -> Result<()> {
+        let mut locked_ops = self.ops.lock().unwrap();
+        for evt in evts {
+            locked_ops.send_raw_event(evt)?;
+        }
+        Ok(())
+    }
+
     fn send_sync(&self) -> Result<()> {
         self.ops.lock().unwrap().send_sync()
     }
@@ -746,22 +800,46 @@ impl MultiTouchDevice {
 
 pub trait MultitouchOps: Send {
     fn send_event(&mut self, evt: &MultiTouchAbsData) -> Result<()>;
+    fn send_raw_event(&mut self, evt: &RawInputEvent) -> Result<()>;
     fn send_sync(&mut self) -> Result<()>;
 }
 
-pub fn send_mt_event(evt: &mut MultiTouchAbsData, ui_width: i32, ui_height: i32) -> Result<()> {
-    get_mt_handler()?
+pub fn send_mt_screen_event(
+    evt: &mut MultiTouchAbsData,
+    ui_width: i32,
+    ui_height: i32,
+) -> Result<()> {
+    get_mt_screen_handler()?
         .as_mut()
         .unwrap()
         .send_event(evt, ui_width, ui_height)
 }
 
-pub fn send_mt_sync() -> Result<()> {
-    get_mt_handler()?.as_ref().unwrap().send_sync()
+pub fn send_mt_screen_sync() -> Result<()> {
+    get_mt_screen_handler()?.as_ref().unwrap().send_sync()
+}
+
+pub fn send_mt_pad_raw_events(evts: &[RawInputEvent]) -> Result<()> {
+    get_mt_pad_handler()?
+        .as_mut()
+        .unwrap()
+        .send_raw_input_events(evts)
+}
+
+pub fn send_mt_pad_sync() -> Result<()> {
+    get_mt_pad_handler()?.as_ref().unwrap().send_sync()
+}
+
+pub fn get_mt_pad_feature() -> Result<(i32, i32)> {
+    Ok(get_mt_pad_handler()?.as_ref().unwrap().get_max_size())
 }
 
 pub fn lift_all_fingers() -> Result<()> {
-    get_mt_handler()?.as_mut().unwrap().lift_all_fingers()
+    get_mt_screen_handler()?
+        .as_mut()
+        .unwrap()
+        .lift_all_fingers()?;
+    get_mt_pad_handler()?.as_mut().unwrap().lift_all_fingers()
 }
 
 //
@@ -770,7 +848,7 @@ pub fn lift_all_fingers() -> Result<()> {
 static NOTIFIER_MANAGER: Lazy<RwLock<InputStateNotifier>> =
     Lazy::new(|| RwLock::new(InputStateNotifier::new()));
 
-pub type InputStateNotifyCallback = dyn Fn(InputStateChangeReason) + Send + Sync;
+pub type InputStateNotifyCallback = dyn Fn(MultitouchType, InputStateChangeReason) + Send + Sync;
 
 #[derive(Clone, Copy)]
 pub enum InputStateChangeReason {
@@ -802,9 +880,9 @@ impl InputStateNotifier {
         self.notifiers.remove(&id);
     }
 
-    fn notify(&self, reason: InputStateChangeReason) {
+    fn notify(&self, touchtype: MultitouchType, reason: InputStateChangeReason) {
         for (_, notify) in self.notifiers.iter() {
-            notify(reason);
+            notify(touchtype, reason);
         }
     }
 }
@@ -820,8 +898,8 @@ pub fn unregister_input_notifier(id: u64) {
     NOTIFIER_MANAGER.write().unwrap().unregister_notifier(id);
 }
 
-fn input_state_changed(reason: InputStateChangeReason) {
-    NOTIFIER_MANAGER.read().unwrap().notify(reason);
+fn input_state_changed(touchtype: MultitouchType, reason: InputStateChangeReason) {
+    NOTIFIER_MANAGER.read().unwrap().notify(touchtype, reason);
 }
 
 #[cfg(test)]
