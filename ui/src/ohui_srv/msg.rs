@@ -12,7 +12,10 @@
 
 use std::mem::size_of;
 
+use anyhow::{bail, Result};
 use util::byte_code::ByteCode;
+
+use crate::input::MultiTouchEventKind;
 
 pub const CLIENT_FOCUSIN_EVENT: u32 = 0x0;
 pub const CLIENT_FOCUSOUT_EVENT: u32 = 0x1;
@@ -44,10 +47,12 @@ pub enum EventType {
     Focus = 9,
     VmCtrlInfo = 10,
     FlushFrame = 11,
-    Multitouch = 12,
+    MultitouchScreen = 12,
     InputDeviceChange = 13,
     WindowInfoV2 = 14,
     VmViewChange = 15,
+    TouchPadScroll = 16,
+    TouchPadPinch = 17,
     #[default]
     Max,
 }
@@ -182,9 +187,18 @@ pub const MULTITOUCH_EVENT_MOVE: u32 = 1;
 pub const MULTITOUCH_EVENT_UP: u32 = 2;
 pub const MULTITOUCH_EVENT_CANCEL: u32 = 3;
 
+pub fn try_into_mt_event(evt: u32) -> Result<MultiTouchEventKind> {
+    Ok(match evt {
+        MULTITOUCH_EVENT_DOWN => MultiTouchEventKind::BEGIN,
+        MULTITOUCH_EVENT_MOVE => MultiTouchEventKind::UPDATE,
+        MULTITOUCH_EVENT_UP => MultiTouchEventKind::END,
+        _ => bail!("unknown event {}", evt),
+    })
+}
+
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
-pub struct MultiTouchEvent {
+pub struct MultiTouchScreenEvent {
     // 0: start(finger starts to press)
     // 1: update(finger moves)
     // 2: end(finger leaves)
@@ -199,7 +213,7 @@ pub struct MultiTouchEvent {
     pub blob_id: u32,
 }
 
-impl ByteCode for MultiTouchEvent {}
+impl ByteCode for MultiTouchScreenEvent {}
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -223,8 +237,10 @@ impl InputDeviceChange {
     }
 }
 
-pub const INPUT_MULTITOUCH_ONLINE: u64 = 1;
-pub const INPUT_MULTITOUCH_OFFLINE: u64 = 2;
+pub const INPUT_MULTITOUCH_SCREEN_ONLINE: u64 = 1;
+pub const INPUT_MULTITOUCH_SCREEN_OFFLINE: u64 = 2;
+pub const INPUT_MULTITOUCH_PAD_ONLINE: u64 = 3;
+pub const INPUT_MULTITOUCH_PAD_OFFLINE: u64 = 4;
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -246,6 +262,25 @@ pub const FOLD_STATUS_UNKNOWN: u32 = 0;
 pub const FOLD_STATUS_EXPAND: u32 = 1;
 pub const FOLD_STATUS_FOLDED: u32 = 2;
 pub const FOLD_STATUS_HALF_FOLDED: u32 = 3;
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct TouchPadScrollEvent {
+    pub action: u32,
+    pub horizontal: f64,
+    pub vertical: f64,
+}
+
+impl ByteCode for TouchPadScrollEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct TouchPadPinchEvent {
+    pub action: u32,
+    pub pinch: f64,
+}
+
+impl ByteCode for TouchPadPinchEvent {}
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -293,11 +328,13 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
         EventType::CursorDefine => size_of::<HWCursorEvent>(),
         EventType::Ledstate => size_of::<LedstateEvent>(),
         EventType::Greet => size_of::<GreetEvent>(),
-        EventType::Multitouch => size_of::<MultiTouchEvent>(),
+        EventType::MultitouchScreen => size_of::<MultiTouchScreenEvent>(),
         EventType::FlushFrame => size_of::<FlushFrameEvent>(),
         EventType::InputDeviceChange => size_of::<InputDeviceChange>(),
         EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
         EventType::VmViewChange => size_of::<VmViewChangeEvent>(),
+        EventType::TouchPadScroll => size_of::<TouchPadScrollEvent>(),
+        EventType::TouchPadPinch => size_of::<TouchPadPinchEvent>(),
         _ => 0,
     }
 }
