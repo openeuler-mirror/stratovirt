@@ -13,6 +13,7 @@
 pub mod channel;
 pub mod msg;
 pub mod msg_handle;
+pub mod touchpad;
 
 use std::os::unix::io::RawFd;
 use std::path::Path;

@@ -22,6 +22,7 @@ use util::byte_code::ByteCode;
 use super::{
     channel::{recv_slice, send_obj, OhUiChannel},
     msg::*,
+    touchpad::*,
 };
 use crate::{
     console::{get_active_console, graphic_hardware_ui_info, set_dpy_rotation, Rotation},
@@ -80,6 +81,9 @@ impl WindowState {
     }
 
     fn press_btn(&mut self, btn: u32) -> Result<()> {
+        if let Ok(true) = stop_slide() {
+            return Ok(());
+        }
         input_button(btn, true)?;
         input_point_sync()
     }
@@ -115,6 +119,7 @@ impl WindowState {
 
     fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
         let (pos_x, pos_y) = trans_mouse_pos(x, y, f64::from(self.width), f64::from(self.height));
+        let _ = stop_slide();
         input_move_abs(Axis::X, pos_x)?;
         input_move_abs(Axis::Y, pos_y)?;
         input_point_sync()
@@ -141,7 +146,8 @@ impl WindowState {
 #[derive(Default)]
 struct InputDeviceState {
     input_notifier_id: u64,
-    has_multitouch: bool,
+    has_multitouch_screen: bool,
+    has_multitouch_pad: bool,
 }
 
 #[derive(Default)]
@@ -190,15 +196,28 @@ impl OhUiMsgHandler {
                 let internal_reason = match touchtype {
                     MultitouchType::Screen => match reason {
                         InputStateChangeReason::MultitouchRegister => {
-                            input_state.lock().unwrap().has_multitouch = true;
-                            INPUT_MULTITOUCH_ONLINE
+                            input_state.lock().unwrap().has_multitouch_screen = true;
+                            INPUT_MULTITOUCH_SCREEN_ONLINE
                         }
                         InputStateChangeReason::MultitouchUnregister => {
-                            input_state.lock().unwrap().has_multitouch = false;
-                            INPUT_MULTITOUCH_OFFLINE
+                            input_state.lock().unwrap().has_multitouch_screen = false;
+                            INPUT_MULTITOUCH_SCREEN_OFFLINE
                         }
                     },
-                    _ => unreachable!(),
+                    MultitouchType::Pad => match reason {
+                        InputStateChangeReason::MultitouchRegister => {
+                            input_state.lock().unwrap().has_multitouch_pad = true;
+                            if let Err(e) = init_tp_emu() {
+                                error!("failed to init touchpad emulator {:?}", e);
+                            }
+                            INPUT_MULTITOUCH_PAD_ONLINE
+                        }
+                        InputStateChangeReason::MultitouchUnregister => {
+                            input_state.lock().unwrap().has_multitouch_pad = false;
+                            uninit_tp_emu();
+                            INPUT_MULTITOUCH_PAD_OFFLINE
+                        }
+                    },
                 };
                 send_input_device_change_msg(writer.clone(), internal_reason);
             },
@@ -279,9 +298,9 @@ impl OhUiMsgHandler {
                 let body = FlushFrameEvent::from_bytes(&body_bytes[..]).unwrap();
                 self.handle_flushframe(body)
             }
-            EventType::Multitouch => {
-                let body = MultiTouchEvent::from_bytes(&body_bytes[..]).unwrap();
-                self.handle_multitouch_event(body)
+            EventType::MultitouchScreen => {
+                let body = MultiTouchScreenEvent::from_bytes(&body_bytes[..]).unwrap();
+                self.handle_multitouch_screen_event(body)
             }
             EventType::WindowInfoV2 => {
                 let body = WindowInfoV2Event::from_bytes(&body_bytes[..]).unwrap();
@@ -292,6 +311,14 @@ impl OhUiMsgHandler {
                 let body = VmViewChangeEvent::from_bytes(&body_bytes[..]).unwrap();
                 info!("VmViewChange: {:?}", body);
                 self.handle_vm_view_change(body)
+            }
+            EventType::TouchPadScroll => {
+                let body = TouchPadScrollEvent::from_bytes(&body_bytes[..]).unwrap();
+                self.handle_touchpad_scroll(body)
+            }
+            EventType::TouchPadPinch => {
+                let body = TouchPadPinchEvent::from_bytes(&body_bytes[..]).unwrap();
+                self.handle_touchpad_pinch(body)
             }
             _ => {
                 error!(
@@ -447,7 +474,7 @@ impl OhUiMsgHandler {
         Ok(())
     }
 
-    fn handle_multitouch_event(&self, mtt: &MultiTouchEvent) -> Result<()> {
+    fn handle_multitouch_screen_event(&self, mtt: &MultiTouchScreenEvent) -> Result<()> {
         let mtt_type = mtt.event_type;
         let slot_id = mtt.tracking_id;
         let mut tracking_id = mtt.tracking_id;
@@ -463,7 +490,7 @@ impl OhUiMsgHandler {
                 tracking_id = -1;
                 MultiTouchEventKind::END
             }
-            _ => bail!("unsupported multitouch event type {}", mtt_type),
+            _ => bail!("unsupported multitouch screen event type {}", mtt_type),
         };
         let mut evt = MultiTouchAbsData::new(
             evt_type,
@@ -490,6 +517,18 @@ impl OhUiMsgHandler {
         Ok(())
     }
 
+    fn handle_touchpad_scroll(&self, mtt: &TouchPadScrollEvent) -> Result<()> {
+        let action = try_into_mt_event(mtt.action)?;
+        let evt = TouchPadScrollData::new(action, mtt.horizontal, mtt.vertical);
+        send_scroll_event(evt)
+    }
+
+    fn handle_touchpad_pinch(&self, mtt: &TouchPadPinchEvent) -> Result<()> {
+        let action = try_into_mt_event(mtt.action)?;
+        let evt = TouchPadPinchData::new(action, mtt.pinch);
+        send_pinch_event(evt)
+    }
+
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
         if let Some(writer) = self.writer.lock().unwrap().as_mut() {
@@ -501,9 +540,19 @@ impl OhUiMsgHandler {
     }
 
     pub fn send_input_device_state(&self) {
-        match self.input_state.lock().unwrap().has_multitouch {
-            true => send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_ONLINE),
-            false => send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_OFFLINE),
+        match self.input_state.lock().unwrap().has_multitouch_screen {
+            true => {
+                send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_SCREEN_ONLINE)
+            }
+            false => {
+                send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_SCREEN_OFFLINE)
+            }
+        }
+        match self.input_state.lock().unwrap().has_multitouch_pad {
+            true => send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_PAD_ONLINE),
+            false => {
+                send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_PAD_OFFLINE)
+            }
         }
     }
 
