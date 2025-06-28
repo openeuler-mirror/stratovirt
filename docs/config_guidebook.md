@@ -1274,11 +1274,12 @@ Sample Configuration：
 ### 2.24 virtio-multitouch
 virtio-multitouch is a virtualized multitouch input device can be used to create human multitouch interface devices, such as mutlitouch screen, digitizer, touchpad.
 
-Five properties are supported for virtio-multitouch.
+Six properties are supported for virtio-multitouch.
 * id: unique device id.
 * serial: the serial number(unique string) of the device.
 * x: the max value of X-axle
 * y: the max value of Y-axle
+* touchtype: multitouch type, default is screen.
 
 For virtio-multitouch-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -1291,7 +1292,7 @@ Sample Configuration：
 # virtio mmio multitouch device
 -device virtio-multitouch-device,id=<mt_id>,serial=<mt_serial>,x=<x>,y=<y>
 # virtio pci multitouch device
--device virtio-multitouch-pci,id=<mt_id>,serial=<mt_serial>,x=<0x7FFF>,y=<0x7FFF>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]
+-device virtio-multitouch-pci,id=<mt_id>,serial=<mt_serial>,x=<0x7FFF>,y=<0x7FFF>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off][,touchtype=screen|pad]
 ```
 
 Note:

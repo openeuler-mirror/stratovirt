@@ -24,6 +24,8 @@ use crate::byte_code::ByteCode;
 pub const EV_KEY: u8 = 0x01;
 /// ABS Event.
 pub const EV_ABS: u8 = 0x03;
+/// MSC Event.
+pub const EV_MSC: u8 = 0x04;
 /// Event Code type, used for autorepeating devices.
 pub const EV_REP: u8 = 0x14;
 /// Max event type.
@@ -51,7 +53,10 @@ pub const ABS_MT_PRESSURE: u8 = 0x3A;
 /// Max ABS_* event type.
 pub const ABS_MAX: u8 = 0x3F;
 
+pub const BTN_LEFT: u16 = 0x110;
 pub const BTN_TOUCH: u16 = 0x14A;
+
+pub const MSC_TIMESTAMP: u16 = 0x05;
 
 /// Sync event type.
 pub const EV_SYN: u16 = 0x00;
@@ -60,8 +65,12 @@ pub const SYN_REPORT: u16 = 0x00;
 /// Synchronization multitouch point.
 pub const SYN_MT_REPORT: u16 = 0x2;
 
+/// pointer input devices.
+pub const INPUT_PROP_POINTER: u16 = 0x00;
 /// direct input devices.
 pub const INPUT_PROP_DIRECT: u16 = 0x01;
+/// buttonpad input devices.
+pub const INPUT_PROP_BUTTONPAD: u16 = 0x02;
 
 pub const BUS_VIRTUAL: u16 = 0x06;
 
@@ -147,10 +156,11 @@ pub struct InputAbsInfo {
 }
 
 impl InputAbsInfo {
-    pub fn new(min: u32, max: u32) -> Self {
+    pub fn new(min: u32, max: u32, res: u32) -> Self {
         Self {
             minimum: min,
             maximum: max,
+            resolution: res,
             ..Default::default()
         }
     }
@@ -299,6 +309,15 @@ impl InputEvent {
             timestamp: [0; 2],
             ev_type,
             code,
+            value,
+        }
+    }
+
+    pub fn new_u8(ev_type: u8, code: u8, value: i32) -> Self {
+        Self {
+            timestamp: [0; 2],
+            ev_type: ev_type as u16,
+            code: code as u16,
             value,
         }
     }
