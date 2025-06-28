@@ -27,12 +27,13 @@ use crate::{
     console::{get_active_console, graphic_hardware_ui_info, set_dpy_rotation, Rotation},
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
-        lift_all_fingers, register_input_notifier, release_all_btn, release_all_key, send_mt_event,
-        send_mt_sync, trigger_key, Axis, InputStateChangeReason, MultiTouchAbsData,
-        MultiTouchEventKind, ABS_MAX, CAPS_LOCK_LED, CONSUMER_PREFIX, INPUT_BUTTON_WHEEL_DOWN,
-        INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK,
-        INPUT_POINT_FORWARD, INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT,
-        KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
+        lift_all_fingers, register_input_notifier, release_all_btn, release_all_key,
+        send_mt_screen_event, send_mt_screen_sync, trigger_key, Axis, InputStateChangeReason,
+        MultiTouchAbsData, MultiTouchEventKind, MultitouchType, ABS_MAX, CAPS_LOCK_LED,
+        CONSUMER_PREFIX, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT,
+        INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD,
+        INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_CAPS_LOCK,
+        KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
     },
     keycode::{DpyMod, KeyCode},
 };
@@ -184,19 +185,24 @@ impl OhUiMsgHandler {
     fn register_input_change_notifier(&self) {
         let writer = self.writer.clone();
         let input_state = self.input_state.clone();
-        let notifier = Arc::new(move |reason: InputStateChangeReason| {
-            let internal_reason = match reason {
-                InputStateChangeReason::MultitouchRegister => {
-                    input_state.lock().unwrap().has_multitouch = true;
-                    INPUT_MULTITOUCH_ONLINE
-                }
-                InputStateChangeReason::MultitouchUnregister => {
-                    input_state.lock().unwrap().has_multitouch = false;
-                    INPUT_MULTITOUCH_OFFLINE
-                }
-            };
-            send_input_device_change_msg(writer.clone(), internal_reason);
-        });
+        let notifier = Arc::new(
+            move |touchtype: MultitouchType, reason: InputStateChangeReason| {
+                let internal_reason = match touchtype {
+                    MultitouchType::Screen => match reason {
+                        InputStateChangeReason::MultitouchRegister => {
+                            input_state.lock().unwrap().has_multitouch = true;
+                            INPUT_MULTITOUCH_ONLINE
+                        }
+                        InputStateChangeReason::MultitouchUnregister => {
+                            input_state.lock().unwrap().has_multitouch = false;
+                            INPUT_MULTITOUCH_OFFLINE
+                        }
+                    },
+                    _ => unreachable!(),
+                };
+                send_input_device_change_msg(writer.clone(), internal_reason);
+            },
+        );
 
         self.input_state.lock().unwrap().input_notifier_id = register_input_notifier(notifier);
     }
@@ -461,8 +467,8 @@ impl OhUiMsgHandler {
         );
         let (w, h) = *self.ui_size.read().unwrap();
 
-        send_mt_event(&mut evt, w as i32, h as i32)?;
-        send_mt_sync()?;
+        send_mt_screen_event(&mut evt, w as i32, h as i32)?;
+        send_mt_screen_sync()?;
         trace::oh_event_multitouch(
             mtt.x,
             mtt.y,
