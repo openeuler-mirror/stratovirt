@@ -411,6 +411,9 @@ impl InputIoHandler {
                     }
                 }
                 Err(e) => {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        return;
+                    }
                     error!("Failed to read event from evdev_fd: {:?}", e);
                     return;
                 }
