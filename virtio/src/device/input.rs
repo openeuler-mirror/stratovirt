@@ -106,6 +106,7 @@ struct VirtioInputAbsInfo {
     max: [u8; size_of::<u32>()],
     fuzz: [u8; size_of::<u32>()],
     flat: [u8; size_of::<u32>()],
+    res: [u8; size_of::<u32>()],
 }
 
 impl VirtioInputAbsInfo {
@@ -115,6 +116,7 @@ impl VirtioInputAbsInfo {
             max: absinfo.maximum.to_le_bytes(),
             fuzz: absinfo.fuzz.to_le_bytes(),
             flat: absinfo.flat.to_le_bytes(),
+            res: absinfo.resolution.to_le_bytes(),
         }
     }
 }
