@@ -36,6 +36,7 @@ use machine_manager::{
     config::{get_pci_df, parse_bool, valid_id, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::{register_event_helper, unregister_event_helper},
 };
+use ui::input::MultitouchType;
 use util::byte_code::ByteCode;
 use util::evdev::*;
 use util::loop_context::{
@@ -308,6 +309,8 @@ pub struct InputIoHandler {
     interrupt_cb: Arc<VirtioInterrupt>,
     /// fd of the evdev file
     evdev_fd: Option<Arc<File>>,
+    /// multitouch type
+    mt_type: Option<MultitouchType>,
 }
 
 impl InputIoHandler {
@@ -437,6 +440,11 @@ impl InputIoHandler {
             }
         }
     }
+
+    #[inline]
+    pub fn get_mt_type(&self) -> Option<MultitouchType> {
+        self.mt_type
+    }
 }
 
 /// Create a new EventNotifier.
@@ -564,6 +572,7 @@ impl Input {
         mem_space: Arc<AddressSpace>,
         interrupt_cb: Arc<VirtioInterrupt>,
         queue_evts: Vec<Arc<EventFd>>,
+        mt_type: Option<MultitouchType>,
     ) -> Result<InputIoHandler> {
         let queues = &self.base.queues;
         if queues.len() != self.queue_num() {
@@ -591,6 +600,7 @@ impl Input {
             device_broken: self.base.broken.clone(),
             interrupt_cb: interrupt_cb.clone(),
             evdev_fd: self.fd.clone(),
+            mt_type,
         })
     }
 }
@@ -635,7 +645,7 @@ impl VirtioDevice for Input {
         interrupt_cb: Arc<VirtioInterrupt>,
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
-        let handler = self.create_io_handler(mem_space, interrupt_cb, queue_evts)?;
+        let handler = self.create_io_handler(mem_space, interrupt_cb, queue_evts, None)?;
         register_event_helper(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler))),
             None,
