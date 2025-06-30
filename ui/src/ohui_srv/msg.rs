@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::mem::size_of;
+use std::sync::LazyLock;
 
 use anyhow::{bail, Result};
 use util::byte_code::ByteCode;
@@ -33,7 +34,7 @@ pub const CLIENT_MOUSE_BUTTON_FORWARD: u32 = 0x4;
 pub const EVENT_MSG_HDR_SIZE: u32 = size_of::<EventMsgHdr>() as u32;
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialOrd, PartialEq)]
 pub enum EventType {
     WindowInfo = 0,
     MouseButton = 1,
@@ -317,24 +318,50 @@ impl EventMsgHdr {
 }
 
 pub fn event_msg_data_len(event_type: EventType) -> usize {
-    match event_type {
-        EventType::WindowInfo => size_of::<WindowInfoEvent>(),
-        EventType::MouseButton => size_of::<MouseButtonEvent>(),
-        EventType::MouseMotion => size_of::<MouseMotionEvent>(),
-        EventType::Keyboard => size_of::<KeyboardEvent>(),
-        EventType::Scroll => size_of::<ScrollEvent>(),
-        EventType::Focus => size_of::<FocusEvent>(),
-        EventType::FrameBufferDirty => size_of::<FrameBufferDirtyEvent>(),
-        EventType::CursorDefine => size_of::<HWCursorEvent>(),
-        EventType::Ledstate => size_of::<LedstateEvent>(),
-        EventType::Greet => size_of::<GreetEvent>(),
-        EventType::MultitouchScreen => size_of::<MultiTouchScreenEvent>(),
-        EventType::FlushFrame => size_of::<FlushFrameEvent>(),
-        EventType::InputDeviceChange => size_of::<InputDeviceChange>(),
-        EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
-        EventType::VmViewChange => size_of::<VmViewChangeEvent>(),
-        EventType::TouchPadScroll => size_of::<TouchPadScrollEvent>(),
-        EventType::TouchPadPinch => size_of::<TouchPadPinchEvent>(),
-        _ => 0,
+    static EVENT_LEN: LazyLock<Vec<usize>> = LazyLock::new(|| {
+        vec![
+            // WindowInfo
+            size_of::<WindowInfoEvent>(),
+            // MouseButton
+            size_of::<MouseButtonEvent>(),
+            // MouseMotion
+            size_of::<MouseMotionEvent>(),
+            // Keyboard
+            size_of::<KeyboardEvent>(),
+            // Scroll
+            size_of::<ScrollEvent>(),
+            // LedState
+            size_of::<LedstateEvent>(),
+            // FrameBufferDirty
+            size_of::<FrameBufferDirtyEvent>(),
+            // Greet
+            size_of::<GreetEvent>(),
+            // CursorDefine
+            size_of::<HWCursorEvent>(),
+            // Focus
+            size_of::<FocusEvent>(),
+            // VmCtrlInfo
+            0,
+            // FlushFrame
+            size_of::<FlushFrameEvent>(),
+            // MultitouchScreen
+            size_of::<MultiTouchScreenEvent>(),
+            // InputDeviceChange
+            size_of::<InputDeviceChange>(),
+            // WindowInfoV2
+            size_of::<WindowInfoV2Event>(),
+            // VmViewChange
+            size_of::<VmViewChangeEvent>(),
+            // TouchPadScroll
+            size_of::<TouchPadScrollEvent>(),
+            // TouchPadPinch
+            size_of::<TouchPadPinchEvent>(),
+        ]
+    });
+
+    if event_type >= EventType::Max {
+        0
+    } else {
+        EVENT_LEN[event_type as usize]
     }
 }
