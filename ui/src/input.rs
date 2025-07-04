@@ -575,7 +575,7 @@ pub trait ConsumerOpts: Send {
 //
 // the code for multitouch
 //
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum MultitouchType {
     #[default]
     Screen,

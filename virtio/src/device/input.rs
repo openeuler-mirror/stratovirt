@@ -43,6 +43,11 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 
+pub const VIRTIO_INPUT_F_MOUSE: u32 = 0x0;
+pub const VIRTIO_INPUT_F_KEYBOARD: u32 = 0x1;
+pub const VIRTIO_INPUT_F_MTT_SCREEN: u32 = 0x2;
+pub const VIRTIO_INPUT_F_MTT_TOUCHPAD: u32 = 0x3;
+
 /// Unset select cfg.
 const VIRTIO_INPUT_CFG_UNSET: u8 = 0x00;
 /// Returns the name of the device

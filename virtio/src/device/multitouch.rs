@@ -20,9 +20,10 @@ use ui::input::{
     MultitouchOps, MultitouchType,
 };
 
-use crate::VirtioBase;
-use crate::VirtioDevice;
-use crate::VirtioInterrupt;
+use crate::{
+    virtio_has_feature, VirtioBase, VirtioDevice, VirtioInterrupt, VIRTIO_INPUT_F_MTT_SCREEN,
+    VIRTIO_INPUT_F_MTT_TOUCHPAD,
+};
 use crate::{EvdevConfig, Input, InputIoHandler};
 use address_space::AddressSpace;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
@@ -233,12 +234,16 @@ impl VirtioDevice for Multitouch {
     fn virtio_base_mut(&mut self) -> &mut VirtioBase {
         self.device.virtio_base_mut()
     }
+
     fn init_config_features(&mut self) -> Result<()> {
+        self.virtio_base_mut().device_features |=
+            1 << VIRTIO_INPUT_F_MTT_TOUCHPAD | 1 << VIRTIO_INPUT_F_MTT_SCREEN;
         Ok(())
     }
 
     fn realize(&mut self) -> Result<()> {
-        self.device.realize()
+        self.device.realize()?;
+        self.init_config_features()
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) -> Result<()> {
@@ -255,6 +260,15 @@ impl VirtioDevice for Multitouch {
         interrupt_cb: Arc<VirtioInterrupt>,
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
+        if self.touchtype == MultitouchType::Pad
+            && !virtio_has_feature(
+                self.device.virtio_base().driver_features,
+                VIRTIO_INPUT_F_MTT_TOUCHPAD,
+            )
+        {
+            bail!("the guest driver didn't initialize the device as touchpad");
+        }
+
         let handler = Arc::new(Mutex::new(self.device.create_io_handler(
             mem_space,
             interrupt_cb,
