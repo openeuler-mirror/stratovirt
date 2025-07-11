@@ -50,7 +50,7 @@ pub enum EventType {
     FlushFrame = 11,
     MultitouchScreen = 12,
     InputDeviceChange = 13,
-    WindowInfoV2 = 14,
+    WindowInfoExtension = 14,
     VmViewChange = 15,
     TouchPadScroll = 16,
     TouchPadPinch = 17,
@@ -245,14 +245,14 @@ pub const INPUT_MULTITOUCH_PAD_OFFLINE: u64 = 4;
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
-pub struct WindowInfoV2Event {
-    pub width: u32,
-    pub height: u32,
+pub struct WindowInfoExtensionEvent {
+    pub surface_width: u32,
+    pub surface_height: u32,
     pub rotation: u32,
     pub fold_status: u32,
 }
 
-impl ByteCode for WindowInfoV2Event {}
+impl ByteCode for WindowInfoExtensionEvent {}
 
 pub const WINDOW_ROTATION_0: u32 = 0;
 pub const WINDOW_ROTATION_90: u32 = 1;
@@ -349,7 +349,7 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
             // InputDeviceChange
             size_of::<InputDeviceChange>(),
             // WindowInfoV2
-            size_of::<WindowInfoV2Event>(),
+            size_of::<WindowInfoExtensionEvent>(),
             // VmViewChange
             size_of::<VmViewChangeEvent>(),
             // TouchPadScroll

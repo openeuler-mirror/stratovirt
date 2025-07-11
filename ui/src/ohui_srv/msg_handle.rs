@@ -159,7 +159,7 @@ pub struct OhUiMsgHandler {
     vm_pause: Arc<RwLock<bool>>,
     pause_notifier_id: Mutex<u64>,
     input_state: Arc<Mutex<InputDeviceState>>,
-    ui_size: RwLock<(u32, u32)>,
+    surface_size: RwLock<(u32, u32)>,
 }
 
 impl OhUiMsgHandler {
@@ -172,7 +172,7 @@ impl OhUiMsgHandler {
             vm_pause: Arc::new(RwLock::new(false)),
             pause_notifier_id: Mutex::new(0),
             input_state: Arc::new(Mutex::new(InputDeviceState::default())),
-            ui_size: RwLock::new((0, 0)),
+            surface_size: RwLock::new((0, 0)),
         };
         handler.register_pause_notifier(handler.vm_pause.clone());
         handler.register_input_change_notifier();
@@ -278,7 +278,9 @@ impl OhUiMsgHandler {
             return false;
         }
 
-        !matches!(et, EventType::WindowInfoV2)
+        let ret =
+            matches!(et, EventType::WindowInfoExtension) || matches!(et, EventType::WindowInfo);
+        !ret
     }
 
     fn handle_mouse_button(&self, mb: &MouseButtonEvent) -> Result<()> {
@@ -373,17 +375,13 @@ impl OhUiMsgHandler {
                 }
             }
         }
-        *self.ui_size.write().unwrap() = (wi.width, wi.height);
         trace::oh_event_windowinfo(wi.width, wi.height);
     }
 
-    fn handle_windowinfo_v2(&self, wi_v2: &WindowInfoV2Event) -> Result<()> {
-        let wi = WindowInfoEvent {
-            width: wi_v2.width,
-            height: wi_v2.height,
-        };
-        self.handle_windowinfo(&wi);
-        set_dpy_rotation(Rotation::try_from(wi_v2.rotation).map_err(|e| anyhow!("{:?}", e))?);
+    fn handle_windowinfo_extension(&self, wie: &WindowInfoExtensionEvent) -> Result<()> {
+        *self.surface_size.write().unwrap() = (wie.surface_width, wie.surface_height);
+        set_dpy_rotation(Rotation::try_from(wie.rotation).map_err(|e| anyhow!("{:?}", e))?);
+        Ok(())
     }
 
     fn handle_focuschange(&self, fe: &FocusEvent) -> Result<()> {
@@ -430,7 +428,7 @@ impl OhUiMsgHandler {
             slot_id,
             tracking_id,
         );
-        let (w, h) = *self.ui_size.read().unwrap();
+        let (w, h) = *self.surface_size.read().unwrap();
 
         send_mt_screen_event(&mut evt, w as i32, h as i32)?;
         send_mt_screen_sync()?;
@@ -533,7 +531,7 @@ static MSG_HANDLER_TABLE: LazyLock<Vec<MsgHandleFunc>> = LazyLock::new(|| {
         // InputDeviceChange 13
         Box::new(stub_handler),
         // WindowInfoV2      14
-        Box::new(windowinfo_v2_handler),
+        Box::new(windowinfo_extension_handler),
         // VmViewChange      15
         Box::new(vm_view_change_handler),
         // TouchPadScroll    16
@@ -549,6 +547,7 @@ fn stub_handler(_msg_handler: &OhUiMsgHandler, _body_bytes: &[u8]) -> Result<()>
 
 fn window_info_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
     let body = WindowInfoEvent::from_bytes(body_bytes).unwrap();
+    info!("{:?}", body);
     msg_handler.handle_windowinfo(body);
     Ok(())
 }
@@ -601,10 +600,10 @@ fn mtt_screen_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result
     msg_handler.handle_multitouch_screen_event(body)
 }
 
-fn windowinfo_v2_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
-    let body = WindowInfoV2Event::from_bytes(body_bytes).unwrap();
-    info!("WindowInfoV2: {:?}", body);
-    msg_handler.handle_windowinfo_v2(body)
+fn windowinfo_extension_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = WindowInfoExtensionEvent::from_bytes(body_bytes).unwrap();
+    info!("{:?}", body);
+    msg_handler.handle_windowinfo_extension(body)
 }
 
 fn vm_view_change_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
