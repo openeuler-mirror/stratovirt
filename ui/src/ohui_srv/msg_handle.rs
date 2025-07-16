@@ -184,6 +184,9 @@ impl OhUiMsgHandler {
         let pause_notify = Arc::new(move |paused: bool| {
             info!("Message Handler get vm pause state {:?}", paused);
             *vm_pause.write().unwrap() = paused;
+            if !paused {
+                let _ = Self::release_input_keys();
+            }
         });
         *self.pause_notifier_id.lock().unwrap() = register_vm_pause_notifier(pause_notify);
     }
@@ -392,9 +395,7 @@ impl OhUiMsgHandler {
             }
             CLIENT_FOCUSOUT_EVENT => {
                 info!("received focus-out event");
-                release_all_key()?;
-                release_all_btn()?;
-                lift_all_fingers()?;
+                Self::release_input_keys()?;
             }
             _ => warn!("focus message type error."),
         }
@@ -495,6 +496,13 @@ impl OhUiMsgHandler {
     pub fn reset(&self) {
         *self.reader.lock().unwrap() = None;
         *self.writer.lock().unwrap() = None;
+    }
+
+    fn release_input_keys() -> Result<()> {
+        release_all_key()?;
+        release_all_btn()?;
+        lift_all_fingers()?;
+        lift_tp_fingers()
     }
 }
 

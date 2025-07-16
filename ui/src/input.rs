@@ -838,8 +838,7 @@ pub fn lift_all_fingers() -> Result<()> {
     get_mt_screen_handler()?
         .as_mut()
         .unwrap()
-        .lift_all_fingers()?;
-    get_mt_pad_handler()?.as_mut().unwrap().lift_all_fingers()
+        .lift_all_fingers()
 }
 
 //

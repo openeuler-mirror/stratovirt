@@ -408,6 +408,10 @@ impl TouchpadEmulator {
     }
 
     fn lift_all_fingers(&mut self) -> Result<()> {
+        if !self.init {
+            return Ok(());
+        }
+
         let len = self.slots.len();
         self.evts.clear();
 
@@ -436,6 +440,10 @@ pub fn send_scroll_event(evt: TouchPadScrollData) -> Result<()> {
 
 pub fn stop_slide() -> Result<bool> {
     TP_EMU.lock().unwrap().stop_slide()
+}
+
+pub fn lift_tp_fingers() -> Result<()> {
+    TP_EMU.lock().unwrap().lift_all_fingers()
 }
 
 pub fn init_tp_emu() -> Result<()> {
