@@ -298,7 +298,7 @@ impl VmConfig {
             }
         }
         let file = open_file(path, read_only, direct)?;
-        let (req_align, buf_align) = get_file_alignment(&file, direct);
+        let (req_align, buf_align) = get_file_alignment(&file, direct)?;
         if req_align == 0 || buf_align == 0 {
             bail!(
                 "Failed to detect alignment requirement of drive file {}.",

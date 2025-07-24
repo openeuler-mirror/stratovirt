@@ -2185,7 +2185,7 @@ mod test {
             None,
         )
         .unwrap();
-        let (req_align, buf_align) = get_file_alignment(&image.file, true);
+        let (req_align, buf_align) = get_file_alignment(&image.file, true).unwrap();
         let conf = BlockProperty {
             id: path.to_string(),
             format: DiskFormat::Qcow2,
@@ -2509,7 +2509,7 @@ mod test {
             let alloc_clusters: Vec<u64> = vec![1, 2, 4, 8, 16, 32];
             for n_clusters in alloc_clusters {
                 let image = TestImage::new(path, image_bits, cluster_bits);
-                let (req_align, buf_align) = get_file_alignment(&image.file, true);
+                let (req_align, buf_align) = get_file_alignment(&image.file, true).unwrap();
                 let conf = BlockProperty {
                     id: path.to_string(),
                     format: DiskFormat::Qcow2,
@@ -2586,7 +2586,7 @@ mod test {
         // and then use the aligned interval for recying disk.
         for (offset_begin, offset_end) in test_data {
             let mut image = TestImage::new(path, image_bits, cluster_bits);
-            let (req_align, buf_align) = get_file_alignment(&image.file, true);
+            let (req_align, buf_align) = get_file_alignment(&image.file, true).unwrap();
             conf.req_align = req_align;
             conf.buf_align = buf_align;
             let mut qcow2_driver = image.create_qcow2_driver(conf.clone());
@@ -2628,7 +2628,7 @@ mod test {
         let cluster_bits = 16;
         let cluster_size = 1 << cluster_bits;
         let mut image = TestImage::new(path, image_bits, cluster_bits);
-        let (req_align, buf_align) = get_file_alignment(&image.file, true);
+        let (req_align, buf_align) = get_file_alignment(&image.file, true).unwrap();
         let conf = BlockProperty {
             id: path.to_string(),
             format: DiskFormat::Qcow2,
