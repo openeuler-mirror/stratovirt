@@ -25,7 +25,10 @@ use super::{
     touchpad::*,
 };
 use crate::{
-    console::{get_active_console, graphic_hardware_ui_info, set_dpy_rotation, Rotation},
+    console::{
+        get_active_console, get_dpy_standing, graphic_hardware_ui_info, set_dpy_rotation,
+        set_dpy_standing, Rotation,
+    },
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
         lift_all_fingers, register_input_notifier, release_all_btn, release_all_key,
@@ -412,7 +415,14 @@ impl OhUiMsgHandler {
         }
 
         let evt_type = match mtt_type {
-            MULTITOUCH_EVENT_DOWN => MultiTouchEventKind::BEGIN,
+            MULTITOUCH_EVENT_DOWN => {
+                // send mouse move event if display is standing to wakeup the guest
+                if get_dpy_standing() {
+                    let _ = self.state.lock().unwrap().move_pointer(0.0, 0.0);
+                    set_dpy_standing(false);
+                }
+                MultiTouchEventKind::BEGIN
+            }
             MULTITOUCH_EVENT_MOVE => MultiTouchEventKind::UPDATE,
             MULTITOUCH_EVENT_UP => {
                 tracking_id = -1;
