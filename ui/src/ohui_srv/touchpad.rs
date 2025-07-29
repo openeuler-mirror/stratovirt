@@ -443,6 +443,10 @@ pub fn stop_slide() -> Result<bool> {
 }
 
 pub fn lift_tp_fingers() -> Result<()> {
+    TP_EMU
+        .lock()
+        .unwrap()
+        .set_touch_status(MultiTouchPadStatus::Up);
     TP_EMU.lock().unwrap().lift_all_fingers()
 }
 
