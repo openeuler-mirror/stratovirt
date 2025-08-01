@@ -514,3 +514,130 @@ pub fn init_tp_emu() -> Result<()> {
 pub fn uninit_tp_emu() {
     TP_EMU.lock().unwrap().uninit()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::{
+        register_mt_handler, unregister_mt_handler, MultiTouchAbsData, MultitouchOps,
+        MultitouchType,
+    };
+    use crate::ohui_srv::OhUiMsgHandler;
+
+    struct MultitouchOpsTest {}
+    impl MultitouchOps for MultitouchOpsTest {
+        fn send_event(&mut self, _mtt_evt: &MultiTouchAbsData) -> Result<()> {
+            Ok(())
+        }
+
+        fn send_raw_event(&mut self, _evt: &InputEvent) -> Result<()> {
+            Ok(())
+        }
+
+        fn send_sync(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_tp_register_and_unregister() {
+        let ops = Arc::new(Mutex::new(MultitouchOpsTest {}));
+        OhUiMsgHandler::new();
+        assert!(register_mt_handler(ops, 12000, 8000, 4, MultitouchType::Pad).is_ok());
+        assert_eq!(TP_EMU.lock().unwrap().init, true);
+        assert_eq!(TP_EMU.lock().unwrap().x_max, 12000);
+        assert_eq!(TP_EMU.lock().unwrap().y_max, 8000);
+        unregister_mt_handler(MultitouchType::Pad);
+        assert_eq!(TP_EMU.lock().unwrap().init, false);
+    }
+
+    #[test]
+    fn test_scroll_event() {
+        let ops = Arc::new(Mutex::new(MultitouchOpsTest {}));
+        OhUiMsgHandler::new();
+        assert!(register_mt_handler(ops, 12000, 8000, 4, MultitouchType::Pad).is_ok());
+
+        // Test scroll
+        let mut scroll_event = TouchPadScrollData::new(MultiTouchEventKind::BEGIN, 0.0, 0.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        scroll_event = TouchPadScrollData::new(MultiTouchEventKind::UPDATE, 0.0, 0.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        scroll_event = TouchPadScrollData::new(MultiTouchEventKind::UPDATE, 0.0, 1.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        std::thread::sleep(Duration::from_millis(SEND_SYNC_INTERVAL * 2));
+        scroll_event = TouchPadScrollData::new(MultiTouchEventKind::UPDATE, 0.0, 5.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        scroll_event = TouchPadScrollData::new(MultiTouchEventKind::END, 0.0, 0.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        assert_eq!(TP_EMU.lock().unwrap().sliding, false);
+
+        // Test slide
+        let mut scroll_event = TouchPadScrollData::new(MultiTouchEventKind::BEGIN, 0.0, 0.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        scroll_event = TouchPadScrollData::new(MultiTouchEventKind::UPDATE, 0.0, 50.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        scroll_event = TouchPadScrollData::new(MultiTouchEventKind::END, 0.0, 0.0);
+        assert!(send_scroll_event(scroll_event).is_ok());
+        assert_eq!(TP_EMU.lock().unwrap().sliding, true);
+        assert!(stop_slide().is_ok());
+        assert_eq!(TP_EMU.lock().unwrap().sliding, false);
+        unregister_mt_handler(MultitouchType::Pad);
+    }
+
+    #[test]
+    fn test_pinch_event() {
+        let ops = Arc::new(Mutex::new(MultitouchOpsTest {}));
+        OhUiMsgHandler::new();
+        assert!(register_mt_handler(ops, 12000, 8000, 4, MultitouchType::Pad).is_ok());
+
+        let mut pinch_event = TouchPadPinchData::new(MultiTouchEventKind::BEGIN, 1.0);
+        assert!(send_pinch_event(pinch_event).is_ok());
+        pinch_event = TouchPadPinchData::new(MultiTouchEventKind::UPDATE, 5.0);
+        assert!(send_pinch_event(pinch_event).is_ok());
+        pinch_event = TouchPadPinchData::new(MultiTouchEventKind::END, 0.0);
+        assert!(send_pinch_event(pinch_event).is_ok());
+        unregister_mt_handler(MultitouchType::Pad);
+    }
+
+    #[test]
+    fn test_swipe_event() {
+        let ops = Arc::new(Mutex::new(MultitouchOpsTest {}));
+        OhUiMsgHandler::new();
+        assert!(register_mt_handler(ops, 12000, 8000, 4, MultitouchType::Pad).is_ok());
+
+        let mut swipe_event = TouchPadSwipeData::new(MultiTouchEventKind::BEGIN, 0, 0);
+        assert!(send_swipe_event(swipe_event).is_ok());
+        swipe_event = TouchPadSwipeData::new(MultiTouchEventKind::UPDATE, 1, 1);
+        assert!(send_swipe_event(swipe_event).is_ok());
+        // Test the raw value is greater than 0
+        assert!(TP_EMU.lock().unwrap().slots[0].x > 0);
+        assert!(TP_EMU.lock().unwrap().slots[0].y > 0);
+        assert!(TP_EMU.lock().unwrap().slots[1].x > 0);
+        assert!(TP_EMU.lock().unwrap().slots[1].y > 0);
+        assert!(TP_EMU.lock().unwrap().slots[2].x > 0);
+        assert!(TP_EMU.lock().unwrap().slots[2].y > 0);
+        swipe_event = TouchPadSwipeData::new(MultiTouchEventKind::END, 0, 0);
+        assert!(send_swipe_event(swipe_event).is_ok());
+        unregister_mt_handler(MultitouchType::Pad);
+    }
+
+    #[test]
+    fn test_lift_tp_fingers() {
+        let ops = Arc::new(Mutex::new(MultitouchOpsTest {}));
+        OhUiMsgHandler::new();
+        assert!(register_mt_handler(ops, 12000, 8000, 4, MultitouchType::Pad).is_ok());
+        assert!(lift_tp_fingers().is_ok());
+
+        // Test touchpad thread state
+        let tp = TP_EMU.lock().unwrap();
+        let locked_state = tp.touch_state.0.lock().unwrap();
+        match *locked_state {
+            MultiTouchPadStatus::Up => assert!(true),
+            _ => assert!(false),
+        }
+        drop(locked_state);
+        drop(tp);
+
+        unregister_mt_handler(MultitouchType::Pad);
+    }
+}

@@ -376,3 +376,39 @@ impl MultitouchOps for InputIoHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    #[test]
+    fn test_touchpad_cmdline_parser() {
+        // Test device parameters are all right.
+        let touchpad_cmd =
+            "virtio-multitouch-pci,id=touchpad,bus=pcie.0,addr=0xb,x=12000,y=8000,touchtype=pad";
+        let touchpad_config =
+            MultitouchConfig::try_parse_from(str_slip_to_clap(touchpad_cmd, true, false)).unwrap();
+        assert_eq!(touchpad_config.id, "touchpad");
+        assert_eq!(touchpad_config.touchtype, MultitouchType::Pad);
+        assert_eq!(touchpad_config.x, 12000);
+        assert_eq!(touchpad_config.y, 8000);
+
+        // Test device parameters are illegal value.
+        let touchpad_cmd = "virtio-multitouch-pci,id=touchpad,bus=pcie.0,addr=0xb,x=12000,y=8000,touchtype=touchpad";
+        let result = MultitouchConfig::try_parse_from(str_slip_to_clap(touchpad_cmd, true, false));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_touchpad_info_init() {
+        let touchpad_cmd =
+            "virtio-multitouch-pci,id=touchpad,bus=pcie.0,addr=0xb,x=12000,y=8000,touchtype=pad";
+        let touchpad_config =
+            MultitouchConfig::try_parse_from(str_slip_to_clap(touchpad_cmd, true, false)).unwrap();
+        let touchpad_info = Multitouch::new(touchpad_config);
+        assert_eq!(touchpad_info.touchtype, MultitouchType::Pad);
+        assert_eq!(touchpad_info.x_max, 12000);
+        assert_eq!(touchpad_info.y_max, 8000);
+    }
+}
