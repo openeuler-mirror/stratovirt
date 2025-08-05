@@ -24,8 +24,8 @@ use crate::input::{
     get_mt_pad_feature, send_mt_pad_raw_events, send_mt_pad_sync, MultiTouchEventKind,
 };
 
-// Currently we only support maximum 2 fingers.
-const SUPPORT_SLOT_MAX: usize = 2;
+// Currently we only support maximum 3 fingers.
+const SUPPORT_SLOT_MAX: usize = 3;
 
 // If we send all events for 2 fingers, the events are like below:
 // ABS_MT_SLOT 0
@@ -54,6 +54,8 @@ const SLIDE_CHECK_PIXELS: i32 = 15;
 const DISTANCE_BETWEEN_TWO_FINGERS_SCROLL: i32 = 5;
 // two fingers
 const TWO_FINGERS: usize = 2;
+// three fingers
+pub const THREE_FINGERS: usize = 3;
 // Minimum scroll pixels, When the scroll pixels is too small,
 // Windows will think it is a two-finger touch.
 const MIN_SCROLL_PIXELS: i32 = 180;
@@ -73,6 +75,23 @@ impl MultiTouchPadAbsData {
             x_update,
             y,
             y_update,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TouchPadSwipeData {
+    pub action: MultiTouchEventKind,
+    pub avg_x: i32,
+    pub avg_y: i32,
+}
+
+impl TouchPadSwipeData {
+    pub fn new(action: MultiTouchEventKind, avg_x: i32, avg_y: i32) -> Self {
+        Self {
+            action,
+            avg_x,
+            avg_y,
         }
     }
 }
@@ -407,6 +426,40 @@ impl TouchpadEmulator {
         self.handle_finger_event(TWO_FINGERS)
     }
 
+    fn send_swipe_event(&mut self, evt: TouchPadSwipeData) -> Result<()> {
+        if !self.init {
+            warn!("touchpad emulator is not init, ignore swipe event");
+            return Ok(());
+        }
+
+        match evt.action {
+            MultiTouchEventKind::BEGIN => {
+                self.set_touch_status(MultiTouchPadStatus::Down);
+            }
+            MultiTouchEventKind::UPDATE => {
+                self.handle_swipe(evt.avg_x, evt.avg_y)?;
+            }
+            MultiTouchEventKind::END => {
+                self.set_touch_status(MultiTouchPadStatus::Up);
+                self.lift_all_fingers()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_swipe(&mut self, avg_x: i32, avg_y: i32) -> Result<()> {
+        // We distinguish the three fingers by different x.
+        // In order to prevent x < 0, let's take the average as the lowest value,
+        // and the next x increases by 100.
+        self.slots[0].x = avg_x;
+        self.slots[0].y = avg_y;
+        self.slots[1].x = avg_x + 100;
+        self.slots[1].y = avg_y;
+        self.slots[2].x = avg_x + 200;
+        self.slots[2].y = avg_y;
+        self.handle_finger_event(THREE_FINGERS)
+    }
+
     fn lift_all_fingers(&mut self) -> Result<()> {
         if !self.init {
             return Ok(());
@@ -429,6 +482,10 @@ impl TouchpadEmulator {
 
 static TP_EMU: LazyLock<Mutex<TouchpadEmulator>> =
     LazyLock::new(|| Mutex::new(TouchpadEmulator::new()));
+
+pub fn send_swipe_event(evt: TouchPadSwipeData) -> Result<()> {
+    TP_EMU.lock().unwrap().send_swipe_event(evt)
+}
 
 pub fn send_pinch_event(evt: TouchPadPinchData) -> Result<()> {
     TP_EMU.lock().unwrap().send_pinch_event(evt)
