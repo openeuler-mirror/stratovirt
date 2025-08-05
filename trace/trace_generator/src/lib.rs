@@ -100,14 +100,12 @@ pub fn gen_trace_state(_input: TokenStream) -> TokenStream {
         let get_func = parse_str::<Ident>(format!("get_{}_state", name).as_str()).unwrap();
         let set_func = parse_str::<Ident>(format!("set_{}_state", name).as_str()).unwrap();
         quote!(
-            static mut #state_name: AtomicBool = AtomicBool::new(false);
+            static #state_name: AtomicBool = AtomicBool::new(false);
             fn #get_func() -> bool {
-                // SAFETY: AtomicBool can be safely shared between threads.
-                unsafe { #state_name.load(Ordering::SeqCst) }
+                #state_name.load(Ordering::SeqCst)
             }
             fn #set_func(val: bool) {
-                // SAFETY: AtomicBool can be safely shared between threads.
-                unsafe { #state_name.store(val, Ordering::SeqCst) }
+                #state_name.store(val, Ordering::SeqCst)
             }
         )
     });
@@ -162,8 +160,7 @@ pub fn gen_trace_event_func(_input: TokenStream) -> TokenStream {
                 let state_name = parse_str::<Ident>(format!("{}_state", event_name).to_uppercase().as_str()).unwrap();
                 quote!(
                     #[cfg(any(feature = "trace_to_logger", feature = "trace_to_ftrace"))]
-                    // SAFETY: AtomicBool can be safely shared between threads.
-                    if unsafe { #state_name.load(Ordering::SeqCst) } {
+                    if #state_name.load(Ordering::SeqCst) {
                         #[cfg(feature = "trace_to_logger")]
                         {
                             log::trace!(#message, #event_name.to_string() #message_args);
@@ -242,8 +239,7 @@ pub fn gen_trace_scope_func(_input: TokenStream) -> TokenStream {
                 let state_name = parse_str::<Ident>(format!("{}_state", scope_name).to_uppercase().as_str()).unwrap();
                 quote!(
                     #[cfg(any(feature = "trace_to_logger", feature = "trace_to_ftrace", all(target_env = "ohos", feature = "trace_to_hitrace")))]
-                    // SAFETY: AtomicBool can be safely shared between threads.
-                    if unsafe { #state_name.load(Ordering::SeqCst) } {
+                    if #state_name.load(Ordering::SeqCst) {
                         let trace_info = format!(#message, #scope_name.to_string() #message_args);
                         if asyn {
                             return trace_scope::Scope::Asyn(trace_scope::TraceScopeAsyn::new(trace_info))

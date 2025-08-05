@@ -300,7 +300,7 @@ impl UnixSock {
 
     fn cmsg_data(&self, cmsg_buffer: *mut cmsghdr) -> *mut RawFd {
         (cmsg_buffer as *mut u8).wrapping_add(
-            // SAFETY: Parameter is zero.
+            // SAFETY: Parameter zero is valid.
             unsafe { CMSG_LEN(0) } as usize,
         ) as *mut RawFd
     }
@@ -318,7 +318,7 @@ impl UnixSock {
         // Safe to get msg_control because the parameter is valid.
         let nex_cmsg_pos = (next_cmsg as *mut u8).wrapping_sub(msghdr.msg_control as usize) as u64;
 
-        // SAFETY: Parameter is constant.
+        // SAFETY: Parameter zero is valid.
         if nex_cmsg_pos.wrapping_add(u64::from(unsafe { CMSG_LEN(0) }))
             > msghdr.msg_controllen as u64
         {
@@ -339,7 +339,6 @@ impl UnixSock {
     ///
     /// The socket file descriptor is broken.
     pub fn send_msg(&self, iovecs: &mut [iovec], out_fds: &[RawFd]) -> Result<usize> {
-        // SAFETY: We checked the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We checked the out_fds lens before.
         let cmsg_len = unsafe { CMSG_LEN(u32::try_from(std::mem::size_of_val(out_fds))?) };
@@ -410,7 +409,6 @@ impl UnixSock {
     ///
     /// The socket file descriptor is broken.
     pub fn recv_msg(&self, iovecs: &mut [iovec], in_fds: &mut [RawFd]) -> Result<(usize, usize)> {
-        // SAFETY: We check the iovecs lens before.
         let iovecs_len = iovecs.len();
         // SAFETY: We check the in_fds lens before.
         let cmsg_capacity = unsafe { CMSG_SPACE(u32::try_from(std::mem::size_of_val(in_fds))?) };
@@ -462,7 +460,7 @@ impl UnixSock {
             let cmsg = unsafe { cmsg_ptr.read_unaligned() };
 
             if cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_RIGHTS {
-                // SAFETY: Input parameter is constant.
+                // SAFETY: Parameter zero is valid.
                 let fd_count = (cmsg.cmsg_len as u64 - u64::from(unsafe { CMSG_LEN(0) })) as usize
                     / size_of::<RawFd>();
                 let new_in_fds_count = in_fds_count

@@ -117,7 +117,7 @@ impl RamfbState {
             stride = linesize;
         }
 
-        let fb_addr = match self
+        let (fb_addr, fb_len) = match self
             .sys_mem
             .addr_cache_init(GuestAddress(addr), AddressAttr::Ram)
         {
@@ -127,7 +127,7 @@ impl RamfbState {
                     error!("Insufficient contiguous memory length");
                     return;
                 }
-                hva
+                (hva, len)
             }
             None => {
                 error!("Failed to get the host address of the framebuffer");
@@ -159,7 +159,10 @@ impl RamfbState {
 
         self.surface = Some(ds);
 
-        set_press_event(self.install.clone(), fb_addr as *const u8);
+        if fb_len >= 3 {
+            // SAFETY: fb_addr is valid and length is enough.
+            unsafe { set_press_event(self.install.clone(), fb_addr as *const u8) };
+        }
     }
 
     fn replace_surface(&mut self) {
@@ -347,14 +350,17 @@ impl StateTransfer for Ramfb {
     }
 }
 
-fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
+/// # Safety
+///
+/// The length of data must not less than 3.
+unsafe fn set_press_event(install: Arc<AtomicBool>, data: *const u8) {
     let black_screen =
-        // SAFETY: data is the raw pointer of framebuffer. EDKII has malloc the memory of
-        // the framebuffer. So dereference the data is safe.
+        // SAFETY: caller promises data is valid.
         unsafe { !data.is_null() && *data == 0 && *data.offset(1) == 0 && *data.offset(2) == 0 };
     if install.load(Ordering::Acquire) && black_screen {
         let set_press_func = Box::new(move || {
-            set_press_event(install.clone(), data);
+            // SAFETY: caller promises data is valid.
+            unsafe { set_press_event(install.clone(), data) };
         });
         let press_func = Box::new(move || {
             key_event(KEYCODE_RET, true)
