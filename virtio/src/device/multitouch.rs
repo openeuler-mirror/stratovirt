@@ -56,8 +56,8 @@ const MT_ABS_INFO: [MultitouchAbsInfo; 2] = [
     },
     // touchpad
     MultitouchAbsInfo {
-        // two fingers
-        slot_max: 0x1,
+        // three fingers
+        slot_max: 0x2,
         touch_major_max: 0xff,
         touch_minor_max: 0xff,
         tracking_id_max: 0xffff,

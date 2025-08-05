@@ -54,6 +54,7 @@ pub enum EventType {
     VmViewChange = 15,
     TouchPadScroll = 16,
     TouchPadPinch = 17,
+    TouchPadSwipe = 18,
     #[default]
     Max,
 }
@@ -266,6 +267,17 @@ pub const FOLD_STATUS_HALF_FOLDED: u32 = 3;
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
+pub struct TouchPadSwipeEvent {
+    pub action: u32,
+    pub finger_count: u32,
+    pub avg_x: i32,
+    pub avg_y: i32,
+}
+
+impl ByteCode for TouchPadSwipeEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct TouchPadScrollEvent {
     pub action: u32,
     pub horizontal: f64,
@@ -356,6 +368,8 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
             size_of::<TouchPadScrollEvent>(),
             // TouchPadPinch
             size_of::<TouchPadPinchEvent>(),
+            // TouchPadSwipe
+            size_of::<TouchPadSwipeEvent>(),
         ]
     });
 

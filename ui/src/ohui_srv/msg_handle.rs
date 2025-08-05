@@ -467,6 +467,12 @@ impl OhUiMsgHandler {
         send_pinch_event(evt)
     }
 
+    fn handle_touchpad_swipe(&self, mtt: &TouchPadSwipeEvent) -> Result<()> {
+        let action = try_into_mt_event(mtt.action)?;
+        let evt = TouchPadSwipeData::new(action, mtt.avg_x, mtt.avg_y);
+        send_swipe_event(evt)
+    }
+
     pub fn send_windowinfo(&self, w: u32, h: u32) {
         self.state.lock().unwrap().update_window_info(w, h);
         if let Some(writer) = self.writer.lock().unwrap().as_mut() {
@@ -556,6 +562,8 @@ static MSG_HANDLER_TABLE: LazyLock<Vec<MsgHandleFunc>> = LazyLock::new(|| {
         Box::new(tp_scroll_handler),
         // TouchPadPinch     17
         Box::new(tp_pinch_handler),
+        // TouchPadSwipe     18
+        Box::new(tp_swipe_handler),
     ]
 });
 
@@ -636,6 +644,15 @@ fn tp_scroll_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<
 fn tp_pinch_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
     let body = TouchPadPinchEvent::from_bytes(body_bytes).unwrap();
     msg_handler.handle_touchpad_pinch(body)
+}
+
+fn tp_swipe_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = TouchPadSwipeEvent::from_bytes(body_bytes).unwrap();
+    // only handle three fingers swipe
+    if body.finger_count != THREE_FINGERS as u32 {
+        return Ok(());
+    }
+    msg_handler.handle_touchpad_swipe(body)
 }
 
 fn send_input_device_change_msg(writer: Arc<Mutex<Option<MsgWriter>>>, reason: u64) {
