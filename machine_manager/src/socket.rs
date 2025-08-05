@@ -95,7 +95,7 @@ impl SocketRWHandler {
 
     fn parse_fd(&mut self, mhdr: &msghdr) {
         // At least it should has one RawFd.
-        // SAFETY: The input parameter is constant.
+        // SAFETY: The input parameter is valid.
         let min_cmsg_len = unsafe { u64::from(CMSG_LEN(size_of::<RawFd>() as u32)) };
         if (mhdr.msg_controllen as u64) < min_cmsg_len {
             return;
@@ -141,10 +141,8 @@ impl SocketRWHandler {
         };
         let mut cmsg_space = [0_u8; MAX_RECV_FDS_LEN];
         loop {
-            let mut mhdr: msghdr =
-                // SAFETY: In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be 
-                // initialized in normal way.
-                unsafe { std::mem::zeroed() };
+            // SAFETY: Zero is valid for it's member.
+            let mut mhdr: msghdr = unsafe { std::mem::zeroed() };
             mhdr.msg_name = std::ptr::null_mut();
             mhdr.msg_namelen = 0;
             mhdr.msg_iov = &mut iov as *mut iovec;

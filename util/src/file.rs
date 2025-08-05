@@ -49,8 +49,11 @@ pub fn open_file(path: &str, read_only: bool, direct: bool) -> Result<File> {
     Ok(file)
 }
 
-fn is_io_aligned(file: &File, buf: u64, size: usize) -> bool {
-    // SAFETY: file and buf is valid.
+/// # Safety
+///
+/// The length of buf must not less than size.
+unsafe fn is_io_aligned(file: &File, buf: u64, size: usize) -> bool {
+    // SAFETY: caller promises buf and size are valid.
     let ret = unsafe {
         libc::pread(
             file.as_raw_fd() as libc::c_int,
@@ -84,7 +87,8 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
     // Guess alignment requirement of request.
     let mut align = MIN_FILE_ALIGN;
     while align <= MAX_FILE_ALIGN {
-        if is_io_aligned(file, aligned_buffer as u64, align as usize) {
+        // SAFETY: aligned_buffer is valid and length is enough.
+        if unsafe { is_io_aligned(file, aligned_buffer as u64, align as usize) } {
             req_align = align;
             break;
         }
@@ -94,11 +98,14 @@ pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
     // Guess alignment requirement of buffer.
     let mut align = MIN_FILE_ALIGN;
     while align <= MAX_FILE_ALIGN {
-        if is_io_aligned(
-            file,
-            aligned_buffer as u64 + u64::from(align),
-            MAX_FILE_ALIGN as usize,
-        ) {
+        // SAFETY: aligned_buffer is valid and length is enough.
+        if unsafe {
+            is_io_aligned(
+                file,
+                aligned_buffer as u64 + u64::from(align),
+                MAX_FILE_ALIGN as usize,
+            )
+        } {
             buf_align = align;
             break;
         }

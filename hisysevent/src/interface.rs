@@ -171,7 +171,7 @@ pub(crate) fn write_to_hisysevent(
 
     let params_wrapper = format_param_array(event_params);
 
-    // SAFETY: Call hisysevent function, all parameters are just read.
+    // SAFETY: All parameters are valid and return val is checked.
     let ret = unsafe {
         (HISYSEVENT_FUNC_TABLE.hisysevent_write)(
             func.as_ptr() as *const c_char,
