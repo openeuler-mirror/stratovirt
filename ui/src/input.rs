@@ -68,6 +68,13 @@ pub const NUM_LOCK_LED: u8 = 0x1;
 pub const CAPS_LOCK_LED: u8 = 0x2;
 pub const SCROLL_LOCK_LED: u8 = 0x4;
 
+// consumer
+pub const CONSUMER_PREFIX: u16 = 0xe000;
+pub const CONSUMER_UP: u16 = 0x0100;
+pub const MEDIA_PLAY_PAUSE: u16 = CONSUMER_PREFIX | 0x22;
+pub const MEDIA_STOP: u16 = CONSUMER_PREFIX | 0x24;
+pub const MEDIA_PREVIOUS: u16 = CONSUMER_PREFIX | 0x10;
+pub const MEDIA_NEXT: u16 = CONSUMER_PREFIX | 0x19;
 static INPUTS: Lazy<Arc<Mutex<Inputs>>> = Lazy::new(|| Arc::new(Mutex::new(Inputs::default())));
 
 static LED_STATE: Lazy<Arc<Mutex<LedState>>> =
@@ -258,6 +265,8 @@ struct Inputs {
     kbd_lists: HashMap<String, Arc<Mutex<dyn KeyboardOpts>>>,
     tablet_ids: Vec<String>,
     tablet_lists: HashMap<String, Arc<Mutex<dyn PointerOpts>>>,
+    consumer_ids: Vec<String>,
+    consumer_lists: HashMap<String, Arc<Mutex<dyn ConsumerOpts>>>,
     keyboard_state: KeyBoardState,
     btn_state: u32,
 }
@@ -295,10 +304,35 @@ impl Inputs {
         }
     }
 
+    fn register_consumer(&mut self, device: &str, consumer: Arc<Mutex<dyn ConsumerOpts>>) {
+        self.consumer_ids.insert(0, device.to_string());
+        self.consumer_lists.insert(device.to_string(), consumer);
+    }
+
+    fn unregister_consumer(&mut self, device: &str) {
+        self.consumer_lists.remove(device);
+        let len = self.consumer_ids.len();
+        for i in 0..len {
+            if self.consumer_ids[i] == device {
+                self.consumer_ids.remove(i);
+                break;
+            }
+        }
+    }
+
     fn get_active_kbd(&mut self) -> Option<Arc<Mutex<dyn KeyboardOpts>>> {
         if !self.kbd_ids.is_empty() {
             let kbd = self.kbd_lists.get(&self.kbd_ids[0])?.clone();
             Some(kbd)
+        } else {
+            None
+        }
+    }
+
+    fn get_active_consumer(&mut self) -> Option<Arc<Mutex<dyn ConsumerOpts>>> {
+        if !self.consumer_ids.is_empty() {
+            let consumer = self.consumer_lists.get(&self.consumer_ids[0])?.clone();
+            Some(consumer)
         } else {
             None
         }
@@ -349,6 +383,14 @@ pub fn register_pointer(device: &str, tablet: Arc<Mutex<dyn PointerOpts>>) {
 
 pub fn unregister_pointer(device: &str) {
     INPUTS.lock().unwrap().unregister_mouse(device);
+}
+
+pub fn register_consumer(device: &str, consumer: Arc<Mutex<dyn ConsumerOpts>>) {
+    INPUTS.lock().unwrap().register_consumer(device, consumer);
+}
+
+pub fn unregister_consumer(device: &str) {
+    INPUTS.lock().unwrap().unregister_consumer(device);
 }
 
 pub fn input_move_abs(axis: Axis, data: u32) -> Result<()> {
@@ -404,6 +446,14 @@ pub fn key_event(keycode: u16, down: bool) -> Result<()> {
     let kbd = INPUTS.lock().unwrap().get_active_kbd();
     if let Some(k) = kbd {
         k.lock().unwrap().do_key_event(keycode, down)?;
+    }
+    Ok(())
+}
+
+pub fn consumer_event(keycode: u16, down: bool) -> Result<()> {
+    let consumer = INPUTS.lock().unwrap().get_active_consumer();
+    if let Some(c) = consumer {
+        c.lock().unwrap().do_consumer_event(keycode, down)?;
     }
     Ok(())
 }
@@ -515,6 +565,10 @@ pub trait KeyboardOpts: Send {
 pub trait PointerOpts: Send {
     fn update_point_state(&mut self, input_event: InputEvent) -> Result<()>;
     fn sync(&mut self) -> Result<()>;
+}
+
+pub trait ConsumerOpts: Send {
+    fn do_consumer_event(&mut self, keycode: u16, down: bool) -> Result<()>;
 }
 
 #[cfg(test)]

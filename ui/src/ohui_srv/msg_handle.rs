@@ -28,10 +28,10 @@ use crate::{
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
         release_all_btn, release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED,
-        INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
-        INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD, INPUT_POINT_LEFT,
-        INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_CAPS_LOCK, KEYCODE_NUM_LOCK,
-        KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
+        CONSUMER_PREFIX, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT,
+        INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD,
+        INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_CAPS_LOCK,
+        KEYCODE_NUM_LOCK, KEYCODE_SCR_LOCK, NUM_LOCK_LED, SCROLL_LOCK_LED,
     },
     keycode::{DpyMod, KeyCode},
 };
@@ -88,15 +88,26 @@ impl WindowState {
 
     fn do_key_action(&self, keycode: u16, action: u16) -> Result<()> {
         let press = action != 0;
-        keyboard_update(press, keycode)?;
-        input::key_event(keycode, press).map_err(|e| {
-            anyhow!(
-                "do key event failed: code: {}, action: {}, {:?}",
-                keycode,
-                press,
-                e
-            )
-        })
+        if keycode & CONSUMER_PREFIX == CONSUMER_PREFIX {
+            input::consumer_event(keycode, press).map_err(|e| {
+                anyhow!(
+                    "do consumer event failed: code: {}, action: {}, {:?}",
+                    keycode,
+                    press,
+                    e
+                )
+            })
+        } else {
+            keyboard_update(press, keycode)?;
+            input::key_event(keycode, press).map_err(|e| {
+                anyhow!(
+                    "do key event failed: code: {}, action: {}, {:?}",
+                    keycode,
+                    press,
+                    e
+                )
+            })
+        }
     }
 
     fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
