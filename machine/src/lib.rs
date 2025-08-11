@@ -73,6 +73,8 @@ use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{devices_register_sysbusdevops_type, to_sysbusdevops, SysBus, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
+#[cfg(feature = "usb_consumer")]
+use devices::usb::consumer::{UsbConsumer, UsbConsumerConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
 use devices::usb::storage::{UsbStorage, UsbStorageConfig};
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
@@ -1866,6 +1868,15 @@ pub trait MachineOps: MachineLifecycle {
                     .realize()
                     .with_context(|| "Failed to realize usb tablet device")?
             }
+            #[cfg(feature = "usb_consumer")]
+            "usb-consumer" => {
+                let config =
+                    UsbConsumerConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+                let consumer = UsbConsumer::new(config);
+                consumer
+                    .realize()
+                    .with_context(|| "Failed to realize usb consumer device")?
+            }
             #[cfg(feature = "usb_camera")]
             "usb-camera" => {
                 let token_id = match self.get_token_id() {
@@ -2011,7 +2022,7 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
-                ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-consumer" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
                 #[cfg(feature = "vhostuser_block")]
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
                 #[cfg(feature = "vhostuser_block")]
