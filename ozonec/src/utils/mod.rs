@@ -50,7 +50,7 @@ bitflags::bitflags! {
 
 impl OpenHow {
     fn new() -> Self {
-        // SAFETY: FFI call with valid arguments.
+        // SAFETY: returns the struct `libc::open_how` represented all-zero bytes. And its member will be initialized later.
         unsafe { mem::zeroed() }
     }
 
