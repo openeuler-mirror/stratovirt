@@ -68,7 +68,7 @@ impl<T: Clone + 'static> RawDriver<T> {
             bail!("Failed to alloc memory for write.");
         }
 
-        // SAFETY: align_buf is valid and large enough.
+        // SAFETY: align_buf (sized `write_size`) is allocated successfully in `libc::memalign()`.
         let ret = unsafe {
             raw_write(
                 self.driver.file.as_raw_fd(),
