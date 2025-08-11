@@ -808,7 +808,7 @@ impl BlockIoHandler {
         if !virtio_has_feature(complete_cb.driver_features, VIRTIO_BLK_F_FLUSH)
             && aiocb.opcode == OpCode::Pwritev
             && ret >= 0
-            && raw_datasync(aiocb.file_fd) < 0
+            && raw_datasync(&aiocb.file) < 0
         {
             error!("Failed to flush data before send response to guest.");
             status = VIRTIO_BLK_S_IOERR;

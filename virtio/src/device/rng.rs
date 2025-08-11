@@ -177,7 +177,7 @@ impl RngHandler {
             // SAFETY: buffer is valid and large enough.
             let ret = unsafe {
                 raw_read(
-                    self.random_file.as_raw_fd(),
+                    &self.random_file,
                     buffer.as_mut_ptr() as u64,
                     size as usize,
                     0,
