@@ -23,7 +23,7 @@ use std::{
     fs::File,
     io::{Seek, SeekFrom, Write},
     mem::size_of,
-    os::unix::io::{AsRawFd, RawFd},
+    os::unix::io::AsRawFd,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicU64},
@@ -117,7 +117,7 @@ pub enum HostRange {
 pub struct SyncAioInfo {
     /// Aio for sync read/write metadata.
     aio: Aio<()>,
-    pub(crate) fd: RawFd,
+    pub(crate) file: Arc<File>,
     pub prop: BlockProperty,
 }
 
@@ -134,10 +134,10 @@ impl SyncAioInfo {
         Ok(())
     }
 
-    pub fn new(fd: RawFd, prop: BlockProperty) -> Result<Self> {
+    pub fn new(file: Arc<File>, prop: BlockProperty) -> Result<Self> {
         Ok(Self {
             aio: Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?,
-            fd,
+            file,
             prop,
         })
     }
@@ -153,7 +153,7 @@ impl SyncAioInfo {
             direct: self.prop.direct,
             req_align: self.prop.req_align,
             buf_align: self.prop.buf_align,
-            file_fd: self.fd,
+            file: self.file.clone(),
             opcode,
             iovec,
             offset,
@@ -270,8 +270,7 @@ pub fn qcow2_flush_metadata<T: Clone + 'static>(
 
 impl<T: Clone + 'static> Qcow2Driver<T> {
     pub fn new(file: Arc<File>, aio: Aio<T>, conf: BlockProperty) -> Result<Self> {
-        let fd = file.as_raw_fd();
-        let sync_aio = Rc::new(RefCell::new(SyncAioInfo::new(fd, conf.clone())?));
+        let sync_aio = Rc::new(RefCell::new(SyncAioInfo::new(file.clone(), conf.clone())?));
         Ok(Self {
             driver: FileDriver::new(file, aio, conf),
             sync_aio: sync_aio.clone(),
@@ -778,7 +777,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             );
         }
         if write_zero && addr < self.driver.disk_size()? {
-            let ret = raw_write_zeroes(self.sync_aio.borrow_mut().fd, addr as usize, size);
+            let ret = raw_write_zeroes(
+                self.sync_aio.borrow_mut().file.as_raw_fd(),
+                addr as usize,
+                size,
+            );
             if ret < 0 {
                 let zero_buf = vec![0_u8; self.header.cluster_size() as usize];
                 for i in 0..clusters {

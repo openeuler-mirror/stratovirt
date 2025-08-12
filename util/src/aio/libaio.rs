@@ -140,7 +140,7 @@ impl<T: Clone> AioContext<T> for LibaioContext {
             iocbs.push(IoCb {
                 data: cb.user_data,
                 aio_lio_opcode: opcode as u16,
-                aio_fildes: cb.file_fd as u32,
+                aio_fildes: cb.file.as_raw_fd() as u32,
                 aio_buf,
                 aio_nbytes: cb.iovec.len() as u64,
                 aio_offset: cb.offset as u64,

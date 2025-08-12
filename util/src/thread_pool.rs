@@ -47,10 +47,6 @@ struct PoolState {
     req_lists: LinkedList<PoolTask>,
 }
 
-/// SAFETY: All the operations on req_lists are protected by the mutex,
-/// so there is no synchronization problem.
-unsafe impl Send for PoolState {}
-
 impl PoolState {
     fn new() -> Self {
         Self {

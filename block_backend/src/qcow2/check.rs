@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::{cell::RefCell, cmp::Ordering, mem::size_of, rc::Rc};
+use std::{cell::RefCell, cmp::Ordering, mem::size_of, os::fd::AsRawFd, rc::Rc};
 
 use anyhow::{bail, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
@@ -175,7 +175,7 @@ impl RefcountBlock {
             self.set_refcount(start_idx + i as usize, 1)?;
             // Write zero to disk
             let ret = raw_write_zeroes(
-                sync_aio.borrow_mut().fd,
+                sync_aio.borrow_mut().file.as_raw_fd(),
                 cluster_offset as usize,
                 cluster_size as u64,
             );

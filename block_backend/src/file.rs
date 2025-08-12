@@ -85,7 +85,7 @@ impl<T: Clone + 'static> FileDriver<T> {
             direct: self.block_prop.direct,
             req_align: self.block_prop.req_align,
             buf_align: self.block_prop.buf_align,
-            file_fd: self.file.as_raw_fd(),
+            file: self.file.clone(),
             opcode,
             iovec,
             offset,

@@ -19,8 +19,9 @@ pub use raw::*;
 
 use std::clone::Clone;
 use std::fmt::Display;
+use std::fs::File;
 use std::io::Write;
-use std::os::unix::io::RawFd;
+use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::{cmp, str::FromStr};
@@ -174,7 +175,7 @@ pub struct AioCb<T: Clone> {
     pub buf_align: u32,
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
-    pub file_fd: RawFd,
+    pub file: Arc<File>,
     pub opcode: OpCode,
     pub iovec: Vec<Iovec>,
     pub offset: usize,
@@ -213,10 +214,10 @@ impl<T: Clone> AioCb<T> {
 
     pub fn rw_sync(&self) -> i32 {
         let mut ret = match self.opcode {
-            // SAFETY: iovec of aiocb is valid.
-            OpCode::Preadv => unsafe { raw_readv(self.file_fd, &self.iovec, self.offset) },
-            // SAFETY: iovec of aiocb is valid.
-            OpCode::Pwritev => unsafe { raw_writev(self.file_fd, &self.iovec, self.offset) },
+            // SAFETY: iovec is valid which is generated and checked by address_space.
+            OpCode::Preadv => unsafe { raw_readv(&self.file, &self.iovec, self.offset) },
+            // SAFETY: iovec is valid which is generated and checked by address_space.
+            OpCode::Pwritev => unsafe { raw_writev(&self.file, &self.iovec, self.offset) },
             _ => -1,
         };
         if ret < 0 {
@@ -229,7 +230,7 @@ impl<T: Clone> AioCb<T> {
     }
 
     fn flush_sync(&self) -> i32 {
-        let ret = raw_datasync(self.file_fd);
+        let ret = raw_datasync(&self.file);
         if ret < 0 {
             error!("Failed to do sync flush.");
         }
@@ -237,7 +238,7 @@ impl<T: Clone> AioCb<T> {
     }
 
     fn discard_sync(&self) -> i32 {
-        let ret = raw_discard(self.file_fd, self.offset, self.nbytes);
+        let ret = raw_discard(self.file.as_raw_fd(), self.offset, self.nbytes);
         if ret < 0 && ret != -libc::ENOTSUP {
             error!("Failed to do sync discard.");
         }
@@ -247,12 +248,12 @@ impl<T: Clone> AioCb<T> {
     fn write_zeroes_sync(&mut self) -> i32 {
         let mut ret;
         if self.opcode == OpCode::WriteZeroesUnmap {
-            ret = raw_discard(self.file_fd, self.offset, self.nbytes);
+            ret = raw_discard(self.file.as_raw_fd(), self.offset, self.nbytes);
             if ret == 0 {
                 return ret;
             }
         }
-        ret = raw_write_zeroes(self.file_fd, self.offset, self.nbytes);
+        ret = raw_write_zeroes(self.file.as_raw_fd(), self.offset, self.nbytes);
         if ret == -libc::ENOTSUP && !self.iovec.is_empty() {
             self.opcode = OpCode::Pwritev;
             return self.rw_sync();
@@ -347,7 +348,7 @@ impl<T: Clone> AioCb<T> {
                     // SAFETY: bounce_buffer is valid and large enough.
                     let len = unsafe {
                         raw_read(
-                            self.file_fd,
+                            &self.file,
                             bounce_buffer as u64,
                             nbytes as usize,
                             offset as usize,
@@ -402,7 +403,7 @@ impl<T: Clone> AioCb<T> {
                     // SAFETY: bounce_buffer is valid and large enough.
                     let len = unsafe {
                         raw_read(
-                            self.file_fd,
+                            &self.file,
                             bounce_buffer as u64,
                             self.req_align as usize,
                             offset_align as usize,
@@ -431,7 +432,7 @@ impl<T: Clone> AioCb<T> {
                         // SAFETY: bounce_buffer is valid and large enough.
                         let len = unsafe {
                             raw_read(
-                                self.file_fd,
+                                &self.file,
                                 bounce_buffer as u64 + nbytes - u64::from(self.req_align),
                                 self.req_align as usize,
                                 (offset + nbytes) as usize - self.req_align as usize,
@@ -462,7 +463,7 @@ impl<T: Clone> AioCb<T> {
                     // SAFETY: bounce_buffer is valid and large enough.
                     let len = unsafe {
                         raw_write(
-                            self.file_fd,
+                            &self.file,
                             bounce_buffer as u64,
                             nbytes as usize,
                             offset as usize,
@@ -563,7 +564,7 @@ impl<T: Clone + 'static> Aio<T> {
     }
 
     pub fn submit_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
-        trace::aio_submit_request(cb.file_fd, &cb.opcode, cb.offset, cb.nbytes);
+        trace::aio_submit_request(cb.file.as_raw_fd(), &cb.opcode, cb.offset, cb.nbytes);
         if self.ctx.is_none()
             || [
                 OpCode::Discard,
@@ -889,8 +890,6 @@ pub unsafe fn iovec_write_zero(iovec: &[Iovec]) {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::prelude::AsRawFd;
-
     use vmm_sys_util::tempfile::TempFile;
 
     use super::*;
@@ -928,14 +927,14 @@ mod tests {
         ];
 
         // Perform aio rw.
-        let file_fd = file.as_raw_fd();
+        let arc_file = Arc::new(file);
         let aiocb = AioCb {
             direct,
             req_align: align,
             buf_align: align,
             discard: false,
             write_zeroes: WriteZeroesState::Off,
-            file_fd,
+            file: arc_file.clone(),
             opcode,
             iovec,
             offset,
@@ -957,7 +956,7 @@ mod tests {
         // SAFETY: new_content is valid.
         let ret = unsafe {
             raw_read(
-                file_fd,
+                &arc_file,
                 new_content.as_mut_ptr() as u64,
                 new_content.len(),
                 0,

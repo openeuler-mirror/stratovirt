@@ -12,7 +12,6 @@
 
 use std::{
     fs::File,
-    os::unix::io::AsRawFd,
     sync::{
         atomic::{AtomicBool, AtomicU64},
         Arc, Mutex,
@@ -69,14 +68,7 @@ impl<T: Clone + 'static> RawDriver<T> {
         }
 
         // SAFETY: align_buf (sized `write_size`) is allocated successfully in `libc::memalign()`.
-        let ret = unsafe {
-            raw_write(
-                self.driver.file.as_raw_fd(),
-                align_buf as u64,
-                write_size as usize,
-                0,
-            )
-        };
+        let ret = unsafe { raw_write(&self.driver.file, align_buf as u64, write_size as usize, 0) };
         // SAFETY: the memory is allocated in this function.
         unsafe { libc::free(align_buf) };
 

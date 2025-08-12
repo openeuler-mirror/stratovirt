@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fs::File;
 use std::sync::{Arc, Mutex};
 
 use log::error;
@@ -30,7 +31,7 @@ pub struct IoData {
     pub buf_align: u32,
     pub discard: bool,
     pub write_zeroes: WriteZeroesState,
-    pub file_fd: i32,
+    pub file: Arc<File>,
     pub opcode: OpCode,
     pub iovec: Vec<Iovec>,
     pub offset: usize,
@@ -46,7 +47,7 @@ impl IoData {
             buf_align: self.buf_align,
             discard: self.discard,
             write_zeroes: self.write_zeroes,
-            file_fd: self.file_fd,
+            file: self.file.clone(),
             opcode: self.opcode,
             iovec: self.iovec.clone(),
             offset: self.offset,
@@ -141,7 +142,7 @@ impl<T: Clone> AioContext<T> for ThreadsAioContext {
 
             let io_data = IoData {
                 opcode: cb.opcode,
-                file_fd: cb.file_fd,
+                file: cb.file.clone(),
                 offset: cb.offset,
                 nbytes: cb.nbytes,
                 iovec: cb.iovec.clone(),
