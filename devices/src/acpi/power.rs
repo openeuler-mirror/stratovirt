@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use log::info;
+use log::error;
 
 use crate::acpi::ged::{AcpiEvent, Ged};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
@@ -169,18 +169,6 @@ impl PowerDev {
         Ok(())
     }
 
-    fn power_load_static_status(&mut self) {
-        info!("Load static power devices status");
-        self.regs[REG_IDX_ACAD_ON] = 1;
-        self.regs[REG_IDX_BAT_DCAP] = 0xffffffff;
-        self.regs[REG_IDX_BAT_FCAP] = 0xffffffff;
-        self.regs[REG_IDX_BAT_DVOLT] = 0xffffffff;
-        self.regs[REG_IDX_BAT_STATE] = ACPI_BATTERY_STATE_CHARGING;
-        self.regs[REG_IDX_BAT_PRATE] = 0;
-        self.regs[REG_IDX_BAT_RCAP] = 0xffffffff;
-        self.regs[REG_IDX_BAT_PVOLT] = 0xffffffff;
-    }
-
     fn send_power_event(&self, evt: AcpiEvent) {
         self.ged.lock().unwrap().inject_acpi_event(evt);
     }
@@ -218,20 +206,11 @@ impl Device for PowerDev {
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
 
-        let pdev_available: bool;
-        {
-            let mut pdev = dev.lock().unwrap();
-            pdev_available = pdev.power_battery_init_info().is_ok();
-            if pdev_available {
-                pdev.send_power_event(AcpiEvent::BatteryInf);
-            }
-        }
-        if pdev_available {
-            power_status_update(&dev);
-        } else {
-            let mut pdev = dev.lock().unwrap();
-            pdev.power_load_static_status();
-        }
+        let mut pdev = dev.lock().unwrap();
+        pdev.power_battery_init_info()?;
+        pdev.send_power_event(AcpiEvent::BatteryInf);
+        drop(pdev);
+        power_status_update(&dev);
 
         Ok(dev)
     }
@@ -398,7 +377,9 @@ fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
 
     let mut pdev = dev.lock().unwrap();
 
-    if pdev.power_status_read().is_ok() {
+    if let Err(e) = pdev.power_status_read() {
+        error!("Failed to read power status: {:?}", e);
+    } else {
         let step2notify: u32 = pdev.regs[REG_IDX_BAT_FCAP] / 100;
         let bdiff: u32 = pdev.regs[REG_IDX_BAT_RCAP].abs_diff(pdev.state.last_bat_lvl);
 
@@ -411,11 +392,9 @@ fn power_status_update(dev: &Arc<Mutex<PowerDev>>) {
             pdev.state.last_bat_st = pdev.regs[REG_IDX_BAT_STATE];
             pdev.state.last_bat_lvl = pdev.regs[REG_IDX_BAT_RCAP];
         }
-
-        EventLoop::get_ctx(None)
-            .unwrap()
-            .timer_add(update_func, Duration::from_secs(5));
-    } else {
-        pdev.power_load_static_status();
     }
+    // Check the power status every 5 seconds.
+    EventLoop::get_ctx(None)
+        .unwrap()
+        .timer_add(update_func, Duration::from_secs(5));
 }
