@@ -174,6 +174,9 @@ fn iov_to_buf<T: ByteCode>(
     }
 }
 
+/// # Safety
+///
+/// The caller must check the addr and len params are legal.
 unsafe fn memory_advise(addr: *mut libc::c_void, len: libc::size_t, advice: libc::c_int) {
     if libc::madvise(addr, len, advice) != 0 {
         let evt_type = match advice {
@@ -241,7 +244,7 @@ impl Request {
             } else if hva == last_addr + BALLOON_PAGE_SIZE {
                 free_len += 1;
             } else {
-                // SAFETY: The memory to be freed is allocated by guest.
+                // SAFETY: The memory to be freed is allocated by guest and has been checked in `get_host_address`.
                 unsafe {
                     memory_advise(
                         start_addr as *const libc::c_void as *mut _,
@@ -257,7 +260,7 @@ impl Request {
         }
 
         if free_len != 0 {
-            // SAFETY: The memory to be freed is allocated by guest.
+            // SAFETY: The memory to be freed is allocated by guest and has been checked in `get_host_address`.
             unsafe {
                 memory_advise(
                     start_addr as *const libc::c_void as *mut _,
@@ -328,7 +331,7 @@ impl Request {
                 } else if hva == last_addr + BALLOON_PAGE_SIZE && last_share == share {
                     free_len += 1;
                 } else {
-                    // SAFETY: The memory to be freed is allocated by guest.
+                    // SAFETY: The memory to be freed is allocated by guest and has been checked in `get_host_address`.
                     unsafe {
                         memory_advise(
                             start_addr as *const libc::c_void as *mut _,
@@ -349,7 +352,7 @@ impl Request {
                 last_addr = hva;
             }
             if free_len != 0 {
-                // SAFETY: The memory to be freed is allocated by guest.
+                // SAFETY: The memory to be freed is allocated by guest and has been checked in `get_host_address`.
                 unsafe {
                     memory_advise(
                         start_addr as *const libc::c_void as *mut _,
@@ -390,7 +393,7 @@ impl Request {
                     } else {
                         advice = libc::MADV_DONTNEED;
                     }
-                    // SAFETY: The memory to be freed is allocated by guest.
+                    // SAFETY: The memory to be freed is allocated by guest and has been checked in `get_host_address`.
                     unsafe {
                         memory_advise(
                             host_page_bitmap.base_address as *const libc::c_void as *mut _,
@@ -419,7 +422,7 @@ impl Request {
             } else {
                 libc::MADV_DONTNEED
             };
-            // SAFETY: The memory to be freed is allocated by guest.
+            // SAFETY: The memory to be freed is allocated by guest and has been checked in `get_host_address`.
             unsafe {
                 memory_advise(
                     hva as *const libc::c_void as *mut _,
