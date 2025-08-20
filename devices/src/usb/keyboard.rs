@@ -262,3 +262,76 @@ impl UsbDevice for UsbKeyboard {
         self.cntlr.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyboard_interface() {
+        let interface_descriptor = &DESC_IFACE_KEYBOARD.clone().interface_desc;
+        // bInterfaceClass: 3(HID)
+        assert_eq!(interface_descriptor.bInterfaceClass, 3);
+        // bInterfaceSubClass: 0(No Subclass) 1(Boot Interface Subclass) 2-255(Reserved)
+        assert_eq!(interface_descriptor.bInterfaceSubClass, 1);
+        // bInterfaceProtocol: 0(None) 1(Keyboard) 2(Mouse) 3-255(Reserved)
+        assert_eq!(interface_descriptor.bInterfaceProtocol, 1);
+    }
+
+    #[test]
+    fn test_usb_device_method() {
+        let mut keyboard = UsbKeyboard::new(UsbKeyboardConfig {
+            classtype: "usb-keyboard".to_string(),
+            id: "keyboard".to_string(),
+            bus: None,
+            port: None,
+        });
+
+        let _ = &keyboard.reset();
+        let _ = &keyboard.unrealize();
+        let _ = &keyboard.get_controller();
+        let device_req = UsbDeviceRequest {
+            request_type: USB_DEVICE_OUT_REQUEST,
+            request: USB_REQUEST_SET_ADDRESS,
+            value: 0,
+            index: 0,
+            length: 0,
+        };
+        let target_dev =
+            Arc::downgrade(&Arc::new(Mutex::new(keyboard))) as Weak<Mutex<dyn UsbDevice>>;
+        let packet = Arc::new(Mutex::new(UsbPacket::new(
+            1,
+            u32::from(USB_TOKEN_OUT),
+            0,
+            0,
+            Vec::new(),
+            None,
+            Some(target_dev),
+        )));
+        let mut keyboard = UsbKeyboard::new(UsbKeyboardConfig {
+            classtype: "usb-keyboard".to_string(),
+            id: "keyboard".to_string(),
+            bus: None,
+            port: None,
+        });
+        let _ = &keyboard.handle_control(&packet, &device_req);
+        let _ = &keyboard.handle_data(&packet);
+        let _ = &keyboard.cancel_packet(&packet);
+        let _ = &keyboard.realize();
+    }
+
+    #[test]
+    fn test_key_event() {
+        let mut usb_adapter = UsbKeyboardAdapter {
+            usb_kbd: Arc::new(Mutex::new(UsbKeyboard::new(UsbKeyboardConfig {
+                classtype: "usb-keyboard".to_string(),
+                id: "keyboard".to_string(),
+                bus: None,
+                port: None,
+            }))),
+        };
+        // 0x0057: scancode of F11
+        let _ = usb_adapter.do_key_event(0x0057, true);
+        let _ = usb_adapter.do_key_event(0x0057, false);
+    }
+}
