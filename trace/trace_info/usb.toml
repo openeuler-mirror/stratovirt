@@ -359,6 +359,18 @@ message = "hid_code {:?} index {:?} key {:?}"
 enabled = true
 
 [[events]]
+name = "usb_consumer_event"
+args = "keycode: &dyn fmt::Debug, down: &dyn fmt::Debug"
+message = "do consumer event keycode={:?} down={:?}"
+enabled = true
+
+[[events]]
+name = "usb_consumer_queue_full"
+args = ""
+message = "consumer queue is full"
+enabled = true
+
+[[events]]
 name = "usb_no_data_in_usb_device"
 args = ""
 message = "no data in usb device."

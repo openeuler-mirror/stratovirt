@@ -955,6 +955,20 @@ Three properties can be set for USB Uas.
 
 Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
 
+#### 2.13.8 USB Consumer
+The USB consumer is a consumer that uses the USB protocol. It should be attached to USB controller.
+
+One property can be set for USB Consumer.
+
+* id: unique device id.
+
+```shell
+-device usb-consumer,id=<consumer>
+```
+
+Note: Only one consumer can be configured.
+
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 

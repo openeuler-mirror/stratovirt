@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use crate::input::{MEDIA_NEXT, MEDIA_PLAY_PAUSE, MEDIA_PREVIOUS, MEDIA_STOP};
 use std::collections::HashMap;
 
 pub enum DpyMod {
@@ -198,6 +199,10 @@ pub enum KeyCode {
     MetaL,
     MetaR,
     Brokenbar,
+    MediaPlayPause,
+    MediaStop,
+    MediaPrevious,
+    MediaNext,
 }
 
 impl KeyCode {
@@ -326,56 +331,60 @@ impl KeyCode {
             KeyCode::SuperL => 0x00DB,
             KeyCode::SuperR => 0x00DC,
             KeyCode::Menu => 0x00DD,
-            KeyCode::Exclam => 0x0102,      // Shift 1
-            KeyCode::At => 0x0103,          // Shift 2
-            KeyCode::Numbersign => 0x0104,  // Shift 3
-            KeyCode::Dollar => 0x0105,      // Shift 4
-            KeyCode::Percent => 0x0106,     // Shift 5
-            KeyCode::Asciicircum => 0x0107, // Shift 6
-            KeyCode::Ampersand => 0x0108,   // Shift 7
-            KeyCode::Asterisk => 0x0109,    // Shift 8
-            KeyCode::Parenleft => 0x010A,   // Shift 9
-            KeyCode::Parenright => 0x010B,  // Shift 0
-            KeyCode::Underscore => 0x010C,  // Shift Minus
-            KeyCode::Plus => 0x010D,        // Shift Equal
-            KeyCode::KeyQ => 0x0110,        // Shift q
-            KeyCode::KeyW => 0x0111,        // Shift w
-            KeyCode::KeyE => 0x0112,        // Shift e
-            KeyCode::KeyR => 0x0113,        // Shift r
-            KeyCode::KeyT => 0x0114,        // Shift t
-            KeyCode::KeyY => 0x0115,        // Shift y
-            KeyCode::KeyU => 0x0116,        // Shift u
-            KeyCode::KeyI => 0x0117,        // Shift i
-            KeyCode::KeyO => 0x0118,        // Shift o
-            KeyCode::KeyP => 0x0119,        // Shift p
-            KeyCode::Braceleft => 0x011A,   // Shift Bracketleft
-            KeyCode::Braceright => 0x011B,  // Shift Bracketright
-            KeyCode::KeyA => 0x011E,        // Shift a
-            KeyCode::KeyS => 0x011F,        // Shift s
-            KeyCode::KeyD => 0x0120,        // Shift d
-            KeyCode::KeyF => 0x0121,        // Shift f
-            KeyCode::KeyG => 0x0122,        // Shift g
-            KeyCode::KeyH => 0x0123,        // Shift h
-            KeyCode::KeyJ => 0x0124,        // Shift j
-            KeyCode::KeyK => 0x0125,        // Shift k
-            KeyCode::KeyL => 0x0126,        // Shift l
-            KeyCode::Colon => 0x0127,       // Shift Semicolon
-            KeyCode::Quotedbl => 0x0128,    // Shift Apostrophe
-            KeyCode::Asciitilde => 0x0129,  // Shift Grave
-            KeyCode::Bar => 0x012B,         // Shift Backslash
-            KeyCode::KeyZ => 0x012C,        // Shift z
-            KeyCode::KeyX => 0x012D,        // Shift x
-            KeyCode::KeyC => 0x012E,        // Shift c
-            KeyCode::KeyV => 0x012F,        // Shift v
-            KeyCode::KeyB => 0x0130,        // Shift b
-            KeyCode::KeyN => 0x0131,        // Shift n
-            KeyCode::KeyM => 0x0132,        // Shift m
-            KeyCode::Less => 0x0133,        // Shift Comma
-            KeyCode::Greater => 0x0134,     // Shift Period
-            KeyCode::Question => 0x0135,    // Shift Slash
-            KeyCode::MetaL => 0x0138,       // Shift AltL
-            KeyCode::MetaR => 0x01B8,       // Shift AltR
-            KeyCode::Brokenbar => 0x0956,   // Shift Altgr Less
+            KeyCode::Exclam => 0x0102,                   // Shift 1
+            KeyCode::At => 0x0103,                       // Shift 2
+            KeyCode::Numbersign => 0x0104,               // Shift 3
+            KeyCode::Dollar => 0x0105,                   // Shift 4
+            KeyCode::Percent => 0x0106,                  // Shift 5
+            KeyCode::Asciicircum => 0x0107,              // Shift 6
+            KeyCode::Ampersand => 0x0108,                // Shift 7
+            KeyCode::Asterisk => 0x0109,                 // Shift 8
+            KeyCode::Parenleft => 0x010A,                // Shift 9
+            KeyCode::Parenright => 0x010B,               // Shift 0
+            KeyCode::Underscore => 0x010C,               // Shift Minus
+            KeyCode::Plus => 0x010D,                     // Shift Equal
+            KeyCode::KeyQ => 0x0110,                     // Shift q
+            KeyCode::KeyW => 0x0111,                     // Shift w
+            KeyCode::KeyE => 0x0112,                     // Shift e
+            KeyCode::KeyR => 0x0113,                     // Shift r
+            KeyCode::KeyT => 0x0114,                     // Shift t
+            KeyCode::KeyY => 0x0115,                     // Shift y
+            KeyCode::KeyU => 0x0116,                     // Shift u
+            KeyCode::KeyI => 0x0117,                     // Shift i
+            KeyCode::KeyO => 0x0118,                     // Shift o
+            KeyCode::KeyP => 0x0119,                     // Shift p
+            KeyCode::Braceleft => 0x011A,                // Shift Bracketleft
+            KeyCode::Braceright => 0x011B,               // Shift Bracketright
+            KeyCode::KeyA => 0x011E,                     // Shift a
+            KeyCode::KeyS => 0x011F,                     // Shift s
+            KeyCode::KeyD => 0x0120,                     // Shift d
+            KeyCode::KeyF => 0x0121,                     // Shift f
+            KeyCode::KeyG => 0x0122,                     // Shift g
+            KeyCode::KeyH => 0x0123,                     // Shift h
+            KeyCode::KeyJ => 0x0124,                     // Shift j
+            KeyCode::KeyK => 0x0125,                     // Shift k
+            KeyCode::KeyL => 0x0126,                     // Shift l
+            KeyCode::Colon => 0x0127,                    // Shift Semicolon
+            KeyCode::Quotedbl => 0x0128,                 // Shift Apostrophe
+            KeyCode::Asciitilde => 0x0129,               // Shift Grave
+            KeyCode::Bar => 0x012B,                      // Shift Backslash
+            KeyCode::KeyZ => 0x012C,                     // Shift z
+            KeyCode::KeyX => 0x012D,                     // Shift x
+            KeyCode::KeyC => 0x012E,                     // Shift c
+            KeyCode::KeyV => 0x012F,                     // Shift v
+            KeyCode::KeyB => 0x0130,                     // Shift b
+            KeyCode::KeyN => 0x0131,                     // Shift n
+            KeyCode::KeyM => 0x0132,                     // Shift m
+            KeyCode::Less => 0x0133,                     // Shift Comma
+            KeyCode::Greater => 0x0134,                  // Shift Period
+            KeyCode::Question => 0x0135,                 // Shift Slash
+            KeyCode::MetaL => 0x0138,                    // Shift AltL
+            KeyCode::MetaR => 0x01B8,                    // Shift AltR
+            KeyCode::Brokenbar => 0x0956,                // Shift Altgr Less
+            KeyCode::MediaPlayPause => MEDIA_PLAY_PAUSE, // Play/Pause
+            KeyCode::MediaStop => MEDIA_STOP,            // Stop
+            KeyCode::MediaPrevious => MEDIA_PREVIOUS,    // Scan Previous Track
+            KeyCode::MediaNext => MEDIA_NEXT,            // Scan Next Track
         }
     }
 
@@ -397,7 +406,11 @@ impl KeyCode {
 }
 
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
-const KEY_CODE_OH: [(KeyCode, u16); 105] = [
+const KEY_CODE_OH: [(KeyCode, u16); 109] = [
+    (KeyCode::MediaPlayPause, 0x000A),
+    (KeyCode::MediaStop, 0x000B),
+    (KeyCode::MediaPrevious, 0x000C),
+    (KeyCode::MediaNext, 0x000D),
     (KeyCode::Key0, 0x07D0),
     (KeyCode::Key1, 0x07D1),
     (KeyCode::Key2, 0x07D2),

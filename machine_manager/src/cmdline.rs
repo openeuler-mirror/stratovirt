@@ -256,6 +256,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd usb controller: -device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>; \
                    \n\t\tadd usb keyboard: -device usb-kbd,id=<kbd>; \
                    \n\t\tadd usb tablet: -device usb-tablet,id=<tablet>; \
+                   \n\t\tadd usb consumer: -device usb-consumer,id=<consumer>; \
                    \n\t\tadd usb storage: -device usb-storage,id=<storage>,drive=<drive_id>; \
                    \n\t\tadd scsi controller: -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off][,iothread=<iothread1>][,num-queues=<N>]; \
                    \n\t\tadd scsi hard disk: -device scsi-hd,scsi-id=<0>,bus=<scsi0.0>,lun=<0>,drive=<drive-scsi0-0-0-0>,id=<scsi0-0-0-0>; \
