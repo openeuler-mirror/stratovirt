@@ -62,7 +62,7 @@ use machine_manager::config::get_cameradev_config;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::ShutdownAction;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_incoming_uri,
+    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_incoming_uri, parse_size,
     BootIndexInfo, ConfigCheck, DiskFormat, DriveConfig, ExBool, MigrateMode, NumaNode, NumaNodes,
     M,
 };
@@ -1577,6 +1577,47 @@ impl DeviceInterface for StdMachine {
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
             ),
+        }
+    }
+
+    fn set_viomem(&mut self, args: Box<qmp_schema::SetViomemArgument>) -> Response {
+        let requested_size = match parse_size(&args.requested_size) {
+            Ok(rs) => rs,
+            Err(_) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "Invalid set-viomem arguments".to_string(),
+                    ),
+                    None,
+                )
+            }
+        };
+
+        match virtio::qmp_set_viomem(&args.id, requested_size) {
+            Ok(_) => Response::create_empty_response(),
+            Err(e) => {
+                error!(
+                    "Failed to set viomem@{} requested size to {}, {:?}",
+                    args.id, requested_size, e
+                );
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        }
+    }
+
+    fn get_viomem(&self, args: Box<qmp_schema::GetViomemArgument>) -> Response {
+        match virtio::qmp_get_viomem(&args.id) {
+            Ok(value) => Response::create_response(value, None),
+            Err(e) => {
+                error!("Failed to get viomem@{} information, {:?}", args.id, e);
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
         }
     }
 

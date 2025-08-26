@@ -22,6 +22,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 trace = { path = "../trace" }
 util = { path = "../util" }
+nix = { version = "0.26.2", default-features = false, features = ["fs", "feature"]}
 clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 
 [features]

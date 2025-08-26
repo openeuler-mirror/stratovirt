@@ -247,6 +247,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd vhost pci vsock: -device vhost-vsock-pci,id=<vsock_id>,guest-cid=<N>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off]; \
                    \n\t\tadd virtio mmio balloon: -device virtio-balloon-device[,deflate-on-oom=true|false][,free-page-reporting=true|false]; \
                    \n\t\tadd virtio pci balloon: -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]; \
+                   \n\t\tadd virtio mmio mem: -device virtio-mem-device,id=<viomem_id>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>]; \
+                   \n\t\tadd virtio pci mem: -device virtio-mem-pci,id=<viomem_id>,bus=<pcie.0>,addr=<0x4>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>][,multifunction=on|off]; \
                    \n\t\tadd virtio mmio rng: -device virtio-rng-device,rng=<objrng0>,max-bytes=<1234>,period=<1000>; \
                    \n\t\tadd virtio pci rng: -device virtio-rng-pci,id=<rng_id>,rng=<objrng0>,max-bytes=<1234>,period=<1000>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
                    \n\t\tadd virtio mmio input: -device virtio-input-device,id=<input_id>,evdev=<evdev0>; \

@@ -24,7 +24,7 @@ use nix::sys::statfs::fstatfs;
 use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
 use crate::{AddressRange, GuestAddress, Region};
-use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemZoneConfig};
+use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemBackendObjConfig};
 use util::unix::{do_mmap, host_page_size, mbind};
 
 const MAX_PREALLOC_THREAD: i64 = 16;
@@ -296,7 +296,7 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
 ///
 /// * `mem_config` - The config of default memory.
 /// * `thread_num` - The num of mem preallocv threads, typically the number of vCPUs.
-pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<Region> {
+pub fn create_backend_mem(mem_config: &MemBackendObjConfig, thread_num: u8) -> Result<Region> {
     let mut f_back: Option<FileBackend> = None;
 
     if mem_config.memfd() {
@@ -331,7 +331,7 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
         mem_config.size,
         f_back,
         mem_config.dump_guest_core,
-        mem_config.share,
+        mem_config.share(),
         false,
     )?);
     if mem_config.prealloc {
@@ -349,13 +349,16 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
 /// # Arguments
 ///
 /// * `mem_mappings` - The host virtual address of mapped memory information.
-/// * `zone` - Memory zone config info.
-fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConfig) -> Result<()> {
-    if zone.host_numa_nodes.is_none() {
+/// * `mb_config` - Memory backend config info.
+fn set_host_memory_policy(
+    mem_mappings: &Arc<HostMemMapping>,
+    mb_config: &MemBackendObjConfig,
+) -> Result<()> {
+    if mb_config.host_numa_nodes.is_none() {
         return Ok(());
     }
     let host_addr_start = mem_mappings.host_address();
-    let nodes = zone.host_numa_nodes.as_ref().unwrap();
+    let nodes = mb_config.host_numa_nodes.as_ref().unwrap();
     let mut max_node = nodes[nodes.len() - 1] as usize;
 
     // Upper limit of max_node is MAX_NODES.
@@ -367,7 +370,7 @@ fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConf
     // It is kind of linux bug or feature which will cut off the last node.
     max_node += 1;
 
-    let policy = HostMemPolicy::from(zone.policy.clone());
+    let policy = HostMemPolicy::from(mb_config.policy.clone());
     if policy == HostMemPolicy::Default {
         max_node = 0;
         nmask = vec![0_u64; max_node];
@@ -380,7 +383,7 @@ fn set_host_memory_policy(mem_mappings: &Arc<HostMemMapping>, zone: &MemZoneConf
     unsafe {
         mbind(
             host_addr_start,
-            zone.size,
+            mb_config.size,
             policy as u32,
             nmask,
             max_node as u64,

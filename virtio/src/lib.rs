@@ -37,6 +37,7 @@ pub use device::block::{Block, BlockState, VirtioBlkConfig, VirtioBlkDevConfig};
 #[cfg(feature = "virtio_gpu")]
 pub use device::gpu::*;
 pub use device::input::*;
+pub use device::memory::*;
 pub use device::net::*;
 #[cfg(feature = "virtio_rng")]
 pub use device::rng::{Rng, RngConfig, RngState};
@@ -66,7 +67,7 @@ use devices::pci::register_pcidevops_type;
 use devices::sysbus::register_sysbusdevops_type;
 use machine_manager::config::ConfigCheck;
 use migration_derive::ByteCode;
-use util::aio::{mem_to_buf, Iovec};
+use util::aio::{iov_from_buf_direct, mem_to_buf, Iovec};
 use util::byte_code::ByteCode;
 use util::num_ops::{read_u32, write_u32};
 use util::AsAny;
@@ -86,6 +87,7 @@ pub const VIRTIO_TYPE_SCSI: u32 = 8;
 pub const VIRTIO_TYPE_GPU: u32 = 16;
 pub const VIRTIO_TYPE_INPUT: u32 = 18;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
+pub const VIRTIO_TYPE_MEM: u32 = 24;
 pub const VIRTIO_TYPE_FS: u32 = 26;
 
 // The Status of Virtio Device.
@@ -809,6 +811,37 @@ pub fn iov_read_object<T: ByteCode>(
         bail!("Read length error: expected {}, read {}.", size, count);
     }
     Ok(obj)
+}
+
+/// Write object typed `T` to iovec.
+pub fn iov_write_object<T: ByteCode>(
+    mem_space: &Arc<AddressSpace>,
+    iovec: &[ElemIovec],
+    cache: &Option<RegionCache>,
+    obj: T,
+) -> Result<()> {
+    let (in_size, ctrl_vec) = gpa_hva_iovec_map(iovec, mem_space, cache)?;
+    let obj_len = size_of::<T>() as u64;
+    if in_size < obj_len {
+        bail!(
+            "Invalid length for object: get {}, expected {}",
+            in_size,
+            obj_len
+        );
+    }
+
+    // SAFETY: obj_len has checked above
+    unsafe { iov_from_buf_direct(&ctrl_vec, obj.as_bytes()) }.and_then(|size| {
+        if size as u64 != obj_len {
+            bail!(
+                "Expected send msg length is {}, actual send length {}.",
+                obj_len,
+                size
+            )
+        };
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// Read iovec to buf and return the read number of bytes.
