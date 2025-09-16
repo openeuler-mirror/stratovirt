@@ -256,3 +256,85 @@ impl UsbDevice for UsbConsumer {
         self.cntlr.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ui::input::MEDIA_PLAY_PAUSE;
+
+    #[test]
+    #[cfg(feature = "usb_consumer")]
+    fn test_consumer_interface() {
+        let hid_descriptor_data = &DESC_IFACE_CONSUMER.clone().other_desc[0].data;
+        let data_len = hid_descriptor_data.len();
+        assert_eq!(
+            hid_descriptor_data[data_len - 2] as usize,
+            CONSUMER_REPORT_DESCRIPTOR.len()
+        );
+        let interface_descriptor = &DESC_IFACE_CONSUMER.clone().interface_desc;
+        // bInterfaceClass: 3(HID)
+        assert_eq!(interface_descriptor.bInterfaceClass, 3);
+        // bInterfaceSubClass: 0(No Subclass) 1(Boot Interface Subclass) 2-255(Reserved)
+        assert_eq!(interface_descriptor.bInterfaceSubClass, 0);
+        // bInterfaceProtocol: 0(None) 1(Keyboard) 2(Mouse) 3-255(Reserved)
+        assert_eq!(interface_descriptor.bInterfaceProtocol, 0);
+    }
+
+    #[test]
+    #[cfg(feature = "usb_consumer")]
+    fn test_usb_device_method() {
+        let mut consumer = UsbConsumer::new(UsbConsumerConfig {
+            classtype: "usb-consumer".to_string(),
+            id: "consumer".to_string(),
+            bus: None,
+            port: None,
+        });
+
+        let _ = &consumer.reset();
+        let _ = &consumer.unrealize();
+        let _ = &consumer.get_controller();
+        let device_req = UsbDeviceRequest {
+            request_type: USB_DEVICE_OUT_REQUEST,
+            request: USB_REQUEST_SET_ADDRESS,
+            value: 0,
+            index: 0,
+            length: 0,
+        };
+        let target_dev =
+            Arc::downgrade(&Arc::new(Mutex::new(consumer))) as Weak<Mutex<dyn UsbDevice>>;
+        let packet = Arc::new(Mutex::new(UsbPacket::new(
+            1,
+            u32::from(USB_TOKEN_OUT),
+            0,
+            0,
+            Vec::new(),
+            None,
+            Some(target_dev),
+        )));
+        let mut consumer = UsbConsumer::new(UsbConsumerConfig {
+            classtype: "usb-consumer".to_string(),
+            id: "consumer".to_string(),
+            bus: None,
+            port: None,
+        });
+        let _ = &consumer.handle_control(&packet, &device_req);
+        let _ = &consumer.handle_data(&packet);
+        let _ = &consumer.cancel_packet(&packet);
+        let _ = &consumer.realize();
+    }
+
+    #[test]
+    #[cfg(feature = "usb_consumer")]
+    fn test_consumer_event() {
+        let mut usb_adapter = UsbConsumerAdapter {
+            usb_consumer: Arc::new(Mutex::new(UsbConsumer::new(UsbConsumerConfig {
+                classtype: "usb-consumer".to_string(),
+                id: "consumer".to_string(),
+                bus: None,
+                port: None,
+            }))),
+        };
+        let _ = usb_adapter.do_consumer_event(MEDIA_PLAY_PAUSE, true);
+        let _ = usb_adapter.do_consumer_event(MEDIA_PLAY_PAUSE, false);
+    }
+}
