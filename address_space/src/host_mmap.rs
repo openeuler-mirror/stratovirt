@@ -180,30 +180,31 @@ fn max_nr_threads(nr_vcpus: u8) -> u8 {
 /// * `start` - The start host address of memory segment.
 /// * `page_size` - Size of host page.
 /// * `nr_pages` - Number of pages.
-fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
+///
+/// # Safety
+///
+/// The caller must check the addr and nr_pages params are legal.
+unsafe fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
     let mut addr = start;
     for _i in 0..nr_pages {
-        // SAFETY: The data read from raw pointer is written to the same address.
-        unsafe {
-            let read_addr = addr as *mut u8;
-            let data: u8 = *read_addr;
-            // This function is used to prevent compiler optimization.
-            // If `*read = data` is used, the compiler optimizes it as no-op,
-            // which means that the pages will not be touched.
-            std::ptr::write_volatile(read_addr, data);
-        }
+        let read_addr = addr as *mut u8;
+        let data: u8 = *read_addr;
+        // This function is used to prevent compiler optimization.
+        // If `*read = data` is used, the compiler optimizes it as no-op,
+        // which means that the pages will not be touched.
+        std::ptr::write_volatile(read_addr, data);
         addr += page_size;
     }
 }
 
 /// Pre-alloc memory for virtual machine.
 ///
-/// # Arguments
+/// # Safety
 ///
-/// * `host_addr` - The start host address to pre allocate.
-/// * `size` - Size of memory.
+/// * `host_addr` - The start host address to pre allocate which must be valid hva.
+/// * `size` - Size of memory which must be not exceed the length of host_addr.
 /// * `nr_vcpus` - Number of vcpus.
-fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+unsafe fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     trace::trace_scope_start!(pre_alloc, args = (size));
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
@@ -219,7 +220,10 @@ fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
             pages_per_thread
         };
         let thread = thread::spawn(move || {
-            touch_pages(addr, page_size, touch_nr_pages);
+            // SAFETY: page_size and touch_nr_pages is valid which is calculated above.
+            unsafe {
+                touch_pages(addr, page_size, touch_nr_pages);
+            }
         });
         threads_join.push(thread);
         addr += touch_nr_pages * page_size;
@@ -278,7 +282,8 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
     )?);
 
     if mem_config.mem_prealloc {
-        mem_prealloc(block.host_address(), mem_config.mem_size, thread_num);
+        // SAFETY: The host_addr and size is valid when defining block.
+        unsafe { mem_prealloc(block.host_address(), mem_config.mem_size, thread_num) };
     }
     let region = Region::init_ram_region(block, "DefaultRam");
 
@@ -330,7 +335,8 @@ pub fn create_backend_mem(mem_config: &MemZoneConfig, thread_num: u8) -> Result<
         false,
     )?);
     if mem_config.prealloc {
-        mem_prealloc(block.host_address(), mem_config.size, thread_num);
+        // SAFETY: The host_addr and size is valid when defining block.
+        unsafe { mem_prealloc(block.host_address(), mem_config.size, thread_num) };
     }
     set_host_memory_policy(&block, mem_config)?;
 
@@ -603,7 +609,8 @@ mod test {
         assert_eq!(max_nr_threads(1), 1);
         // The max threads limit is 16, or the number of host CPUs, it will never be 20.
         assert_ne!(max_nr_threads(20), 20);
-        mem_prealloc(host_addr, 0x20_0000, 20);
+        // SAFETY: The host_addr and size is valid which is mapped above.
+        unsafe { mem_prealloc(host_addr, 0x20_0000, 20) };
 
         // Mmap and prealloc with file backend.
         let file_path = String::from("back_mem_test");
@@ -618,7 +625,8 @@ mod test {
             false,
         )
         .unwrap();
-        mem_prealloc(host_addr, 0x10_0000, 2);
+        // SAFETY: The host_addr and size is valid which is mapped above.
+        unsafe { mem_prealloc(host_addr, 0x10_0000, 2) };
         std::fs::remove_file(file_path).unwrap();
     }
 }
