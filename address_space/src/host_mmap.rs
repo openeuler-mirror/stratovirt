@@ -331,7 +331,7 @@ pub fn create_backend_mem(mem_config: &MemBackendObjConfig, thread_num: u8) -> R
         mem_config.size,
         f_back,
         mem_config.dump_guest_core,
-        mem_config.share,
+        mem_config.share(),
         false,
     )?);
     if mem_config.prealloc {

@@ -1747,7 +1747,7 @@ pub trait MachineOps: MachineLifecycle {
                 )
             })?;
 
-        if !mem_cfg.share {
+        if !mem_cfg.share() {
             bail!("Object for share config is not on");
         }
 
