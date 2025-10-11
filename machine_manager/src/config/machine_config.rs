@@ -10,10 +10,14 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fs::{remove_file, File};
+use std::os::unix::io::FromRawFd;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
+use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
 use serde::{Deserialize, Serialize};
 
 use super::error::ConfigError;
@@ -151,6 +155,89 @@ impl Default for MachineMemConfig {
             mem_prealloc: false,
             membackend_objs: None,
         }
+    }
+}
+
+pub const MEM_BACKEND_TYPE_ANON: u64 = 1;
+pub const MEM_BACKEND_TYPE_MEMFD: u64 = 2;
+pub const MEM_BACKEND_TYPE_FILE: u64 = 4;
+
+#[derive(Clone, Debug, Default)]
+pub struct MemoryBackend {
+    pub mb_type: u64,
+    pub size: u64,
+    pub backend: Option<Arc<File>>,
+    pub file_path: Option<String>,
+    pub share: bool,
+}
+
+impl MemoryBackend {
+    pub fn new(option: MemBackendObjConfig) -> Self {
+        let mut mb: MemoryBackend = Default::default();
+        mb.mb_type = match option.mem_type.as_str() {
+            "memory-backend-memfd" => {
+                mb.file_path = Some(format!("stratovirt_memfd@{}", option.id));
+                MEM_BACKEND_TYPE_MEMFD
+            }
+            "memory-backend-file" => {
+                mb.file_path = option.mem_path.clone();
+                MEM_BACKEND_TYPE_FILE
+            }
+            _ => {
+                mb.file_path = None;
+                MEM_BACKEND_TYPE_ANON
+            }
+        };
+        mb.backend = None;
+        mb.share = option.share();
+        mb.size = option.size;
+        mb
+    }
+
+    pub fn realize(&mut self) -> Result<()> {
+        match self.mb_type {
+            MEM_BACKEND_TYPE_MEMFD => {
+                let path_str = match self.file_path.as_ref() {
+                    Some(path) => path.clone(),
+                    None => bail!("memory-backend-memfd path absent"),
+                };
+                let memfd =
+                    memfd_create(&std::ffi::CString::new(path_str)?, MemFdCreateFlag::empty())?;
+                if memfd < 0 {
+                    return Err(std::io::Error::last_os_error())
+                        .with_context(|| "Failed to create memfd");
+                }
+                // SAFETY: The parameters memfd has checked upper.
+                let memfile = unsafe { File::from_raw_fd(memfd) };
+                memfile
+                    .set_len(self.size)
+                    .with_context(|| "Failed to set the length of memfd file")?;
+                self.backend = Some(Arc::new(memfile));
+            }
+            MEM_BACKEND_TYPE_FILE => {
+                let path_str = match self.file_path.as_ref() {
+                    Some(path) => path.clone(),
+                    None => bail!("memory-backend-file path absent"),
+                };
+                let path = std::path::Path::new(&path_str);
+                let unlink = !path.exists();
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(path)
+                    .with_context(|| format!("Failed to open file: {}", path_str))?;
+                if file.metadata().unwrap().len() < self.size {
+                    file.set_len(self.size)?;
+                }
+                if unlink {
+                    remove_file(path.as_os_str())?;
+                }
+                self.backend = Some(Arc::new(file));
+            }
+            _ => {}
+        };
+        Ok(())
     }
 }
 
