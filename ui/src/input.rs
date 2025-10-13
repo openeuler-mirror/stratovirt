@@ -695,16 +695,21 @@ impl MultiTouchAbsData {
         }
     }
 
-    fn scale_axis(&mut self, ui_width: i32, ui_height: i32, x_max: i32, y_max: i32) {
-        self.x = Self::scale(self.x, 0, ui_width, 0, x_max);
-        self.y = Self::scale(self.y, 0, ui_height, 0, y_max);
+    fn scale_axis(&mut self, ui_width: i32, ui_height: i32, x_max: i32, y_max: i32) -> Result<()> {
+        self.x = Self::scale(self.x, 0, ui_width, 0, x_max)?;
+        self.y = Self::scale(self.y, 0, ui_height, 0, y_max)?;
+        Ok(())
     }
 
-    fn scale(val: i32, min_in: i32, max_in: i32, min_out: i32, max_out: i32) -> i32 {
+    fn scale(val: i32, min_in: i32, max_in: i32, min_out: i32, max_out: i32) -> Result<i32> {
         let range_in = (max_in - min_in) as i64;
         let range_out = (max_out - min_out) as i64;
 
-        ((val - min_in) as i64 * range_out / range_in + min_out as i64) as i32
+        if range_in == 0 {
+            bail!("try div by zero, max_in {} min_in {}", max_in, min_in);
+        }
+
+        Ok(((val - min_in) as i64 * range_out / range_in + min_out as i64) as i32)
     }
 }
 
@@ -751,14 +756,14 @@ impl MultiTouchDevice {
 
         match evt.kind {
             MultiTouchEventKind::BEGIN => {
-                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max)
+                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max)?
             }
             MultiTouchEventKind::END => locked_ops.send_event(evt)?,
             MultiTouchEventKind::UPDATE => {
                 if self.slots[slot_id].tracking_id == -1 {
                     bail!("UPDATE is only valid after the pointer was pressed");
                 }
-                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max);
+                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max)?;
             }
         }
         self.slots[slot_id] = evt.clone();
