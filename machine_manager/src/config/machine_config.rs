@@ -137,6 +137,7 @@ impl MemBackendObjConfig {
 pub struct MachineMemConfig {
     pub mem_size: u64,
     pub max_size: u64,
+    pub current_size: u64,
     pub mem_path: Option<String>,
     pub dump_guest_core: bool,
     pub mem_share: bool,
@@ -149,6 +150,7 @@ impl Default for MachineMemConfig {
         MachineMemConfig {
             mem_size: DEFAULT_MEMSIZE * M,
             max_size: MAX_MEMSIZE,
+            current_size: DEFAULT_MEMSIZE * M,
             mem_path: None,
             dump_guest_core: true,
             mem_share: false,
@@ -225,6 +227,7 @@ impl MemoryBackend {
                     .read(true)
                     .write(true)
                     .create(true)
+                    .truncate(false)
                     .open(path)
                     .with_context(|| format!("Failed to open file: {}", path_str))?;
                 if file.metadata().unwrap().len() < self.size {
@@ -527,6 +530,7 @@ impl VmConfig {
         if mem_cfg.maxmem < mem_cfg.size {
             bail!("maxmem must bigger than current memory size")
         }
+        self.machine_config.mem_config.current_size = mem_cfg.size;
 
         Ok(())
     }
@@ -727,6 +731,8 @@ mod tests {
             dump_guest_core: false,
             mem_prealloc: false,
             membackend_objs: None,
+            max_size: MAX_MEMSIZE,
+            current_size: MAX_MEMSIZE,
         };
         let mut machine_config = MachineConfig {
             mach_type: MachineType::MicroVm,
@@ -945,6 +951,7 @@ mod tests {
 
         let memory_cfg = "size=8G,maxmem=32G";
         let mem_cfg_ret = vm_config.add_memory(memory_cfg);
+        assert!(mem_cfg_ret.is_ok());
         let mem_size = vm_config.machine_config.mem_config.mem_size;
         let max_size = vm_config.machine_config.mem_config.max_size;
         assert_eq!(mem_size, 8 * 1024 * 1024 * 1024);
