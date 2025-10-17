@@ -1002,6 +1002,7 @@ dependencies = [
  "hex",
  "libc",
  "log",
+ "nix 0.26.2",
  "once_cell",
  "regex",
  "serde",

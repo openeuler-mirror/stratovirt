@@ -10,8 +10,18 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::HashMap;
+use std::mem::size_of;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::vec::Vec;
+
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use log::{error, info, warn};
@@ -19,12 +29,6 @@ use machine_manager::config::{
     get_pci_df, parse_bool, valid_id, MemBackendObjConfig, MemoryBackend, DEFAULT_VIRTQUEUE_SIZE,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use std::mem::size_of;
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
-use std::vec::Vec;
 use util::bitmap::Bitmap;
 use util::byte_code::ByteCode;
 use util::gen_base_func;
@@ -32,8 +36,6 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::unix::do_mmap;
-use vmm_sys_util::epoll::EventSet;
-use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
 use crate::{
@@ -41,9 +43,6 @@ use crate::{
     VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_MEM,
 };
-
-const VIRTIO_MEM_F_ACPI_PXM: u32 = 0;
-const VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE: u32 = 1;
 
 const QUEUE_NUM_MEM: usize = 1;
 
@@ -60,6 +59,9 @@ const VIRTIO_MEM_RESP_ERROR: u16 = 3;
 const VIRTIO_MEM_STATE_PLUGGED: u16 = 0;
 const VIRTIO_MEM_STATE_UNPLUGGED: u16 = 1;
 const VIRTIO_MEM_STATE_MIXED: u16 = 2;
+
+const VIRTIO_MEM_F_ACPI_PXM: u32 = 0;
+const VIRTIO_MEM_F_UNPLUGGED_INACCESSIBLE: u32 = 1;
 
 const DEFAULT_MEM_BLOCK_SIZE: u64 = 33554432; // 32 MB
 const DEFAULT_MEM_BLOCK_ALIGN_SIZE: u64 = 16384; // 16 KB
@@ -452,6 +454,8 @@ struct MemoryHandler {
     pub(crate) device_broken: Arc<AtomicBool>,
     /// Virtio mem Region list
     pub(crate) regions: Arc<Mutex<MemRegionState>>,
+    /// The memory backend for the device.
+    pub(crate) fb: Option<FileBackend>,
 }
 
 impl MemoryHandler {
@@ -723,12 +727,41 @@ impl Memory {
         let mem = Self::new_internal(option, memobj, max_size);
         let id = mem.id.clone();
         let mem_arc = Arc::new(Mutex::new(mem));
+        register_viomem_device(id, mem_arc.clone())?;
 
         Ok(mem_arc)
     }
 
     pub fn get_region_size(&self) -> u64 {
         self.config.lock().unwrap().region_size
+    }
+
+    fn update_request(&mut self, request_size: u64) -> Result<()> {
+        info!("qmp request size {}", request_size);
+        if request_size % self.config.lock().unwrap().block_size != 0 {
+            bail!("requested_size not aligned with device block size")
+        }
+        let old_requested_size = self.config.lock().unwrap().requested_size;
+        self.config.lock().unwrap().requested_size = request_size;
+        self.signal_config_change().with_context(|| {
+            self.config.lock().unwrap().requested_size = old_requested_size;
+            "Failed to notify about configuration change after setting request memory size"
+        })?;
+
+        Ok(())
+    }
+
+    /// Notify configuration changes to VM.
+    fn signal_config_change(&self) -> Result<()> {
+        if let Some(interrupt_cb) = &self.interrupt_cb {
+            interrupt_cb(&VirtioInterruptType::Config, None, false).with_context(|| {
+                VirtioError::InterruptTrigger("viomem", VirtioInterruptType::Config)
+            })
+        } else {
+            Err(anyhow!(VirtioError::DeviceNotActivated(
+                "viomem".to_string()
+            )))
+        }
     }
 }
 
@@ -791,7 +824,7 @@ impl VirtioDevice for Memory {
 
         let config = self.config.lock().unwrap();
         let backend = self.backend.lock().unwrap();
-        let (host_addr, _) = match &backend.backend {
+        let (host_addr, fb) = match &backend.backend {
             Some(file) => (
                 do_mmap(
                     &Some(file.as_ref()),
@@ -824,6 +857,7 @@ impl VirtioDevice for Memory {
                 host_addr,
             ))),
             device_broken: self.base.broken.clone(),
+            fb,
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -841,4 +875,27 @@ impl VirtioDevice for Memory {
     fn reset(&mut self) -> Result<()> {
         Ok(())
     }
+}
+
+fn register_viomem_device(id: String, mem: Arc<Mutex<Memory>>) -> Result<()> {
+    VIOMEM_DEV_LIST
+        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+        .lock()
+        .unwrap()
+        .insert(id, mem);
+    Ok(())
+}
+
+pub fn qmp_set_viomem(id: &String, request_size: u64) -> Result<()> {
+    if let Some(devlist) = VIOMEM_DEV_LIST.get() {
+        match devlist.lock().unwrap().get(id) {
+            Some(mem) => {
+                mem.lock().unwrap().update_request(request_size)?;
+            }
+            None => {
+                bail!("not found virtio-mem@{} device", id)
+            }
+        }
+    }
+    bail!("no virtio-mem device context")
 }

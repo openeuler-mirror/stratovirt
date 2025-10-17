@@ -26,7 +26,8 @@ use crate::qmp::qmp_schema::{
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
     Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
     MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent,
-    QueryMemGpaArgument, QueryVcpuRegArgument, Target, TypeLists, UpdateRegionArgument,
+    QueryMemGpaArgument, QueryVcpuRegArgument, SetViomemArgument, Target, TypeLists,
+    UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -236,6 +237,9 @@ pub trait DeviceInterface {
 
     /// Query display of stratovirt.
     fn query_display_image(&self) -> Response;
+
+    /// Update a virtio-mem device.
+    fn set_viomem(&mut self, args: Box<SetViomemArgument>) -> Response;
 
     /// Query state.
     fn query_workloads(&self) -> Response {
