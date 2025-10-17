@@ -380,11 +380,40 @@ impl MultitouchOps for InputIoHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::{address_space_init, eventloop_init};
+    use crate::*;
+    use address_space::{AddressAttr, GuestAddress};
     use machine_manager::config::str_slip_to_clap;
+    use ui::input::{
+        lift_all_fingers, send_mt_screen_event, send_mt_screen_sync, MultiTouchAbsData,
+        MultiTouchEventKind,
+    };
+
+    const QUEUE_SIZE: u16 = 256;
+
+    fn get_default_test_multitouch(touch_type: MultitouchType) -> Multitouch {
+        let cmd = match touch_type {
+            MultitouchType::Pad => "virtio-multitouch-pci,id=touchpad,bus=pcie.0,addr=0xb,x=12000,y=8000,touchtype=pad",
+            MultitouchType::Screen => "virtio-multitouch-pci,id=touchscreen,bus=pcie.0,addr=0xb,x=4000,y=3500,touchtype=screen",
+        };
+        let config = MultitouchConfig::try_parse_from(str_slip_to_clap(cmd, true, false)).unwrap();
+        Multitouch::new(config)
+    }
 
     #[test]
-    fn test_touchpad_cmdline_parser() {
-        // Test device parameters are all right.
+    fn test_multitouch_cmdline_parser() {
+        // Test touchscreen device parameters.
+        let touchscreen_cmd =
+            "virtio-multitouch-pci,id=touchscreen,bus=pcie.0,addr=0xb,x=4000,y=3500";
+        let touchscreen_config =
+            MultitouchConfig::try_parse_from(str_slip_to_clap(touchscreen_cmd, true, false))
+                .unwrap();
+        assert_eq!(touchscreen_config.id, "touchscreen");
+        assert_eq!(touchscreen_config.touchtype, MultitouchType::Screen);
+        assert_eq!(touchscreen_config.x, 4000);
+        assert_eq!(touchscreen_config.y, 3500);
+
+        // Test touchpad device parameters.
         let touchpad_cmd =
             "virtio-multitouch-pci,id=touchpad,bus=pcie.0,addr=0xb,x=12000,y=8000,touchtype=pad";
         let touchpad_config =
@@ -401,14 +430,93 @@ mod tests {
     }
 
     #[test]
-    fn test_touchpad_info_init() {
-        let touchpad_cmd =
-            "virtio-multitouch-pci,id=touchpad,bus=pcie.0,addr=0xb,x=12000,y=8000,touchtype=pad";
-        let touchpad_config =
-            MultitouchConfig::try_parse_from(str_slip_to_clap(touchpad_cmd, true, false)).unwrap();
-        let touchpad_info = Multitouch::new(touchpad_config);
-        assert_eq!(touchpad_info.touchtype, MultitouchType::Pad);
-        assert_eq!(touchpad_info.x_max, 12000);
-        assert_eq!(touchpad_info.y_max, 8000);
+    fn test_multitouch_init() {
+        // Test touchscreen init.
+        let mut touchscreen = get_default_test_multitouch(MultitouchType::Screen);
+        assert_eq!(touchscreen.touchtype, MultitouchType::Screen);
+        assert_eq!(touchscreen.x_max, 4000);
+        assert_eq!(touchscreen.y_max, 3500);
+        touchscreen.realize().unwrap();
+        assert!(touchscreen.virtio_base().device_features & 1 << VIRTIO_INPUT_F_MTT_SCREEN > 0);
+
+        // Test touchpad init.
+        let mut touchpad = get_default_test_multitouch(MultitouchType::Pad);
+        assert_eq!(touchpad.touchtype, MultitouchType::Pad);
+        assert_eq!(touchpad.x_max, 12000);
+        assert_eq!(touchpad.y_max, 8000);
+        touchpad.realize().unwrap();
+        assert!(touchscreen.virtio_base().device_features & 1 << VIRTIO_INPUT_F_MTT_TOUCHPAD > 0);
+    }
+
+    #[test]
+    fn test_read_write_config() {
+        let mut touchscreen = get_default_test_multitouch(MultitouchType::Screen);
+        touchscreen.realize().unwrap();
+
+        let expect_config_space: [u8; 2] = [0x01, 0x02];
+        let mut read_config_space = [0u8; 2];
+        touchscreen.write_config(0, &expect_config_space).unwrap();
+        touchscreen.read_config(0, &mut read_config_space).unwrap();
+        assert_eq!(read_config_space, expect_config_space);
+    }
+
+    #[test]
+    fn test_multitouch_process() {
+        eventloop_init();
+
+        let mut multitouch = get_default_test_multitouch(MultitouchType::Screen);
+        multitouch.realize().unwrap();
+
+        let mem_space = address_space_init();
+        let interrupt_cb = Arc::new(Box::new(
+            move |_int_type: &VirtioInterruptType, _queue: Option<&Queue>, _needs_reset: bool| {
+                Ok(())
+            },
+        ) as VirtioInterrupt);
+        let mut queues: Vec<Arc<Mutex<Queue>>> = Vec::new();
+        let mut queue_evts: Vec<Arc<EventFd>> = Vec::new();
+        for i in 0..2 as u64 {
+            let mut queue_config_inf = QueueConfig::new(QUEUE_SIZE);
+            queue_config_inf.desc_table = GuestAddress(40960 * i);
+            queue_config_inf.addr_cache.desc_table_host = unsafe {
+                mem_space
+                    .get_host_address(queue_config_inf.desc_table, AddressAttr::Ram)
+                    .unwrap()
+            };
+            queue_config_inf.avail_ring = GuestAddress(40960 * i + 4096);
+            queue_config_inf.addr_cache.avail_ring_host = unsafe {
+                mem_space
+                    .get_host_address(queue_config_inf.avail_ring, AddressAttr::Ram)
+                    .unwrap()
+            };
+            queue_config_inf.used_ring = GuestAddress(40960 * i + 4672);
+            queue_config_inf.addr_cache.used_ring_host = unsafe {
+                mem_space
+                    .get_host_address(queue_config_inf.used_ring, AddressAttr::Ram)
+                    .unwrap()
+            };
+            queue_config_inf.ready = true;
+            let queue = Arc::new(Mutex::new(Queue::new(queue_config_inf, 1).unwrap()));
+            queues.push(queue);
+            let event_inf = Arc::new(EventFd::new(libc::EFD_NONBLOCK).unwrap());
+            queue_evts.push(event_inf);
+        }
+        multitouch.virtio_base_mut().queues = queues;
+        assert!(multitouch
+            .activate(mem_space.clone(), interrupt_cb, queue_evts)
+            .is_ok());
+        let mut abs_data_begin =
+            MultiTouchAbsData::new(MultiTouchEventKind::BEGIN, 200, 400, 100, 100, 0, 0);
+        let mut abs_data_update =
+            MultiTouchAbsData::new(MultiTouchEventKind::UPDATE, 210, 410, 110, 110, 0, 0);
+        let mut abs_data_end =
+            MultiTouchAbsData::new(MultiTouchEventKind::END, 210, 410, 110, 110, 0, -1);
+        assert!(send_mt_screen_event(&mut abs_data_begin, 4000, 3500).is_ok());
+        assert!(send_mt_screen_event(&mut abs_data_update, 4000, 3500).is_ok());
+        assert!(send_mt_screen_event(&mut abs_data_end, 4000, 3500).is_ok());
+        assert!(send_mt_screen_sync().is_ok());
+        assert!(lift_all_fingers().is_ok());
+        assert!(multitouch.reset().is_ok());
+        assert!(multitouch.deactivate().is_ok());
     }
 }
