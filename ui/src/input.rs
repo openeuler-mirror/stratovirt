@@ -976,6 +976,11 @@ mod tests {
         y: u32,
     }
 
+    fn get_keyboard_state(keycode: u16) -> bool {
+        let locked_input = INPUTS.lock().unwrap();
+        locked_input.keyboard_state.keystate.contains(&keycode)
+    }
+
     impl PointerOpts for TestTablet {
         fn update_point_state(&mut self, input_event: InputEvent) -> Result<()> {
             match input_event.input_type {
@@ -1081,5 +1086,42 @@ mod tests {
         drop(locked_input);
 
         test_input.unregister_input();
+    }
+
+    #[cfg(feature = "keycode")]
+    #[test]
+    fn test_keyboard_process() {
+        // Test keyboard_update
+        let keycode_list = vec![
+            KEYCODE_SHIFT,
+            KEYCODE_CTRL,
+            KEYCODE_ALT,
+            KEYCODE_ALT_R,
+            KEYCODE_CAPS_LOCK,
+            KEYCODE_NUM_LOCK,
+        ];
+        for keycode in keycode_list {
+            assert!(keyboard_update(true, keycode).is_ok());
+            assert_eq!(get_keyboard_state(keycode), true);
+            assert!(keyboard_update(false, keycode).is_ok());
+            assert_eq!(get_keyboard_state(keycode), false);
+        }
+        assert_eq!(keyboard_modifier_get(KeyboardModifier::KeyModNumlock), true);
+        keyboard_state_reset();
+        assert_eq!(
+            keyboard_modifier_get(KeyboardModifier::KeyModNumlock),
+            false
+        );
+
+        // Test update_key_state
+        assert!(update_key_state(true, 97, 0x07E1).is_ok());
+        assert_eq!(get_keyboard_state(0x07E1), true);
+        assert!(update_key_state(true, 96, 0x47).is_ok());
+        assert_eq!(get_keyboard_state(0x47), true);
+
+        // Test kbd_led_state
+        set_kbd_led_state(3 as u8);
+        assert_eq!(check_kbd_led_state(3 as u8), true);
+        assert_eq!(get_kbd_led_state(), 3 as u8);
     }
 }
