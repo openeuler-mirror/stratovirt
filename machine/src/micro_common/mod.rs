@@ -1011,6 +1011,19 @@ impl DeviceInterface for LightMachine {
             }
         }
     }
+
+    fn get_viomem(&self, args: Box<qmp_schema::GetViomemArgument>) -> Response {
+        match virtio::qmp_get_viomem(&args.id) {
+            Ok(value) => Response::create_response(value, None),
+            Err(e) => {
+                error!("Failed to get viomem@{} information, {:?}", args.id, e);
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        }
+    }
 }
 
 impl MigrateInterface for LightMachine {

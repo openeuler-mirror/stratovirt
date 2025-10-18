@@ -485,6 +485,7 @@ fn qmp_command_exec(
         (chardev_add, chardev_add),
         (cameradev_add, cameradev_add),
         (set_viomem, set_viomem),
+        (get_viomem, get_viomem),
         (update_region, update_region),
         (human_monitor_command, human_monitor_command),
         (blockdev_snapshot_internal_sync, blockdev_snapshot_internal_sync),

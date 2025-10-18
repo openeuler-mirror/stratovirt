@@ -20,6 +20,8 @@ use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -109,6 +111,20 @@ fn alloc_base_addr(
     base_addr
 }
 
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+struct ViomemInfo {
+    pub node: u16,
+    #[serde(rename = "size")]
+    pub region_size: u64,
+    #[serde(rename = "block-size")]
+    pub block_size: u64,
+    #[serde(rename = "requested-size")]
+    pub requested_size: u64,
+    #[serde(rename = "plugged-size")]
+    pub plugged_size: u64,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 struct VirtioMemConfig {
@@ -128,6 +144,25 @@ struct VirtioMemConfig {
     plugged_size: u64,
     /// the requested amount of plugged memory within the usable device-managed memory region.
     requested_size: u64,
+}
+
+impl VirtioMemConfig {
+    pub(crate) fn qmp_query(&self) -> Value {
+        let node_id = if self.node_id == NUMA_NONE {
+            0
+        } else {
+            self.node_id
+        };
+
+        serde_json::to_value(ViomemInfo {
+            node: node_id,
+            region_size: self.region_size,
+            block_size: self.block_size,
+            requested_size: self.requested_size,
+            plugged_size: self.plugged_size,
+        })
+        .unwrap()
+    }
 }
 
 #[repr(C)]
@@ -454,8 +489,6 @@ struct MemoryHandler {
     pub(crate) device_broken: Arc<AtomicBool>,
     /// Virtio mem Region list
     pub(crate) regions: Arc<Mutex<MemRegionState>>,
-    /// The memory backend for the device.
-    pub(crate) fb: Option<FileBackend>,
 }
 
 impl MemoryHandler {
@@ -738,6 +771,9 @@ impl Memory {
 
     fn update_request(&mut self, request_size: u64) -> Result<()> {
         info!("qmp request size {}", request_size);
+        if request_size > self.config.lock().unwrap().region_size {
+            bail!("request size out of the device region size")
+        }
         if request_size % self.config.lock().unwrap().block_size != 0 {
             bail!("requested_size not aligned with device block size")
         }
@@ -824,22 +860,16 @@ impl VirtioDevice for Memory {
 
         let config = self.config.lock().unwrap();
         let backend = self.backend.lock().unwrap();
-        let (host_addr, fb) = match &backend.backend {
-            Some(file) => (
-                do_mmap(
-                    &Some(file.as_ref()),
-                    config.region_size,
-                    0,
-                    false,
-                    backend.share,
-                    false,
-                )?,
-                Some(FileBackend::new_common(file.clone())),
-            ),
-            None => (
-                do_mmap(&None, config.region_size, 0, false, backend.share, false)?,
-                None,
-            ),
+        let host_addr = match &backend.backend {
+            Some(file) => do_mmap(
+                &Some(file.as_ref()),
+                config.region_size,
+                0,
+                false,
+                backend.share,
+                false,
+            )?,
+            None => do_mmap(&None, config.region_size, 0, false, backend.share, false)?,
         };
         drop(backend);
 
@@ -857,7 +887,6 @@ impl VirtioDevice for Memory {
                 host_addr,
             ))),
             device_broken: self.base.broken.clone(),
-            fb,
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -889,13 +918,25 @@ fn register_viomem_device(id: String, mem: Arc<Mutex<Memory>>) -> Result<()> {
 pub fn qmp_set_viomem(id: &String, request_size: u64) -> Result<()> {
     if let Some(devlist) = VIOMEM_DEV_LIST.get() {
         match devlist.lock().unwrap().get(id) {
-            Some(mem) => {
-                mem.lock().unwrap().update_request(request_size)?;
-            }
+            Some(mem) => mem.lock().unwrap().update_request(request_size),
             None => {
                 bail!("not found virtio-mem@{} device", id)
             }
         }
+    } else {
+        bail!("no virtio-mem device context")
     }
-    bail!("no virtio-mem device context")
+}
+
+pub fn qmp_get_viomem(id: &String) -> Result<Value> {
+    if let Some(devlist) = VIOMEM_DEV_LIST.get() {
+        match devlist.lock().unwrap().get(id) {
+            Some(mem) => Ok(mem.lock().unwrap().config.lock().unwrap().qmp_query()),
+            None => {
+                bail!("not found virtio-mem@{} device", id)
+            }
+        }
+    } else {
+        bail!("no virtio-mem device context")
+    }
 }

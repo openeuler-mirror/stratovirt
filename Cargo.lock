@@ -1929,6 +1929,7 @@ dependencies = [
  "migration",
  "migration_derive",
  "once_cell",
+ "serde",
  "serde_json",
  "thiserror",
  "trace",
