@@ -57,8 +57,8 @@ use machine_manager::config::get_chardev_socket_path;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::Param;
 use machine_manager::config::{
-    parse_incoming_uri, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode, NetDevcfg,
-    NetworkInterfaceConfig, VmConfig,
+    parse_incoming_uri, parse_size, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
+    NetDevcfg, NetworkInterfaceConfig, VmConfig,
 };
 use machine_manager::machine::{
     DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
@@ -982,6 +982,47 @@ impl DeviceInterface for LightMachine {
             qmp_schema::QmpErrorClass::GenericError("The micro vm is not supported".to_string()),
             None,
         )
+    }
+
+    fn set_viomem(&mut self, args: Box<qmp_schema::SetViomemArgument>) -> Response {
+        let requested_size = match parse_size(&args.requested_size) {
+            Ok(rs) => rs,
+            Err(_) => {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(
+                        "Invalid set-viomem arguments".to_string(),
+                    ),
+                    None,
+                )
+            }
+        };
+
+        match virtio::qmp_set_viomem(&args.id, requested_size) {
+            Ok(_) => Response::create_empty_response(),
+            Err(e) => {
+                error!(
+                    "Failed to set viomem@{} requested size to {}, {:?}",
+                    args.id, requested_size, e
+                );
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        }
+    }
+
+    fn get_viomem(&self, args: Box<qmp_schema::GetViomemArgument>) -> Response {
+        match virtio::qmp_get_viomem(&args.id) {
+            Ok(value) => Response::create_response(value, None),
+            Err(e) => {
+                error!("Failed to get viomem@{} information, {:?}", args.id, e);
+                Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                )
+            }
+        }
     }
 }
 

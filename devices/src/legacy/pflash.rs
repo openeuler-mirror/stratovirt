@@ -347,7 +347,7 @@ impl PFlash {
                 .with_context(|| "Failed to get host address.")
         }?;
         let ret =
-        // SAFETY: addr and size are valid.
+        // SAFETY: addr is in `RomDevice` region and addr/size has been checked.
         unsafe {
             libc::msync(
                 addr as *mut libc::c_void,

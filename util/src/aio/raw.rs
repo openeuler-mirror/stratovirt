@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::os::unix::io::RawFd;
+use std::fs::File;
+use std::os::unix::io::{AsRawFd, RawFd};
 
 use libc::{c_int, c_void, fdatasync, iovec, off_t, pread, preadv, pwrite, pwritev, size_t};
 use log::error;
@@ -21,8 +22,9 @@ use super::Iovec;
 /// # Safety
 ///
 /// Caller should has valid buf.
-pub unsafe fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
+pub unsafe fn raw_read(file: &File, buf: u64, size: usize, offset: usize) -> i64 {
     let mut ret;
+    let fd = file.as_raw_fd();
     loop {
         ret = pread(
             fd as c_int,
@@ -51,8 +53,9 @@ pub unsafe fn raw_read(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
 /// # Safety
 ///
 /// Caller should has valid iovec.
-pub unsafe fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
+pub unsafe fn raw_readv(file: &File, iovec: &[Iovec], offset: usize) -> i64 {
     let mut ret;
+    let fd = file.as_raw_fd();
     loop {
         ret = preadv(
             fd as c_int,
@@ -79,8 +82,9 @@ pub unsafe fn raw_readv(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
 /// # Safety
 ///
 /// Caller should has valid buf.
-pub unsafe fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 {
+pub unsafe fn raw_write(file: &File, buf: u64, size: usize, offset: usize) -> i64 {
     let mut ret;
+    let fd = file.as_raw_fd();
     loop {
         ret = pwrite(
             fd as c_int,
@@ -109,8 +113,9 @@ pub unsafe fn raw_write(fd: RawFd, buf: u64, size: usize, offset: usize) -> i64 
 /// # Safety
 ///
 /// Caller should has valid iovec.
-pub unsafe fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
+pub unsafe fn raw_writev(file: &File, iovec: &[Iovec], offset: usize) -> i64 {
     let mut ret;
+    let fd = file.as_raw_fd();
     loop {
         // Caller should has valid iovec.
         ret = pwritev(
@@ -135,9 +140,9 @@ pub unsafe fn raw_writev(fd: RawFd, iovec: &[Iovec], offset: usize) -> i64 {
     ret
 }
 
-pub fn raw_datasync(fd: RawFd) -> i64 {
-    // SAFETY: fd is valid.
-    let ret = unsafe { i64::from(fdatasync(fd)) };
+pub fn raw_datasync(file: &File) -> i64 {
+    // SAFETY: The return value is checked.
+    let ret = unsafe { i64::from(fdatasync(file.as_raw_fd())) };
     if ret < 0 {
         error!("Failed to fdatasync: errno {}.", nix::errno::errno());
     }

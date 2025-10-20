@@ -77,12 +77,14 @@ Default VM memory size is 256M. The supported VM memory size is among [128M, 512
 
 ```shell
 # cmdline
--m [size=]<megs>[m|M|g|G]
+-m [size=]<megs>[m|M|g|G][,maxmem=<megs>[m|M|g|G]]
 
 -m 256m
 -m 256
 -m 1G
 ```
+
+Note: The maxmem option is only used in memory hot-(un)plug scenarios.
 
 #### 1.3.2 Memory Prealloc
 Memory Prealloc feature is used to preallocate VM physical memory in advance and create its page tables.
@@ -955,6 +957,20 @@ Three properties can be set for USB Uas.
 
 Note: "aio=off,direct=false" must be configured and other aio/direct values are not supported.
 
+#### 2.13.8 USB Consumer
+The USB consumer is a consumer that uses the USB protocol. It should be attached to USB controller.
+
+One property can be set for USB Consumer.
+
+* id: unique device id.
+
+```shell
+-device usb-consumer,id=<consumer>
+```
+
+Note: Only one consumer can be configured.
+
+
 ### 2.14 Virtio Scsi Controller
 Virtio Scsi controller is a pci device which can be attached scsi device.
 
@@ -1228,6 +1244,31 @@ Sample Configuration：
 
 Note:
 1. Only host evdev passthrough supported.
+
+### 2.23 virtio-mem
+virtio-mem device allow dynamic resizing of virtual machine memory, provide a flexible, cross-architecture memory hot(un)plug solution.
+
+Five properties are supported for virtio-mem.
+* id: unique device id.
+* memdev: memory-backend id
+* memaddr: the base GPA of the virtio-mem managed memory region.
+* requested-size: the requested amount of plugged memory.
+* block-size: the alignment size of a memory block.
+* node: numa node id.
+
+For virtio-mem-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it. As virtio pci mem device is a
+single function device, the function number should be set to zero.
+
+Sample Configuration：
+```shell
+# virtio mmio mem device
+-device virtio-mem-device,id=<viomem_id>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>]
+# virtio pci mem device
+-device virtio-mem-pci,id=<viomem_id>,bus=<pcie.0>,addr=<0x4>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>][,multifunction=on|off]
+```
 
 ## 3. Trace
 

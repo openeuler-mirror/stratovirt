@@ -413,6 +413,40 @@ Get memory size of guest.
 <- { "return": { "actual": 2147483648 } }
 ```
 
+## virtio-mem device management
+
+With QMP command you can set target memory size of guest and get memory size of guest.
+
+### set-viomem
+
+Set target memory size of guest.
+
+#### Arguments
+
+* `id` : The device's ID.
+* `requested-size` : new request size of the virtio-mem device.
+
+#### Example
+
+```json
+-> { "execute": "set-viomem", "arguments": { "id" : "viomem0", "requested-size": "1G" } }
+<- { "return": {} }
+```
+
+### get-viomem
+
+Get memory size of guest.
+
+#### Arguments
+* `id`: The device's ID.
+
+#### Example
+
+```json
+-> { "execute": "get-viomem", "arguments" : { "id" : "viomem0"} }
+<- { "return": { "node" : 0, "size": 21474883648, "block-size": 67108864, "plugged-size": 0, "requested-size": 0 } }
+```
+
 ## Migration
 
 ### migrate

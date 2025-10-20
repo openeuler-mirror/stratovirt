@@ -109,9 +109,15 @@ ioctl_ior_nr!(EVIOCGBIT, EVDEV, 0x20 + evt, EvdevBuf, evt);
 ioctl_ior_nr!(EVIOCGABS, EVDEV, 0x40 + abs, InputAbsInfo, abs);
 ioctl_iow_nr!(EVIOCGRAB, EVDEV, 0x90, c_int);
 
-pub fn evdev_ioctl(fd: &File, req: u64, len: usize) -> EvdevBuf {
+/// # Safety
+///
+/// Caller should has valid evdev fd/req/len.
+pub unsafe fn evdev_ioctl(fd: &File, req: u64, len: usize) -> EvdevBuf {
     let mut evbuf = EvdevBuf::new();
-    // SAFETY: file is `evdev` fd, and we check the return.
+    // SAFETY:
+    // 1. `fd` must be evdev type.
+    // 2. `req` must be valid evdev type.
+    // 3. `evbuf` is safe which is created above.
     let ret = unsafe { ioctl_with_mut_ref(fd, req, &mut evbuf.buf) };
     if ret < 0 {
         error!(
@@ -135,9 +141,13 @@ pub fn evdev_ioctl(fd: &File, req: u64, len: usize) -> EvdevBuf {
     evbuf
 }
 
-pub fn evdev_evt_supported(fd: &File) -> Result<BTreeMap<u8, EvdevBuf>> {
+/// # Safety
+///
+/// Caller should has valid evdev fd.
+pub unsafe fn evdev_evt_supported(fd: &File) -> Result<BTreeMap<u8, EvdevBuf>> {
     let mut evts: BTreeMap<u8, EvdevBuf> = BTreeMap::new();
-    let evt_type = evdev_ioctl(fd, EVIOCGBIT(0), 0);
+    // SAFETY: req and len is valid.
+    let evt_type = unsafe { evdev_ioctl(fd, EVIOCGBIT(0), 0) };
     if evt_type.len == 0 {
         bail!(format!(
             "Failed to get bit 0, error {}",
@@ -149,7 +159,9 @@ pub fn evdev_evt_supported(fd: &File) -> Result<BTreeMap<u8, EvdevBuf>> {
             // Not supported event
             continue;
         }
-        evts.insert(ev, evdev_ioctl(fd, EVIOCGBIT(ev as u32), 0));
+        // SAFETY: req and len is valid.
+        let ret = unsafe { evdev_ioctl(fd, EVIOCGBIT(ev as u32), 0) };
+        evts.insert(ev, ret);
     }
 
     Ok(evts)

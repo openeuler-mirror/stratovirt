@@ -207,19 +207,31 @@ struct EvdevConfig {
 
 impl EvdevConfig {
     fn new(fd: &File) -> Result<Self> {
-        if evdev_ioctl(fd, EVIOCGVERSION(), size_of::<c_int>()).len == 0 {
+        // SAFETY: req and len is valid.
+        let version = unsafe { evdev_ioctl(fd, EVIOCGVERSION(), size_of::<c_int>()) };
+        if version.len == 0 {
             bail!("It's not an evdev device");
         }
 
-        let id = EvdevId::from_buf(evdev_ioctl(fd, EVIOCGID(), size_of::<EvdevId>()));
+        // SAFETY: req and len is valid.
+        let buf_id = unsafe { evdev_ioctl(fd, EVIOCGID(), size_of::<EvdevId>()) };
+        let id = EvdevId::from_buf(buf_id);
+        // SAFETY: req and len is valid.
+        let name = unsafe { evdev_ioctl(fd, EVIOCGNAME(), 0).to_vec() };
+        // SAFETY: req and len is valid.
+        let serial = unsafe { evdev_ioctl(fd, EVIOCGUNIQ(), 0).to_vec() };
+        // SAFETY: req and len is valid.
+        let properties = unsafe { evdev_ioctl(fd, EVIOCGPROP(), 0) };
+        // SAFETY: req and len is valid.
+        let event_supported = unsafe { evdev_evt_supported(fd)? };
         Ok(Self {
             select: VIRTIO_INPUT_CFG_UNSET,
             subsel: 0,
             device_ids: virtio_input_device_ids::from_evdevid(id),
-            name: evdev_ioctl(fd, EVIOCGNAME(), 0).to_vec(),
-            serial: evdev_ioctl(fd, EVIOCGUNIQ(), 0).to_vec(),
-            properties: evdev_ioctl(fd, EVIOCGPROP(), 0),
-            event_supported: evdev_evt_supported(fd)?,
+            name,
+            serial,
+            properties,
+            event_supported,
             abs_info: evdev_abs(fd)?,
         })
     }

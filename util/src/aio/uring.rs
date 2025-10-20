@@ -65,7 +65,7 @@ impl<T: Clone> AioContext<T> for IoUringContext {
             let data = cb.user_data;
             let len = cb.iovec.len();
             let iovs = cb.iovec.as_ptr();
-            let fd = types::Fd(cb.file_fd);
+            let fd = types::Fd(cb.file.as_raw_fd());
             let entry = match cb.opcode {
                 OpCode::Preadv => opcode::Readv::new(fd, iovs as *const libc::iovec, len as u32)
                     .offset(offset)

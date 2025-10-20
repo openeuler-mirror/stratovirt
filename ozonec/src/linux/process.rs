@@ -128,7 +128,7 @@ impl Process {
 
     pub fn set_scheduler(&self) -> Result<()> {
         if let Some(scheduler) = &self.oci.scheduler {
-            // SAFETY: FFI call with valid arguments.
+            // SAFETY: returns the struct `libc::sched_param` represented all-zero bytes. And its member will be initialized later.
             let mut param: libc::sched_param = unsafe { mem::zeroed() };
             param.sched_priority = scheduler.priority.unwrap_or_default();
             // SAFETY: FFI call with valid arguments.

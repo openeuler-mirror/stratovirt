@@ -247,6 +247,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd vhost pci vsock: -device vhost-vsock-pci,id=<vsock_id>,guest-cid=<N>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off]; \
                    \n\t\tadd virtio mmio balloon: -device virtio-balloon-device[,deflate-on-oom=true|false][,free-page-reporting=true|false]; \
                    \n\t\tadd virtio pci balloon: -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]; \
+                   \n\t\tadd virtio mmio mem: -device virtio-mem-device,id=<viomem_id>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>]; \
+                   \n\t\tadd virtio pci mem: -device virtio-mem-pci,id=<viomem_id>,bus=<pcie.0>,addr=<0x4>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>][,multifunction=on|off]; \
                    \n\t\tadd virtio mmio rng: -device virtio-rng-device,rng=<objrng0>,max-bytes=<1234>,period=<1000>; \
                    \n\t\tadd virtio pci rng: -device virtio-rng-pci,id=<rng_id>,rng=<objrng0>,max-bytes=<1234>,period=<1000>,bus=<pcie.0>,addr=<0x1>[,multifunction=on|off]; \
                    \n\t\tadd virtio mmio input: -device virtio-input-device,id=<input_id>,evdev=<evdev0>; \
@@ -256,6 +258,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd usb controller: -device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>; \
                    \n\t\tadd usb keyboard: -device usb-kbd,id=<kbd>; \
                    \n\t\tadd usb tablet: -device usb-tablet,id=<tablet>; \
+                   \n\t\tadd usb consumer: -device usb-consumer,id=<consumer>; \
                    \n\t\tadd usb storage: -device usb-storage,id=<storage>,drive=<drive_id>; \
                    \n\t\tadd scsi controller: -device virtio-scsi-pci,id=<scsi_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off][,iothread=<iothread1>][,num-queues=<N>]; \
                    \n\t\tadd scsi hard disk: -device scsi-hd,scsi-id=<0>,bus=<scsi0.0>,lun=<0>,drive=<drive-scsi0-0-0-0>,id=<scsi0-0-0-0>; \

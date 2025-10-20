@@ -109,7 +109,7 @@ struct GlobalConfig {
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ObjectConfig {
     pub rng_object: HashMap<String, RngObjConfig>,
-    pub mem_object: HashMap<String, MemZoneConfig>,
+    pub mem_object: HashMap<String, MemBackendObjConfig>,
     #[cfg(feature = "vnc_auth")]
     pub tls_object: HashMap<String, TlsCredObjConfig>,
     #[cfg(feature = "vnc_auth")]
@@ -223,7 +223,7 @@ impl VmConfig {
                 self.object.rng_object.insert(id, rng_cfg);
             }
             "memory-backend-ram" | "memory-backend-file" | "memory-backend-memfd" => {
-                self.add_mem_zone(object_args)?;
+                self.add_mem_backend(object_args)?;
             }
             #[cfg(feature = "vnc_auth")]
             "tls-creds-x509" => {

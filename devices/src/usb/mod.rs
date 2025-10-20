@@ -15,6 +15,8 @@ pub mod camera;
 #[cfg(feature = "usb_camera")]
 pub mod camera_media_type_guid;
 pub mod config;
+#[cfg(feature = "usb_consumer")]
+pub mod consumer;
 pub mod error;
 pub mod hid;
 pub mod keyboard;

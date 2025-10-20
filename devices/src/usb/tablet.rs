@@ -303,3 +303,111 @@ impl UsbDevice for UsbTablet {
         self.cntlr.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ui::input::{ButtonEvent, KeyEvent, MoveEvent};
+
+    #[test]
+    fn test_tablet_interface() {
+        let interface_descriptor = &DESC_IFACE_TABLET.clone().interface_desc;
+        // bInterfaceClass: 3(HID)
+        assert_eq!(interface_descriptor.bInterfaceClass, 3);
+        // bInterfaceSubClass: 0(No Subclass) 1(Boot Interface Subclass) 2-255(Reserved)
+        assert_eq!(interface_descriptor.bInterfaceSubClass, 0);
+        // bInterfaceProtocol: 0(None) 1(Keyboard) 2(Mouse) 3-255(Reserved)
+        assert_eq!(interface_descriptor.bInterfaceProtocol, 0);
+    }
+
+    #[test]
+    fn test_usb_device_method() {
+        let mut tablet = UsbTablet::new(UsbTabletConfig {
+            classtype: "usb-tablet".to_string(),
+            id: "tablet".to_string(),
+            bus: None,
+            port: None,
+        });
+
+        let _ = &tablet.reset();
+        let _ = &tablet.unrealize();
+        let _ = &tablet.get_controller();
+        let device_req = UsbDeviceRequest {
+            request_type: USB_DEVICE_OUT_REQUEST,
+            request: USB_REQUEST_SET_ADDRESS,
+            value: 0,
+            index: 0,
+            length: 0,
+        };
+        let target_dev =
+            Arc::downgrade(&Arc::new(Mutex::new(tablet))) as Weak<Mutex<dyn UsbDevice>>;
+        let packet = Arc::new(Mutex::new(UsbPacket::new(
+            1,
+            u32::from(USB_TOKEN_OUT),
+            0,
+            0,
+            Vec::new(),
+            None,
+            Some(target_dev),
+        )));
+        let mut tablet = UsbTablet::new(UsbTabletConfig {
+            classtype: "usb-tablet".to_string(),
+            id: "tablet".to_string(),
+            bus: None,
+            port: None,
+        });
+        let _ = &tablet.handle_control(&packet, &device_req);
+        let _ = &tablet.handle_data(&packet);
+        let _ = &tablet.cancel_packet(&packet);
+        let _ = &tablet.realize();
+    }
+
+    #[test]
+    fn test_tablet_event() {
+        let mut usb_adapter = UsbTabletAdapter {
+            tablet: Arc::new(Mutex::new(UsbTablet::new(UsbTabletConfig {
+                classtype: "usb-tablet".to_string(),
+                id: "tablet".to_string(),
+                bus: None,
+                port: None,
+            }))),
+        };
+
+        // test button event
+        let press_button_event = InputEvent {
+            input_type: InputType::ButtonEvent,
+            move_event: MoveEvent::default(),
+            button_event: ButtonEvent {
+                button: INPUT_BUTTON_WHEEL_UP,
+                down: true,
+            },
+            key_event: KeyEvent::default(),
+        };
+        let _ = usb_adapter.update_point_state(press_button_event);
+
+        let release_button_event = InputEvent {
+            input_type: InputType::ButtonEvent,
+            move_event: MoveEvent::default(),
+            button_event: ButtonEvent {
+                button: INPUT_BUTTON_WHEEL_UP,
+                down: false,
+            },
+            key_event: KeyEvent::default(),
+        };
+        let _ = usb_adapter.update_point_state(release_button_event);
+
+        // test move event
+        let move_event = InputEvent {
+            input_type: InputType::MoveEvent,
+            move_event: MoveEvent::default(),
+            button_event: ButtonEvent::default(),
+            key_event: KeyEvent::default(),
+        };
+        let _ = usb_adapter.update_point_state(move_event);
+
+        match usb_adapter.sync() {
+            Ok(_) => true,
+            Err(_) => false,
+        };
+    }
+}

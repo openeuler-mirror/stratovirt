@@ -24,9 +24,10 @@ use crate::qmp::qmp_response::{Response, Version};
 use crate::qmp::qmp_schema::{
     BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
-    Events, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
+    Events, GetViomemArgument, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
     MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent,
-    QueryMemGpaArgument, QueryVcpuRegArgument, Target, TypeLists, UpdateRegionArgument,
+    QueryMemGpaArgument, QueryVcpuRegArgument, SetViomemArgument, Target, TypeLists,
+    UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -237,6 +238,12 @@ pub trait DeviceInterface {
     /// Query display of stratovirt.
     fn query_display_image(&self) -> Response;
 
+    /// Set requested-size of a virtio-mem device.
+    fn set_viomem(&mut self, args: Box<SetViomemArgument>) -> Response;
+
+    /// Get information of a virtio-mem device.
+    fn get_viomem(&self, args: Box<GetViomemArgument>) -> Response;
+
     /// Query state.
     fn query_workloads(&self) -> Response {
         Response::create_error_response(
@@ -363,6 +370,7 @@ pub trait DeviceInterface {
             ("nec-usb-xhci", "base-xhci"),
             ("usb-tablet", "usb-hid"),
             ("usb-kbd", "usb-hid"),
+            ("usb-consumer", "usb-hid"),
             ("usb-storage", "usb-storage-dev"),
             ("virtio-gpu-pci", "virtio-gpu"),
         ];

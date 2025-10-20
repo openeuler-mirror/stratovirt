@@ -73,6 +73,8 @@ use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
 use devices::sysbus::{devices_register_sysbusdevops_type, to_sysbusdevops, SysBus, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
+#[cfg(feature = "usb_consumer")]
+use devices::usb::consumer::{UsbConsumer, UsbConsumerConfig};
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
 use devices::usb::storage::{UsbStorage, UsbStorageConfig};
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
@@ -407,21 +409,21 @@ pub trait MachineOps: MachineLifecycle {
         let root = self.get_vm_ram();
         let numa_nodes = self.get_numa_nodes();
 
-        if numa_nodes.is_none() || mem_config.mem_zones.is_none() {
+        if numa_nodes.is_none() || mem_config.membackend_objs.is_none() {
             let default_mem = create_default_mem(mem_config, thread_num)?;
             root.add_subregion_not_update(default_mem, 0_u64)?;
             return Ok(());
         }
-        let zones = mem_config.mem_zones.as_ref().unwrap();
+        let mb_objs = mem_config.membackend_objs.as_ref().unwrap();
         let mut offset = 0_u64;
         for node in numa_nodes.as_ref().unwrap().iter() {
-            for zone in zones.iter() {
-                if zone.id.eq(&node.1.mem_dev) {
-                    let ram = create_backend_mem(zone, thread_num)?;
+            for mb_obj in mb_objs.iter() {
+                if mb_obj.id.eq(&node.1.mem_dev) {
+                    let ram = create_backend_mem(mb_obj, thread_num)?;
                     root.add_subregion_not_update(ram, offset)?;
                     offset = offset
-                        .checked_add(zone.size)
-                        .with_context(|| "total zone size overflow")?;
+                        .checked_add(mb_obj.size)
+                        .with_context(|| "total mem backend size overflow")?;
                     break;
                 }
             }
@@ -733,6 +735,57 @@ pub trait MachineOps: MachineLifecycle {
             }
         }
 
+        Ok(())
+    }
+
+    /// Add virtio memory device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    fn add_virtio_mem(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let option = virtio::MemoryConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let memoption = vm_config
+            .object
+            .mem_object
+            .remove(&option.memdev)
+            .with_context(|| {
+                format!(
+                    "Object for memory-backend-* {} config not found",
+                    option.memdev
+                )
+            })?;
+
+        let max_size = vm_config.machine_config.mem_config.max_size;
+        let device = virtio::Memory::new_arc(option.clone(), memoption, max_size)?;
+
+        let current_size = device.lock().unwrap().get_region_size()
+            + vm_config.machine_config.mem_config.current_size;
+        if current_size > max_size {
+            bail!("failed to add virtio-mem, current memory out of maxsize");
+        } else {
+            vm_config.machine_config.mem_config.current_size = current_size;
+        }
+
+        match option.classtype.as_str() {
+            "virtio-mem-device" => {
+                check_arg_nonexist!(
+                    ("bus", option.bus),
+                    ("addr", option.addr),
+                    ("multifunction", option.multifunction)
+                );
+                self.add_virtio_mmio_device(option.id.clone(), device)
+                    .with_context(|| "Failed to add virtio mmio mem device")?;
+            }
+            _ => {
+                check_arg_exist!(("bus", option.bus), ("addr", option.addr));
+                let bdf = PciBdf::new(option.bus.clone().unwrap(), option.addr.unwrap());
+                let multi_func = option.multifunction.unwrap_or_default();
+                self.add_virtio_pci_device(&option.id, &bdf, device, multi_func, false)
+                    .with_context(|| "Failed to add pci mem device")?;
+            }
+        }
         Ok(())
     }
 
@@ -1745,7 +1798,7 @@ pub trait MachineOps: MachineLifecycle {
                 )
             })?;
 
-        if !mem_cfg.share {
+        if !mem_cfg.share() {
             bail!("Object for share config is not on");
         }
 
@@ -1865,6 +1918,15 @@ pub trait MachineOps: MachineLifecycle {
                 tablet
                     .realize()
                     .with_context(|| "Failed to realize usb tablet device")?
+            }
+            #[cfg(feature = "usb_consumer")]
+            "usb-consumer" => {
+                let config =
+                    UsbConsumerConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+                let consumer = UsbConsumer::new(config);
+                consumer
+                    .realize()
+                    .with_context(|| "Failed to realize usb consumer device")?
             }
             #[cfg(feature = "usb_camera")]
             "usb-camera" => {
@@ -2006,12 +2068,13 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-net-pci", add_virtio_pci_net, vm_config, cfg_args, false),
                 ("pcie-root-port", add_pci_root_port, cfg_args),
                 ("virtio-balloon-device" | "virtio-balloon-pci", add_virtio_balloon, vm_config, cfg_args),
+                ("virtio-mem-device" | "virtio-mem-pci", add_virtio_mem, vm_config, cfg_args),
                 ("virtio-input-device" | "virtio-input-pci", add_virtio_input, cfg_args),
                 ("virtio-serial-device" | "virtio-serial-pci", add_virtio_serial, vm_config, cfg_args),
                 ("virtconsole" | "virtserialport", add_virtio_serial_port, vm_config, cfg_args),
                 ("vhost-user-fs-pci" | "vhost-user-fs-device", add_virtio_fs, vm_config, cfg_args),
                 ("nec-usb-xhci", add_usb_xhci, cfg_args),
-                ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
+                ("usb-kbd" | "usb-storage" | "usb-uas" | "usb-tablet" | "usb-consumer" | "usb-camera" | "usb-host", add_usb_device,  vm_config, cfg_args);
                 #[cfg(feature = "vhostuser_block")]
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
                 #[cfg(feature = "vhostuser_block")]

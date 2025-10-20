@@ -10,13 +10,13 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::fmt::{Display, Formatter, Result as FmtResult};
-
 use log::error;
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::sync::LazyLock;
 
 use super::config::*;
 use super::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
-use ui::input::set_kbd_led_state;
+use ui::input::{set_kbd_led_state, MEDIA_NEXT, MEDIA_PLAY_PAUSE, MEDIA_PREVIOUS, MEDIA_STOP};
 
 /// HID keycode
 const HID_KEYBOARD_LEFT_CONTROL: u8 = 0xe0;
@@ -152,12 +152,35 @@ const KEYBOARD_REPORT_DESCRIPTOR: [u8; 63] = [
     0xc0, // End Collection
 ];
 
+/// consumer report descriptor
+pub static CONSUMER_REPORT_DESCRIPTOR: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    vec![
+        0x05, 0x0C, // Usage Page (Consumer)
+        0x09, 0x01, // Usage (Consumer Control)
+        0xa1, 0x01, // Collection (Application)
+        0x15, 0x00, // Logical Minimum (0)
+        0x25, 0x01, // Logical Maximum (1)
+        0x75, 0x01, // Report Size (1)
+        0x95, 0x04, // Report Count (4)
+        0x09, 0xCD, // Usage (Play/Pause)
+        0x09, 0xB7, // Usage (Stop)
+        0x09, 0xB5, // Usage (Scan Previous Track)
+        0x09, 0xB6, // Usage (Scan Next Track)
+        0x81, 0x02, // Input (Data,Var,Abs)
+        0x75, 0x01, // Report Size (1)
+        0x95, 0x04, // Report Count (4)
+        0x81, 0x03, // Input (Const,Var,Abs)
+        0xc0, // End Collection
+    ]
+});
+
 /// HID type
 #[derive(Debug)]
 pub enum HidType {
     Mouse,
     Tablet,
     Keyboard,
+    Consumer,
     UnKnown,
 }
 
@@ -222,6 +245,22 @@ impl HidPointer {
     }
 }
 
+pub struct HidConsumer {
+    pub keycodes: [u16; QUEUE_LENGTH as usize],
+}
+
+impl HidConsumer {
+    fn new() -> Self {
+        HidConsumer {
+            keycodes: [0; QUEUE_LENGTH as usize],
+        }
+    }
+
+    fn reset(&mut self) {
+        self.keycodes.iter_mut().for_each(|x| *x = 0);
+    }
+}
+
 /// Human Interface Device.
 pub struct Hid {
     pub(crate) head: u32,
@@ -231,6 +270,7 @@ pub struct Hid {
     idle: u8,
     pub(crate) keyboard: HidKeyboard,
     pub(crate) pointer: HidPointer,
+    pub(crate) consumer: HidConsumer,
 }
 
 impl Hid {
@@ -243,6 +283,7 @@ impl Hid {
             idle: 0,
             keyboard: HidKeyboard::new(),
             pointer: HidPointer::new(),
+            consumer: HidConsumer::new(),
         }
     }
 
@@ -253,6 +294,7 @@ impl Hid {
         self.idle = 0;
         self.keyboard.reset();
         self.pointer.reset();
+        self.consumer.reset();
     }
 
     fn convert_to_hid_code(&mut self) {
@@ -334,6 +376,24 @@ impl Hid {
         data
     }
 
+    fn consumer_poll(&mut self) -> Vec<u8> {
+        let mut data = vec![1];
+        if self.num != 0 {
+            let slot = self.head & QUEUE_MASK;
+            self.increase_head();
+            self.num -= 1;
+            let keycode = self.consumer.keycodes[slot as usize];
+            data[0] = match keycode {
+                MEDIA_PLAY_PAUSE => 1,
+                MEDIA_STOP => 2,
+                MEDIA_PREVIOUS => 4,
+                MEDIA_NEXT => 8,
+                _ => 0,
+            };
+        }
+        data
+    }
+
     fn pointer_poll(&mut self) -> Vec<u8> {
         let index = self.head;
         if self.num != 0 {
@@ -403,6 +463,11 @@ impl Hid {
                             .clone_from_slice(&KEYBOARD_REPORT_DESCRIPTOR[..]);
                         packet.actual_length = KEYBOARD_REPORT_DESCRIPTOR.len() as u32;
                     }
+                    HidType::Consumer => {
+                        data[..CONSUMER_REPORT_DESCRIPTOR.len()]
+                            .clone_from_slice(&CONSUMER_REPORT_DESCRIPTOR);
+                        packet.actual_length = CONSUMER_REPORT_DESCRIPTOR.len() as u32;
+                    }
                     _ => {
                         error!("Unknown HID type");
                         packet.status = UsbPacketStatus::Stall;
@@ -435,6 +500,11 @@ impl Hid {
                 }
                 HidType::Keyboard => {
                     let buf = self.keyboard_poll();
+                    data[0..buf.len()].copy_from_slice(buf.as_slice());
+                    packet.actual_length = buf.len() as u32;
+                }
+                HidType::Consumer => {
+                    let buf = self.consumer_poll();
                     data[0..buf.len()].copy_from_slice(buf.as_slice());
                     packet.actual_length = buf.len() as u32;
                 }
@@ -515,6 +585,9 @@ impl Hid {
                 }
                 HidType::Tablet => {
                     buf = self.pointer_poll();
+                }
+                HidType::Consumer => {
+                    buf = self.consumer_poll();
                 }
                 _ => {
                     error!("Unsupported HID device");
