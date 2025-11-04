@@ -573,6 +573,15 @@ impl DeviceStateDesc {
     /// * `desc` - device state descriptor for old version `DeviceState`.
     /// * `current_slice` - current slice for `DeviceState`.
     pub fn add_padding(&self, desc: &DeviceStateDesc, current_slice: &mut Vec<u8>) -> Result<()> {
+        if desc.size > self.size {
+            log::warn!(
+                "Old size {} of {} which is bigger than new size {}",
+                desc.size,
+                desc.name,
+                self.size
+            );
+        }
+
         let tmp_slice = current_slice.clone();
         current_slice.clear();
         // SAFETY: size has been checked in restore_desc_db().
