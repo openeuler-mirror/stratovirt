@@ -582,10 +582,7 @@ impl DeviceStateDesc {
             );
         }
 
-        let tmp_slice = current_slice.clone();
-        current_slice.clear();
-        // SAFETY: size has been checked in restore_desc_db().
-        current_slice.resize(self.size as usize, 0);
+        let mut target_slice = vec![0u8; self.size as usize];
         for field in self.clone().fields {
             if desc.contains(&field.alias) {
                 let (new_start, new_end) = desc.get_slice_index(&field.alias)?;
@@ -598,9 +595,10 @@ impl DeviceStateDesc {
                     end -= (end - start) - (new_end - new_start);
                 }
 
-                current_slice[start..end].clone_from_slice(&tmp_slice[new_start..new_end]);
+                target_slice[start..end].clone_from_slice(&current_slice[new_start..new_end]);
             }
         }
+        *current_slice = target_slice;
 
         Ok(())
     }
