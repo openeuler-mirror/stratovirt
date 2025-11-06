@@ -26,6 +26,7 @@ use vmm_sys_util::epoll::EventSet;
 use super::qmp_schema;
 use super::qmp_schema::QmpCommand;
 use super::{qmp_channel::QmpChannel, qmp_response::QmpGreeting, qmp_response::Response};
+use crate::config::{parse_incoming_uri, MigrateMode};
 use crate::event;
 use crate::event_loop::EventLoop;
 use crate::machine::{MachineExternalInterface, VmState};
@@ -421,6 +422,49 @@ fn handle_qmp(
     }
 }
 
+fn stop(controller: &Arc<Mutex<dyn MachineExternalInterface>>) -> Response {
+    let mut qmp_response = Response::create_empty_response();
+    let now = Instant::now();
+    while !controller.lock().unwrap().pause() {
+        thread::sleep(Duration::from_millis(5));
+        if now.elapsed() > Duration::from_secs(2) {
+            // Not use resume() to avoid unnecessary qmp event.
+            controller
+                .lock()
+                .unwrap()
+                .notify_lifecycle(VmState::Paused, VmState::Running);
+            qmp_response = Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("Failed to pause VM".to_string()),
+                None,
+            );
+            break;
+        }
+    }
+
+    qmp_response
+}
+
+fn is_snapshot(qmp_command: &QmpCommand, snapshot_id: &mut Option<String>) -> bool {
+    if let QmpCommand::migrate {
+        ref arguments,
+        ref id,
+    } = qmp_command
+    {
+        if let Ok((MigrateMode::File, _)) = parse_incoming_uri(&arguments.uri) {
+            *snapshot_id = id.clone();
+            return true;
+        }
+    }
+    false
+}
+
+fn is_vm_running(controller: &Arc<Mutex<dyn MachineExternalInterface>>) -> bool {
+    let response = controller.lock().unwrap().query_status();
+    let value = response.get_value().unwrap();
+    let s_info = serde_json::from_value::<qmp_schema::StatusInfo>(value).unwrap();
+    s_info.running
+}
+
 /// Create a match , where `qmp_command` and its arguments matching by handle
 /// function, and exec this qmp command.
 fn qmp_command_exec(
@@ -430,6 +474,19 @@ fn qmp_command_exec(
 ) -> (String, bool) {
     let mut qmp_response = Response::create_empty_response();
     let mut shutdown_flag = false;
+
+    // For snapshot, it needs to stop vcpu.
+    let mut stop_flag = false;
+    let mut snapshot_id: Option<String> = None;
+    if is_snapshot(&qmp_command, &mut snapshot_id) && is_vm_running(controller) {
+        let mut response = stop(controller);
+        if response.is_error_response() {
+            info!("Failed to stop vcpus for snapshot");
+            response.change_id(snapshot_id.clone());
+            return (serde_json::to_string(&response).unwrap(), shutdown_flag);
+        }
+        stop_flag = true;
+    }
 
     // Use macro create match to cover most Qmp command
     let mut id = create_command_matches!(
@@ -498,24 +555,7 @@ fn qmp_command_exec(
     if id.is_none() {
         id = match qmp_command {
             QmpCommand::stop { arguments: _, id } => {
-                let now = Instant::now();
-                while !controller.lock().unwrap().pause() {
-                    thread::sleep(Duration::from_millis(5));
-                    if now.elapsed() > Duration::from_secs(2) {
-                        // Not use resume() to avoid unnecessary qmp event.
-                        controller
-                            .lock()
-                            .unwrap()
-                            .notify_lifecycle(VmState::Paused, VmState::Running);
-                        qmp_response = Response::create_error_response(
-                            qmp_schema::QmpErrorClass::GenericError(
-                                "Failed to pause VM".to_string(),
-                            ),
-                            None,
-                        );
-                        break;
-                    }
-                }
+                qmp_response = stop(controller);
                 id
             }
             QmpCommand::quit { id, .. } => {
@@ -561,6 +601,13 @@ fn qmp_command_exec(
             }
             _ => None,
         }
+    }
+
+    if stop_flag && qmp_response.is_error_response() {
+        controller
+            .lock()
+            .unwrap()
+            .notify_lifecycle(VmState::Paused, VmState::Running);
     }
 
     // Change response id with input qmp message
