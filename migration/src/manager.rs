@@ -17,13 +17,15 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use log::info;
 use once_cell::sync::Lazy;
 
 use crate::general::translate_id;
 use crate::migration::DirtyBitmap;
-use crate::protocol::{DeviceStateDesc, MemBlock, MigrationStatus, StateTransfer};
+use crate::protocol::{
+    DeviceStateDesc, MemBlock, MigrationStatus, StateTransfer, MAX_DEVICE_STATE_SIZE,
+};
 use crate::MigrateOps;
 use machine_manager::config::VmConfig;
 use machine_manager::machine::MachineLifecycle;
@@ -59,10 +61,15 @@ pub trait MigrationHook: StateTransfer {
             .get_state_vec()
             .with_context(|| "Failed to get device state")?;
 
+        if state_data.len() > MAX_DEVICE_STATE_SIZE {
+            bail!("Invalid state length {}, id {}", state_data.len(), id);
+        }
+
         fd.write_all(
             Instance {
                 name: id,
                 object: self.get_device_alias(),
+                size: state_data.len() as u64,
             }
             .as_bytes(),
         )
@@ -145,14 +152,19 @@ pub trait MigrationHook: StateTransfer {
 ///
 /// # Notes
 ///
-/// Instance contains two parts: One part is name for every object.
-/// another is the type of a object.
+/// Instance contains three parts:
+///   1) the first part is name for every object.
+///   2) the second part is the type of a object.
+///   3) the third part is the size of the state vector bytes.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Copy, Clone, Debug, Default)]
 pub struct Instance {
     /// The name reflects the unique device or ram_region instance in a VM.
     pub name: u64,
     /// The object is the type which is registered to `desc_db`.
     pub object: u64,
+    /// The size of state vector bytes will be write to file. It is using with
+    /// DescSerde macro which will not calculate size and fields for DeviceStateDesc.
+    pub size: u64,
 }
 
 impl ByteCode for Instance {}

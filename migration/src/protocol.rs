@@ -301,6 +301,8 @@ const COMPAT_VERSION: u32 = CURRENT_VERSION;
 const EAX_VENDOR_INFO: u32 = 0x0;
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
 pub const HEADER_LENGTH: usize = 4096;
+/// The max size of one device state is 1MiB.
+pub const MAX_DEVICE_STATE_SIZE: usize = 1 << 20;
 
 /// Format type for migration.
 /// Different file format will have different file layout.
