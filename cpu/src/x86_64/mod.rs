@@ -406,7 +406,7 @@ impl X86CPUState {
                     if entry.index == 0 {
                         entry.ecx |= 1u32 << X86_FEATURE_HYPERVISOR;
                         entry.ecx |= 1u32 << X86_FEATURE_TSC_DEADLINE_TIMER;
-                        entry.ebx = self.apic_id << 24 | 8 << 8;
+                        entry.ebx = (self.apic_id << 24) | (8 << 8);
                     }
                 }
                 2 => {

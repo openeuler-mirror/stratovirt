@@ -396,7 +396,7 @@ fn build_prt_for_aml(pci_bus: &mut AmlDevice, irq: i32) {
         (0..PCI_PIN_NUM).for_each(|pin| {
             let gsi = (pin + slot) % PCI_PIN_NUM;
             let mut pkg = AmlPackage::new(4);
-            pkg.append_child(AmlDWord(u32::from(slot) << 16 | 0xFFFF));
+            pkg.append_child(AmlDWord((u32::from(slot) << 16) | 0xFFFF));
             pkg.append_child(AmlDWord(u32::from(pin)));
             pkg.append_child(AmlName(format!("GSI{}", gsi)));
             pkg.append_child(AmlZero);

@@ -1073,7 +1073,7 @@ pub fn qmp_query_display_image() -> Result<GpuInfo> {
         if !locked_con.active {
             continue;
         }
-        let dev_name = &locked_con.dev_name.clone();
+        let dev_name = locked_con.dev_name.clone();
 
         if let Some(surface) = &mut locked_con.surface {
             // SAFETY: The image is created within the function, it can be ensure
@@ -1087,7 +1087,7 @@ pub fn qmp_query_display_image() -> Result<GpuInfo> {
                     surface.stride(),
                 )
             }?;
-            let mut file = create_file(&mut gpu_info, dev_name)?;
+            let mut file = create_file(&mut gpu_info, dev_name.as_str())?;
             cairo_image.write_to_png(&mut file)?;
         };
     }
@@ -1095,7 +1095,7 @@ pub fn qmp_query_display_image() -> Result<GpuInfo> {
     Ok(gpu_info)
 }
 
-fn create_file(gpu_info: &mut GpuInfo, dev_name: &String) -> Result<fs::File> {
+fn create_file(gpu_info: &mut GpuInfo, dev_name: &str) -> Result<fs::File> {
     let temp_dir = env::temp_dir().display().to_string();
     let binding = temp_dir + "/stratovirt-images";
     let path = Path::new(&binding);

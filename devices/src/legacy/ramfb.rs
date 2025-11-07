@@ -53,7 +53,7 @@ pub struct RamfbConfig {
     pub install: bool,
 }
 
-#[repr(packed)]
+#[repr(C, packed)]
 struct RamfbCfg {
     _addr: u64,
     _fourcc: u32,

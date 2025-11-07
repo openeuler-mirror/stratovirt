@@ -398,7 +398,7 @@ impl AudioContext {
         let mut other = AudioSpec::default();
         other
             .set(size, rate, channels)
-            .map_or(false, |_| (self.spec == other))
+            .is_ok_and(|_| (self.spec == other))
     }
 }
 

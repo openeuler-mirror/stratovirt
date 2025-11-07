@@ -82,7 +82,7 @@ const DEFAULT_REFRESH_INTERVAL: u64 = 30;
 pub const BIT_PER_BYTE: u32 = 8;
 
 pub const fn round_up_div(n: u64, d: u64) -> u64 {
-    (n + d - 1) / d
+    n.div_ceil(d)
 }
 
 pub const fn round_up(n: u64, d: u64) -> u64 {

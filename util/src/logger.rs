@@ -136,7 +136,7 @@ impl Log for VmLogger {
             println!("Failed to log message {:?}", e);
             return;
         }
-        if let Err(e) = rotate.rotate_file(formatmsg.as_bytes().len()) {
+        if let Err(e) = rotate.rotate_file(formatmsg.len()) {
             println!("Failed to rotate log files {:?}", e);
         }
     }

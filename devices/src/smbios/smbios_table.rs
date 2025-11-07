@@ -996,7 +996,7 @@ impl SmbiosTable {
         for i in 0..smbios_sockets {
             self.build_type4(smbios.type4.clone(), u16::from(i), mach_cfg);
         }
-        let mem_num = ((mach_cfg.mem_config.mem_size + 16 * GB_SIZE - 1) / (16 * GB_SIZE)) as u16;
+        let mem_num = mach_cfg.mem_config.mem_size.div_ceil(16 * GB_SIZE) as u16;
         self.build_type16(mach_cfg.mem_config.mem_size, mem_num);
 
         for i in 0..mem_num {

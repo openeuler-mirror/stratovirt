@@ -1184,11 +1184,11 @@ impl VirtioDevice for Block {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
-            | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC
-            | 1_u64 << VIRTIO_F_RING_EVENT_IDX
-            | 1_u64 << VIRTIO_BLK_F_FLUSH
-            | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
+        self.base.device_features = (1_u64 << VIRTIO_F_VERSION_1)
+            | (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+            | (1_u64 << VIRTIO_F_RING_EVENT_IDX)
+            | (1_u64 << VIRTIO_BLK_F_FLUSH)
+            | (1_u64 << VIRTIO_BLK_F_SEG_MAX);
         if self.drive_cfg.readonly {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
