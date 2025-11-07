@@ -1189,7 +1189,7 @@ pub struct GpuInfo {
 ///
 /// # Arguments
 ///
-/// * `value` - Memoey size.
+/// * `value` - Memory size.
 ///
 /// # Notes
 ///

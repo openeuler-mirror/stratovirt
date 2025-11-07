@@ -477,7 +477,7 @@ pub struct Seccomp {
     /// Path of UNIX domain socket over which the runtime will send the
     /// container process state data structure when the SCMP_ACT_NOTIFY
     /// action is used.
-    pub listennerPath: Option<String>,
+    pub listenerPath: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Seccomp file descriptor returned by the seccomp syscall.
     pub seccompFd: Option<String>,

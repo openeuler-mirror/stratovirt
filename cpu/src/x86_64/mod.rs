@@ -109,10 +109,10 @@ impl X86CPUTopology {
         X86CPUTopology::default()
     }
 
-    pub fn set_topology(mut self, toplogy: (u8, u8, u8)) -> Self {
-        self.threads = toplogy.0;
-        self.cores = toplogy.1;
-        self.dies = toplogy.2;
+    pub fn set_topology(mut self, topology: (u8, u8, u8)) -> Self {
+        self.threads = topology.0;
+        self.cores = topology.1;
+        self.dies = topology.2;
         self
     }
 }

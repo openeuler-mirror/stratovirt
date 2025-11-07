@@ -637,7 +637,7 @@ impl HotplugOps for RootPort {
         if ((sltctl & PCI_EXP_SLTCTL_PIC) == PCI_EXP_SLTCTL_PWR_IND_OFF)
             && ((sltctl & PCI_EXP_SLTCTL_PCC) == PCI_EXP_SLTCTL_PWR_OFF)
         {
-            // if the slot has already been unpluged, skip notifying the guest.
+            // if the slot has already been unplugged, skip notifying the guest.
             return Ok(());
         }
 

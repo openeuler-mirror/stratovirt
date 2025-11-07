@@ -305,7 +305,7 @@ extern "C" {
         builder: *mut *mut OhAudioStreamBuilder,
         type_: OhAudioStreamType,
     ) -> OhAudioStreamResult;
-    /// Destroy a streamBulder.
+    /// Destroy a streamBuilder.
     ///
     ///  This function must be called when you are done using the builder.
     ///
