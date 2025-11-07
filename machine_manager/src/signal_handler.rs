@@ -29,7 +29,7 @@ pub const VM_EXIT_GENE_ERR: i32 = 1;
 const SYSTEMCALL_OFFSET: isize = 6;
 const SYS_SECCOMP: i32 = 1;
 
-static mut RECEIVED_SIGNAL: AtomicI32 = AtomicI32::new(0);
+static RECEIVED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 pub fn exit_with_code(code: i32) {
     // SAFETY: The basic_clean function has been executed before exit.
@@ -40,23 +40,33 @@ pub fn exit_with_code(code: i32) {
 
 pub fn set_signal(num: c_int) {
     /*
-     * Other three signals need to send shutdown message more than SIGSYS.
-     * So, if received other three signals, it should replace the SIGSYS
-     * which has been received before. The SIGTERM/SIGINT/SIGHUP has the
-     * same treatment, if received one of them, no need to replace it.
+     * Compared to the SIGSYS signal, the other three signals require
+     * additional shutdown information to be sent via the QMP channel.
+     * Therefore, if any of the other three signals are received, the
+     * previously received SIGSYS signal must be replaced in the global
+     * variable. The SIGTERM/SIGINT/SIGHUP signals are handled in the
+     * same way.
+     * Retry on CAS fail.
      */
-    if [0, libc::SIGSYS].contains(&get_signal()) {
-        // SAFETY: just write a global variable.
-        unsafe {
-            RECEIVED_SIGNAL.store(num, Ordering::SeqCst);
+    loop {
+        let prev = get_signal();
+        if prev != 0 && prev != libc::SIGSYS {
+            break;
         }
-        EventLoop::get_ctx(None).unwrap().kick();
+
+        if RECEIVED_SIGNAL
+            .compare_exchange(prev, num, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            // CAS success，kick main loop
+            EventLoop::get_ctx(None).unwrap().kick();
+            break;
+        }
     }
 }
 
 pub fn get_signal() -> i32 {
-    // SAFETY: just read a global variable.
-    unsafe { RECEIVED_SIGNAL.load(Ordering::SeqCst) }
+    RECEIVED_SIGNAL.load(Ordering::SeqCst)
 }
 
 pub fn handle_signal() {
