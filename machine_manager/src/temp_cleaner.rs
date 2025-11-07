@@ -13,14 +13,11 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::{
-    atomic::{fence, Ordering},
-    Arc,
-};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use log::{error, info};
 
-static mut GLOBAL_TEMP_CLEANER: Option<TempCleaner> = None;
+static GLOBAL_TEMP_CLEANER: OnceLock<Mutex<TempCleaner>> = OnceLock::new();
 
 pub type ExitNotifier = dyn Fn() + Send + Sync;
 
@@ -31,52 +28,37 @@ pub struct TempCleaner {
     paths: Vec<String>,
     /// Notifiers are used to release residual resources after exiting the vm.
     notifiers: HashMap<String, Arc<ExitNotifier>>,
+    /// Indicate whether clean has been done.
+    executed: bool,
 }
 
 impl TempCleaner {
     pub fn object_init() {
-        // SAFETY: This global variable is only used in single thread,
-        // so there is no data competition or synchronization problem.
-        unsafe {
-            if GLOBAL_TEMP_CLEANER.is_none() {
-                GLOBAL_TEMP_CLEANER = Some(TempCleaner {
-                    paths: Vec::new(),
-                    notifiers: HashMap::new(),
-                });
-            }
-        }
+        let _ = GLOBAL_TEMP_CLEANER.set(Mutex::new(TempCleaner {
+            paths: Vec::new(),
+            notifiers: HashMap::new(),
+            executed: false,
+        }));
     }
 
     /// Add to be removed file path
     pub fn add_path(path: String) {
-        // SAFETY: This global variable is only used in single thread,
-        // so there is no data competition or synchronization problem.
-        unsafe {
-            if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
-                tmp.paths.push(path);
-            }
+        if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
+            tmp.lock().unwrap().paths.push(path);
         }
     }
 
     /// Add exit notifier.
     pub fn add_exit_notifier(id: String, exit: Arc<ExitNotifier>) {
-        // SAFETY: This global variable is only used in single thread,
-        // so there is no data competition or synchronization problem.
-        unsafe {
-            if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
-                tmp.notifiers.insert(id, exit);
-            }
+        if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
+            tmp.lock().unwrap().notifiers.insert(id, exit);
         }
     }
 
     /// Remove exit notifier by id.
     pub fn remove_exit_notifier(id: &str) {
-        // SAFETY: This global variable is only used in single thread,
-        // so there is no data competition or synchronization problem.
-        unsafe {
-            if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
-                tmp.notifiers.remove(id);
-            }
+        if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
+            tmp.lock().unwrap().notifiers.remove(id);
         }
     }
 
@@ -102,25 +84,20 @@ impl TempCleaner {
 
     /// Clean the resources
     pub fn clean() {
-        // SAFETY: This global variable is only used in single thread,
-        // so there is no data competition or synchronization problem.
-        unsafe {
-            if let Some(tmp) = GLOBAL_TEMP_CLEANER.as_mut() {
-                tmp.clean_files();
-                tmp.exit_notifier();
-                fence(Ordering::SeqCst);
-                GLOBAL_TEMP_CLEANER = None;
-            }
+        if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
+            let mut locked_cleaner = tmp.lock().unwrap();
+            locked_cleaner.clean_files();
+            locked_cleaner.exit_notifier();
+            locked_cleaner.paths.clear();
+            locked_cleaner.notifiers.clear();
+            locked_cleaner.executed = true;
         }
     }
 
     pub fn is_cleaned() -> bool {
-        // SAFETY: This global variable is read but not modified by iothread.
-        // so there is not need to add lock to it.
-        unsafe {
-            let ret = GLOBAL_TEMP_CLEANER.is_none();
-            fence(Ordering::SeqCst);
-            ret
+        if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
+            return tmp.lock().unwrap().executed;
         }
+        true
     }
 }
