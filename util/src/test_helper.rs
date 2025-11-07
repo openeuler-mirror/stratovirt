@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::{Lazy, OnceCell};
@@ -41,7 +42,7 @@ impl IntxInfo {
 
 static TEST_ENABLED: OnceCell<bool> = OnceCell::new();
 static TEST_BASE_TIME: OnceCell<Instant> = OnceCell::new();
-static mut TEST_CLOCK: Option<Arc<RwLock<u64>>> = None;
+static TEST_CLOCK: OnceLock<Arc<AtomicU64>> = OnceLock::new();
 pub static TEST_MSIX_LIST: Lazy<Mutex<Vec<MsixMsg>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static TEST_INTX_LIST: Lazy<Mutex<Vec<IntxInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
@@ -52,12 +53,7 @@ pub fn set_test_enabled() {
     if let Err(_e) = TEST_BASE_TIME.set(Instant::now()) {
         panic!("Failed to initialize clock");
     }
-    // SAFETY: This module is only used for test.
-    unsafe {
-        if TEST_CLOCK.is_none() {
-            TEST_CLOCK = Some(Arc::new(RwLock::new(0)));
-        }
-    }
+    TEST_CLOCK.get_or_init(|| Arc::new(AtomicU64::new(0)));
 }
 
 pub fn is_test_enabled() -> bool {
@@ -65,44 +61,32 @@ pub fn is_test_enabled() -> bool {
 }
 
 pub fn set_test_clock(value: u64) {
-    // SAFETY: This module is only used for test.
-    unsafe {
-        if TEST_CLOCK.is_none() {
-            panic!("TEST_CLOCK has not been initialized.");
+    let test_clock = TEST_CLOCK
+        .get()
+        .expect("TEST_CLOCK has not been initialized.");
+    let mut current = test_clock.load(Ordering::Acquire);
+    while value > current {
+        match test_clock.compare_exchange(current, value, Ordering::Release, Ordering::Acquire) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
         }
-        if value <= get_test_clock() {
-            return;
-        }
-
-        let mut test_clock = TEST_CLOCK.as_ref().unwrap().write().unwrap();
-        *test_clock = value;
     }
 }
 
 pub fn get_test_clock() -> u64 {
-    // SAFETY: This module is only used for test.
-    unsafe {
-        if TEST_CLOCK.is_none() {
-            panic!("TEST_CLOCK has not been initialized.");
-        }
-
-        *TEST_CLOCK.as_ref().unwrap().read().unwrap()
-    }
+    TEST_CLOCK
+        .get()
+        .expect("TEST_CLOCK has not been initialized.")
+        .load(Ordering::Acquire)
 }
 
 pub fn get_test_time() -> Instant {
-    // SAFETY: This module is only used for test.
-    unsafe {
-        if TEST_CLOCK.is_none() {
-            panic!("TEST_CLOCK has not been initialized.");
-        }
-
-        TEST_BASE_TIME
-            .get()
-            .unwrap()
-            .checked_add(Duration::from_nanos(get_test_clock()))
-            .unwrap()
-    }
+    let base = TEST_BASE_TIME
+        .get()
+        .expect("TEST_BASE_TIME has not been initialized");
+    let offset_nanos = get_test_clock();
+    base.checked_add(Duration::from_nanos(offset_nanos))
+        .expect("test time overflow")
 }
 
 pub fn add_msix_msg(addr: u64, data: u32) {
