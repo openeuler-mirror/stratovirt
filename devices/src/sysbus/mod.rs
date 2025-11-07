@@ -17,7 +17,7 @@ pub use error::SysBusError;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use anyhow::{bail, Context, Result};
 use vmm_sys_util::eventfd::EventFd;
@@ -365,7 +365,8 @@ impl AmlBuilder for SysBus {
 
 pub type ToSysBusDevOpsFunc = fn(&mut dyn Any) -> &mut dyn SysBusDevOps;
 
-static mut SYSBUSDEVTYPE_HASHMAP: Option<HashMap<TypeId, ToSysBusDevOpsFunc>> = None;
+static SYSBUSDEVTYPE_HASHMAP: OnceLock<RwLock<HashMap<TypeId, ToSysBusDevOpsFunc>>> =
+    OnceLock::new();
 
 pub fn convert_to_sysbusdevops<T: SysBusDevOps>(item: &mut dyn Any) -> &mut dyn SysBusDevOps {
     // SAFETY: The typeid of `T` is the typeid recorded in the hashmap. The target structure type of
@@ -376,18 +377,12 @@ pub fn convert_to_sysbusdevops<T: SysBusDevOps>(item: &mut dyn Any) -> &mut dyn 
 
 pub fn register_sysbusdevops_type<T: SysBusDevOps>() -> Result<()> {
     let type_id = TypeId::of::<T>();
-    // SAFETY: SYSBUSDEVTYPE_HASHMAP will be built in `type_init` function sequentially in the main thread.
-    // And will not be changed after `type_init`.
-    unsafe {
-        if SYSBUSDEVTYPE_HASHMAP.is_none() {
-            SYSBUSDEVTYPE_HASHMAP = Some(HashMap::new());
-        }
-        let types = SYSBUSDEVTYPE_HASHMAP.as_mut().unwrap();
-        if types.get(&type_id).is_some() {
-            bail!("Type Id {:?} has been registered.", type_id);
-        }
-        types.insert(type_id, convert_to_sysbusdevops::<T>);
+    let map = SYSBUSDEVTYPE_HASHMAP.get_or_init(|| RwLock::new(HashMap::new()));
+    let mut types = map.write().unwrap();
+    if types.get(&type_id).is_some() {
+        bail!("Type Id {:?} has been registered.", type_id);
     }
+    types.insert(type_id, convert_to_sysbusdevops::<T>);
 
     Ok(())
 }
@@ -415,13 +410,10 @@ pub fn devices_register_sysbusdevops_type() -> Result<()> {
 }
 
 pub fn to_sysbusdevops(dev: &mut dyn Device) -> Option<&mut dyn SysBusDevOps> {
-    // SAFETY: SYSBUSDEVTYPE_HASHMAP has been built. And this function is called without changing hashmap.
-    unsafe {
-        let types = SYSBUSDEVTYPE_HASHMAP.as_mut().unwrap();
-        let func = types.get(&dev.device_type_id())?;
-        let sysbusdev = func(dev.as_any_mut());
-        Some(sysbusdev)
-    }
+    let types = SYSBUSDEVTYPE_HASHMAP.get().unwrap().read().unwrap();
+    let func = types.get(&dev.device_type_id())?;
+    let sysbusdev = func(dev.as_any_mut());
+    Some(sysbusdev)
 }
 
 #[cfg(test)]
