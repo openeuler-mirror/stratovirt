@@ -284,12 +284,12 @@ fn subrectangle_with_pixel_value(
 /// Second Byte: width-and-height-position.
 fn hextile_enc_sub_coloured(buf: &mut Vec<u8>, x: i32, y: i32, w: i32, h: i32) {
     buf.append(
-        &mut (((x & 0x0f) << 4 | (y & 0x0f)) as u8)
+        &mut ((((x & 0x0f) << 4) | (y & 0x0f)) as u8)
             .to_be_bytes()
             .to_vec(),
     );
     buf.append(
-        &mut ((((w - 1) & 0x0f) << 4 | ((h - 1) & 0x0f)) as u8)
+        &mut (((((w - 1) & 0x0f) << 4) | ((h - 1) & 0x0f)) as u8)
             .to_be_bytes()
             .to_vec(),
     );

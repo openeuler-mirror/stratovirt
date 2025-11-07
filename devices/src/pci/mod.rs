@@ -118,7 +118,7 @@ fn pci_devfn(slot: u8, func: u8) -> u8 {
 }
 
 fn pci_slot(devfn: u8) -> u8 {
-    devfn >> 3 & 0x1f
+    (devfn >> 3) & 0x1f
 }
 
 fn pci_func(devfn: u8) -> u8 {
@@ -391,7 +391,7 @@ pub fn init_multifunction(
 /// 0 <= pin <= 3. 0 = INTA, 1 = INTB, 2 = INTC, 3 = INTD.
 /// PCI-to-PCI bridge specification 9.1: Interrupt routing.
 pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
-    let pci_slot = devfn >> 3 & 0x1f;
+    let pci_slot = (devfn >> 3) & 0x1f;
     u32::from((pci_slot + pin) % PCI_PIN_NUM)
 }
 

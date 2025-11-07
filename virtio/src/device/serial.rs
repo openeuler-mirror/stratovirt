@@ -224,9 +224,9 @@ impl VirtioDevice for Serial {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
-            | 1_u64 << VIRTIO_CONSOLE_F_SIZE
-            | 1_u64 << VIRTIO_CONSOLE_F_MULTIPORT;
+        self.base.device_features = (1_u64 << VIRTIO_F_VERSION_1)
+            | (1_u64 << VIRTIO_CONSOLE_F_SIZE)
+            | (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT);
         Ok(())
     }
 

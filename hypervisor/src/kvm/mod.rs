@@ -755,7 +755,7 @@ impl KVMInterruptManager {
     pub fn arch_map_irq(&self, gsi: u32) -> u32 {
         let irq = gsi + GIC_IRQ_INTERNAL;
         let irqtype = KVM_ARM_IRQ_TYPE_SPI;
-        irqtype << KVM_ARM_IRQ_TYPE_SHIFT | irq
+        (irqtype << KVM_ARM_IRQ_TYPE_SHIFT) | irq
     }
 }
 

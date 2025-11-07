@@ -36,8 +36,8 @@ struct GdtEntry(pub u64);
 
 impl GdtEntry {
     fn new(flags: u64, base: u64, limit: u64) -> Self {
-        let base = (base & 0xff00_0000) << (56 - 24) | (base & 0x00ff_ffff) << 16;
-        let limit = (limit & 0x000f_0000) << (48 - 16) | (limit & 0x0000_ffff);
+        let base = ((base & 0xff00_0000) << (56 - 24)) | ((base & 0x00ff_ffff) << 16);
+        let limit = ((limit & 0x000f_0000) << (48 - 16)) | (limit & 0x0000_ffff);
         let flags = (flags & 0x0000_f0ff) << 40;
 
         GdtEntry(base | limit | flags)
@@ -64,8 +64,8 @@ impl GdtEntry {
 //   Bits(24 - 31): Base Address 24, 31
 impl From<GdtEntry> for kvm_bindings::kvm_segment {
     fn from(item: GdtEntry) -> Self {
-        let base = (item.0 >> 16 & 0x00ff_ffff) | (item.0 >> (56 - 24) & 0xff00_0000);
-        let limit = (item.0 >> (48 - 16) & 0x000f_0000) | (item.0 & 0x0000_ffff);
+        let base = ((item.0 >> 16) & 0x00ff_ffff) | ((item.0 >> (56 - 24)) & 0xff00_0000);
+        let limit = ((item.0 >> (48 - 16)) & 0x000f_0000) | (item.0 & 0x0000_ffff);
         let flags = (item.0 >> 40) & 0x0000_f0ff;
 
         kvm_bindings::kvm_segment {

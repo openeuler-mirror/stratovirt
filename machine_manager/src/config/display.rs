@@ -65,7 +65,6 @@ fn get_dir_path(p: &str) -> Result<String> {
 /// GTK and OHUI related configuration.
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
 #[command(no_binary_name(true))]
-
 pub struct DisplayConfig {
     #[arg(long, alias = "classtype", value_parser = ["gtk", "ohui"])]
     pub display_type: String,

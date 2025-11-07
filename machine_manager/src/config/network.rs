@@ -119,7 +119,7 @@ impl ConfigCheck for NetDevcfg {
         if self.vhost_fds.is_some() && self.vhost_type().is_none() {
             bail!("Argument 'vhostfd' or 'vhostfds' are not needed for virtio-net device");
         }
-        if self.tap_fds.is_none() && self.ifname.eq("") && self.netdev_type.ne("vhost-user") {
+        if self.tap_fds.is_none() && self.ifname.is_empty() && self.netdev_type.ne("vhost-user") {
             bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
         }
 

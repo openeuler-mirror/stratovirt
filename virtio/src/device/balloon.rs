@@ -82,7 +82,7 @@ struct GuestIovec {
 }
 
 #[derive(Clone, Copy, Default)]
-#[repr(packed(1))]
+#[repr(C, packed)]
 struct BalloonStat {
     _tag: u16,
     _val: u64,

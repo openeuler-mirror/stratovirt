@@ -163,7 +163,7 @@ impl UsbHostRequest {
 
     pub fn ctrl_transfer_packet(&self, packet: &mut UsbPacket, actual_length: usize) {
         let setup_buf = get_buffer_from_transfer(self.host_transfer, 8);
-        let mut len = (setup_buf[7] as usize) << 8 | setup_buf[6] as usize;
+        let mut len = ((setup_buf[7] as usize) << 8) | setup_buf[6] as usize;
         if len > actual_length {
             len = actual_length;
         }

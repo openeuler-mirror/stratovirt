@@ -87,7 +87,7 @@ fn option_slice_as_mut_ptr<T>(o: &mut Option<&mut [T]>) -> *mut T {
     }
 }
 
-impl<'a> Clone3<'a> {
+impl Clone3<'_> {
     pub fn exit_signal(&mut self, exit_signal: u64) -> &mut Self {
         self.exit_signal = exit_signal;
         self

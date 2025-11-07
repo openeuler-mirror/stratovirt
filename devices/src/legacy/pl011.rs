@@ -49,9 +49,9 @@ const INT_TX: u32 = 1 << 5;
 // Receive interrupt bit
 const INT_RX: u32 = 1 << 4;
 // Framing/Panity/Break/Overrun error bits, bits 7~10.
-const INT_E: u32 = 1 << 7 | 1 << 8 | 1 << 9 | 1 << 10;
+const INT_E: u32 = (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10);
 // nUARTRI/nUARTCTS/nUARTDCD/nUARTDSR modem interrupt bits, bits 0~3.
-const INT_MS: u32 = 1 | 1 << 1 | 1 << 2 | 1 << 3;
+const INT_MS: u32 = 1 | (1 << 1) | (1 << 2) | (1 << 3);
 
 const PL011_FIFO_SIZE: usize = 16;
 

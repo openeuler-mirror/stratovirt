@@ -220,7 +220,7 @@ impl RTC {
             }
             RTC_REG_C => {
                 // The interrupt request flag (IRQF), alarm interrupt flag (AF).
-                data[0] = 1 << 7 | 1 << 5;
+                data[0] = (1 << 7) | (1 << 5);
             }
             _ => {
                 data[0] = self.cmos_data[self.cur_index as usize];

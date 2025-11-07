@@ -553,9 +553,9 @@ pub trait VirtioDevice: Send + AsAny {
         }
 
         let features = if page == 0 {
-            u64::from(self.driver_features(1)) << 32 | u64::from(v)
+            (u64::from(self.driver_features(1)) << 32) | u64::from(v)
         } else {
-            u64::from(v) << 32 | u64::from(self.driver_features(0))
+            (u64::from(v) << 32) | u64::from(self.driver_features(0))
         };
         self.virtio_base_mut().driver_features = features;
     }
@@ -680,9 +680,9 @@ pub trait VirtioDevice: Send + AsAny {
 
         let queue_select = self.virtio_base().queue_select;
         let queues_config = &mut self.virtio_base_mut().queues_config;
-        return queues_config
+        queues_config
             .get_mut(queue_select as usize)
-            .with_context(|| "queue_select overflows");
+            .with_context(|| "queue_select overflows")
     }
 
     /// Get ISR register.
@@ -740,7 +740,7 @@ pub trait VirtioDevice: Send + AsAny {
     /// # Arguments
     ///
     /// * `_configs` - The related configs for device.
-    ///     eg: DriveConfig and VirtioBlkDevConfig for virtio blk device.
+    ///   eg: DriveConfig and VirtioBlkDevConfig for virtio blk device.
     fn update_config(&mut self, _configs: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
         bail!("Unsupported to update configuration")
     }

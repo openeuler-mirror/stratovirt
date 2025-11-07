@@ -780,11 +780,11 @@ impl SysBusDevOps for PFlash {
 
                     match index {
                         0 => {
-                            ret = self.ident[0] << 8 | self.ident[1];
+                            ret = (self.ident[0] << 8) | self.ident[1];
                             trace::pflash_manufacturer_id(ret);
                         }
                         1 => {
-                            ret = self.ident[2] << 8 | self.ident[3];
+                            ret = (self.ident[2] << 8) | self.ident[3];
                             trace::pflash_device_id(ret);
                         }
                         _ => {
