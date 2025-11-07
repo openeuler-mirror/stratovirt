@@ -1798,6 +1798,7 @@ impl MigrationHook for Net {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::eventloop_init;
 
     #[test]
     fn test_net_init() {
@@ -1963,7 +1964,7 @@ mod tests {
 
     #[test]
     fn test_iothread() {
-        EventLoop::object_init(&None).unwrap();
+        eventloop_init();
 
         let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
         net.net_cfg.iothread = Some("iothread".to_string());
@@ -1976,7 +1977,5 @@ mod tests {
         } else {
             assert!(false);
         }
-
-        EventLoop::loop_clean();
     }
 }

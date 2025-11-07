@@ -17,7 +17,7 @@ use std::io::Error;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Barrier, Mutex, RwLock};
+use std::sync::{Arc, Barrier, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -214,7 +214,7 @@ pub struct EventLoopContext {
     /// Epoll file descriptor.
     epoll: Epoll,
     /// Control epoll loop running.
-    manager: Option<Arc<Mutex<dyn EventLoopManager>>>,
+    manager: OnceLock<Arc<Mutex<dyn EventLoopManager>>>,
     /// Used to wakeup epoll to re-evaluate events or timers.
     kick_event: EventFd,
     /// Used to avoid unnecessary kick operation when the
@@ -227,7 +227,7 @@ pub struct EventLoopContext {
     /// Events abandoned are stored in garbage collector.
     gc: Arc<RwLock<Vec<Box<EventNotifier>>>>,
     /// Temp events vector, store wait returned events.
-    ready_events: Vec<EpollEvent>,
+    ready_events: Arc<Mutex<Vec<EpollEvent>>>,
     /// Timer list
     timers: Arc<Mutex<Vec<Box<Timer>>>>,
     /// The next timer id to be used.
@@ -248,22 +248,18 @@ impl Drop for EventLoopContext {
     }
 }
 
-// SAFETY: The closure in EventNotifier and Timer doesn't impl Send, they're
-// not sent between threads actually.
-unsafe impl Send for EventLoopContext {}
-
 impl EventLoopContext {
     /// Constructs a new `EventLoopContext`.
     pub fn new(thread_exit_barrier: Arc<Barrier>) -> Self {
         let mut ctx = EventLoopContext {
             epoll: Epoll::new().unwrap(),
-            manager: None,
+            manager: OnceLock::new(),
             kick_event: create_new_eventfd().unwrap(),
             kick_me: AtomicBool::new(false),
             kicked: AtomicBool::new(false),
             events: Arc::new(RwLock::new(BTreeMap::new())),
             gc: Arc::new(RwLock::new(Vec::new())),
-            ready_events: vec![EpollEvent::default(); READY_EVENT_MAX],
+            ready_events: Arc::new(Mutex::new(vec![EpollEvent::default(); READY_EVENT_MAX])),
             timers: Arc::new(Mutex::new(Vec::new())),
             timer_next_id: AtomicU64::new(0),
             thread_pool: Arc::new(ThreadPool::default()),
@@ -290,7 +286,7 @@ impl EventLoopContext {
     }
 
     // Force epoll.wait to exit to re-evaluate events and timers.
-    pub fn kick(&mut self) {
+    pub fn kick(&self) {
         self.kicked.store(true, Ordering::SeqCst);
         if self.kick_me.load(Ordering::SeqCst) {
             if let Err(e) = self.kick_event.write(1) {
@@ -302,11 +298,13 @@ impl EventLoopContext {
         }
     }
 
-    pub fn set_manager(&mut self, manager: Arc<Mutex<dyn EventLoopManager>>) {
-        self.manager = Some(manager);
+    pub fn set_manager(&self, manager: Arc<Mutex<dyn EventLoopManager>>) {
+        if self.manager.set(manager).is_err() {
+            warn!("EventLoopManager has been set");
+        }
     }
 
-    fn clear_gc(&mut self) {
+    fn clear_gc(&self) {
         let max_cnt = self.gc.write().unwrap().len();
         let mut pop_cnt: usize = 0;
 
@@ -323,7 +321,7 @@ impl EventLoopContext {
         }
     }
 
-    fn add_event(&mut self, mut event: EventNotifier) -> Result<()> {
+    fn add_event(&self, mut event: EventNotifier) -> Result<()> {
         // If there is one same alive event monitored, update the handlers and eventset.
         // If there is one same parked event, update the handlers and eventset but warn.
         // If there is no event in the map, insert the event and park the related.
@@ -370,7 +368,7 @@ impl EventLoopContext {
         Ok(())
     }
 
-    fn rm_event(&mut self, event: &EventNotifier) -> Result<()> {
+    fn rm_event(&self, event: &EventNotifier) -> Result<()> {
         // If there is no event in the map, return Error.
         // Else put the event in gc and reactivate the parked event.
         let mut events_map = self.events.write().unwrap();
@@ -420,7 +418,7 @@ impl EventLoopContext {
         Ok(())
     }
 
-    fn modify_event(&mut self, mut event: EventNotifier) -> Result<()> {
+    fn modify_event(&self, mut event: EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
@@ -446,7 +444,7 @@ impl EventLoopContext {
         Ok(())
     }
 
-    fn park_event(&mut self, event: &EventNotifier) -> Result<()> {
+    fn park_event(&self, event: &EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
@@ -468,7 +466,7 @@ impl EventLoopContext {
         Ok(())
     }
 
-    fn resume_event(&mut self, event: &EventNotifier) -> Result<()> {
+    fn resume_event(&self, event: &EventNotifier) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
@@ -490,7 +488,7 @@ impl EventLoopContext {
         Ok(())
     }
 
-    fn update_events_for_fd(&mut self, event: &EventNotifier, add: bool) -> Result<()> {
+    fn update_events_for_fd(&self, event: &EventNotifier, add: bool) -> Result<()> {
         let mut events_map = self.events.write().unwrap();
         match events_map.get_mut(&event.raw_fd) {
             Some(notifier) => {
@@ -524,7 +522,7 @@ impl EventLoopContext {
     /// # Arguments
     ///
     /// * `notifiers` - event notifiers wanted to add to or remove from `EventLoop`.
-    pub fn update_events(&mut self, notifiers: Vec<EventNotifier>) -> Result<()> {
+    pub fn update_events(&self, notifiers: Vec<EventNotifier>) -> Result<()> {
         for en in notifiers {
             trace::update_event(&en.raw_fd, &en.op);
             match en.op {
@@ -557,8 +555,8 @@ impl EventLoopContext {
     }
 
     /// Executes `epoll.wait()` to wait for events, and call the responding callbacks.
-    pub fn run(&mut self) -> Result<bool> {
-        if let Some(manager) = &self.manager {
+    pub fn run(&self) -> Result<bool> {
+        if let Some(manager) = self.manager.get() {
             if manager.lock().unwrap().loop_should_exit() {
                 manager.lock().unwrap().loop_cleanup()?;
                 return Ok(false);
@@ -569,7 +567,7 @@ impl EventLoopContext {
         Ok(true)
     }
 
-    pub fn iothread_run(&mut self) -> Result<()> {
+    pub fn iothread_run(&self) -> Result<()> {
         let min_timeout_ns = self.timers_min_duration();
         if min_timeout_ns.is_none() {
             for _i in 0..AIO_PRFETCH_CYCLE_TIME {
@@ -595,7 +593,7 @@ impl EventLoopContext {
     ///
     /// * `func` - the function will be called later.
     /// * `delay` - delay time.
-    pub fn timer_add(&mut self, func: Box<dyn Fn()>, delay: Duration) -> u64 {
+    pub fn timer_add(&self, func: Box<dyn Fn()>, delay: Duration) -> u64 {
         // insert in order of expire_time
         let mut timers = self.timers.lock().unwrap();
 
@@ -617,7 +615,7 @@ impl EventLoopContext {
     }
 
     /// Remove timer with specific timer id.
-    pub fn timer_del(&mut self, timer_id: u64) {
+    pub fn timer_del(&self, timer_id: u64) {
         let mut timers = self.timers.lock().unwrap();
         for (i, t) in timers.iter().enumerate() {
             if timer_id == t.id {
@@ -645,7 +643,7 @@ impl EventLoopContext {
     }
 
     /// Call function of the timers which have already expired.
-    pub fn run_timers(&mut self) {
+    pub fn run_timers(&self) {
         let now = get_current_time();
         let mut expired_nr: usize = 0;
 
@@ -665,7 +663,7 @@ impl EventLoopContext {
         }
     }
 
-    fn epoll_wait_manager(&mut self, mut time_out: Option<Duration>) -> Result<()> {
+    fn epoll_wait_manager(&self, mut time_out: Option<Duration>) -> Result<()> {
         let need_kick = !(time_out.is_some() && *time_out.as_ref().unwrap() == Duration::ZERO);
         if need_kick {
             self.kick_me.store(true, Ordering::SeqCst);
@@ -687,11 +685,13 @@ impl EventLoopContext {
             };
         }
 
+        let mut ready_events = self.ready_events.lock().unwrap();
+
         let time_out_ms = match time_out {
             Some(t) => i32::try_from(t.as_millis()).unwrap_or(i32::MAX),
             None => -1,
         };
-        let ev_count = match self.epoll.wait(time_out_ms, &mut self.ready_events[..]) {
+        let ev_count = match self.epoll.wait(time_out_ms, &mut ready_events[..]) {
             Ok(ev_count) => ev_count,
             Err(e) if e.raw_os_error() == Some(libc::EINTR) => 0,
             Err(e) => return Err(anyhow!(UtilError::EpollWait(e))),
@@ -703,14 +703,14 @@ impl EventLoopContext {
         for i in 0..ev_count {
             // SAFETY: elements in self.events_map never get released in other functions
             let event = unsafe {
-                let event_ptr = self.ready_events[i].data() as *const EventNotifier;
+                let event_ptr = ready_events[i].data() as *const EventNotifier;
                 &*event_ptr as &EventNotifier
             };
             let mut notifiers = Vec::new();
             let status_locked = event.status.lock().unwrap();
             if *status_locked == EventStatus::Alive {
                 for handler in event.handlers.iter() {
-                    match handler(self.ready_events[i].event_set(), event.raw_fd) {
+                    match handler(ready_events[i].event_set(), event.raw_fd) {
                         None => {}
                         Some(mut notifier) => {
                             notifiers.append(&mut notifier);
@@ -729,8 +729,8 @@ impl EventLoopContext {
         Ok(())
     }
 
-    pub fn clean_event_loop(&mut self) -> Result<()> {
-        if let Some(manager) = &self.manager {
+    pub fn clean_event_loop(&self) -> Result<()> {
+        if let Some(manager) = self.manager.get() {
             manager.lock().unwrap().loop_cleanup()?;
         }
         Ok(())
@@ -801,7 +801,7 @@ mod test {
 
     #[test]
     fn basic_test() {
-        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
+        let mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd1_related = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -828,7 +828,7 @@ mod test {
 
     #[test]
     fn parked_event_test() {
-        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
+        let mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd2 = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -875,7 +875,7 @@ mod test {
 
     #[test]
     fn event_handler_test() {
-        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
+        let mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let mut notifiers = Vec::new();
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd1_related = EventFd::new(EFD_NONBLOCK).unwrap();
@@ -914,7 +914,7 @@ mod test {
 
     #[test]
     fn error_operation_test() {
-        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
+        let mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let leisure_fd = EventFd::new(EFD_NONBLOCK).unwrap();
 
@@ -951,7 +951,7 @@ mod test {
 
     #[test]
     fn error_parked_operation_test() {
-        let mut mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
+        let mainloop = EventLoopContext::new(Arc::new(Barrier::new(1)));
         let fd1 = EventFd::new(EFD_NONBLOCK).unwrap();
         let fd2 = EventFd::new(EFD_NONBLOCK).unwrap();
 

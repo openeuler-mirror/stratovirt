@@ -934,6 +934,8 @@ mod tests {
 
     use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
     use devices::sysbus::{SysBus, IRQ_BASE, IRQ_MAX};
+    use machine_manager::config::IothreadConfig;
+    use machine_manager::event_loop::EventLoop;
 
     pub const MEMORY_SIZE: u64 = 1024 * 1024;
 
@@ -985,5 +987,19 @@ mod tests {
             )
             .unwrap();
         sys_space
+    }
+
+    pub fn eventloop_init() {
+        let thread_name = "io1".to_string();
+        // spawn io thread
+        let io_conf = IothreadConfig {
+            classtype: "iothread".to_string(),
+            id: thread_name.clone(),
+            #[cfg(target_env = "ohos")]
+            qos: None,
+            #[cfg(target_env = "ohos")]
+            bundle_name: None,
+        };
+        EventLoop::object_init(&Some(vec![io_conf])).unwrap();
     }
 }

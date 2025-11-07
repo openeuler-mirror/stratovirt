@@ -1251,10 +1251,9 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{address_space_init, MEMORY_SIZE};
+    use crate::tests::{address_space_init, eventloop_init, MEMORY_SIZE};
     use crate::*;
     use address_space::{AddressAttr, AddressRange, HostMemMapping, Region};
-    use machine_manager::event_loop::EventLoop;
 
     const QUEUE_SIZE: u16 = 256;
 
@@ -1583,7 +1582,7 @@ mod tests {
 
     #[test]
     fn test_balloon_activate() {
-        EventLoop::object_init(&None).unwrap();
+        eventloop_init();
 
         let mem_space = address_space_init();
         let interrupt_evt = EventFd::new(libc::EFD_NONBLOCK).unwrap();
@@ -1624,8 +1623,6 @@ mod tests {
         let mut bln = Balloon::new(bln_cfg, mem_space.clone());
         bln.base.queues = queues;
         assert!(bln.activate(mem_space, interrupt_cb, queue_evts).is_ok());
-
-        EventLoop::loop_clean();
     }
 
     #[test]

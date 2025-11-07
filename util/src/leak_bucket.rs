@@ -65,7 +65,7 @@ impl LeakBucket {
     /// # Arguments
     ///
     /// * `loop_context` - used for delay function call.
-    pub fn throttled(&mut self, loop_context: &mut EventLoopContext, need_units: u32) -> bool {
+    pub fn throttled(&mut self, loop_context: &EventLoopContext, need_units: u32) -> bool {
         // capacity value is zero, indicating that there is no need to limit
         if self.capacity == 0 {
             return false;
