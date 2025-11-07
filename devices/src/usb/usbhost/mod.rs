@@ -586,7 +586,7 @@ impl UsbHost {
         trace::usb_host_parse_config(self.config.hostbus, self.config.hostaddr, conf.number());
         for (i, intf) in conf.interfaces().enumerate() {
             // The usb_deviec.altsetting indexes alternate settings by the interface number.
-            // Get the 0th alternate setting first so that we can grap the interface number,
+            // Get the 0th alternate setting first so that we can get the interface number,
             // and then correct the alternate setting value if necessary.
             let mut intf_desc = intf.descriptors().next();
             if intf_desc.is_none() {
@@ -938,7 +938,7 @@ impl UsbHost {
                     locked_iso_queue.unused.push_back(iso_transfer.unwrap());
                     if e == Error::NoDevice || e == Error::Io {
                         // When the USB device reports the preceding error, XHCI notifies the guest
-                        // of the error through packet status. The guest initiallizes the device
+                        // of the error through packet status. The guest initializes the device
                         // again.
                         packet.lock().unwrap().status = UsbPacketStatus::Stall;
                     };

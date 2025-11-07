@@ -155,7 +155,7 @@ pub fn setns(fd: i32, nstype: i32) -> Result<()> {
 ///
 /// # Arguments
 ///
-/// * `path` - The relative path of filder.
+/// * `path` - The relative path of folder.
 pub fn mkdir(path: &str) -> Result<()> {
     let path_ptr = into_cstring(path)?;
     SyscallResult {
