@@ -182,7 +182,7 @@ pub fn create_pixman_image(
 
 /// Bpp: bit per pixel
 pub fn bytes_per_pixel() -> usize {
-    ((pixman_format_bpp(pixman_format_code_t::PIXMAN_x8r8g8b8 as u32) + 7) / 8) as usize
+    pixman_format_bpp(pixman_format_code_t::PIXMAN_x8r8g8b8 as u32).div_ceil(8) as usize
 }
 
 /// Decrease the reference of image

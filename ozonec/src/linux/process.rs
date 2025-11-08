@@ -216,7 +216,7 @@ impl Process {
             let setgroups = read_to_string("proc/self/setgroups")
                 .with_context(|| "Failed to read setgroups")?;
             if setgroups.trim() == "deny" {
-                bail!("Cannot set additional gids as setgroup is desabled");
+                bail!("Cannot set additional gids as setgroup is disabled");
             }
 
             let gids: Vec<Gid> = additional_gids

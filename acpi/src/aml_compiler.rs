@@ -224,12 +224,12 @@ impl AmlEisaId {
 impl AmlBuilder for AmlEisaId {
     fn aml_bytes(&self) -> Vec<u8> {
         let chars = self.name.chars().collect::<Vec<_>>();
-        let dword: u32 = (chars[0] as u32 - 0x40) << 26
-            | (chars[1] as u32 - 0x40) << 21
-            | (chars[2] as u32 - 0x40) << 16
-            | chars[3].to_digit(16).unwrap() << 12
-            | chars[4].to_digit(16).unwrap() << 8
-            | chars[5].to_digit(16).unwrap() << 4
+        let dword: u32 = ((chars[0] as u32 - 0x40) << 26)
+            | ((chars[1] as u32 - 0x40) << 21)
+            | ((chars[2] as u32 - 0x40) << 16)
+            | (chars[3].to_digit(16).unwrap() << 12)
+            | (chars[4].to_digit(16).unwrap() << 8)
+            | (chars[5].to_digit(16).unwrap() << 4)
             | chars[6].to_digit(16).unwrap();
 
         let mut bytes = dword.as_bytes().to_vec();
@@ -290,7 +290,7 @@ impl AmlBuilder for AmlToUuid {
         for i in index {
             let mut chars = self.name.chars();
             uuid_bytes.push(
-                (chars.nth(*i).unwrap().to_digit(16).unwrap() as u8) << 4
+                ((chars.nth(*i).unwrap().to_digit(16).unwrap() as u8) << 4)
                     | chars.next().unwrap().to_digit(16).unwrap() as u8,
             );
         }
@@ -339,16 +339,16 @@ fn build_pkg_length(length: usize, include_self: bool) -> Vec<u8> {
             bytes.push(pkg_length as u8);
         }
         2 => {
-            bytes.push((1 << pkg_1byte_shift | (pkg_length & 0xF)) as u8);
+            bytes.push(((1 << pkg_1byte_shift) | (pkg_length & 0xF)) as u8);
             bytes.push((pkg_length >> pkg_2byte_shift) as u8);
         }
         3 => {
-            bytes.push((2 << pkg_1byte_shift | (pkg_length & 0xF)) as u8);
+            bytes.push(((2 << pkg_1byte_shift) | (pkg_length & 0xF)) as u8);
             bytes.push((pkg_length >> pkg_2byte_shift) as u8);
             bytes.push((pkg_length >> pkg_3byte_shift) as u8);
         }
         4 => {
-            bytes.push((3 << pkg_1byte_shift | (pkg_length & 0xF)) as u8);
+            bytes.push(((3 << pkg_1byte_shift) | (pkg_length & 0xF)) as u8);
             bytes.push((pkg_length >> pkg_2byte_shift) as u8);
             bytes.push((pkg_length >> pkg_3byte_shift) as u8);
             bytes.push((pkg_length >> pkg_4byte_shift) as u8);
@@ -1321,7 +1321,7 @@ impl AmlBuilder for AmlDmaResource {
     fn aml_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![0x2A, 1 << self.channel];
 
-        let mut flags = (self.trans_sz as u8) | (self.dma_type as u8) << 5;
+        let mut flags = (self.trans_sz as u8) | ((self.dma_type as u8) << 5);
         if self.is_master {
             flags |= 1 << 2; // Bit-2 represents bus master
         }
@@ -1706,9 +1706,9 @@ impl AmlBuilder for AmlExtendedInterrupt {
         bytes.extend(total_len.as_bytes());
 
         let flags = self.usage as u8
-            | (self.int_mode as u8) << 1
-            | (self.int_polar as u8) << 2
-            | (self.share as u8) << 3;
+            | ((self.int_mode as u8) << 1)
+            | ((self.int_polar as u8) << 2)
+            | ((self.share as u8) << 3);
         bytes.push(flags);
 
         bytes.push(self.irq_list.len() as u8);

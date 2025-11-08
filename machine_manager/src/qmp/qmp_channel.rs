@@ -83,7 +83,7 @@ pub fn create_timestamp() -> TimeStamp {
 /// The struct `QmpChannel` is the only struct can handle Global variable
 /// `QMP_CHANNEL`.
 /// It is used to send event to qmp client and restore some file descriptor
-/// which was sended by client.
+/// which was sent by client.
 pub struct QmpChannel {
     /// The `writer` to send `QmpEvent`.
     event_writer: RwLock<Option<SocketRWHandler>>,

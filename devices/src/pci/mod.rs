@@ -34,7 +34,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
@@ -118,7 +118,7 @@ fn pci_devfn(slot: u8, func: u8) -> u8 {
 }
 
 fn pci_slot(devfn: u8) -> u8 {
-    devfn >> 3 & 0x1f
+    (devfn >> 3) & 0x1f
 }
 
 fn pci_func(devfn: u8) -> u8 {
@@ -258,7 +258,7 @@ pub trait PciDevOps: Device + Send {
 
 pub type ToPciDevOpsFunc = fn(&mut dyn Any) -> &mut dyn PciDevOps;
 
-static mut PCIDEVOPS_HASHMAP: Option<HashMap<TypeId, ToPciDevOpsFunc>> = None;
+static PCIDEVOPS_HASHMAP: RwLock<Option<HashMap<TypeId, ToPciDevOpsFunc>>> = RwLock::new(None);
 
 pub fn convert_to_pcidevops<T: PciDevOps>(item: &mut dyn Any) -> &mut dyn PciDevOps {
     // SAFETY: The typeid of `T` is the typeid recorded in the hashmap. The target structure type of
@@ -269,18 +269,15 @@ pub fn convert_to_pcidevops<T: PciDevOps>(item: &mut dyn Any) -> &mut dyn PciDev
 
 pub fn register_pcidevops_type<T: PciDevOps>() -> Result<()> {
     let type_id = TypeId::of::<T>();
-    // SAFETY: PCIDEVOPS_HASHMAP will be built in `type_init` function sequentially in the main thread.
-    // And will not be changed after `type_init`.
-    unsafe {
-        if PCIDEVOPS_HASHMAP.is_none() {
-            PCIDEVOPS_HASHMAP = Some(HashMap::new());
-        }
-        let types = PCIDEVOPS_HASHMAP.as_mut().unwrap();
-        if types.get(&type_id).is_some() {
-            bail!("Type Id {:?} has been registered.", type_id);
-        }
-        types.insert(type_id, convert_to_pcidevops::<T>);
+    let mut locked_pcidevops = PCIDEVOPS_HASHMAP.write().unwrap();
+    if locked_pcidevops.is_none() {
+        *locked_pcidevops = Some(HashMap::new());
     }
+    let types = locked_pcidevops.as_mut().unwrap();
+    if types.get(&type_id).is_some() {
+        bail!("Type Id {:?} has been registered.", type_id);
+    }
+    types.insert(type_id, convert_to_pcidevops::<T>);
 
     Ok(())
 }
@@ -298,19 +295,18 @@ pub fn devices_register_pcidevops_type() -> Result<()> {
 
 #[cfg(test)]
 pub fn clean_pcidevops_type() {
-    unsafe {
-        PCIDEVOPS_HASHMAP = None;
-    }
+    *PCIDEVOPS_HASHMAP.write().unwrap() = None;
 }
 
 pub fn to_pcidevops(dev: &mut dyn Device) -> Option<&mut dyn PciDevOps> {
-    // SAFETY: PCIDEVOPS_HASHMAP has been built. And this function is called without changing hashmap.
-    unsafe {
-        let types = PCIDEVOPS_HASHMAP.as_mut().unwrap();
-        let func = types.get(&dev.device_type_id())?;
-        let pcidev = func(dev.as_any_mut());
-        Some(pcidev)
+    if PCIDEVOPS_HASHMAP.read().unwrap().is_none() {
+        // PCIDEVOPS_HASHMAP was not initialized
+        return None;
     }
+    let types = PCIDEVOPS_HASHMAP.read().unwrap();
+    let func = types.as_ref().unwrap().get(&dev.device_type_id())?;
+    let pcidev = func(dev.as_any_mut());
+    Some(pcidev)
 }
 
 /// Convert from Arc<Mutex<dyn Device>> to &mut dyn PciDevOps.
@@ -395,7 +391,7 @@ pub fn init_multifunction(
 /// 0 <= pin <= 3. 0 = INTA, 1 = INTB, 2 = INTC, 3 = INTD.
 /// PCI-to-PCI bridge specification 9.1: Interrupt routing.
 pub fn swizzle_map_irq(devfn: u8, pin: u8) -> u32 {
-    let pci_slot = devfn >> 3 & 0x1f;
+    let pci_slot = (devfn >> 3) & 0x1f;
     u32::from((pci_slot + pin) % PCI_PIN_NUM)
 }
 

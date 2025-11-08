@@ -955,9 +955,12 @@ impl PciDevOps for VfioPciDevice {
             .msix
             .as_ref()
             .map_or(0, |m| m.lock().unwrap().msix_cap_offset as usize);
-        let was_enable = self.base.config.msix.as_ref().map_or(false, |m| {
-            m.lock().unwrap().is_enabled(&self.base.config.config)
-        });
+        let was_enable = self
+            .base
+            .config
+            .msix
+            .as_ref()
+            .is_some_and(|m| m.lock().unwrap().is_enabled(&self.base.config.config));
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         PCI_BUS!(parent_bus, locked_bus, pci_bus);
         self.base.config.write(
@@ -979,9 +982,12 @@ impl PciDevOps for VfioPciDevice {
                 }
             }
         } else if ranges_overlap(offset, size, cap_offset, MSIX_CAP_SIZE as usize).unwrap() {
-            let is_enable = self.base.config.msix.as_ref().map_or(false, |m| {
-                m.lock().unwrap().is_enabled(&self.base.config.config)
-            });
+            let is_enable = self
+                .base
+                .config
+                .msix
+                .as_ref()
+                .is_some_and(|m| m.lock().unwrap().is_enabled(&self.base.config.config));
 
             if !was_enable && is_enable {
                 if let Err(e) = self.vfio_enable_msix() {

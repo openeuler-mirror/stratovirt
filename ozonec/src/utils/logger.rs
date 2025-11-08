@@ -206,7 +206,7 @@ impl Log for Logger {
             eprintln!("Failed to log message: {:?}", e);
             return;
         }
-        if let Err(e) = log_rotate.rotate(fmt_msg.as_bytes().len()) {
+        if let Err(e) = log_rotate.rotate(fmt_msg.len()) {
             eprintln!("Failed to rotate log files: {:?}", e);
         }
     }

@@ -718,7 +718,7 @@ impl ClientIoHandler {
                 self.update_frame_buff()?;
             }
             ClientMsg::KeyEvent => {
-                self.key_envent()
+                self.key_event()
                     .unwrap_or_else(|e| error!("Key event error: {:?}", e));
             }
             ClientMsg::PointerEvent => {
@@ -966,7 +966,7 @@ impl ClientIoHandler {
     }
 
     /// Keyboard event.
-    fn key_envent(&mut self) -> Result<()> {
+    fn key_event(&mut self) -> Result<()> {
         if self.expect == 1 {
             self.expect = 8;
             return Ok(());

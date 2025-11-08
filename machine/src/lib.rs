@@ -1673,7 +1673,7 @@ pub trait MachineOps: MachineLifecycle {
         let fast_unplug = vm_config
             .global_config
             .get("pcie-root-port.fast-unplug")
-            .map_or(false, |val| val == FAST_UNPLUG_ON);
+            .is_some_and(|val| val == FAST_UNPLUG_ON);
 
         RootPort::set_fast_unplug_feature(fast_unplug);
         Ok(())

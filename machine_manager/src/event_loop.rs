@@ -12,11 +12,11 @@
 
 use std::collections::HashMap;
 use std::os::unix::prelude::RawFd;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, Mutex, OnceLock};
 use std::{process, thread};
 
 use anyhow::{bail, Result};
-use log::{error, info};
+use log::{error, info, warn};
 
 use super::config::IothreadConfig;
 use crate::machine::IOTHREADS;
@@ -40,7 +40,7 @@ pub struct EventLoop {
     io_threads: HashMap<String, EventLoopContext>,
 }
 
-static mut GLOBAL_EVENT_LOOP: Option<EventLoop> = None;
+static GLOBAL_EVENT_LOOP: OnceLock<EventLoop> = OnceLock::new();
 
 impl EventLoop {
     /// Init GLOBAL_EVENT_LOOP, include main loop and io-threads loop
@@ -65,43 +65,37 @@ impl EventLoop {
             }
         }
 
-        // SAFETY: This function is called at startup thus no concurrent accessing to
-        // GLOBAL_EVENT_LOOP. And each iothread has a dedicated EventLoopContext.
-        unsafe {
-            if GLOBAL_EVENT_LOOP.is_none() {
-                GLOBAL_EVENT_LOOP = Some(EventLoop {
-                    main_loop: EventLoopContext::new(thread_exit_barrier),
-                    io_threads,
-                });
-
-                if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
-                    for (id, ctx) in &mut event_loop.io_threads {
-                        thread::Builder::new().name(id.to_string()).spawn(move || {
-                            let iothread_info = IothreadInfo {
-                                shrink: 0,
-                                pid: process::id(),
-                                grow: 0,
-                                max: 0,
-                                id: id.to_string(),
-                            };
-                            IOTHREADS.lock().unwrap().push(iothread_info);
-                            while ctx.iothread_run().is_ok() {
-                                // If is_cleaned() is true, it means the main thread will exit.
-                                // So, exit the iothread.
-                                if TempCleaner::is_cleaned() {
-                                    break;
-                                }
-                            }
-                            if let Err(e) = ctx.clean_event_loop() {
-                                error!("Failed to clean event loop {:?}", e);
-                            }
-                            ctx.thread_exit_barrier.wait();
-                        })?;
+        let res = GLOBAL_EVENT_LOOP.set(EventLoop {
+            main_loop: EventLoopContext::new(thread_exit_barrier),
+            io_threads,
+        });
+        if res.is_err() {
+            warn!("GLOBAL_EVENT_LOOP has been initialized");
+            return Ok(());
+        }
+        let event_loop = GLOBAL_EVENT_LOOP.get().unwrap();
+        for (id, ctx) in &event_loop.io_threads {
+            thread::Builder::new().name(id.to_string()).spawn(move || {
+                let iothread_info = IothreadInfo {
+                    shrink: 0,
+                    pid: process::id(),
+                    grow: 0,
+                    max: 0,
+                    id: id.to_string(),
+                };
+                IOTHREADS.lock().unwrap().push(iothread_info);
+                while ctx.iothread_run().is_ok() {
+                    // If is_cleaned() is true, it means the main thread will exit.
+                    // So, exit the iothread.
+                    if TempCleaner::is_cleaned() {
+                        break;
                     }
-                } else {
-                    bail!("Global Event Loop have not been initialized.")
                 }
-            }
+                if let Err(e) = ctx.clean_event_loop() {
+                    error!("Failed to clean event loop {:?}", e);
+                }
+                ctx.thread_exit_barrier.wait();
+            })?;
         }
 
         Ok(())
@@ -112,16 +106,13 @@ impl EventLoop {
     /// # Arguments
     ///
     /// * `name` - if None, return main loop, OR return io-thread-loop which is related to `name`.
-    pub fn get_ctx(name: Option<&String>) -> Option<&mut EventLoopContext> {
-        // SAFETY: All concurrently accessed data of EventLoopContext is protected.
-        unsafe {
-            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
-                if let Some(name) = name {
-                    return event_loop.io_threads.get_mut(name);
-                }
-
-                return Some(&mut event_loop.main_loop);
+    pub fn get_ctx(name: Option<&String>) -> Option<&EventLoopContext> {
+        if let Some(event_loop) = GLOBAL_EVENT_LOOP.get() {
+            if let Some(name) = name {
+                return event_loop.io_threads.get(name);
             }
+
+            return Some(&event_loop.main_loop);
         }
 
         panic!("Global Event Loop have not been initialized.");
@@ -133,13 +124,10 @@ impl EventLoop {
     ///
     /// * `manager` - The main part to manager the event loop.
     pub fn set_manager(manager: Arc<Mutex<dyn EventLoopManager>>) {
-        // SAFETY: All concurrently accessed data of EventLoopContext is protected.
-        unsafe {
-            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
-                event_loop.main_loop.set_manager(manager.clone());
-                for (_name, io_thread) in event_loop.io_threads.iter_mut() {
-                    io_thread.set_manager(manager.clone());
-                }
+        if let Some(event_loop) = GLOBAL_EVENT_LOOP.get() {
+            event_loop.main_loop.set_manager(manager.clone());
+            for (_name, io_thread) in event_loop.io_threads.iter() {
+                io_thread.set_manager(manager.clone());
             }
         }
     }
@@ -165,46 +153,34 @@ impl EventLoop {
     /// Once run main loop, `epoll` in `MainLoopContext` will execute
     /// `epoll_wait()` function to wait for events.
     pub fn loop_run() -> Result<()> {
-        // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
-        // accessing.
-        unsafe {
-            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
-                loop {
-                    let sig_num = get_signal();
-                    if sig_num != 0 {
-                        info!("MainLoop exits due to receive signal {}", sig_num);
-                        return Ok(());
-                    }
-                    if !event_loop.main_loop.run()? {
-                        info!("MainLoop exits due to guest internal operation.");
-                        return Ok(());
-                    }
+        if let Some(event_loop) = GLOBAL_EVENT_LOOP.get() {
+            loop {
+                let sig_num = get_signal();
+                if sig_num != 0 {
+                    info!("MainLoop exits due to receive signal {}", sig_num);
+                    return Ok(());
                 }
-            } else {
-                bail!("Global Event Loop have not been initialized.")
+                if !event_loop.main_loop.run()? {
+                    info!("MainLoop exits due to guest internal operation.");
+                    return Ok(());
+                }
             }
+        } else {
+            bail!("Global Event Loop have not been initialized.")
         }
     }
 
     pub fn loop_clean() {
         EventLoop::kick_iothreads();
-        // SAFETY: the main_loop ctx is dedicated for main thread, thus no concurrent
-        // accessing.
-        unsafe {
-            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
-                event_loop.main_loop.thread_exit_barrier.wait();
-            }
-            GLOBAL_EVENT_LOOP = None;
+        if let Some(event_loop) = GLOBAL_EVENT_LOOP.get() {
+            event_loop.main_loop.thread_exit_barrier.wait();
         }
     }
 
     pub fn kick_iothreads() {
-        // SAFETY: All concurrently accessed data of EventLoopContext is protected.
-        unsafe {
-            if let Some(event_loop) = GLOBAL_EVENT_LOOP.as_mut() {
-                for (_name, io_thread) in event_loop.io_threads.iter_mut() {
-                    io_thread.kick();
-                }
+        if let Some(event_loop) = GLOBAL_EVENT_LOOP.get() {
+            for (_name, io_thread) in event_loop.io_threads.iter() {
+                io_thread.kick();
             }
         }
     }

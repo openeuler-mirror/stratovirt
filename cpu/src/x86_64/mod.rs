@@ -109,10 +109,10 @@ impl X86CPUTopology {
         X86CPUTopology::default()
     }
 
-    pub fn set_topology(mut self, toplogy: (u8, u8, u8)) -> Self {
-        self.threads = toplogy.0;
-        self.cores = toplogy.1;
-        self.dies = toplogy.2;
+    pub fn set_topology(mut self, topology: (u8, u8, u8)) -> Self {
+        self.threads = topology.0;
+        self.cores = topology.1;
+        self.dies = topology.2;
         self
     }
 }
@@ -406,7 +406,7 @@ impl X86CPUState {
                     if entry.index == 0 {
                         entry.ecx |= 1u32 << X86_FEATURE_HYPERVISOR;
                         entry.ecx |= 1u32 << X86_FEATURE_TSC_DEADLINE_TIMER;
-                        entry.ebx = self.apic_id << 24 | 8 << 8;
+                        entry.ebx = (self.apic_id << 24) | (8 << 8);
                     }
                 }
                 2 => {

@@ -1480,22 +1480,22 @@ impl VirtioDevice for Net {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.base.device_features = 1 << VIRTIO_F_VERSION_1
-            | 1 << VIRTIO_NET_F_CSUM
-            | 1 << VIRTIO_NET_F_GUEST_CSUM
-            | 1 << VIRTIO_NET_F_GUEST_TSO4
-            | 1 << VIRTIO_NET_F_GUEST_TSO6
-            | 1 << VIRTIO_NET_F_GUEST_UFO
-            | 1 << VIRTIO_NET_F_HOST_TSO4
-            | 1 << VIRTIO_NET_F_HOST_TSO6
-            | 1 << VIRTIO_NET_F_HOST_UFO
-            | 1 << VIRTIO_NET_F_CTRL_RX
-            | 1 << VIRTIO_NET_F_CTRL_VLAN
-            | 1 << VIRTIO_NET_F_CTRL_RX_EXTRA
-            | 1 << VIRTIO_NET_F_CTRL_MAC_ADDR
-            | 1 << VIRTIO_NET_F_CTRL_VQ
-            | 1 << VIRTIO_F_RING_INDIRECT_DESC
-            | 1 << VIRTIO_F_RING_EVENT_IDX;
+        self.base.device_features = (1 << VIRTIO_F_VERSION_1)
+            | (1 << VIRTIO_NET_F_CSUM)
+            | (1 << VIRTIO_NET_F_GUEST_CSUM)
+            | (1 << VIRTIO_NET_F_GUEST_TSO4)
+            | (1 << VIRTIO_NET_F_GUEST_TSO6)
+            | (1 << VIRTIO_NET_F_GUEST_UFO)
+            | (1 << VIRTIO_NET_F_HOST_TSO4)
+            | (1 << VIRTIO_NET_F_HOST_TSO6)
+            | (1 << VIRTIO_NET_F_HOST_UFO)
+            | (1 << VIRTIO_NET_F_CTRL_RX)
+            | (1 << VIRTIO_NET_F_CTRL_VLAN)
+            | (1 << VIRTIO_NET_F_CTRL_RX_EXTRA)
+            | (1 << VIRTIO_NET_F_CTRL_MAC_ADDR)
+            | (1 << VIRTIO_NET_F_CTRL_VQ)
+            | (1 << VIRTIO_F_RING_INDIRECT_DESC)
+            | (1 << VIRTIO_F_RING_EVENT_IDX);
 
         let mut locked_config = self.config_space.lock().unwrap();
 
@@ -1512,7 +1512,7 @@ impl VirtioDevice for Net {
         if let Some(tap) = self.taps.as_ref().map(|t| &t[0]) {
             if !tap.has_ufo() {
                 self.base.device_features &=
-                    !(1 << VIRTIO_NET_F_GUEST_UFO | 1 << VIRTIO_NET_F_HOST_UFO);
+                    !((1 << VIRTIO_NET_F_GUEST_UFO) | (1 << VIRTIO_NET_F_HOST_UFO));
             }
         }
 
@@ -1579,7 +1579,7 @@ impl VirtioDevice for Net {
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.config_space.clone())));
         self.ctrl_info = Some(ctrl_info.clone());
         let driver_features = self.base.driver_features;
-        if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
+        if (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
 
@@ -1798,6 +1798,7 @@ impl MigrationHook for Net {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::eventloop_init;
 
     #[test]
     fn test_net_init() {
@@ -1963,7 +1964,7 @@ mod tests {
 
     #[test]
     fn test_iothread() {
-        EventLoop::object_init(&None).unwrap();
+        eventloop_init();
 
         let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
         net.net_cfg.iothread = Some("iothread".to_string());
@@ -1976,7 +1977,5 @@ mod tests {
         } else {
             assert!(false);
         }
-
-        EventLoop::loop_clean();
     }
 }

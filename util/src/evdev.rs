@@ -50,7 +50,7 @@ impl EvdevBuf {
     }
 
     pub fn get_bit(&self, bit: usize) -> bool {
-        if (bit + 7) / 8 > self.len {
+        if bit.div_ceil(8) > self.len {
             return false;
         }
         let idx = bit / 8;

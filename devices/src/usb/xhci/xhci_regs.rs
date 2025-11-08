@@ -373,12 +373,12 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
         let value = match offset {
             XHCI_CAP_REG_CAPLENGTH => {
                 let hci_version_offset = XHCI_CAP_REG_HCIVERSION * 8;
-                XHCI_VERSION << hci_version_offset | XHCI_CAP_LENGTH
+                (XHCI_VERSION << hci_version_offset) | XHCI_CAP_LENGTH
             }
             XHCI_CAP_REG_HCSPARAMS1 => {
-                u32::from(max_ports) << CAP_HCSP_NP_SHIFT
-                    | max_intrs << CAP_HCSP_NI_SHIFT
-                    | (locked_dev.slots.len() as u32) << CAP_HCSP_NDS_SHIFT
+                (u32::from(max_ports) << CAP_HCSP_NP_SHIFT)
+                    | (max_intrs << CAP_HCSP_NI_SHIFT)
+                    | ((locked_dev.slots.len() as u32) << CAP_HCSP_NDS_SHIFT)
             }
             XHCI_CAP_REG_HCSPARAMS2 => {
                 // IST
@@ -388,15 +388,15 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             XHCI_CAP_REG_HCCPARAMS1 => {
                 // The offset of the first extended capability is (base) + (0x8 << 2)
                 // The primary stream array size is 1 << (0x7 + 1)
-                0x8 << CAP_HCCP_EXCP_SHIFT | (0x7 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
+                (0x8 << CAP_HCCP_EXCP_SHIFT) | (0 << CAP_HCCP_MPSAS_SHIFT) | CAP_HCCP_AC64
             }
             XHCI_CAP_REG_DBOFF => XHCI_OFF_DOORBELL,
             XHCI_CAP_REG_RTSOFF => XHCI_OFF_RUNTIME,
             XHCI_CAP_REG_HCCPARAMS2 => 0,
             // Extended capabilities (USB 2.0)
             0x20 => {
-                CAP_EXT_USB_REVISION_2_0 << CAP_EXT_REVISION_SHIFT
-                    | 0x4 << CAP_EXT_NEXT_CAP_POINTER_SHIFT
+                (CAP_EXT_USB_REVISION_2_0 << CAP_EXT_REVISION_SHIFT)
+                    | (0x4 << CAP_EXT_NEXT_CAP_POINTER_SHIFT)
                     | u32::from(CAP_EXT_CAP_ID_SUPPORT_PROTOCOL)
             }
             0x24 => CAP_EXT_USB_NAME_STRING,
@@ -404,7 +404,7 @@ pub fn build_cap_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
             0x2c => 0x0,
             // Extended capabilities (USB 3.0)
             0x30 => {
-                CAP_EXT_USB_REVISION_3_0 << CAP_EXT_REVISION_SHIFT
+                (CAP_EXT_USB_REVISION_3_0 << CAP_EXT_REVISION_SHIFT)
                     | u32::from(CAP_EXT_CAP_ID_SUPPORT_PROTOCOL)
             }
             0x34 => CAP_EXT_USB_NAME_STRING,

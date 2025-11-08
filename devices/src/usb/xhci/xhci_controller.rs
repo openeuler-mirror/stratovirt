@@ -632,7 +632,7 @@ impl UsbPort {
 
     /// Get port link state from port status and control register.
     pub fn get_port_link_state(&self) -> u32 {
-        self.portsc >> PORTSC_PLS_SHIFT & PORTSC_PLS_MASK
+        (self.portsc >> PORTSC_PLS_SHIFT) & PORTSC_PLS_MASK
     }
 
     /// Set port link state in port status and control register.
@@ -677,11 +677,11 @@ impl XhciEvent {
     pub fn to_trb(&self) -> XhciTRB {
         XhciTRB {
             parameter: self.ptr,
-            status: self.length | (self.ccode as u32) << EVENT_TRB_CCODE_SHIFT,
-            control: u32::from(self.slot_id) << EVENT_TRB_SLOT_ID_SHIFT
-                | u32::from(self.ep_id) << EVENT_TRB_EP_ID_SHIFT
+            status: self.length | ((self.ccode as u32) << EVENT_TRB_CCODE_SHIFT),
+            control: (u32::from(self.slot_id) << EVENT_TRB_SLOT_ID_SHIFT)
+                | (u32::from(self.ep_id) << EVENT_TRB_EP_ID_SHIFT)
                 | self.flags
-                | (self.trb_type as u32) << TRB_TYPE_SHIFT,
+                | ((self.trb_type as u32) << TRB_TYPE_SHIFT),
             addr: 0,
             ccs: false,
         }
@@ -715,7 +715,7 @@ impl XhciSlotCtx {
     }
 
     pub fn get_slot_state(&self) -> u32 {
-        self.dev_state >> SLOT_STATE_SHIFT & SLOT_STATE_MASK
+        (self.dev_state >> SLOT_STATE_SHIFT) & SLOT_STATE_MASK
     }
 
     pub fn set_context_entry(&mut self, num: u32) {
@@ -730,7 +730,7 @@ impl XhciSlotCtx {
     }
 
     pub fn get_max_exit_latency(&self) -> u32 {
-        self.dev_info2 >> SLOT_CONTEXT_MAX_EXIT_LATENCY_SHIFT & SLOT_CONTEXT_MAX_EXIT_LATENCY_MASK
+        (self.dev_info2 >> SLOT_CONTEXT_MAX_EXIT_LATENCY_SHIFT) & SLOT_CONTEXT_MAX_EXIT_LATENCY_MASK
     }
 
     pub fn set_max_exit_latency(&mut self, state: u32) {
@@ -741,7 +741,8 @@ impl XhciSlotCtx {
     }
 
     pub fn get_interrupter_target(&self) -> u32 {
-        self.tt_info >> SLOT_CONTEXT_INTERRUPTER_TARGET_SHIFT & SLOT_CONTEXT_INTERRUPTER_TARGET_MASK
+        (self.tt_info >> SLOT_CONTEXT_INTERRUPTER_TARGET_SHIFT)
+            & SLOT_CONTEXT_INTERRUPTER_TARGET_MASK
     }
 
     pub fn set_interrupter_target(&mut self, state: u32) {
@@ -752,7 +753,7 @@ impl XhciSlotCtx {
     }
 
     pub fn get_usb_device_address(&self) -> u32 {
-        self.dev_state >> SLOT_CONTEXT_DEVICE_ADDRESS_SHIFT & SLOT_CONTEXT_DEVICE_ADDRESS_MASK
+        (self.dev_state >> SLOT_CONTEXT_DEVICE_ADDRESS_SHIFT) & SLOT_CONTEXT_DEVICE_ADDRESS_MASK
     }
 
     pub fn set_usb_device_address(&mut self, state: u32) {
@@ -797,7 +798,7 @@ impl XhciEpCtx {
     }
 
     pub fn get_ep_state(&self) -> u32 {
-        self.ep_info >> EP_CONTEXT_EP_STATE_SHIFT & EP_CONTEXT_EP_STATE_MASK
+        (self.ep_info >> EP_CONTEXT_EP_STATE_SHIFT) & EP_CONTEXT_EP_STATE_MASK
     }
 
     pub fn set_ep_state(&mut self, state: u32) {
@@ -1194,7 +1195,7 @@ impl XhciDevice {
     }
 
     fn lookup_usb_port(&mut self, slot_ctx: &XhciSlotCtx) -> Option<Arc<Mutex<UsbPort>>> {
-        let port = (slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT & 0xff) as u8;
+        let port = ((slot_ctx.dev_info2 >> SLOT_CTX_PORT_NUMBER_SHIFT) & 0xff) as u8;
         if port < 1 || port > self.usb_ports.len() as u8 {
             error!("Invalid port: {}", port);
             return None;
@@ -1265,23 +1266,23 @@ impl XhciDevice {
                         TRBType::CrStopEndpoint => {
                             slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
-                                let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                                let ep_id = (trb.control >> TRB_CR_EPID_SHIFT) & TRB_CR_EPID_MASK;
                                 event.ccode = self.stop_endpoint(slot_id, ep_id)?;
                             }
                         }
                         TRBType::CrResetEndpoint => {
                             slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
-                                let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                                let ep_id = (trb.control >> TRB_CR_EPID_SHIFT) & TRB_CR_EPID_MASK;
                                 event.ccode = self.reset_endpoint(slot_id, ep_id)?;
                             }
                         }
                         TRBType::CrSetTrDequeue => {
                             slot_id = self.get_slot_id(&mut event, &trb);
                             if slot_id != 0 {
-                                let ep_id = trb.control >> TRB_CR_EPID_SHIFT & TRB_CR_EPID_MASK;
+                                let ep_id = (trb.control >> TRB_CR_EPID_SHIFT) & TRB_CR_EPID_MASK;
                                 let stream_id =
-                                    trb.status >> TRB_CR_STREAMID_SHIFT & TRB_CR_STREAMID_MASK;
+                                    (trb.status >> TRB_CR_STREAMID_SHIFT) & TRB_CR_STREAMID_MASK;
                                 event.ccode =
                                     self.set_tr_dequeue_pointer(slot_id, ep_id, stream_id, &trb)?;
                             }
