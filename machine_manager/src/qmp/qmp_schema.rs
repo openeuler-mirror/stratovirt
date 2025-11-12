@@ -763,13 +763,13 @@ generate_command_impl!(get_viomem, ViomemInfo);
 pub struct ViomemInfo {
     pub node: u16,
     #[serde(rename = "size")]
-    pub region_size: usize,
+    pub region_size: u64,
     #[serde(rename = "block-size")]
-    pub block_size: usize,
+    pub block_size: u64,
     #[serde(rename = "requested-size")]
-    pub requested_size: usize,
+    pub requested_size: u64,
     #[serde(rename = "plugged-size")]
-    pub plugged_size: usize,
+    pub plugged_size: u64,
 }
 
 /// query-hotpluggable-cpus
