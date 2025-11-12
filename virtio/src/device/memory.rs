@@ -718,7 +718,7 @@ impl Memory {
         config.block_size = match option.block_size {
             Some(block_size) => {
                 if block_size % DEFAULT_MEM_BLOCK_ALIGN_SIZE != 0 {
-                    DEFAULT_MEM_BLOCK_ALIGN_SIZE
+                    DEFAULT_MEM_BLOCK_SIZE
                 } else {
                     block_size
                 }
