@@ -20,7 +20,6 @@ use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -31,6 +30,7 @@ use machine_manager::config::{
     get_pci_df, parse_bool, valid_id, MemBackendObjConfig, MemoryBackend, DEFAULT_VIRTQUEUE_SIZE,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::qmp::qmp_schema::ViomemInfo;
 use util::bitmap::Bitmap;
 use util::byte_code::ByteCode;
 use util::gen_base_func;
@@ -109,20 +109,6 @@ fn alloc_base_addr(
     pluggable.addr = base_addr + region_size;
 
     base_addr
-}
-
-#[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-struct ViomemInfo {
-    pub node: u16,
-    #[serde(rename = "size")]
-    pub region_size: u64,
-    #[serde(rename = "block-size")]
-    pub block_size: u64,
-    #[serde(rename = "requested-size")]
-    pub requested_size: u64,
-    #[serde(rename = "plugged-size")]
-    pub plugged_size: u64,
 }
 
 #[repr(C)]
