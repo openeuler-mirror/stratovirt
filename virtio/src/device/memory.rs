@@ -24,6 +24,12 @@ use serde_json::Value;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::error::VirtioError;
+use crate::{
+    iov_read_object, iov_write_object, read_config_default, report_virtio_error, Queue, VirtioBase,
+    VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_VERSION_1, VIRTIO_TYPE_MEM,
+};
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use log::{error, info, warn};
 use machine_manager::config::{
@@ -38,13 +44,6 @@ use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
 use util::unix::do_mmap;
-
-use crate::error::VirtioError;
-use crate::{
-    iov_read_object, iov_write_object, read_config_default, report_virtio_error, Queue, VirtioBase,
-    VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_MEM,
-};
 
 const QUEUE_NUM_MEM: usize = 1;
 
@@ -133,7 +132,7 @@ struct VirtioMemConfig {
 }
 
 impl VirtioMemConfig {
-    pub(crate) fn qmp_query(&self) -> Value {
+    fn qmp_query(&self) -> Value {
         let node_id = if self.node_id == NUMA_NONE {
             0
         } else {
@@ -460,21 +459,21 @@ impl MemRegionState {
 
 struct MemoryHandler {
     /// The guest request queue
-    pub(crate) queue: Arc<Mutex<Queue>>,
+    queue: Arc<Mutex<Queue>>,
     /// The eventfd used to notify the guest request queue event
-    pub(crate) queue_evt: Arc<EventFd>,
+    queue_evt: Arc<EventFd>,
     /// The function for interrupt triggering
-    pub(crate) interrupt_cb: Arc<VirtioInterrupt>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     /// Configuration space of virtio mem device.
     config: Arc<Mutex<VirtioMemConfig>>,
     /// System address space.
-    pub(crate) mem_space: Arc<AddressSpace>,
+    mem_space: Arc<AddressSpace>,
     /// Bit mask of features negotiated by the backend and the frontend
-    pub(crate) driver_features: u64,
+    driver_features: u64,
     /// Virtio mem device is broken or not.
-    pub(crate) device_broken: Arc<AtomicBool>,
+    device_broken: Arc<AtomicBool>,
     /// Virtio mem Region list
-    pub(crate) regions: Arc<Mutex<MemRegionState>>,
+    regions: Arc<Mutex<MemRegionState>>,
 }
 
 impl MemoryHandler {
@@ -901,28 +900,25 @@ fn register_viomem_device(id: String, mem: Arc<Mutex<Memory>>) -> Result<()> {
     Ok(())
 }
 
+fn get_viomem(id: &String) -> Result<Arc<Mutex<Memory>>> {
+    let devlist = VIOMEM_DEV_LIST
+        .get()
+        .with_context(|| "no virtio-mem device context.")?;
+    let locked_list = devlist.lock().unwrap();
+    let mem = locked_list
+        .get(id)
+        .with_context(|| format!("not found virtio-mem@{} device", id))?;
+    Ok(mem.clone())
+}
+
 pub fn qmp_set_viomem(id: &String, request_size: u64) -> Result<()> {
-    if let Some(devlist) = VIOMEM_DEV_LIST.get() {
-        match devlist.lock().unwrap().get(id) {
-            Some(mem) => mem.lock().unwrap().update_request(request_size),
-            None => {
-                bail!("not found virtio-mem@{} device", id)
-            }
-        }
-    } else {
-        bail!("no virtio-mem device context")
-    }
+    let mem = get_viomem(id)?;
+    mem.lock().unwrap().update_request(request_size)?;
+    Ok(())
 }
 
 pub fn qmp_get_viomem(id: &String) -> Result<Value> {
-    if let Some(devlist) = VIOMEM_DEV_LIST.get() {
-        match devlist.lock().unwrap().get(id) {
-            Some(mem) => Ok(mem.lock().unwrap().config.lock().unwrap().qmp_query()),
-            None => {
-                bail!("not found virtio-mem@{} device", id)
-            }
-        }
-    } else {
-        bail!("no virtio-mem device context")
-    }
+    let mem = get_viomem(id)?;
+    let value = mem.lock().unwrap().config.lock().unwrap().qmp_query();
+    Ok(value)
 }
