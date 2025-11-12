@@ -625,10 +625,25 @@ impl AddressSpace {
     pub fn address_in_memory(&self, addr: GuestAddress, size: u64) -> bool {
         let view = &self.flat_view.load();
 
-        view.find_flatrange(addr).is_some_and(|range| {
-            range.owner.region_type() == RegionType::Ram
-                && size <= range.addr_range.end_addr().offset_from(addr)
-        })
+        // Hot-plugged memory may result in that a contiguous guest range is map to multiple host memory regions.
+        let mut base_addr = addr;
+        let mut remain = size;
+
+        loop {
+            if let Some(range) = view.find_flatrange(base_addr) {
+                if range.owner.region_type() != RegionType::Ram {
+                    return false;
+                }
+                let range_size = range.addr_range.end_addr().offset_from(base_addr);
+                if remain <= range_size {
+                    return true;
+                }
+                remain -= range_size;
+                base_addr = range.addr_range.end_addr();
+            } else {
+                return false;
+            }
+        }
     }
 
     pub fn get_region_cache(&self, addr: GuestAddress, attr: AddressAttr) -> Option<RegionCache> {
