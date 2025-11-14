@@ -161,6 +161,14 @@ impl Response {
     pub(crate) fn change_id(&mut self, id: Option<String>) {
         self.id = id;
     }
+
+    pub fn is_error_response(&self) -> bool {
+        self.error.is_some()
+    }
+
+    pub fn get_value(&self) -> Option<Value> {
+        self.return_.clone()
+    }
 }
 
 impl From<bool> for Response {

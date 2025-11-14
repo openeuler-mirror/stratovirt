@@ -22,6 +22,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::manager::{Instance, MIGRATION_MANAGER};
 use crate::protocol::{
     DeviceStateDesc, FileFormat, MigrationHeader, MigrationStatus, VersionCheck, HEADER_LENGTH,
+    MAX_DEVICE_STATE_SIZE,
 };
 use crate::{MigrationError, MigrationManager};
 use machine_manager::machine::VmState;
@@ -184,16 +185,35 @@ impl MigrationManager {
             .get(&snap_desc.name)
             .with_context(|| "Failed to get snap_desc name")?;
 
-        // SAFETY: size has been checked in restore_desc_db().
-        let mut state_data = vec![0; snap_desc.size as usize];
+        let size = if snap_desc.size == 0 {
+            log::info!(
+                "Check {:?} using serde, size {}",
+                snap_desc.name,
+                instance.size
+            );
+            if instance.size > MAX_DEVICE_STATE_SIZE as u64 {
+                bail!(
+                    "Invalid instance size {} for {:?}",
+                    instance.size,
+                    snap_desc.name
+                );
+            }
+            instance.size as u32
+        } else {
+            // SAFETY: size has been checked in restore_desc_db().
+            snap_desc.size
+        };
+        let mut state_data = vec![0; size as usize];
         fd.read_exact(&mut state_data)?;
 
         match current_desc.check_version(snap_desc) {
             VersionCheck::Same => {}
             VersionCheck::Compat => {
-                current_desc
-                    .add_padding(snap_desc, &mut state_data)
-                    .with_context(|| "Failed to transform snapshot data version")?;
+                if snap_desc.size != 0 {
+                    current_desc
+                        .add_padding(snap_desc, &mut state_data)
+                        .with_context(|| "Failed to transform snapshot data version")?;
+                }
             }
             VersionCheck::Mismatch => {
                 return Err(anyhow!(MigrationError::VersionNotFit(

@@ -301,6 +301,8 @@ const COMPAT_VERSION: u32 = CURRENT_VERSION;
 const EAX_VENDOR_INFO: u32 = 0x0;
 /// The length of `MigrationHeader` part occupies bytes in snapshot file.
 pub const HEADER_LENGTH: usize = 4096;
+/// The max size of one device state is 1MiB.
+pub const MAX_DEVICE_STATE_SIZE: usize = 1 << 20;
 
 /// Format type for migration.
 /// Different file format will have different file layout.
@@ -573,10 +575,16 @@ impl DeviceStateDesc {
     /// * `desc` - device state descriptor for old version `DeviceState`.
     /// * `current_slice` - current slice for `DeviceState`.
     pub fn add_padding(&self, desc: &DeviceStateDesc, current_slice: &mut Vec<u8>) -> Result<()> {
-        let tmp_slice = current_slice.clone();
-        current_slice.clear();
-        // SAFETY: size has been checked in restore_desc_db().
-        current_slice.resize(self.size as usize, 0);
+        if desc.size > self.size {
+            log::warn!(
+                "Old size {} of {} which is bigger than new size {}",
+                desc.size,
+                desc.name,
+                self.size
+            );
+        }
+
+        let mut target_slice = vec![0u8; self.size as usize];
         for field in self.clone().fields {
             if desc.contains(&field.alias) {
                 let (new_start, new_end) = desc.get_slice_index(&field.alias)?;
@@ -589,9 +597,10 @@ impl DeviceStateDesc {
                     end -= (end - start) - (new_end - new_start);
                 }
 
-                current_slice[start..end].clone_from_slice(&tmp_slice[new_start..new_end]);
+                target_slice[start..end].clone_from_slice(&current_slice[new_start..new_end]);
             }
         }
+        *current_slice = target_slice;
 
         Ok(())
     }

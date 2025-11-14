@@ -20,11 +20,16 @@ pub fn parse_struct(
     ident: &syn::Ident,
     current_version: u32,
     compat_version: u32,
+    serde: bool,
 ) -> proc_macro2::TokenStream {
     let struct_ident = format_ident!("DeviceStateDesc");
     let name = format!("{}", ident);
 
-    let fields = parse_fields(&input.fields, ident);
+    let fields: Vec<proc_macro2::TokenStream> = if !serde {
+        parse_fields(&input.fields, ident)
+    } else {
+        Vec::new()
+    };
 
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -39,7 +44,7 @@ pub fn parse_struct(
         #struct_ident {
             name: #name.to_string(),
             alias: #alias,
-            size: std::mem::size_of::<#ident>() as u32,
+            size: if #serde { 0_u32 } else { std::mem::size_of::<#ident>() as u32 },
             current_version: #current_version,
             compat_version: #compat_version,
             fields: vec![#(#fields), *],
