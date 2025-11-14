@@ -1027,9 +1027,18 @@ impl MachineLifecycle for StdMachine {
 impl MigrateInterface for StdMachine {
     fn migrate(&self, uri: String) -> Response {
         match parse_incoming_uri(&uri) {
-            Ok((MigrateMode::File, path)) => migration::snapshot(path),
-            Ok((MigrateMode::Unix, path)) => migration::migration_unix_mode(path),
-            Ok((MigrateMode::Tcp, path)) => migration::migration_tcp_mode(path),
+            Ok(incoming) => match incoming.mode {
+                MigrateMode::File => migration::snapshot(incoming.uri),
+                MigrateMode::Unix => migration::migration_unix_mode(incoming.uri),
+                MigrateMode::Tcp => migration::migration_tcp_mode(incoming.uri),
+                _ => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!(
+                        "Unknown mode: invalid uri: {}",
+                        uri
+                    )),
+                    None,
+                ),
+            },
             _ => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
                 None,

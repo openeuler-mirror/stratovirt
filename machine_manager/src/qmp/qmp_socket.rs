@@ -450,9 +450,11 @@ fn is_snapshot(qmp_command: &QmpCommand, snapshot_id: &mut Option<String>) -> bo
         ref id,
     } = qmp_command
     {
-        if let Ok((MigrateMode::File, _)) = parse_incoming_uri(&arguments.uri) {
-            *snapshot_id = id.clone();
-            return true;
+        if let Ok(incoming) = parse_incoming_uri(&arguments.uri) {
+            if incoming.mode == MigrateMode::File {
+                *snapshot_id = id.clone();
+                return true;
+            }
         }
     }
     false
