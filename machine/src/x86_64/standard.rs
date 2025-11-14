@@ -510,7 +510,7 @@ impl MachineOps for StdMachine {
 
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
         let migrate = locked_vm.get_migrate_info();
-        let boot_config = if migrate.0 == MigrateMode::Unknown {
+        let boot_config = if migrate.mode == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
         } else {
             None
@@ -530,7 +530,7 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        if migrate.0 == MigrateMode::Unknown {
+        if migrate.mode == MigrateMode::Unknown {
             locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
         }
 

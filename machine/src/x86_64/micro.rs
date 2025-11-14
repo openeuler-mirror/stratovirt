@@ -171,7 +171,7 @@ impl MachineOps for LightMachine {
         trace::replaceable_info(&locked_vm.replaceable_info);
 
         let migrate_info = locked_vm.get_migrate_info();
-        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+        let boot_config = if migrate_info.mode == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(None)?)
         } else {
             None
