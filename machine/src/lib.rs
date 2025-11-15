@@ -52,7 +52,8 @@ use vmm_sys_util::eventfd::EventFd;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
 use address_space::{
-    create_backend_mem, create_default_mem, AddressAttr, AddressSpace, GuestAddress, Region,
+    create_backend_mem, create_default_mem, register_ram_list, AddressAttr, AddressSpace,
+    GuestAddress, Region,
 };
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
@@ -446,12 +447,13 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<()> {
         trace::trace_scope_start!(init_memory);
         let migrate_info = self.get_migrate_info();
-        if migrate_info.mode != MigrateMode::File {
+        if migrate_info.mode != MigrateMode::File || !migrate_info.mapped {
             self.create_machine_ram(mem_config, nr_cpus)?;
             self.init_machine_ram(sys_mem, mem_config.mem_size)?;
         }
 
         MigrationManager::register_memory_instance(sys_mem.clone());
+        register_ram_list();
 
         Ok(())
     }
@@ -2495,7 +2497,7 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
     let path = migrate_info.uri;
     match migrate_info.mode {
         MigrateMode::File => {
-            MigrationManager::restore_snapshot(&path)
+            MigrationManager::restore_snapshot(&path, migrate_info.mapped)
                 .with_context(|| "Failed to restore snapshot")?;
             vm.lock()
                 .unwrap()

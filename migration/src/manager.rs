@@ -98,12 +98,12 @@ pub trait MigrationHook: StateTransfer {
         self.set_state_mut(state)
     }
 
-    /// Save memory state to `Write` trait.
+    /// Save memory state to file object.
     ///
     /// # Arguments
     ///
-    /// * _fd - The `Write` trait object to save memory data.
-    fn save_memory(&self, _fd: &mut dyn Write) -> Result<()> {
+    /// * _file - The file object object to save memory data.
+    fn save_memory(&self, _file: &mut File) -> Result<()> {
         Ok(())
     }
 
@@ -112,8 +112,8 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * _memory - The file of memory data, this parameter is optional.
-    /// * _state - device state from memory.
-    fn restore_memory(&self, _memory: Option<&File>, _state: &[u8]) -> Result<()> {
+    /// * _mapped - Whether to directly mmap the memory file as the backend.
+    fn restore_memory(&self, _memory: &mut File, _mapped: bool) -> Result<()> {
         Ok(())
     }
 
@@ -180,6 +180,8 @@ pub struct Vmm {
     pub cpus: HashMap<u64, Arc<dyn MigrationHook + Send + Sync>>,
     /// Trait to represent memory devices.
     pub memory: Option<Arc<dyn MigrationHook + Send + Sync>>,
+    /// Trait to represent ram/rom which are not managed in `vmm.memory`.
+    pub ram_list: Option<Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
     /// Trait to represent transports.
     pub transports: HashMap<u64, Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
     /// Trait to represent devices.
@@ -296,6 +298,19 @@ impl MigrationManager {
     {
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
         locked_vmm.memory = Some(memory);
+    }
+
+    /// Register Ram Region instance to vmm.
+    ///
+    /// # Arguments
+    ///
+    /// * `memory` - The memory instance with MigrationHook trait.
+    pub fn register_ram_region_instance<T>(ram_list: Arc<Mutex<T>>)
+    where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
+        locked_vmm.ram_list = Some(ram_list);
     }
 
     /// Register transport instance to vmm.
