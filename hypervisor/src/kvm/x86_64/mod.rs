@@ -84,7 +84,7 @@ impl KvmCpu {
     pub fn arch_set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
     ) -> Result<()> {
         let mut locked_arch_cpu = arch_cpu.lock().unwrap();
         let apic_id = locked_arch_cpu.apic_id;
@@ -93,12 +93,14 @@ impl KvmCpu {
             .get_lapic()
             .with_context(|| format!("Failed to get lapic for CPU {}/KVM", apic_id))?;
         locked_arch_cpu.setup_lapic(lapic)?;
-        locked_arch_cpu.setup_regs(boot_config);
         let sregs = self
             .fd
             .get_sregs()
             .with_context(|| format!("Failed to get sregs for CPU {}/KVM", apic_id))?;
-        locked_arch_cpu.setup_sregs(sregs, boot_config)?;
+        if let Some(cfg) = boot_config {
+            locked_arch_cpu.setup_regs(cfg);
+            locked_arch_cpu.setup_sregs(sregs, cfg)?;
+        }
         locked_arch_cpu.setup_fpu();
         locked_arch_cpu.setup_msrs();
 

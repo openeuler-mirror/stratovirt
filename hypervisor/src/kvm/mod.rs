@@ -543,7 +543,7 @@ impl CPUHypervisorOps for KvmCpu {
     fn set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         #[cfg(target_arch = "aarch64")] vcpu_config: &CPUFeatures,
     ) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
@@ -1067,7 +1067,7 @@ mod test {
         let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm);
         // test `set_boot_config` function
         assert!(hypervisor_cpu
-            .set_boot_config(cpu.arch().clone(), &cpu_config)
+            .set_boot_config(cpu.arch().clone(), &Some(cpu_config))
             .is_ok());
 
         // test setup special registers

@@ -135,7 +135,7 @@ impl KvmCpu {
     pub fn arch_set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         vcpu_config: &CPUFeatures,
     ) -> Result<()> {
         let mut kvi = self.kvi.lock().unwrap();
@@ -169,7 +169,9 @@ impl KvmCpu {
         }
         drop(kvi);
 
-        arch_cpu.lock().unwrap().set_core_reg(boot_config);
+        if let Some(cfg) = boot_config {
+            arch_cpu.lock().unwrap().set_core_reg(cfg);
+        }
 
         self.arch_vcpu_init()?;
 

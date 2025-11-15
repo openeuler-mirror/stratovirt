@@ -150,13 +150,15 @@ impl CPUHypervisorOps for TestCpu {
     fn set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         #[cfg(target_arch = "aarch64")] _vcpu_config: &CPUFeatures,
     ) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         {
             arch_cpu.lock().unwrap().mpidr = u64::from(self.id);
-            arch_cpu.lock().unwrap().set_core_reg(boot_config);
+            if let Some(cfg) = boot_config.as_ref() {
+                arch_cpu.lock().unwrap().set_core_reg(cfg);
+            }
         }
         Ok(())
     }
