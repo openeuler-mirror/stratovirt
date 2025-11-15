@@ -15,10 +15,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Ok, Result};
 use clap::{ArgAction, Parser};
 use drm_fourcc::DrmFourcc;
 use log::error;
+use serde::{Deserialize, Serialize};
 
 use super::fwcfg::{FwCfgOps, FwCfgWriteCallback};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
@@ -27,6 +28,9 @@ use acpi::AmlBuilder;
 use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use machine_manager::config::valid_id;
 use machine_manager::event_loop::EventLoop;
+use migration::snapshot::RAMFB_SNAPSHOT_ID;
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use ui::console::{
     console_init, display_graphic_update, display_replace_surface, ConsoleType, DisplayConsole,
     DisplaySurface, HardWareOperations,
@@ -54,13 +58,15 @@ pub struct RamfbConfig {
 }
 
 #[repr(C, packed)]
+#[derive(Clone, Copy, Debug, Default, DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
 struct RamfbCfg {
-    _addr: u64,
-    _fourcc: u32,
-    _flags: u32,
-    _width: u32,
-    _height: u32,
-    _stride: u32,
+    addr: u64,
+    fourcc: u32,
+    flags: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
 }
 
 #[derive(Clone)]
@@ -69,6 +75,7 @@ pub struct RamfbState {
     pub con: Option<Weak<Mutex<DisplayConsole>>>,
     sys_mem: Arc<AddressSpace>,
     install: Arc<AtomicBool>,
+    cfg: RamfbCfg,
 }
 
 // SAFETY: The type of image, the field of the struct DisplaySurface
@@ -89,23 +96,8 @@ impl RamfbState {
             con,
             sys_mem,
             install: Arc::new(AtomicBool::new(install)),
+            cfg: RamfbCfg::default(),
         }
-    }
-
-    pub fn setup(&mut self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()> {
-        let mut locked_fw_cfg = fw_cfg.lock().unwrap();
-        let ramfb_state_cb = self.clone();
-        let cfg: Vec<u8> = [0; size_of::<RamfbCfg>()].to_vec();
-        locked_fw_cfg
-            .add_file_callback_entry(
-                "etc/ramfb",
-                cfg,
-                None,
-                Some(Arc::new(Mutex::new(ramfb_state_cb))),
-                true,
-            )
-            .with_context(|| "Failed to set fwcfg")?;
-        Ok(())
     }
 
     fn create_display_surface(
@@ -170,8 +162,28 @@ impl RamfbState {
         set_press_event(self.install.clone(), fb_addr as *const u8);
     }
 
+    fn replace_surface(&mut self) {
+        let format: pixman_format_code_t = if self.cfg.fourcc == DrmFourcc::Xrgb8888 as u32 {
+            pixman_format_code_t::PIXMAN_x8r8g8b8
+        } else {
+            error!("Unsupported drm format: {}", { self.cfg.fourcc });
+            return;
+        };
+
+        self.create_display_surface(
+            self.cfg.width,
+            self.cfg.height,
+            format,
+            self.cfg.stride,
+            self.cfg.addr,
+        );
+        display_replace_surface(&self.con, self.surface)
+            .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+    }
+
     fn reset_ramfb_state(&mut self) {
         self.surface = None;
+        self.cfg = RamfbCfg::default();
     }
 }
 
@@ -181,35 +193,35 @@ impl FwCfgWriteCallback for RamfbState {
             error!("RamfbCfg data format is incorrect");
             return;
         }
-        let addr = u64::from_be_bytes(
+        self.cfg.addr = u64::from_be_bytes(
             data.as_slice()
                 .split_at(size_of::<u64>())
                 .0
                 .try_into()
                 .unwrap(),
         );
-        let fourcc = u32::from_be_bytes(
+        self.cfg.fourcc = u32::from_be_bytes(
             data.as_slice()[8..]
                 .split_at(size_of::<u32>())
                 .0
                 .try_into()
                 .unwrap(),
         );
-        let width = u32::from_be_bytes(
+        self.cfg.width = u32::from_be_bytes(
             data.as_slice()[16..]
                 .split_at(size_of::<u32>())
                 .0
                 .try_into()
                 .unwrap(),
         );
-        let height = u32::from_be_bytes(
+        self.cfg.height = u32::from_be_bytes(
             data.as_slice()[20..]
                 .split_at(size_of::<u32>())
                 .0
                 .try_into()
                 .unwrap(),
         );
-        let stride = u32::from_be_bytes(
+        self.cfg.stride = u32::from_be_bytes(
             data.as_slice()[24..]
                 .split_at(size_of::<u32>())
                 .0
@@ -217,16 +229,7 @@ impl FwCfgWriteCallback for RamfbState {
                 .unwrap(),
         );
 
-        let format: pixman_format_code_t = if fourcc == DrmFourcc::Xrgb8888 as u32 {
-            pixman_format_code_t::PIXMAN_x8r8g8b8
-        } else {
-            error!("Unsupported drm format: {}", fourcc);
-            return;
-        };
-
-        self.create_display_surface(width, height, format, stride, addr);
-        display_replace_surface(&self.con, self.surface)
-            .unwrap_or_else(|e| error!("Error occurs during surface switching: {:?}", e));
+        self.replace_surface();
     }
 }
 
@@ -244,17 +247,35 @@ impl HardWareOperations for RamfbInterface {
 
 pub struct Ramfb {
     base: SysBusDevBase,
-    pub ramfb_state: RamfbState,
+    ramfb_state: Arc<Mutex<RamfbState>>,
 }
 
 impl Ramfb {
-    pub fn new(sys_mem: Arc<AddressSpace>, sysbus: &Arc<Mutex<SysBus>>, install: bool) -> Self {
+    pub fn new(
+        sys_mem: Arc<AddressSpace>,
+        sysbus: &Arc<Mutex<SysBus>>,
+        install: bool,
+        fw_cfg: &Arc<Mutex<dyn FwCfgOps>>,
+    ) -> Result<Self> {
         let mut ramfb = Ramfb {
             base: SysBusDevBase::new(SysBusDevType::Ramfb),
-            ramfb_state: RamfbState::new(sys_mem, install),
+            ramfb_state: Arc::new(Mutex::new(RamfbState::new(sys_mem, install))),
         };
+
+        let mut locked_fw_cfg = fw_cfg.lock().unwrap();
+        let cfg: Vec<u8> = [0; size_of::<RamfbCfg>()].to_vec();
+        locked_fw_cfg
+            .add_file_callback_entry(
+                "etc/ramfb",
+                cfg,
+                None,
+                Some(ramfb.ramfb_state.clone()),
+                true,
+            )
+            .with_context(|| "Failed to set fwcfg")?;
+
         ramfb.set_parent_bus(sysbus.clone());
-        ramfb
+        Ok(ramfb)
     }
 }
 
@@ -262,7 +283,7 @@ impl Device for Ramfb {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        self.ramfb_state.reset_ramfb_state();
+        self.ramfb_state.lock().unwrap().reset_ramfb_state();
         Ok(())
     }
 
@@ -271,6 +292,13 @@ impl Device for Ramfb {
         MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
+
+        MigrationManager::register_device_instance(
+            RamfbCfg::descriptor(),
+            dev.clone(),
+            RAMFB_SNAPSHOT_ID,
+        );
+
         Ok(dev)
     }
 }
@@ -292,6 +320,30 @@ impl SysBusDevOps for Ramfb {
 impl AmlBuilder for Ramfb {
     fn aml_bytes(&self) -> Vec<u8> {
         Vec::new()
+    }
+}
+
+impl MigrationHook for Ramfb {}
+
+impl StateTransfer for Ramfb {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state_locked = self.ramfb_state.lock().unwrap();
+
+        Ok(serde_json::to_vec(&state_locked.cfg)?)
+    }
+
+    fn set_state(&self, state: &[u8]) -> Result<()> {
+        let cfg: RamfbCfg = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("RamfbCfg"))?;
+        let mut ramfb_state = self.ramfb_state.lock().unwrap();
+        ramfb_state.cfg = cfg;
+        ramfb_state.replace_surface();
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&RamfbCfg::descriptor().name).unwrap_or(!0)
     }
 }
 

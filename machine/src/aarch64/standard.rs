@@ -721,9 +721,13 @@ impl MachineOps for StdMachine {
             .get_fwcfg_dev()
             .with_context(|| "Ramfb device must be used UEFI to boot, please add pflash devices")?;
         let sys_mem = self.get_sys_mem();
-        let mut ramfb = Ramfb::new(sys_mem.clone(), &self.base.sysbus, config.install);
+        let ramfb = Ramfb::new(
+            sys_mem.clone(),
+            &self.base.sysbus,
+            config.install,
+            &fwcfg_dev,
+        )?;
 
-        ramfb.ramfb_state.setup(&fwcfg_dev)?;
         ramfb.realize()?;
         Ok(())
     }
