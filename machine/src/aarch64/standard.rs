@@ -651,13 +651,12 @@ impl MachineOps for StdMachine {
         let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
         let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
         for i in 0..=1 {
-            let (fd, read_only) = if i < configs_vec.len() {
+            let (fd, config) = if i < configs_vec.len() {
                 let path = &configs_vec[i].path_on_host;
-                let read_only = configs_vec[i].readonly;
                 let fd = self.fetch_drive_file(path)?;
-                (Some(fd), read_only)
+                (Some(fd), configs_vec[i].clone())
             } else {
-                (None, false)
+                (None, DriveConfig::default())
             };
 
             let pflash = PFlash::new(
@@ -666,7 +665,7 @@ impl MachineOps for StdMachine {
                 sector_len,
                 4,
                 2,
-                read_only,
+                &config,
                 &self.base.sysbus,
                 flash_base,
             )
