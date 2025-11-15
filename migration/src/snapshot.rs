@@ -28,6 +28,7 @@ pub const GICV3_SNAPSHOT_ID: &str = "gicv3";
 pub const GICV3_ITS_SNAPSHOT_ID: &str = "gicv3_its";
 pub const PL011_SNAPSHOT_ID: &str = "pl011";
 pub const PL031_SNAPSHOT_ID: &str = "pl031";
+pub const RAMFB_SNAPSHOT_ID: &str = "ramfb";
 
 /// The suffix used for snapshot memory storage.
 const MEMORY_PATH_SUFFIX: &str = "memory";
