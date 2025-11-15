@@ -17,6 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
 use log::{error, warn};
+use serde::{Deserialize, Serialize};
 
 use crate::legacy::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
@@ -29,6 +30,9 @@ use acpi::{AmlIoDecode, AmlIoResource};
 #[cfg(target_arch = "aarch64")]
 use acpi::{AmlMemory32Fixed, AmlReadAndWrite};
 use address_space::{AddressAttr, AddressSpace, GuestAddress};
+use migration::snapshot::FWCFG_SNAPSHOT_ID;
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::byte_code::ByteCode;
 use util::num_ops::extract_u64;
 use util::{gen_base_func, offset_of};
@@ -290,6 +294,15 @@ fn write_dma_result(addr_space: &Arc<AddressSpace>, addr: GuestAddress, value: u
         )
     })?;
     Ok(())
+}
+
+#[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+struct FwCfgState {
+    cur_entry: u16,
+    cur_offset: u32,
+    dma_enabled: u8,
+    dma_addr: u64,
 }
 
 pub struct FwCfgCommon {
@@ -806,6 +819,39 @@ impl FwCfgCommon {
         )?;
         Ok(())
     }
+
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let fwcfg_state = FwCfgState {
+            cur_entry: self.cur_entry,
+            cur_offset: self.cur_offset,
+            dma_enabled: u8::from(self.dma_enabled),
+            dma_addr: self.dma_addr.0,
+        };
+
+        Ok(serde_json::to_vec(&fwcfg_state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        let fwcfg_state: FwCfgState = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("FwCfgState"))?;
+        self.cur_entry = fwcfg_state.cur_entry;
+        self.cur_offset = fwcfg_state.cur_offset;
+
+        if fwcfg_state.dma_enabled != 0 && fwcfg_state.dma_enabled != 1 {
+            bail!(
+                "fwcfg dma_enabled state is error: {}",
+                fwcfg_state.dma_enabled
+            );
+        }
+        self.dma_enabled = fwcfg_state.dma_enabled == 1;
+        self.dma_addr = GuestAddress(fwcfg_state.dma_addr);
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&FwCfgState::descriptor().name).unwrap_or(!0)
+    }
 }
 
 fn get_io_count(data_len: usize) -> usize {
@@ -944,6 +990,12 @@ impl Device for FwCfgMem {
         sysbus
             .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
+
+        MigrationManager::register_device_instance(
+            FwCfgState::descriptor(),
+            dev.clone(),
+            FWCFG_SNAPSHOT_ID,
+        );
         Ok(dev)
     }
 }
@@ -999,6 +1051,24 @@ impl SysBusDevOps for FwCfgMem {
         Ok(())
     }
 }
+
+#[cfg(target_arch = "aarch64")]
+impl StateTransfer for FwCfgMem {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        self.fwcfg.get_state_vec()
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        self.fwcfg.set_state_mut(state)
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        self.fwcfg.get_device_alias()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl MigrationHook for FwCfgMem {}
 
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "x86_64")]
@@ -1100,6 +1170,13 @@ impl Device for FwCfgIO {
         sysbus
             .attach_device(&dev)
             .with_context(|| "Failed to attach FwCfg device to system bus.")?;
+
+        MigrationManager::register_device_instance(
+            FwCfgState::descriptor(),
+            dev.clone(),
+            FWCFG_SNAPSHOT_ID,
+        );
+
         Ok(dev)
     }
 }
@@ -1162,6 +1239,24 @@ impl SysBusDevOps for FwCfgIO {
         Ok(())
     }
 }
+
+#[cfg(target_arch = "x86_64")]
+impl StateTransfer for FwCfgIO {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        self.fwcfg.get_state_vec()
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        self.fwcfg.set_state_mut(state)
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        self.fwcfg.get_device_alias()
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl MigrationHook for FwCfgIO {}
 
 pub trait FwCfgOps: Send + Sync {
     fn fw_cfg_common(&mut self) -> &mut FwCfgCommon;
