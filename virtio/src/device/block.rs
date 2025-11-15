@@ -18,11 +18,12 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::yield_now;
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use clap::Parser;
-use log::{error, warn};
+use log::{error, info, warn};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
@@ -46,6 +47,7 @@ use machine_manager::config::{
     DriveConfig, DriveFile, VmConfig, DEFAULT_VIRTQUEUE_SIZE, MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use migration::{
     migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
     StateTransfer,
@@ -594,6 +596,10 @@ struct BlockIoHandler {
     discard: bool,
     /// The write-zeroes state.
     write_zeroes: WriteZeroesState,
+    /// If the vm has been paused.
+    vm_paused: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
 }
 
 impl BlockIoHandler {
@@ -649,6 +655,10 @@ impl BlockIoHandler {
         let mut done = false;
 
         loop {
+            if self.vm_paused.load(Ordering::SeqCst) {
+                break;
+            }
+
             let mut queue = self.queue.lock().unwrap();
             let mut elem = queue
                 .vring
@@ -751,6 +761,10 @@ impl BlockIoHandler {
                 break;
             }
 
+            if self.vm_paused.load(Ordering::SeqCst) {
+                break;
+            }
+
             self.queue
                 .lock()
                 .unwrap()
@@ -779,6 +793,7 @@ impl BlockIoHandler {
 
     fn process_queue(&mut self) -> Result<bool> {
         trace::virtio_receive_request("Block".to_string(), "to IO".to_string());
+        self.processing_queue.store(true, Ordering::SeqCst);
         let result = self.process_queue_suppress_notify();
         if result.is_err() {
             report_virtio_error(
@@ -787,6 +802,7 @@ impl BlockIoHandler {
                 &self.device_broken,
             );
         }
+        self.processing_queue.store(false, Ordering::SeqCst);
         result
     }
 
@@ -901,7 +917,9 @@ impl EventNotifierHelper for BlockIoHandler {
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
-            if h_lock.device_broken.load(Ordering::SeqCst) {
+            if h_lock.device_broken.load(Ordering::SeqCst)
+                || h_lock.vm_paused.load(Ordering::SeqCst)
+            {
                 return None;
             }
             if let Err(ref e) = h_lock.process_queue() {
@@ -912,7 +930,9 @@ impl EventNotifierHelper for BlockIoHandler {
         let h_clone = handler.clone();
         let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
             let mut h_lock = h_clone.lock().unwrap();
-            if h_lock.device_broken.load(Ordering::SeqCst) {
+            if h_lock.device_broken.load(Ordering::SeqCst)
+                || h_lock.vm_paused.load(Ordering::SeqCst)
+            {
                 return None;
             }
             match h_lock.process_queue() {
@@ -941,7 +961,9 @@ impl EventNotifierHelper for BlockIoHandler {
             let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut h_lock = h_clone.lock().unwrap();
-                if h_lock.device_broken.load(Ordering::SeqCst) {
+                if h_lock.device_broken.load(Ordering::SeqCst)
+                    || h_lock.vm_paused.load(Ordering::SeqCst)
+                {
                     return None;
                 }
                 if let Some(lb) = h_lock.leak_bucket.as_mut() {
@@ -1056,6 +1078,14 @@ pub struct Block {
     update_evts: Vec<Arc<EventFd>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// If the vm has been paused.
+    vm_paused: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
+    /// The queue notify events for handling IO.
+    queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
+    /// The id for vm paused notifier.
+    pause_notifier_id: u64,
 }
 
 impl Block {
@@ -1073,6 +1103,9 @@ impl Block {
             req_align: 1,
             buf_align: 1,
             drive_files,
+            vm_paused: Arc::new(AtomicBool::new(false)),
+            processing_queue: Arc::new(AtomicBool::new(false)),
+            queue_evts: Arc::new(Mutex::new(Vec::new())),
             ..Default::default()
         }
     }
@@ -1119,6 +1152,50 @@ impl Block {
         Arc::new(move || {
             report_virtio_error(interrupt_cb.clone(), cloned_features, &clone_broken);
         })
+    }
+
+    fn register_pause_notifier(&mut self) {
+        if self.block_backend.is_none() {
+            return;
+        }
+        let queue_evts = self.queue_evts.clone();
+        let vm_paused = self.vm_paused.clone();
+        let processing_queue = self.processing_queue.clone();
+        let incomplete = self
+            .block_backend
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get_inflight();
+        let id = self.blk_cfg.id.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            info!("Set vm pause state {:?} for block device {}", paused, id);
+            vm_paused.store(paused, Ordering::SeqCst);
+            if !paused {
+                let locked_evts = queue_evts.lock().unwrap();
+                for evt in locked_evts.iter() {
+                    if let Err(e) = evt.write(1) {
+                        error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
+                    }
+                }
+            } else {
+                info!("Drain the inflight IO for block device {}", id);
+                while incomplete.load(Ordering::SeqCst) != 0
+                    || processing_queue.load(Ordering::SeqCst)
+                {
+                    yield_now();
+                }
+            }
+        });
+        self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
+    }
+
+    fn unregister_pause_notifier(&mut self) {
+        if self.pause_notifier_id > 0 {
+            unregister_vm_pause_notifier(self.pause_notifier_id);
+            self.pause_notifier_id = 0;
+        }
     }
 }
 
@@ -1180,6 +1257,8 @@ impl VirtioDevice for Block {
 
         self.init_config_features()?;
 
+        self.register_pause_notifier();
+
         Ok(())
     }
 
@@ -1208,9 +1287,11 @@ impl VirtioDevice for Block {
 
     fn unrealize(&mut self) -> Result<()> {
         MigrationManager::unregister_device_instance(BlockState::descriptor(), &self.blk_cfg.id);
-        let drive_files = self.drive_files.lock().unwrap();
-        let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
+        let drive_files = self.drive_files.clone();
+        let drive_id =
+            VmConfig::get_drive_id(&drive_files.lock().unwrap(), &self.drive_cfg.path_on_host)?;
         remove_block_backend(&drive_id);
+        self.unregister_pause_notifier();
         Ok(())
     }
 
@@ -1244,6 +1325,12 @@ impl VirtioDevice for Block {
             if !queue.lock().unwrap().is_enabled() {
                 continue;
             }
+
+            self.queue_evts
+                .lock()
+                .unwrap()
+                .push(queue_evts[index].clone());
+
             let (sender, receiver) = channel();
             let update_evt = Arc::new(create_new_eventfd()?);
             let driver_features = self.base.driver_features;
@@ -1270,6 +1357,8 @@ impl VirtioDevice for Block {
                 },
                 discard: self.drive_cfg.discard,
                 write_zeroes: self.drive_cfg.write_zeroes,
+                vm_paused: self.vm_paused.clone(),
+                processing_queue: self.processing_queue.clone(),
             };
 
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -1432,7 +1521,17 @@ impl StateTransfer for Block {
     }
 }
 
-impl MigrationHook for Block {}
+impl MigrationHook for Block {
+    fn resume(&mut self) -> Result<()> {
+        let locked_evts = self.queue_evts.lock().unwrap();
+        for evt in locked_evts.iter() {
+            if let Err(e) = evt.write(1) {
+                error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
+            }
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1446,6 +1545,7 @@ mod tests {
     use crate::*;
     use address_space::{AddressAttr, GuestAddress};
     use machine_manager::config::{str_slip_to_clap, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
+    use machine_manager::notifier::pause_notify;
     use machine_manager::temp_cleaner::TempCleaner;
 
     const QUEUE_NUM_BLK: usize = 1;
@@ -1780,5 +1880,65 @@ mod tests {
             }
         }
         TempCleaner::clean();
+    }
+
+    // Test register/unregister pause notifier.
+    #[test]
+    fn test_pause_notifier() {
+        let mut block = init_default_block();
+        assert_eq!(block.pause_notifier_id, 0);
+
+        // Realize block device: create TempFile as backing file.
+        block.drive_cfg.readonly = true;
+        block.drive_cfg.direct = false;
+        let f = TempFile::new().unwrap();
+        block.drive_cfg.path_on_host = f.as_path().to_str().unwrap().to_string();
+        VmConfig::add_drive_file(
+            &mut block.drive_files.lock().unwrap(),
+            "",
+            &block.drive_cfg.path_on_host,
+            block.drive_cfg.readonly,
+            block.drive_cfg.direct,
+        )
+        .unwrap();
+
+        // The realize() will call register_pause_notifier.
+        block.realize().unwrap();
+        assert_ne!(block.pause_notifier_id, 0);
+
+        pause_notify(true);
+        assert_eq!(block.vm_paused.load(Ordering::SeqCst), true);
+
+        pause_notify(false);
+        assert_eq!(block.vm_paused.load(Ordering::SeqCst), false);
+
+        block.unregister_pause_notifier();
+        assert_eq!(block.pause_notifier_id, 0);
+    }
+
+    // Test get/set device state.
+    #[test]
+    fn test_state_transfer() {
+        let mut block = init_default_block();
+        block.config_space.blk_size = 512;
+        block.realize().unwrap();
+
+        let device_features = block.base.device_features;
+        let driver_features = block.base.driver_features;
+        let broken = block.base.broken.load(Ordering::SeqCst);
+
+        // Get and modify the device state.
+        let init_state = block.get_state_vec().unwrap();
+        block.base.device_features = 0;
+        block.base.driver_features = 0;
+        block.base.broken.store(true, Ordering::SeqCst);
+
+        // Set and check the device state.
+        block.set_state_mut(&init_state).unwrap();
+        assert_eq!(device_features, block.base.device_features);
+        assert_eq!(driver_features, block.base.driver_features);
+        assert_eq!(broken, block.base.broken.load(Ordering::SeqCst));
+        let blk_size = block.config_space.blk_size;
+        assert_eq!(blk_size, 512);
     }
 }
