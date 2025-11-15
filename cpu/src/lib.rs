@@ -162,7 +162,7 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         #[cfg(target_arch = "aarch64")] vcpu_config: &CPUFeatures,
     ) -> Result<()>;
 
@@ -326,16 +326,14 @@ impl CPUInterface for CPU {
             ))));
         }
 
-        if let Some(boot) = boot {
-            self.hypervisor_cpu
-                .set_boot_config(
-                    self.arch_cpu.clone(),
-                    boot,
-                    #[cfg(target_arch = "aarch64")]
-                    config,
-                )
-                .with_context(|| "Failed to realize arch cpu")?;
-        }
+        self.hypervisor_cpu
+            .set_boot_config(
+                self.arch_cpu.clone(),
+                boot,
+                #[cfg(target_arch = "aarch64")]
+                config,
+            )
+            .with_context(|| "Failed to realize arch cpu")?;
 
         self.arch_cpu
             .lock()
