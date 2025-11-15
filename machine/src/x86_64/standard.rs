@@ -638,7 +638,7 @@ impl MachineOps for StdMachine {
                 sector_len,
                 4_u32,
                 1_u32,
-                config.readonly,
+                &config,
                 &self.base.sysbus,
                 region_base,
             )
