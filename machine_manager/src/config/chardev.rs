@@ -24,7 +24,7 @@ use crate::config::{valid_id, valid_path, valid_socket_path, ConfigCheck, VmConf
 use crate::qmp::qmp_schema;
 
 /// Default value of max ports for virtio-serial.
-const DEFAULT_SERIAL_PORTS_NUMBER: u32 = 31;
+pub const DEFAULT_SERIAL_PORTS_NUMBER: usize = 31;
 
 /// Config structure for virtio-serial-port.
 #[derive(Parser, Debug, Clone)]

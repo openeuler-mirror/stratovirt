@@ -16,11 +16,13 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::thread::yield_now;
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, info, warn};
 use machine_manager::config::ChardevConfig;
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -32,7 +34,10 @@ use crate::{
 use address_space::{AddressAttr, AddressSpace};
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
-    config::{ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_VIRTQUEUE_SIZE},
+    config::{
+        ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_SERIAL_PORTS_NUMBER,
+        DEFAULT_VIRTQUEUE_SIZE,
+    },
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
@@ -114,6 +119,18 @@ impl VirtioConsoleConfig {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
+struct PortState {
+    /// Number id.
+    nr: u32,
+    /// Whether the guest open the serial port.
+    guest_connected: bool,
+    /// Whether the host open the serial socket.
+    host_connected: bool,
+}
+
 /// Status of serial device.
 #[repr(C)]
 #[derive(Copy, Clone, Desc, ByteCode)]
@@ -125,6 +142,10 @@ pub struct VirtioSerialState {
     driver_features: u64,
     /// Virtio serial config space.
     config_space: VirtioConsoleConfig,
+    /// Number of serial port.
+    nr_ports: u32,
+    /// State of serial port.
+    port_state: [PortState; DEFAULT_SERIAL_PORTS_NUMBER],
 }
 
 /// Virtio serial device structure.
@@ -138,6 +159,14 @@ pub struct Serial {
     pub max_nr_ports: u32,
     /// Serial port vector for serialport.
     pub ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
+    /// If the vm has been paused.
+    vm_paused: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
+    /// The queue notify events for handling IO.
+    queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
+    /// The id for vm paused notifier.
+    pause_notifier_id: u64,
 }
 
 impl Serial {
@@ -156,6 +185,9 @@ impl Serial {
             base: VirtioBase::new(VIRTIO_TYPE_CONSOLE, queue_num, queue_size),
             config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
+            vm_paused: Arc::new(AtomicBool::new(false)),
+            processing_queue: Arc::new(AtomicBool::new(false)),
+            queue_evts: Arc::new(Mutex::new(Vec::new())),
             ..Default::default()
         }
     }
@@ -179,7 +211,13 @@ impl Serial {
             driver_features: self.base.driver_features,
             device_broken,
             ports: self.ports.clone(),
+            vm_paused: self.vm_paused.clone(),
+            processing_queue: self.processing_queue.clone(),
         };
+        self.queue_evts
+            .lock()
+            .unwrap()
+            .push(handler.output_queue_evt.clone());
 
         let handler_h = Arc::new(Mutex::new(handler));
         for port in self.ports.lock().unwrap().iter_mut() {
@@ -189,6 +227,37 @@ impl Serial {
         register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
         Ok(())
+    }
+
+    fn register_pause_notifier(&mut self) {
+        let queue_evts = self.queue_evts.clone();
+        let vm_paused = self.vm_paused.clone();
+        let processing_queue = self.processing_queue.clone();
+        let pause_notify = Arc::new(move |paused: bool| {
+            info!("Set vm pause state {:?} for serial device", paused);
+            vm_paused.store(paused, Ordering::SeqCst);
+            if !paused {
+                let locked_evts = queue_evts.lock().unwrap();
+                for evt in locked_evts.iter() {
+                    if let Err(e) = evt.write(1) {
+                        error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
+                    }
+                }
+            } else {
+                while processing_queue.load(Ordering::SeqCst) {
+                    yield_now();
+                }
+                info!("No queue in processing for serial device");
+            }
+        });
+        self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
+    }
+
+    fn unregister_pause_notifier(&mut self) {
+        if self.pause_notifier_id > 0 {
+            unregister_vm_pause_notifier(self.pause_notifier_id);
+            self.pause_notifier_id = 0;
+        }
     }
 }
 
@@ -220,6 +289,7 @@ impl VirtioDevice for Serial {
 
     fn realize(&mut self) -> Result<()> {
         self.init_config_features()?;
+        self.register_pause_notifier();
         Ok(())
     }
 
@@ -272,7 +342,15 @@ impl VirtioDevice for Serial {
                 device_broken: self.base.broken.clone(),
                 port: port.clone(),
                 nr,
+                vm_paused: self.vm_paused.clone(),
+                processing_queue: self.processing_queue.clone(),
             };
+            if port.is_some() {
+                self.queue_evts.lock().unwrap().append(&mut vec![
+                    handler.input_queue_evt.clone(),
+                    handler.output_queue_evt.clone(),
+                ]);
+            }
             let handler_h = Arc::new(Mutex::new(handler));
             let notifiers = EventNotifierHelper::internal_notifiers(handler_h.clone());
             register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
@@ -298,18 +376,36 @@ impl VirtioDevice for Serial {
             port.lock().unwrap().deactivate();
         }
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
+        self.queue_evts.lock().unwrap().clear();
 
+        Ok(())
+    }
+
+    fn unrealize(&mut self) -> Result<()> {
+        self.unregister_pause_notifier();
         Ok(())
     }
 }
 
 impl StateTransfer for Serial {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let state = VirtioSerialState {
+        let mut state = VirtioSerialState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
             config_space: self.config_space,
+            ..Default::default()
         };
+
+        for (index, port) in self.ports.lock().unwrap().iter().enumerate() {
+            let locked_port = port.lock().unwrap();
+            state.port_state[index] = PortState {
+                nr: locked_port.nr,
+                guest_connected: locked_port.guest_connected,
+                host_connected: locked_port.host_connected,
+            };
+            state.nr_ports += 1;
+        }
+
         Ok(state.as_bytes().to_vec())
     }
 
@@ -319,6 +415,25 @@ impl StateTransfer for Serial {
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;
         self.config_space = state.config_space;
+
+        let nr_ports = state.nr_ports as usize;
+        for i in 0..nr_ports {
+            let port_state = state.port_state[i];
+            let port = find_port_by_nr(&self.ports, port_state.nr)
+                .with_context(|| format!("Don't find port {}", port_state.nr))?;
+            let mut locked_port = port.lock().unwrap();
+            // There is no risk in directly assigning the `host_connected` status from the source to the destination.
+            // This is mainly to maintain consistency with the state of the drivers within the virtual machine.
+            // 1) If the source end is `host_connected = false`, the destination will open the port when it receives
+            //    a new chardev link.
+            // 2) If the source end is `host_connected = true`, the destination does not need to open the port again
+            //    when receiving a new socket connection.
+            // 3) If the source end is `host_connected = true` and the destination end keeps not opening the port.
+            //    The data issued within the virtual machine will be discarded in `output_handle`. See function `fill_outbuf`.
+            locked_port.host_connected = port_state.host_connected;
+            locked_port.guest_connected = port_state.guest_connected;
+        }
+
         Ok(())
     }
 
@@ -327,7 +442,17 @@ impl StateTransfer for Serial {
     }
 }
 
-impl MigrationHook for Serial {}
+impl MigrationHook for Serial {
+    fn resume(&mut self) -> Result<()> {
+        let locked_evts = self.queue_evts.lock().unwrap();
+        for evt in locked_evts.iter() {
+            if let Err(e) = evt.write(1) {
+                error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
+            }
+        }
+        Ok(())
+    }
+}
 
 /// Virtio serial port structure.
 #[derive(Clone)]
@@ -414,6 +539,10 @@ struct SerialPortHandler {
     device_broken: Arc<AtomicBool>,
     port: Option<Arc<Mutex<SerialPort>>>,
     nr: u32,
+    /// If the vm has been paused.
+    vm_paused: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
 }
 
 /// Handler for queues which are used for control.
@@ -427,6 +556,10 @@ struct SerialControlHandler {
     /// Virtio serial device is broken or not.
     device_broken: Arc<AtomicBool>,
     ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
+    /// If the vm has been paused.
+    vm_paused: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
 }
 
 impl SerialPortHandler {
@@ -461,6 +594,9 @@ impl SerialPortHandler {
                 if locked_cdev.outbuf_is_full() {
                     break;
                 }
+            }
+            if self.vm_paused.load(Ordering::SeqCst) {
+                break;
             }
 
             let elem = queue_lock
@@ -569,6 +705,10 @@ impl SerialPortHandler {
 
         let mut written_count = 0_usize;
         loop {
+            if self.vm_paused.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = queue_lock
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -646,7 +786,9 @@ impl EventNotifierHelper for SerialPortHandler {
             if h_lock.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+            h_lock.processing_queue.store(true, Ordering::SeqCst);
             h_lock.output_handle();
+            h_lock.processing_queue.store(false, Ordering::SeqCst);
             None
         });
 
@@ -683,6 +825,7 @@ impl EventNotifierHelper for SerialPortHandler {
 
 impl InputReceiver for SerialPortHandler {
     fn receive(&mut self, buffer: &[u8]) {
+        self.processing_queue.store(true, Ordering::SeqCst);
         self.input_handle_internal(buffer).unwrap_or_else(|e| {
             error!("Port {} handle input error: {:?}", self.nr, e);
             report_virtio_error(
@@ -691,6 +834,7 @@ impl InputReceiver for SerialPortHandler {
                 &self.device_broken,
             );
         });
+        self.processing_queue.store(false, Ordering::SeqCst);
     }
 
     fn remain_size(&mut self) -> usize {
@@ -729,6 +873,10 @@ impl SerialControlHandler {
         let mut queue_lock = output_queue.lock().unwrap();
 
         loop {
+            if self.vm_paused.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = queue_lock
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -865,6 +1013,10 @@ impl SerialControlHandler {
         value: u16,
         extra: &[u8],
     ) -> Result<()> {
+        if self.vm_paused.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
         let mut queue_lock = self.input_queue.lock().unwrap();
         let elem = queue_lock
             .vring
@@ -940,7 +1092,9 @@ impl EventNotifierHelper for SerialControlHandler {
             if h_lock.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+            h_lock.processing_queue.store(true, Ordering::SeqCst);
             h_lock.output_control();
+            h_lock.processing_queue.store(false, Ordering::SeqCst);
             None
         });
         notifiers.push(EventNotifier::new(
