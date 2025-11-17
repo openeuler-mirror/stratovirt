@@ -54,12 +54,12 @@ pub struct Region {
     /// The priority of Region, only valid in parent Container-type Region.
     priority: Arc<AtomicI32>,
     /// Size of Region.
-    size: Arc<AtomicU64>,
+    pub size: Arc<AtomicU64>,
     /// Offset in parent Container-type region. It won't be changed once initialized.
     offset: Arc<Mutex<GuestAddress>>,
     /// If not Ram, RomDevice, RamDevice Region type, `mem_mapping` is None. It won't be changed
     /// once initialized.
-    mem_mapping: Option<Arc<HostMemMapping>>,
+    pub mem_mapping: Option<Arc<HostMemMapping>>,
     /// `ops` provides read/write function.
     ops: Option<RegionOps>,
     /// ioeventfds within this Region.
@@ -82,6 +82,7 @@ pub struct Region {
 impl fmt::Debug for Region {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Region")
+            .field("region_name", &self.name)
             .field("region_type", &self.region_type)
             .field("priority", &self.priority)
             .field("size", &self.size)
@@ -525,7 +526,7 @@ impl Region {
 
     /// Return all sub-regions of this Region, the returned vector is not empty,
     /// iff this region is a container.
-    pub(crate) fn subregions(&self) -> Vec<Region> {
+    pub fn subregions(&self) -> Vec<Region> {
         self.subregions.read().unwrap().clone()
     }
 

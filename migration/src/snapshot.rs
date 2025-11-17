@@ -19,9 +19,8 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::general::{translate_id, Lifecycle};
 use crate::manager::{MigrationManager, MIGRATION_MANAGER};
-use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus, HEADER_LENGTH};
+use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus};
 use crate::MigrationError;
-use util::unix::host_page_size;
 
 pub const SERIAL_SNAPSHOT_ID: &str = "serial";
 pub const KVM_SNAPSHOT_ID: &str = "kvm";
@@ -75,7 +74,7 @@ impl MigrationManager {
         vm_memory_path.push(MEMORY_PATH_SUFFIX);
         match File::create(vm_memory_path) {
             Ok(mut memory_file) => {
-                Self::save_memory(Some(FileFormat::MemoryFull), &mut memory_file)?;
+                Self::save_memory(&mut memory_file)?;
             }
             Err(e) => {
                 bail!("Failed to create snapshot memory file: {}", e);
@@ -98,7 +97,8 @@ impl MigrationManager {
     /// # Argument
     ///
     /// * `path` - snapshot dir path.
-    pub fn restore_snapshot(path: &str) -> Result<()> {
+    /// * `mapped` - Whether to directly mmap the memory file as the backend.
+    pub fn restore_snapshot(path: &str, mapped: bool) -> Result<()> {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
 
@@ -125,7 +125,8 @@ impl MigrationManager {
             bail!("Invalid device state snapshot file");
         }
 
-        Self::restore_memory(&mut memory_file).with_context(|| "Failed to load snapshot memory")?;
+        Self::restore_memory(&mut memory_file, mapped)
+            .with_context(|| "Failed to load snapshot memory")?;
         let snapshot_desc_db =
             Self::restore_desc_db(&mut device_state_file, device_state_header.desc_len)
                 .with_context(|| "Failed to load device descriptor db")?;
@@ -139,16 +140,24 @@ impl MigrationManager {
         Ok(())
     }
 
-    /// Save memory state and data to `Write` trait object.
+    /// Save memory state and data to the memory file.
     ///
     /// # Arguments
     ///
-    /// * `fd` - The `Write` trait object to save memory data.
-    fn save_memory(file_format: Option<FileFormat>, fd: &mut dyn Write) -> Result<()> {
-        Self::save_header(file_format, fd)?;
+    /// * `file` - The memory file to save memory data.
+    fn save_memory(file: &mut File) -> Result<()> {
+        Self::save_header(Some(FileFormat::MemoryFull), file)?;
 
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
-        locked_vmm.memory.as_ref().unwrap().save_memory(fd)?;
+        locked_vmm.memory.as_ref().unwrap().save_memory(file)?;
+
+        locked_vmm
+            .ram_list
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .save_memory(file)?;
 
         Ok(())
     }
@@ -158,15 +167,24 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `file` - snapshot memory file.
-    fn restore_memory(file: &mut File) -> Result<()> {
-        let mut state_bytes = [0_u8].repeat((host_page_size() as usize) * 2 - HEADER_LENGTH);
-        file.read_exact(&mut state_bytes)?;
+    /// * `mapped` - Whether to directly mmap the memory file as the backend.
+    fn restore_memory(file: &mut File, mapped: bool) -> Result<()> {
+        // Restore memory managed by address space.
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
         locked_vmm
             .memory
             .as_ref()
             .unwrap()
-            .restore_memory(Some(file), &state_bytes)?;
+            .restore_memory(file, mapped)?;
+
+        // Restore memory managed by ram list.
+        locked_vmm
+            .ram_list
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .restore_memory(file, false)?;
 
         Ok(())
     }

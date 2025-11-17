@@ -52,7 +52,8 @@ use vmm_sys_util::eventfd::EventFd;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
 use address_space::{
-    create_backend_mem, create_default_mem, AddressAttr, AddressSpace, GuestAddress, Region,
+    create_backend_mem, create_default_mem, register_ram_list, AddressAttr, AddressSpace,
+    GuestAddress, Region,
 };
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
@@ -100,7 +101,7 @@ use machine_manager::config::get_chardev_socket_path;
 use machine_manager::config::{
     complete_numa_node, get_class_type, get_pci_bdf, get_value_of_parameter, parse_numa_distance,
     parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig,
-    DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
+    DriveFile, IncomingConfig, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
     NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig,
     FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
@@ -446,15 +447,13 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<()> {
         trace::trace_scope_start!(init_memory);
         let migrate_info = self.get_migrate_info();
-        if migrate_info.0 != MigrateMode::File {
+        if migrate_info.mode != MigrateMode::File || !migrate_info.mapped {
             self.create_machine_ram(mem_config, nr_cpus)?;
-        }
-
-        if migrate_info.0 != MigrateMode::File {
             self.init_machine_ram(sys_mem, mem_config.mem_size)?;
         }
 
         MigrationManager::register_memory_instance(sys_mem.clone());
+        register_ram_list();
 
         Ok(())
     }
@@ -689,12 +688,13 @@ pub trait MachineOps: MachineLifecycle {
 
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
-    fn get_migrate_info(&self) -> Incoming {
-        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return (*mode, path.to_string());
-        }
-
-        (MigrateMode::Unknown, String::new())
+    fn get_migrate_info(&self) -> IncomingConfig {
+        self.get_vm_config()
+            .lock()
+            .unwrap()
+            .incoming
+            .clone()
+            .unwrap_or_default()
     }
 
     /// Add net device.
@@ -2479,7 +2479,7 @@ pub fn vm_run(
     cmd_args: &arg_parser::ArgMatches,
 ) -> Result<()> {
     let migrate = vm.lock().unwrap().get_migrate_info();
-    if migrate.0 == MigrateMode::Unknown {
+    if migrate.mode == MigrateMode::Unknown {
         vm.lock()
             .unwrap()
             .run(cmd_args.is_present("freeze_cpu"))
@@ -2493,10 +2493,11 @@ pub fn vm_run(
 
 /// Start incoming migration from destination.
 fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Result<()> {
-    let (mode, path) = vm.lock().unwrap().get_migrate_info();
-    match mode {
+    let migrate_info = vm.lock().unwrap().get_migrate_info();
+    let path = migrate_info.uri;
+    match migrate_info.mode {
         MigrateMode::File => {
-            MigrationManager::restore_snapshot(&path)
+            MigrationManager::restore_snapshot(&path, migrate_info.mapped)
                 .with_context(|| "Failed to restore snapshot")?;
             vm.lock()
                 .unwrap()
@@ -2539,8 +2540,8 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
     // End the migration and reset the mode.
     let locked_vm = vm.lock().unwrap();
     let vm_config = locked_vm.get_vm_config();
-    if let Some((mode, _)) = vm_config.lock().unwrap().incoming.as_mut() {
-        *mode = MigrateMode::Unknown;
+    if let Some(incoming) = vm_config.lock().unwrap().incoming.as_mut() {
+        incoming.mode = MigrateMode::Unknown;
     }
 
     Ok(())

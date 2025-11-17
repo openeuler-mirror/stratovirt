@@ -154,7 +154,7 @@ impl MachineOps for LightMachine {
         )?;
 
         let migrate_info = locked_vm.get_migrate_info();
-        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+        let boot_config = if migrate_info.mode == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?)
         } else {
             None
