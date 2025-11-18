@@ -561,7 +561,7 @@ impl MachineOps for StdMachine {
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config =
-            if migrate.mode == MigrateMode::Unknown {
+            if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
                 Some(locked_vm.load_boot_source(
                     fwcfg.as_ref(),
                     MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
