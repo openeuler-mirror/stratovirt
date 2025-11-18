@@ -56,7 +56,6 @@ pub fn register_ram_region(region_name: String, mem_mapping: Arc<HostMemMapping>
     Ok(())
 }
 
-#[allow(unused)]
 pub fn unregister_ram_region(region_name: String) -> Option<Arc<HostMemMapping>> {
     if let Some(list) = RAM_LIST.get() {
         let mut locked_list = list.lock().unwrap();
