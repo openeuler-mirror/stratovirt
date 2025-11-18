@@ -168,9 +168,11 @@ impl MigrationHook for RamList {
 }
 
 fn get_ram_region_state(name: &String, region_states: &[RamRegionState]) -> Option<RamRegionState> {
+    let name_size = name.len().min(MAX_REGION_NAME_SIZE);
+    let mut region_name = [0u8; MAX_REGION_NAME_SIZE];
+    region_name[..name_size].copy_from_slice(&name.as_bytes()[..name_size]);
     for region in region_states {
-        let region_name = &region.name[0..region.name_size as usize];
-        if *name == String::from_utf8(region_name.to_vec()).unwrap() {
+        if region_name == region.name {
             return Some(*region);
         }
     }
