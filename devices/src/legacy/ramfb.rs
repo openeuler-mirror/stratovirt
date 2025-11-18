@@ -332,7 +332,7 @@ impl StateTransfer for Ramfb {
         Ok(serde_json::to_vec(&state_locked.cfg)?)
     }
 
-    fn set_state(&self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let cfg: RamfbCfg = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("RamfbCfg"))?;
         let mut ramfb_state = self.ramfb_state.lock().unwrap();
