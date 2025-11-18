@@ -413,7 +413,9 @@ impl AmlCpu {
 
         let mut mat_data: Vec<u8> = vec![0; std::mem::size_of_val(&lapic)];
         // SAFETY: mat_data is large enough to hold lapic.
-        unsafe { *(mat_data.as_mut_ptr() as *mut AcpiLocalApic) = lapic };
+        unsafe {
+            std::ptr::write_unaligned(mat_data.as_mut_ptr() as *mut AcpiLocalApic, lapic);
+        }
 
         mat_data
     }
