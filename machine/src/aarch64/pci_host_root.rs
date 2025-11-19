@@ -13,6 +13,7 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex, Weak};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use devices::pci::config::{
     PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
@@ -20,11 +21,8 @@ use devices::pci::config::{
 };
 use devices::pci::{le_write_u16, PciDevBase, PciDevOps, PciState};
 use devices::{Bus, Device, DeviceBase};
-use migration::{
-    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
-};
-use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 
 const DEVICE_ID_PCIE_HOST: u16 = 0x0008;
@@ -95,9 +93,8 @@ impl PciDevOps for PciHostRoot {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 struct PciHostRootState {
     pci_state: PciState,
 }
@@ -108,14 +105,14 @@ impl StateTransfer for PciHostRoot {
             pci_state: self.base.get_pci_state(),
         };
 
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let pci_host_root = *PciHostRootState::from_bytes(state)
+        let pci_host_root: PciHostRootState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("PciHostRootState"))?;
 
-        self.base.set_pci_state(&pci_host_root.pci_state)?;
+        self.base.set_pci_state(&pci_host_root.pci_state);
 
         Ok(())
     }

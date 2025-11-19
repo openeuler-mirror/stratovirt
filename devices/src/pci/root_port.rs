@@ -17,6 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use log::{error, info};
 use once_cell::sync::OnceCell;
+use serde::{Deserialize, Serialize};
 
 use super::config::{
     PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
@@ -36,7 +37,7 @@ use crate::pci::intx::init_intx;
 use crate::pci::msix::init_msix;
 use crate::pci::{
     init_multifunction, le_read_u16, le_write_clear_value_u16, le_write_set_value_u16,
-    le_write_u16, to_pcidevops, PciDevBase, PciDevOps, PciError, PciIntxState, PcieState,
+    le_write_u16, to_pcidevops, PciDevBase, PciDevOps, PciError, PciIntxState, PciState,
     INTERRUPT_PIN,
 };
 use crate::{
@@ -46,11 +47,8 @@ use crate::{
 use address_space::Region;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
-use migration::{
-    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
-};
-use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 use util::num_ops::{ranges_overlap, str_to_num};
 
@@ -80,10 +78,10 @@ pub struct RootPortConfig {
 
 /// Device state root port.
 #[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 struct RootPortState {
-    pcie_state: PcieState,
+    pci_state: PciState,
 }
 
 pub struct RootPort {
@@ -661,17 +659,17 @@ impl HotplugOps for RootPort {
 impl StateTransfer for RootPort {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
         let state = RootPortState {
-            pcie_state: self.base.get_pcie_state(),
+            pci_state: self.base.get_pci_state(),
         };
 
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let root_port_state = *RootPortState::from_bytes(state)
+        let root_port_state: RootPortState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 
-        self.base.set_pcie_state(&root_port_state.pcie_state)?;
+        self.base.set_pci_state(&root_port_state.pci_state);
 
         Ok(())
     }
