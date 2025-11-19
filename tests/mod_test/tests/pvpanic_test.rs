@@ -59,7 +59,7 @@ impl PvPanicDevCfg {
             test_machine_args.append(&mut args);
         }
 
-        let pvpanic_str = fmt_pvpanic_deves(*self);
+        let pvpanic_str = self.fmt_pvpanic_deves();
         args = pvpanic_str[..].split(' ').collect();
         test_machine_args.append(&mut args);
 
@@ -75,13 +75,13 @@ impl PvPanicDevCfg {
 
         (Rc::new(RefCell::new(pvpanic_pci_dev)), test_state)
     }
-}
 
-fn fmt_pvpanic_deves(cfg: PvPanicDevCfg) -> String {
-    format!(
-        "-device pvpanic,id=pvpanic_pci,bus=pcie.{},addr=0x{},supported-features={}",
-        cfg.bus_num, cfg.addr, cfg.supported_features,
-    )
+    fn fmt_pvpanic_deves(&self) -> String {
+        format!(
+            "-device pvpanic,id=pvpanic_pci,bus=pcie.{},addr=0x{},supported-features={}",
+            &self.bus_num, &self.addr, &self.supported_features,
+        )
+    }
 }
 
 /// PvPanic device read config space.
@@ -94,25 +94,19 @@ fn fmt_pvpanic_deves(cfg: PvPanicDevCfg) -> String {
 #[test]
 fn test_pvpanic_read_config() {
     let cfg = PvPanicDevCfg::default();
-
     let (pvpanic_pci_dev, test_state) = cfg.init(false);
+    let read_config_params: [(u8, u16); 5] = [
+        (PCI_VENDOR_ID, PCI_VENDOR_ID_REDHAT),
+        (PCI_DEVICE_ID, PCI_DEVICE_ID_REDHAT_PVPANIC),
+        (PCI_SUB_CLASS_DEVICE, PCI_CLASS_SYSTEM_OTHER),
+        (PCI_SUBSYSTEM_VENDOR_ID, PCI_VENDOR_ID_REDHAT_QUMRANET),
+        (PCI_SUBSYSTEM_ID, PCI_SUBDEVICE_ID_QEMU),
+    ];
 
-    let info = pvpanic_pci_dev.borrow().config_readw(PCI_VENDOR_ID);
-    assert_eq!(info, PCI_VENDOR_ID_REDHAT);
-
-    let info = pvpanic_pci_dev.borrow().config_readw(PCI_DEVICE_ID);
-    assert_eq!(info, PCI_DEVICE_ID_REDHAT_PVPANIC);
-
-    let info = pvpanic_pci_dev.borrow().config_readw(PCI_SUB_CLASS_DEVICE);
-    assert_eq!(info, PCI_CLASS_SYSTEM_OTHER);
-
-    let info = pvpanic_pci_dev
-        .borrow()
-        .config_readw(PCI_SUBSYSTEM_VENDOR_ID);
-    assert_eq!(info, PCI_VENDOR_ID_REDHAT_QUMRANET);
-
-    let info = pvpanic_pci_dev.borrow().config_readw(PCI_SUBSYSTEM_ID);
-    assert_eq!(info, PCI_SUBDEVICE_ID_QEMU);
+    for &(offset, expected_content) in read_config_params.iter() {
+        let info = pvpanic_pci_dev.borrow().config_readw(offset);
+        assert_eq!(info, expected_content);
+    }
 
     test_state.borrow_mut().stop();
 }
@@ -127,11 +121,9 @@ fn test_pvpanic_read_config() {
 #[test]
 fn test_pvpanic_read_supported_features() {
     let cfg = PvPanicDevCfg::default();
-
     let (pvpanic_pci_dev, test_state) = cfg.init(false);
 
     let bar_addr = pvpanic_pci_dev.borrow().io_map(0);
-
     let start = bar_addr;
 
     let info = test_state.borrow().readb(start);
@@ -160,14 +152,17 @@ fn test_pvpanic_write_events() {
     let bar_addr = pvpanic_pci_dev.borrow().io_map(0);
     let start = bar_addr;
     let tmp_log_path = String::from(TMP_LOG_PATH);
-    let write_test_params: [(u8, &str); 3] = [
-        (PVPANIC_PANICKED as u8, "pvpanic: panicked event"),
-        (PVPANIC_CRASHLOADED as u8, "pvpanic: crashloaded event"),
-        (!DEFAULT_SUPPORTED_FEATURE, "pvpanic: unknown event"),
+    let write_test_params: [(u64, &str); 3] = [
+        (PVPANIC_PANICKED, "pvpanic: panicked event"),
+        (PVPANIC_CRASHLOADED, "pvpanic: crashloaded event"),
+        (
+            u64::from(!DEFAULT_SUPPORTED_FEATURE),
+            "pvpanic: unknown event",
+        ),
     ];
 
     for &(data, expected_log_content) in write_test_params.iter() {
-        test_state.borrow().writeb(start, data);
+        test_state.borrow().writeq(start, data);
         let tmp_log_content = std::fs::read_to_string(&tmp_log_path).unwrap();
 
         assert!(tmp_log_content.contains(expected_log_content));
