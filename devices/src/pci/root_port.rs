@@ -36,7 +36,8 @@ use crate::pci::intx::init_intx;
 use crate::pci::msix::init_msix;
 use crate::pci::{
     init_multifunction, le_read_u16, le_write_clear_value_u16, le_write_set_value_u16,
-    le_write_u16, to_pcidevops, PciDevBase, PciDevOps, PciError, PciIntxState, INTERRUPT_PIN,
+    le_write_u16, to_pcidevops, PciDevBase, PciDevOps, PciError, PciIntxState, PcieState,
+    INTERRUPT_PIN,
 };
 use crate::{
     convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MsiIrqManager, MUT_PCI_BUS, PCI_BUS,
@@ -82,13 +83,7 @@ pub struct RootPortConfig {
 #[derive(Copy, Clone, Desc, ByteCode)]
 #[desc_version(compat_version = "0.1.0")]
 struct RootPortState {
-    /// Max length of config_space is 4096.
-    config_space: [u8; 4096],
-    write_mask: [u8; 4096],
-    write_clear_mask: [u8; 4096],
-    last_cap_end: u16,
-    last_ext_cap_offset: u16,
-    last_ext_cap_end: u16,
+    pcie_state: PcieState,
 }
 
 pub struct RootPort {
@@ -665,16 +660,9 @@ impl HotplugOps for RootPort {
 
 impl StateTransfer for RootPort {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let mut state = RootPortState::default();
-
-        for idx in 0..self.base.config.config.len() {
-            state.config_space[idx] = self.base.config.config[idx];
-            state.write_mask[idx] = self.base.config.write_mask[idx];
-            state.write_clear_mask[idx] = self.base.config.write_clear_mask[idx];
-        }
-        state.last_cap_end = self.base.config.last_cap_end;
-        state.last_ext_cap_end = self.base.config.last_ext_cap_end;
-        state.last_ext_cap_offset = self.base.config.last_ext_cap_offset;
+        let state = RootPortState {
+            pcie_state: self.base.get_pcie_state(),
+        };
 
         Ok(state.as_bytes().to_vec())
     }
@@ -683,13 +671,7 @@ impl StateTransfer for RootPort {
         let root_port_state = *RootPortState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 
-        let length = self.base.config.config.len();
-        self.base.config.config = root_port_state.config_space[..length].to_vec();
-        self.base.config.write_mask = root_port_state.write_mask[..length].to_vec();
-        self.base.config.write_clear_mask = root_port_state.write_clear_mask[..length].to_vec();
-        self.base.config.last_cap_end = root_port_state.last_cap_end;
-        self.base.config.last_ext_cap_end = root_port_state.last_ext_cap_end;
-        self.base.config.last_ext_cap_offset = root_port_state.last_ext_cap_offset;
+        self.base.set_pcie_state(&root_port_state.pcie_state)?;
 
         Ok(())
     }

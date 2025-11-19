@@ -48,6 +48,7 @@ use devices::legacy::{
 };
 #[cfg(feature = "ramfb")]
 use devices::legacy::{Ramfb, RamfbConfig};
+use devices::pci::intx::PciIntxCountState;
 use devices::pci::{PciBus, PciHost, PciIntxState};
 use devices::sysbus::{to_sysbusdevops, SysBusDevType};
 use devices::{
@@ -443,11 +444,16 @@ impl MachineOps for StdMachine {
         root_pci_bus.msi_irq_manager = irq_manager.msi_irq_manager;
         let line_irq_manager = irq_manager.line_irq_manager;
         if let Some(line_irq_manager) = line_irq_manager.clone() {
-            let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
+            let irq_state = Arc::new(Mutex::new(PciIntxState::new(
                 IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
                 line_irq_manager.clone(),
-            ))));
-            root_pci_bus.intx_state = irq_state;
+            )));
+            root_pci_bus.intx_state = Some(irq_state.clone());
+            MigrationManager::register_device_instance(
+                PciIntxCountState::descriptor(),
+                irq_state,
+                "pci_intx_state",
+            );
         } else {
             return Err(anyhow!(
                 "Failed to create intx state: legacy irq manager is none."
@@ -555,7 +561,7 @@ impl MachineOps for StdMachine {
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config =
-            if migrate.mode == MigrateMode::Unknown {
+            if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
                 Some(locked_vm.load_boot_source(
                     fwcfg.as_ref(),
                     MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
