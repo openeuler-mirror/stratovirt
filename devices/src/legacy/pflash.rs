@@ -12,6 +12,7 @@
 
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -220,9 +221,14 @@ impl PFlash {
             config.readonly,
         )?);
 
+        let file_id = Path::new(config.path_on_host.as_str())
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pflash")
+            .to_string();
         let mut pflash = PFlash {
             base: SysBusDevBase::new(SysBusDevType::Flash),
-            file_id: config.path_on_host.clone(),
+            file_id,
             has_backend,
             block_len,
             bank_width,
