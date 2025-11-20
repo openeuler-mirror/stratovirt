@@ -373,7 +373,7 @@ pub enum ScsiXferMode {
 
 // Convert from (target, lun) to unique address in BusBase.
 pub fn get_scsi_key(target: u8, lun: u16) -> u64 {
-    u64::from(target) << TARGET_ID_SHIFT | u64::from(lun)
+    (u64::from(target) << TARGET_ID_SHIFT) | u64::from(lun)
 }
 
 // Convert from unique address in BusBase to (target, lun).
@@ -828,7 +828,7 @@ pub fn scsi_cdb_xfer(cdb: &[u8; SCSI_CMD_BUF_SIZE], dev: Arc<Mutex<dyn Device>>)
             xfer *= block_size;
         }
         INQUIRY => {
-            xfer = i64::from(cdb[4]) | i64::from(cdb[3]) << 8;
+            xfer = i64::from(cdb[4]) | (i64::from(cdb[3]) << 8);
         }
         _ => {}
     }

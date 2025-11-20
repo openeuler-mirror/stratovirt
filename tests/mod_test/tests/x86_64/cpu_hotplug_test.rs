@@ -228,7 +228,7 @@ fn overrange_hotplug_cpu() {
 }
 
 /// Hotplug cpu when max_cpus is not explicitly configured.
-/// TestSetp:
+/// TestStep:
 ///   1. Send id vcpu-1 and cpu-id 1 hotplug qmp command.
 ///   2. Destroy VM.
 /// Expect:

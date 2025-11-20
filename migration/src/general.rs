@@ -221,7 +221,7 @@ impl MigrationManager {
         let desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
         for (_, desc) in desc_db.iter() {
             let desc_str = serde_json::to_string(desc)?;
-            db_data_len += desc_str.as_bytes().len();
+            db_data_len += desc_str.len();
         }
 
         Ok(db_data_len)

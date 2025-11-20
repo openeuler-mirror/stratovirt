@@ -223,12 +223,12 @@ impl DeviceTypeOperation for DemoDisplay {
                 return self.unrealize();
             }
         }
-        return self.sys_mem.write(
+        self.sys_mem.write(
             &mut buf.as_slice(),
             address_space::GuestAddress(mem_addr),
             buf.len() as u64,
             AddressAttr::Ram,
-        );
+        )
     }
 
     fn realize(&mut self) -> Result<()> {

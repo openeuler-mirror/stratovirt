@@ -299,7 +299,7 @@ fn show_menubar_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
     update_window_size(&active_gs)
 }
 
-/// Make the window to fill the entir desktop.
+/// Make the window to fill the entire desktop.
 fn full_screen_callback(gd: &Rc<RefCell<GtkDisplay>>) -> Result<()> {
     let borrowed_gd = gd.borrow();
     let gtk_menu = borrowed_gd.gtk_menu.clone();

@@ -166,13 +166,13 @@ impl VirtioDevice for Net {
         vhost_features &= !(1_u64 << VIRTIO_F_ACCESS_PLATFORM);
 
         let mut device_features = vhost_features;
-        device_features |= 1 << VIRTIO_F_VERSION_1
-            | 1 << VIRTIO_NET_F_CSUM
-            | 1 << VIRTIO_NET_F_GUEST_CSUM
-            | 1 << VIRTIO_NET_F_GUEST_TSO4
-            | 1 << VIRTIO_NET_F_GUEST_UFO
-            | 1 << VIRTIO_NET_F_HOST_TSO4
-            | 1 << VIRTIO_NET_F_HOST_UFO;
+        device_features |= (1 << VIRTIO_F_VERSION_1)
+            | (1 << VIRTIO_NET_F_CSUM)
+            | (1 << VIRTIO_NET_F_GUEST_CSUM)
+            | (1 << VIRTIO_NET_F_GUEST_TSO4)
+            | (1 << VIRTIO_NET_F_GUEST_UFO)
+            | (1 << VIRTIO_NET_F_HOST_TSO4)
+            | (1 << VIRTIO_NET_F_HOST_UFO);
 
         let mut locked_config = self.config_space.lock().unwrap();
 
@@ -240,7 +240,7 @@ impl VirtioDevice for Net {
         let queues = self.base.queues.clone();
         let queue_num = queues.len();
         let driver_features = self.base.driver_features;
-        if (driver_features & 1 << VIRTIO_NET_F_CTRL_VQ != 0) && (queue_num % 2 != 0) {
+        if (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0) {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
             let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.config_space.clone())));

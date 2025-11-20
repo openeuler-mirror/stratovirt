@@ -646,7 +646,7 @@ pub(crate) trait AcpiBuilder {
         #[cfg(target_arch = "x86_64")]
         {
             // FADT flag: disable HW_REDUCED_ACPI bit on x86 plantform.
-            fadt.set_field(112, 1_u32 << 10 | 1_u32 << 8);
+            fadt.set_field(112, (1_u32 << 10) | (1_u32 << 8));
             // Reset Register bit, offset is 116.
             fadt.set_field(116, 0x01_u8);
             fadt.set_field(117, 0x08_u8);

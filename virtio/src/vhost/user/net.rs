@@ -147,14 +147,14 @@ impl VirtioDevice for Net {
             .get_features()
             .with_context(|| "Failed to get features for vhost-user net")?;
 
-        let features = 1 << VIRTIO_F_VERSION_1
-            | 1 << VIRTIO_NET_F_GUEST_CSUM
-            | 1 << VIRTIO_NET_F_GUEST_TSO4
-            | 1 << VIRTIO_NET_F_GUEST_UFO
-            | 1 << VIRTIO_NET_F_HOST_TSO4
-            | 1 << VIRTIO_NET_F_HOST_UFO
-            | 1 << VIRTIO_NET_F_MRG_RXBUF
-            | 1 << VIRTIO_F_RING_EVENT_IDX;
+        let features = (1 << VIRTIO_F_VERSION_1)
+            | (1 << VIRTIO_NET_F_GUEST_CSUM)
+            | (1 << VIRTIO_NET_F_GUEST_TSO4)
+            | (1 << VIRTIO_NET_F_GUEST_UFO)
+            | (1 << VIRTIO_NET_F_HOST_TSO4)
+            | (1 << VIRTIO_NET_F_HOST_UFO)
+            | (1 << VIRTIO_NET_F_MRG_RXBUF)
+            | (1 << VIRTIO_F_RING_EVENT_IDX);
         self.base.device_features &= features;
 
         let mut locked_config = self.config_space.lock().unwrap();

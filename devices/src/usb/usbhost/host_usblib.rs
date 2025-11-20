@@ -459,7 +459,7 @@ pub struct PollFdIter<'a> {
     index: usize,
 }
 
-impl<'a> Iterator for PollFdIter<'a> {
+impl Iterator for PollFdIter<'_> {
     type Item = PollFd;
 
     fn next(&mut self) -> Option<Self::Item> {

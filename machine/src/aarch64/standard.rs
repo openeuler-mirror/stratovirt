@@ -295,10 +295,7 @@ impl StdMachine {
                 return None;
             }
 
-            let value = match vcpu.hypervisor_cpu.get_one_reg(addr) {
-                Ok(value) => Some(value),
-                _ => None,
-            };
+            let value = vcpu.hypervisor_cpu.get_one_reg(addr).ok();
 
             if cpu_state != CpuLifecycleState::Paused {
                 self.resume();
@@ -1171,9 +1168,6 @@ impl AcpiBuilder for StdMachine {
         vm_config.hardware_signature
     }
 }
-
-/// Function that helps to generate flash node in device-tree.
-///
 
 /// Trait that helps to generate all nodes in device-tree.
 #[allow(clippy::upper_case_acronyms)]

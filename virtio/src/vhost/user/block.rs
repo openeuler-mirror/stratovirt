@@ -138,9 +138,9 @@ impl VirtioDevice for Block {
             let protocol_features = locked_client
                 .get_protocol_features()
                 .with_context(|| "Failed to get protocol features for vhost-user blk")?;
-            let supported_protocol_features = 1 << VHOST_USER_PROTOCOL_F_MQ
-                | 1 << VHOST_USER_PROTOCOL_F_CONFIG
-                | 1 << VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD;
+            let supported_protocol_features = (1 << VHOST_USER_PROTOCOL_F_MQ)
+                | (1 << VHOST_USER_PROTOCOL_F_CONFIG)
+                | (1 << VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD);
             self.protocol_features = supported_protocol_features & protocol_features;
             locked_client
                 .set_protocol_features(self.protocol_features)
@@ -183,15 +183,15 @@ impl VirtioDevice for Block {
         }
         drop(locked_client);
 
-        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
-            | 1_u64 << VIRTIO_BLK_F_SIZE_MAX
-            | 1_u64 << VIRTIO_BLK_F_TOPOLOGY
-            | 1_u64 << VIRTIO_BLK_F_BLK_SIZE
-            | 1_u64 << VIRTIO_BLK_F_FLUSH
-            | 1_u64 << VIRTIO_BLK_F_DISCARD
-            | 1_u64 << VIRTIO_BLK_F_WRITE_ZEROES
-            | 1_u64 << VIRTIO_BLK_F_SEG_MAX
-            | 1_u64 << VIRTIO_BLK_F_RO;
+        self.base.device_features = (1_u64 << VIRTIO_F_VERSION_1)
+            | (1_u64 << VIRTIO_BLK_F_SIZE_MAX)
+            | (1_u64 << VIRTIO_BLK_F_TOPOLOGY)
+            | (1_u64 << VIRTIO_BLK_F_BLK_SIZE)
+            | (1_u64 << VIRTIO_BLK_F_FLUSH)
+            | (1_u64 << VIRTIO_BLK_F_DISCARD)
+            | (1_u64 << VIRTIO_BLK_F_WRITE_ZEROES)
+            | (1_u64 << VIRTIO_BLK_F_SEG_MAX)
+            | (1_u64 << VIRTIO_BLK_F_RO);
         if self.blk_cfg.num_queues.unwrap_or(1) > 1 {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_MQ;
         }

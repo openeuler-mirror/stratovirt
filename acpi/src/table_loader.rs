@@ -381,7 +381,7 @@ mod test {
             .is_ok());
 
         let file_bytes = file_name.as_bytes();
-        // SATETY: The "alloc" field of union consists of u8 members, so the access is safe.
+        // SAFETY: The "alloc" field of union consists of u8 members, so the access is safe.
         let alloc = unsafe { &table_loader.cmds.first().unwrap().entry.alloc };
         assert_eq!(
             alloc.file[0..file_bytes.len()].to_vec(),

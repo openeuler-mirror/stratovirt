@@ -1183,7 +1183,7 @@ impl GpuIoHandler {
         }
 
         let pixman_format = get_image_format(res.pixman_image);
-        let bpp = (u32::from(pixman_format_bpp(pixman_format as u32)) + 8 - 1) / 8;
+        let bpp = u32::from(pixman_format_bpp(pixman_format as u32)).div_ceil(8);
         let pixman_stride = get_image_stride(res.pixman_image);
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
@@ -1370,7 +1370,7 @@ impl GpuIoHandler {
         let res = &mut self.resources_list[res_idx];
         let pixman_format = get_image_format(res.pixman_image);
         let width = get_image_width(res.pixman_image) as u32;
-        let bpp = (u32::from(pixman_format_bpp(pixman_format as u32)) + 8 - 1) / 8;
+        let bpp = u32::from(pixman_format_bpp(pixman_format as u32)).div_ceil(8);
         let stride = get_image_stride(res.pixman_image) as u32;
         let data: *mut u8 = get_image_data(res.pixman_image).cast();
 
@@ -1779,9 +1779,9 @@ impl VirtioDevice for Gpu {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.base.device_features = 1u64 << VIRTIO_F_VERSION_1
-            | 1u64 << VIRTIO_F_RING_INDIRECT_DESC
-            | 1u64 << VIRTIO_F_RING_EVENT_IDX;
+        self.base.device_features = (1u64 << VIRTIO_F_VERSION_1)
+            | (1u64 << VIRTIO_F_RING_INDIRECT_DESC)
+            | (1u64 << VIRTIO_F_RING_EVENT_IDX);
         if self.cfg.edid {
             self.base.device_features |= 1 << VIRTIO_GPU_F_EDID;
         }

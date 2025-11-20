@@ -208,7 +208,7 @@ unsafe fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
     trace::trace_scope_start!(pre_alloc, args = (size));
     let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
-    let nr_pages = (size + page_size - 1) / page_size;
+    let nr_pages = size.div_ceil(page_size);
     let pages_per_thread = nr_pages / u64::from(threads);
     let left = nr_pages % u64::from(threads);
     let mut addr = host_addr;

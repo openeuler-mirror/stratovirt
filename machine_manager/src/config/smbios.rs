@@ -205,7 +205,7 @@ impl FromStr for Uuid {
         for i in index {
             let mut chars = name.chars();
             uuid_bytes.push(
-                (chars.nth(*i).unwrap().to_digit(16).unwrap() as u8) << 4
+                ((chars.nth(*i).unwrap().to_digit(16).unwrap() as u8) << 4)
                     | chars.next().unwrap().to_digit(16).unwrap() as u8,
             );
         }

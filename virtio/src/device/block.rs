@@ -1184,11 +1184,11 @@ impl VirtioDevice for Block {
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1
-            | 1_u64 << VIRTIO_F_RING_INDIRECT_DESC
-            | 1_u64 << VIRTIO_F_RING_EVENT_IDX
-            | 1_u64 << VIRTIO_BLK_F_FLUSH
-            | 1_u64 << VIRTIO_BLK_F_SEG_MAX;
+        self.base.device_features = (1_u64 << VIRTIO_F_VERSION_1)
+            | (1_u64 << VIRTIO_F_RING_INDIRECT_DESC)
+            | (1_u64 << VIRTIO_F_RING_EVENT_IDX)
+            | (1_u64 << VIRTIO_BLK_F_FLUSH)
+            | (1_u64 << VIRTIO_BLK_F_SEG_MAX);
         if self.drive_cfg.readonly {
             self.base.device_features |= 1_u64 << VIRTIO_BLK_F_RO;
         };
@@ -1442,12 +1442,10 @@ mod tests {
     use vmm_sys_util::tempfile::TempFile;
 
     use super::*;
-    use crate::tests::address_space_init;
+    use crate::tests::{address_space_init, eventloop_init};
     use crate::*;
     use address_space::{AddressAttr, GuestAddress};
-    use machine_manager::config::{
-        str_slip_to_clap, IothreadConfig, VmConfig, DEFAULT_VIRTQUEUE_SIZE,
-    };
+    use machine_manager::config::{str_slip_to_clap, VmConfig, DEFAULT_VIRTQUEUE_SIZE};
     use machine_manager::temp_cleaner::TempCleaner;
 
     const QUEUE_NUM_BLK: usize = 1;
@@ -1490,7 +1488,8 @@ mod tests {
     // Use different input parameters to verify block `new()` and `realize()` functionality.
     #[test]
     fn test_block_init() {
-        assert!(EventLoop::object_init(&None).is_ok());
+        eventloop_init();
+
         // New block device
         let mut block = init_default_block();
         assert_eq!(block.disk_sectors, 0);
@@ -1519,7 +1518,6 @@ mod tests {
         assert_eq!(block.device_type(), VIRTIO_TYPE_BLOCK);
         assert_eq!(block.queue_num(), QUEUE_NUM_BLK);
         assert_eq!(block.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
-        EventLoop::loop_clean();
     }
 
     // Test `write_config` and `read_config`. The main contests include: compare expect data and
@@ -1631,13 +1629,7 @@ mod tests {
     fn test_iothread() {
         TempCleaner::object_init();
         let thread_name = "io1".to_string();
-
-        // spawn io thread
-        let io_conf = IothreadConfig {
-            classtype: "iothread".to_string(),
-            id: thread_name.clone(),
-        };
-        EventLoop::object_init(&Some(vec![io_conf])).unwrap();
+        eventloop_init();
 
         let mut block = init_default_block();
         let file = TempFile::new().unwrap();
@@ -1788,6 +1780,5 @@ mod tests {
             }
         }
         TempCleaner::clean();
-        EventLoop::loop_clean();
     }
 }

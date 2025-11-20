@@ -153,12 +153,12 @@ pub const MINIMUM_BAR_SIZE_FOR_MMIO: usize = 0x1000;
 const MINIMUM_BAR_SIZE_FOR_PIO: usize = 0x4;
 
 /// PCI Express capability registers, same as kernel defines
-
 const PCI_EXT_CAP_VER_SHIFT: u8 = 16;
 const PCI_EXT_CAP_NEXT_SHIFT: u8 = 20;
 const PCI_EXP_VER2_SIZEOF: u8 = 0x3c;
 const PCI_EXP_FLAGS_VER2: u16 = 0x0002;
 const PCI_EXP_FLAGS_SLOT: u16 = 0x0100;
+
 // PCIe type flag
 const PCI_EXP_FLAGS_TYPE_SHIFT: u16 = 4;
 const PCI_EXP_FLAGS_TYPE: u16 = 0x00f0;

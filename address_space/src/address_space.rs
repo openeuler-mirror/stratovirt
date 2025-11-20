@@ -625,7 +625,7 @@ impl AddressSpace {
     pub fn address_in_memory(&self, addr: GuestAddress, size: u64) -> bool {
         let view = &self.flat_view.load();
 
-        view.find_flatrange(addr).map_or(false, |range| {
+        view.find_flatrange(addr).is_some_and(|range| {
             range.owner.region_type() == RegionType::Ram
                 && size <= range.addr_range.end_addr().offset_from(addr)
         })

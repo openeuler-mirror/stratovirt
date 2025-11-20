@@ -92,7 +92,7 @@ pub struct XhciConfig {
 /// Registers offset.
 /// 0x0    0x40    0x440    0x1000    0x2000      0x3000   0x4000
 /// | cap  | oper  | port   | runtime | doorbell  | MSIX   |
-
+///
 /// XHCI pci device which can be attached to PCI bus.
 pub struct XhciPciDevice {
     base: PciDevBase,

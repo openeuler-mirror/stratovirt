@@ -177,7 +177,7 @@ pub fn write_u64_low(origin: u64, value: u32) -> u64 {
 /// assert!(value == 0x1000_0000_1000_0000);
 /// ```
 pub fn write_u64_high(origin: u64, value: u32) -> u64 {
-    u64::from(value) << 32 | (origin & 0x0000_0000_FFFF_FFFF_u64)
+    (u64::from(value) << 32) | (origin & 0x0000_0000_FFFF_FFFF_u64)
 }
 
 ///  Extract from the 32 bit input @value the bit field specified by the
