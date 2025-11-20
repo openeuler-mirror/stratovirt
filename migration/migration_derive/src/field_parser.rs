@@ -70,7 +70,7 @@ fn parse_field(
 // # Output
 //
 // (path_type, length of array(if not an array, len will be 1), is_array)
-fn parse_ty(input: syn::Type) -> (syn::TypePath, usize, bool) {
+fn parse_ty(input: syn::Type) -> (syn::TypePath, proc_macro2::TokenStream, bool) {
     match input {
         syn::Type::Array(array) => {
             let array_type_token = match *array.elem.clone() {
@@ -82,14 +82,23 @@ fn parse_ty(input: syn::Type) -> (syn::TypePath, usize, bool) {
                 syn::Expr::Lit(expr_lit) => match &expr_lit.lit {
                     syn::Lit::Int(lit_int) => {
                         let array_len: usize = lit_int.base10_parse().unwrap();
-                        (array_type_token, array_len, true)
+                        (array_type_token, quote! {#array_len}, true)
                     }
                     _ => panic!("Unsupported array len literal."),
                 },
-                _ => panic!("Unsupported array len."),
+                syn::Expr::Path(expr_path) => {
+                    let seg_len = expr_path.path.segments.len();
+                    if seg_len == 1 {
+                        let ident = &expr_path.path.segments[0].ident;
+                        (array_type_token, quote! {#ident}, true)
+                    } else {
+                        panic!("Unsupported path segments len {}.", seg_len);
+                    }
+                }
+                _ => panic!("Unsupported array len {:?}.", array.len),
             }
         }
-        syn::Type::Path(token) => (token, 1, false),
+        syn::Type::Path(token) => (token, quote! {1}, false),
         _ => panic!("Unsupported field type {:?}", input),
     }
 }

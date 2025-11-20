@@ -20,24 +20,9 @@ use std::vec::Vec;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
-
-use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-use log::{error, info, warn};
-use machine_manager::config::{
-    get_pci_df, parse_bool, valid_id, MemBackendObjConfig, MemoryBackend, DEFAULT_VIRTQUEUE_SIZE,
-};
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use util::bitmap::Bitmap;
-use util::byte_code::ByteCode;
-use util::gen_base_func;
-use util::loop_context::{
-    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
-};
-use util::unix::do_mmap;
 
 use crate::error::VirtioError;
 use crate::{
@@ -45,6 +30,20 @@ use crate::{
     VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
     VIRTIO_F_VERSION_1, VIRTIO_TYPE_MEM,
 };
+use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+use log::{error, info, warn};
+use machine_manager::config::{
+    get_pci_df, parse_bool, valid_id, MemBackendObjConfig, MemoryBackend, DEFAULT_VIRTQUEUE_SIZE,
+};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::qmp::qmp_schema::ViomemInfo;
+use util::bitmap::Bitmap;
+use util::byte_code::ByteCode;
+use util::gen_base_func;
+use util::loop_context::{
+    read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+};
+use util::unix::do_mmap;
 
 const QUEUE_NUM_MEM: usize = 1;
 
@@ -111,20 +110,6 @@ fn alloc_base_addr(
     base_addr
 }
 
-#[allow(clippy::upper_case_acronyms)]
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-struct ViomemInfo {
-    pub node: u16,
-    #[serde(rename = "size")]
-    pub region_size: u64,
-    #[serde(rename = "block-size")]
-    pub block_size: u64,
-    #[serde(rename = "requested-size")]
-    pub requested_size: u64,
-    #[serde(rename = "plugged-size")]
-    pub plugged_size: u64,
-}
-
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
 struct VirtioMemConfig {
@@ -147,7 +132,7 @@ struct VirtioMemConfig {
 }
 
 impl VirtioMemConfig {
-    pub(crate) fn qmp_query(&self) -> Value {
+    fn qmp_query(&self) -> Value {
         let node_id = if self.node_id == NUMA_NONE {
             0
         } else {
@@ -474,21 +459,21 @@ impl MemRegionState {
 
 struct MemoryHandler {
     /// The guest request queue
-    pub(crate) queue: Arc<Mutex<Queue>>,
+    queue: Arc<Mutex<Queue>>,
     /// The eventfd used to notify the guest request queue event
-    pub(crate) queue_evt: Arc<EventFd>,
+    queue_evt: Arc<EventFd>,
     /// The function for interrupt triggering
-    pub(crate) interrupt_cb: Arc<VirtioInterrupt>,
+    interrupt_cb: Arc<VirtioInterrupt>,
     /// Configuration space of virtio mem device.
     config: Arc<Mutex<VirtioMemConfig>>,
     /// System address space.
-    pub(crate) mem_space: Arc<AddressSpace>,
+    mem_space: Arc<AddressSpace>,
     /// Bit mask of features negotiated by the backend and the frontend
-    pub(crate) driver_features: u64,
+    driver_features: u64,
     /// Virtio mem device is broken or not.
-    pub(crate) device_broken: Arc<AtomicBool>,
+    device_broken: Arc<AtomicBool>,
     /// Virtio mem Region list
-    pub(crate) regions: Arc<Mutex<MemRegionState>>,
+    regions: Arc<Mutex<MemRegionState>>,
 }
 
 impl MemoryHandler {
@@ -718,7 +703,7 @@ impl Memory {
         config.block_size = match option.block_size {
             Some(block_size) => {
                 if block_size % DEFAULT_MEM_BLOCK_ALIGN_SIZE != 0 {
-                    DEFAULT_MEM_BLOCK_ALIGN_SIZE
+                    DEFAULT_MEM_BLOCK_SIZE
                 } else {
                     block_size
                 }
@@ -915,28 +900,25 @@ fn register_viomem_device(id: String, mem: Arc<Mutex<Memory>>) -> Result<()> {
     Ok(())
 }
 
+fn get_viomem(id: &String) -> Result<Arc<Mutex<Memory>>> {
+    let devlist = VIOMEM_DEV_LIST
+        .get()
+        .with_context(|| "no virtio-mem device context.")?;
+    let locked_list = devlist.lock().unwrap();
+    let mem = locked_list
+        .get(id)
+        .with_context(|| format!("not found virtio-mem@{} device", id))?;
+    Ok(mem.clone())
+}
+
 pub fn qmp_set_viomem(id: &String, request_size: u64) -> Result<()> {
-    if let Some(devlist) = VIOMEM_DEV_LIST.get() {
-        match devlist.lock().unwrap().get(id) {
-            Some(mem) => mem.lock().unwrap().update_request(request_size),
-            None => {
-                bail!("not found virtio-mem@{} device", id)
-            }
-        }
-    } else {
-        bail!("no virtio-mem device context")
-    }
+    let mem = get_viomem(id)?;
+    mem.lock().unwrap().update_request(request_size)?;
+    Ok(())
 }
 
 pub fn qmp_get_viomem(id: &String) -> Result<Value> {
-    if let Some(devlist) = VIOMEM_DEV_LIST.get() {
-        match devlist.lock().unwrap().get(id) {
-            Some(mem) => Ok(mem.lock().unwrap().config.lock().unwrap().qmp_query()),
-            None => {
-                bail!("not found virtio-mem@{} device", id)
-            }
-        }
-    } else {
-        bail!("no virtio-mem device context")
-    }
+    let mem = get_viomem(id)?;
+    let value = mem.lock().unwrap().config.lock().unwrap().qmp_query();
+    Ok(value)
 }

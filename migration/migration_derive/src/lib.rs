@@ -71,7 +71,35 @@ pub fn derive_desc(input: TokenStream) -> TokenStream {
 
     let desc = match &input.data {
         syn::Data::Struct(data_struct) => {
-            struct_parser::parse_struct(data_struct, &ident, current_version, compat_version)
+            struct_parser::parse_struct(data_struct, &ident, current_version, compat_version, false)
+        }
+        _ => panic!("Only support struct."),
+    };
+
+    (quote! {
+        impl #ident {
+            pub fn descriptor() -> DeviceStateDesc {
+                #desc
+            }
+        }
+    })
+    .into()
+}
+
+/// Define a macro derive `DescSerde` for serde compatibility.
+#[proc_macro_derive(DescSerde, attributes(desc_version, alias))]
+pub fn derive_desc_serde(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let ident = input.ident.clone();
+
+    let (current_version, _) = attr_parser::parse_struct_attributes(&input.attrs);
+    if current_version == 0 {
+        panic!("current_version should be given.");
+    }
+
+    let desc = match &input.data {
+        syn::Data::Struct(data_struct) => {
+            struct_parser::parse_struct(data_struct, &ident, current_version, 0_u32, true)
         }
         _ => panic!("Only support struct."),
     };
