@@ -26,10 +26,12 @@ use crate::pci::config::{
     PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE,
     VENDOR_ID,
 };
-use crate::pci::{le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps};
+use crate::pci::{le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState};
 use crate::{convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 
 const PVPANIC_PCI_REVISION_ID: u8 = 1;
@@ -97,6 +99,29 @@ impl PvPanicState {
 
         Ok(())
     }
+
+    fn get_state(&self) -> PvPanicDevState {
+        PvPanicDevState {
+            supported_features: self.supported_features,
+        }
+    }
+
+    fn set_state(&mut self, state: &PvPanicDevState) {
+        self.supported_features = state.supported_features;
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, DescSerde)]
+#[desc_version(current_version = "0.1.0")]
+struct PvPanicPciDevState {
+    pci_state: PciState,
+    dev_id: u16,
+    dev_state: PvPanicDevState,
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+struct PvPanicDevState {
+    supported_features: u64,
 }
 
 pub struct PvPanicPci {
@@ -220,6 +245,8 @@ impl Device for PvPanicPci {
         self.register_bar()
             .with_context(|| "pvpanic: device register bar failed")?;
 
+        let device_name = self.name();
+
         // Attach to the PCI bus.
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
@@ -232,10 +259,21 @@ impl Device for PvPanicPci {
             .store(device_id, Ordering::Release);
         locked_bus.attach_child(u64::from(devfn), dev.clone())?;
 
+        MigrationManager::register_device_instance(
+            PvPanicPciDevState::descriptor(),
+            dev.clone(),
+            &device_name,
+        );
+
         Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        MigrationManager::unregister_device_instance(
+            PvPanicPciDevState::descriptor(),
+            &self.name(),
+        );
+
         Ok(())
     }
 }
@@ -255,6 +293,53 @@ impl PciDevOps for PvPanicPci {
             Some(&pci_bus.io_region),
             Some(&pci_bus.mem_region),
         );
+    }
+}
+
+impl StateTransfer for PvPanicPci {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = PvPanicPciDevState {
+            pci_state: self.base.get_pci_state(),
+            dev_id: self.dev_id.load(Ordering::Acquire),
+            dev_state: self.pvpanic.lock().unwrap().get_state(),
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        let pvpanic_pci_state: PvPanicPciDevState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("PVPANIC"))?;
+
+        self.dev_id
+            .store(pvpanic_pci_state.dev_id, Ordering::Release);
+        self.base.set_pci_state(&pvpanic_pci_state.pci_state);
+        self.pvpanic
+            .lock()
+            .unwrap()
+            .set_state(&pvpanic_pci_state.dev_state);
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&PvPanicPciDevState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for PvPanicPci {
+    fn resume(&mut self) -> Result<()> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        if let Err(e) = self.base.config.update_bar_mapping(
+            #[cfg(target_arch = "x86_64")]
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
+        ) {
+            bail!("Failed to update bar, error is {:?}", e);
+        }
+
+        Ok(())
     }
 }
 
