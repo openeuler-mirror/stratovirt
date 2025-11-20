@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::debug;
+use serde::{Deserialize, Serialize};
 
 use super::super::UsbError;
 use super::xhci_controller::{dma_read_u32, dma_write_u32, DwordOrder, XhciEpCtx};
@@ -57,6 +58,12 @@ pub struct XhciCommandRing {
     pub dequeue: GuestAddress,
     /// Consumer Cycle State
     pub ccs: bool,
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+pub struct XhciCommandRingState {
+    dequeue: u64,
+    ccs: u8,
 }
 
 impl XhciCommandRing {
@@ -114,6 +121,18 @@ impl XhciCommandRing {
             }
         }
     }
+
+    pub fn get_snapshot_state(&self) -> XhciCommandRingState {
+        XhciCommandRingState {
+            dequeue: self.dequeue.raw_value(),
+            ccs: self.ccs.into(),
+        }
+    }
+
+    pub fn set_snapshot_state(&mut self, state: &XhciCommandRingState) {
+        self.dequeue = GuestAddress(state.dequeue);
+        self.ccs = state.ccs != 0;
+    }
 }
 
 /// XHCI Transfer Ring
@@ -122,6 +141,12 @@ pub struct XhciTransferRing {
     pub dequeue: Mutex<GuestAddress>,
     /// Consumer Cycle State
     pub ccs: AtomicBool,
+}
+
+#[derive(Copy, Clone, Default, Deserialize, Serialize)]
+pub struct XhciTransferRingState {
+    dequeue: u64,
+    ccs: u8,
 }
 
 impl XhciTransferRing {
@@ -218,6 +243,18 @@ impl XhciTransferRing {
         let dequeue = self.get_dequeue_ptr().raw_value();
         ctx[0] = dequeue as u32 | u32::from(self.get_cycle_bit());
         ctx[1] = (dequeue >> 32) as u32;
+    }
+
+    pub fn get_snapshot_state(&self) -> XhciTransferRingState {
+        XhciTransferRingState {
+            dequeue: self.dequeue.lock().unwrap().raw_value(),
+            ccs: self.ccs.load(Ordering::SeqCst).into(),
+        }
+    }
+
+    pub fn set_snapshot_state(&self, ring_state: &XhciTransferRingState) {
+        *self.dequeue.lock().unwrap() = GuestAddress(ring_state.dequeue);
+        self.ccs.store(ring_state.ccs != 0, Ordering::SeqCst);
     }
 }
 

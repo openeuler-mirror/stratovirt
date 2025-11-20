@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::LinkedList;
+use std::collections::{HashMap, LinkedList};
 use std::mem::size_of;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -20,10 +20,14 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
 
 use super::xhci_pci::XhciConfig;
-use super::xhci_regs::{XhciInterrupter, XhciOperReg};
-use super::xhci_ring::{XhciCommandRing, XhciEventRingSeg, XhciTRB, XhciTransferRing};
+use super::xhci_regs::{XhciInterrupter, XhciInterrupterState, XhciOperReg, XhciOperRegState};
+use super::xhci_ring::{
+    XhciCommandRing, XhciCommandRingState, XhciEventRingSeg, XhciTRB, XhciTransferRing,
+    XhciTransferRingState,
+};
 use super::xhci_trb::{
     TRBCCode, TRBType, SETUP_TRB_TR_LEN, TRB_EV_ED, TRB_SIZE, TRB_TR_DIR, TRB_TR_FRAMEID_MASK,
     TRB_TR_FRAMEID_SHIFT, TRB_TR_IDT, TRB_TR_IOC, TRB_TR_ISP, TRB_TR_LEN_MASK, TRB_TR_SIA,
@@ -83,6 +87,7 @@ const TRANSFER_LEN_MASK: u32 = 0xffffff;
 /// XHCI config
 const XHCI_MAX_PORT2: u8 = 15;
 const XHCI_MAX_PORT3: u8 = 15;
+const XHCI_MAX_PORT: u8 = 30;
 const XHCI_DEFAULT_PORT: u8 = 4;
 /// Input Context.
 const INPUT_CONTEXT_SIZE: u64 = 0x420;
@@ -332,6 +337,21 @@ pub struct XhciEpContext {
     stream_array: Option<XhciStreamArray>,
 }
 
+#[derive(Clone, Default, Deserialize, Serialize)]
+struct XhciEpContextState {
+    epid: u32,
+    enabled: u8,
+    ring: Option<XhciTransferRingState>,
+    ep_type: u8,
+    output_ctx_addr: u64,
+    state: u32,
+    interval: u32,
+    mfindex_last: u64,
+    max_pstreams: u32,
+    lsa: bool,
+    stream_array: Option<XhciStreamArrayState>,
+}
+
 impl XhciEpContext {
     pub fn new(mem: &Arc<AddressSpace>) -> Self {
         Self {
@@ -353,7 +373,7 @@ impl XhciEpContext {
     }
 
     /// Init the endpoint context used the context read from memory.
-    fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) -> Result<()> {
+    pub fn init_ctx(&mut self, output_ctx: DmaAddr, ctx: &XhciEpCtx) -> Result<()> {
         let dequeue: DmaAddr = addr64_from_u32(ctx.deq_lo & !0xf, ctx.deq_hi);
         self.ep_type = ((ctx.ep_info2 >> EP_TYPE_SHIFT) & EP_TYPE_MASK).into();
         *self.output_ctx_addr.lock().unwrap() = GuestAddress(output_ctx);
@@ -377,11 +397,11 @@ impl XhciEpContext {
         Ok(())
     }
 
-    fn get_ep_state(&self) -> u32 {
+    pub fn get_ep_state(&self) -> u32 {
         self.state.load(Ordering::Acquire)
     }
 
-    fn set_ep_state(&self, state: u32) {
+    pub fn set_ep_state(&self, state: u32) {
         self.state.store(state, Ordering::Release);
     }
 
@@ -521,6 +541,49 @@ impl XhciEpContext {
         trace::usb_xhci_reset_streams(self.epid);
         Ok(())
     }
+
+    fn get_snapshot_state(&self) -> XhciEpContextState {
+        XhciEpContextState {
+            epid: self.epid,
+            enabled: self.enabled.into(),
+            ring: self.ring.as_ref().map(|ring| ring.get_snapshot_state()),
+            ep_type: self.ep_type.into(),
+            output_ctx_addr: self.output_ctx_addr.lock().unwrap().raw_value(),
+            state: self.state.load(Ordering::SeqCst),
+            interval: self.interval,
+            mfindex_last: self.mfindex_last,
+            max_pstreams: self.max_pstreams,
+            lsa: self.lsa,
+            stream_array: self
+                .stream_array
+                .as_ref()
+                .map(|stream_array| stream_array.get_snapshot_state()),
+        }
+    }
+
+    fn set_snapshot_state(&mut self, state: &XhciEpContextState) {
+        self.epid = state.epid;
+        self.enabled = state.enabled != 0;
+        if self.ring.is_some() {
+            self.ring
+                .as_mut()
+                .unwrap()
+                .set_snapshot_state(&state.ring.unwrap());
+        }
+        self.ep_type = EpType::from(state.ep_type);
+        *self.output_ctx_addr.lock().unwrap() = GuestAddress(state.output_ctx_addr);
+        self.state.store(state.state, Ordering::SeqCst);
+        self.interval = state.interval;
+        self.mfindex_last = state.mfindex_last;
+        self.max_pstreams = state.max_pstreams;
+        self.lsa = state.lsa;
+        if self.stream_array.is_some() {
+            self.stream_array
+                .as_mut()
+                .unwrap()
+                .set_snapshot_state(state.stream_array.as_ref().unwrap());
+        }
+    }
 }
 
 /// Endpoint type, including control, bulk, interrupt and isochronous.
@@ -537,8 +600,8 @@ pub enum EpType {
 }
 
 impl From<u32> for EpType {
-    fn from(t: u32) -> EpType {
-        match t {
+    fn from(value: u32) -> Self {
+        match value {
             0 => EpType::Invalid,
             1 => EpType::IsoOut,
             2 => EpType::BulkOut,
@@ -552,6 +615,37 @@ impl From<u32> for EpType {
     }
 }
 
+impl From<u8> for EpType {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => EpType::Invalid,
+            1 => EpType::IsoOut,
+            2 => EpType::BulkOut,
+            3 => EpType::IntrOut,
+            4 => EpType::Control,
+            5 => EpType::IsoIn,
+            6 => EpType::BulkIn,
+            7 => EpType::IntrIn,
+            _ => EpType::Invalid,
+        }
+    }
+}
+
+impl From<EpType> for u8 {
+    fn from(value: EpType) -> Self {
+        match value {
+            EpType::Invalid => 0,
+            EpType::IsoOut => 1,
+            EpType::BulkOut => 2,
+            EpType::IntrOut => 3,
+            EpType::Control => 4,
+            EpType::IsoIn => 5,
+            EpType::BulkIn => 6,
+            EpType::IntrIn => 7,
+        }
+    }
+}
+
 /// Device slot, mainly including some endpoint.
 pub struct XhciSlot {
     pub enabled: bool,
@@ -559,6 +653,15 @@ pub struct XhciSlot {
     pub slot_ctx_addr: GuestAddress,
     pub usb_port: Option<Arc<Mutex<UsbPort>>>,
     pub endpoints: Vec<XhciEpContext>,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+struct XhciSlotState {
+    enabled: u8,
+    addressed: u8,
+    port_id: u8,
+    slot_ctx_addr: u64,
+    endpoints: HashMap<u8, XhciEpContextState>,
 }
 
 impl XhciSlot {
@@ -602,6 +705,51 @@ impl XhciSlot {
             || slot_state == SLOT_CONFIGURED;
         Ok(valid)
     }
+
+    fn get_snapshot_state(&self) -> XhciSlotState {
+        let mut endpoints_state: HashMap<u8, XhciEpContextState> = HashMap::new();
+
+        for (i, ep) in self
+            .endpoints
+            .iter()
+            .enumerate()
+            .take(MAX_ENDPOINTS as usize)
+        {
+            if ep.enabled {
+                endpoints_state.insert(i as u8, ep.get_snapshot_state());
+            }
+        }
+
+        let port_id = match self.usb_port.as_ref() {
+            Some(port) => {
+                let locked_port = port.lock().unwrap();
+                locked_port.port_id
+            }
+            None => 0,
+        };
+
+        XhciSlotState {
+            enabled: self.enabled.into(),
+            addressed: self.addressed.into(),
+            port_id,
+            slot_ctx_addr: self.slot_ctx_addr.raw_value(),
+            endpoints: endpoints_state,
+        }
+    }
+
+    fn set_snapshot_state(&mut self, state: &XhciSlotState) -> (bool, u8) {
+        self.enabled = state.enabled != 0;
+        self.addressed = state.addressed != 0;
+        self.slot_ctx_addr = GuestAddress(state.slot_ctx_addr);
+
+        for (i, ep_ctx) in self.endpoints.iter_mut().enumerate() {
+            if let Some(saved_state) = state.endpoints.get(&(i as u8)) {
+                ep_ctx.set_snapshot_state(saved_state);
+            }
+        }
+
+        (self.addressed, state.port_id)
+    }
 }
 
 /// USB port which can attached device.
@@ -615,6 +763,14 @@ pub struct UsbPort {
     pub dev: Option<Arc<Mutex<dyn UsbDevice>>>,
     pub used: bool,
     pub slot_id: u32,
+}
+
+#[derive(Copy, Clone, Default, Deserialize, Serialize)]
+struct XhciPortState {
+    portsc: u32,
+    port_id: u8,
+    used: u8,
+    slot_id: u32,
 }
 
 impl UsbPort {
@@ -645,6 +801,22 @@ impl UsbPort {
     pub fn speed_supported(&self, speed: u32) -> bool {
         let speed_mask = 1 << speed;
         self.speed_mask & speed_mask == speed_mask
+    }
+
+    fn get_snapshot_state(&self) -> XhciPortState {
+        XhciPortState {
+            portsc: self.portsc,
+            port_id: self.port_id,
+            used: self.used.into(),
+            slot_id: self.slot_id,
+        }
+    }
+
+    fn set_snapshot_state(&mut self, port_state: &XhciPortState) {
+        self.portsc = port_state.portsc;
+        self.port_id = port_state.port_id;
+        self.used = port_state.used != 0;
+        self.slot_id = port_state.slot_id;
     }
 }
 
@@ -830,6 +1002,9 @@ pub trait DwordOrder: Default + Copy + Send + Sync {
 #[derive(Clone)]
 pub struct XhciStreamArray(Vec<Arc<Mutex<XhciStreamContext>>>);
 
+#[derive(Clone, Default, Deserialize, Serialize)]
+struct XhciStreamArrayState(Vec<XhciStreamContextState>);
+
 impl XhciStreamArray {
     fn new(mem: &Arc<AddressSpace>, max_pstreams: u32) -> Self {
         let pstreams_num = 1 << (max_pstreams + 1);
@@ -853,6 +1028,21 @@ impl XhciStreamArray {
             stream_context.lock().unwrap().reset();
         }
     }
+
+    fn get_snapshot_state(&self) -> XhciStreamArrayState {
+        let mut state = Vec::new();
+        for ctx in self.0.iter() {
+            state.push(ctx.lock().unwrap().get_snapshot_state());
+        }
+
+        XhciStreamArrayState(state)
+    }
+
+    fn set_snapshot_state(&mut self, state: &XhciStreamArrayState) {
+        for (idx, ctx_state) in state.0.iter().enumerate() {
+            self.0[idx].lock().unwrap().set_snapshot_state(ctx_state);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -864,6 +1054,13 @@ pub struct XhciStreamContext {
     /// Transfer Ring (no Secondary Streams for now).
     ring: Arc<XhciTransferRing>,
     /// Whether the context is up to date after reset.
+    needs_refresh: bool,
+}
+
+#[derive(Copy, Clone, Default, Deserialize, Serialize)]
+struct XhciStreamContextState {
+    dequeue: u64,
+    ring: XhciTransferRingState,
     needs_refresh: bool,
 }
 
@@ -903,6 +1100,20 @@ impl XhciStreamContext {
     fn reset(&mut self) {
         self.needs_refresh = true;
     }
+
+    fn get_snapshot_state(&self) -> XhciStreamContextState {
+        XhciStreamContextState {
+            dequeue: self.dequeue.raw_value(),
+            ring: self.ring.get_snapshot_state(),
+            needs_refresh: self.needs_refresh,
+        }
+    }
+
+    fn set_snapshot_state(&mut self, state: &XhciStreamContextState) {
+        self.dequeue = GuestAddress(state.dequeue);
+        self.ring.set_snapshot_state(&state.ring);
+        self.needs_refresh = state.needs_refresh;
+    }
 }
 
 #[repr(C, packed)]
@@ -925,12 +1136,27 @@ pub struct XhciDevice {
     pub slots: Vec<XhciSlot>,
     pub intrs: Vec<Arc<Mutex<XhciInterrupter>>>,
     pub cmd_ring: XhciCommandRing,
-    mem_space: Arc<AddressSpace>,
+    pub mem_space: Arc<AddressSpace>,
     /// Runtime Register.
     mfindex_start: Duration,
     timer_id: Option<u64>,
     packet_count: u32,
     bme: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct XhciDevState {
+    numports_2: u8,
+    numports_3: u8,
+    oper_state: XhciOperRegState,
+    ports_state: HashMap<u8, XhciPortState>,
+    slots_state: HashMap<u8, XhciSlotState>,
+    intrs_state: Vec<XhciInterrupterState>,
+    cmd_ring_state: XhciCommandRingState,
+    mfindex_secs: u64,
+    mfindex_nanos: u32,
+    timer_id: u64,
+    bme: u8,
 }
 
 impl XhciDevice {
@@ -1046,6 +1272,8 @@ impl XhciDevice {
                 xhci_mfwrap_timer,
                 Duration::from_nanos(left * ISO_BASE_TIME_INTERVAL),
             ));
+        } else {
+            self.timer_id = None;
         }
     }
 
@@ -1403,6 +1631,13 @@ impl XhciDevice {
             slot_ctx.dev_state = (SLOT_ADDRESSED << SLOT_STATE_SHIFT) | slot_id;
             self.set_device_address(dev, slot_id);
         }
+
+        info!(
+            "XHCI Address device slot id {} port id {} device name {}",
+            slot_id,
+            locked_port.port_id,
+            dev.lock().unwrap().device_id()
+        );
         // Enable control endpoint.
         self.enable_endpoint(slot_id, 1, ictx, octx)?;
         dma_write_u32(&self.mem_space, GuestAddress(octx), slot_ctx.as_dwords())?;
@@ -2361,6 +2596,10 @@ impl XhciDevice {
                 "Invalid slot id or ep id, maybe device not activated, {:?}",
                 e
             ));
+            warn!(
+                "Invalid slot id or ep id, maybe device not activated, {:?}",
+                e
+            );
             return Ok(());
         }
         self.kick_endpoint(slot_id, ep_id, stream_id)?;
@@ -2449,6 +2688,119 @@ impl XhciDevice {
             bail!("BME is cleared.")
         }
         Ok(())
+    }
+
+    pub fn get_snapshot_state(&self) -> XhciDevState {
+        let mut ports_state: HashMap<u8, XhciPortState> = HashMap::new();
+        let mut slots_state: HashMap<u8, XhciSlotState> = HashMap::new();
+        let mut intrs_state: Vec<XhciInterrupterState> = Vec::new();
+
+        for (i, port) in self.usb_ports.iter().enumerate() {
+            let should_save = port.lock().unwrap().used;
+            if i < XHCI_MAX_PORT as usize && should_save {
+                ports_state.insert(i as u8, port.lock().unwrap().get_snapshot_state());
+            }
+        }
+
+        for (i, slot) in self.slots.iter().enumerate() {
+            if i < MAX_SLOTS as usize && slot.enabled {
+                slots_state.insert(i as u8, slot.get_snapshot_state());
+            }
+        }
+
+        for (i, intr) in self.intrs.iter().enumerate() {
+            if i < MAX_INTRS as usize {
+                intrs_state.push(intr.lock().unwrap().get_snapshot_state());
+            }
+        }
+
+        XhciDevState {
+            numports_2: self.numports_2,
+            numports_3: self.numports_3,
+            oper_state: self.oper.get_snapshot_state(),
+            ports_state,
+            slots_state,
+            intrs_state,
+            cmd_ring_state: self.cmd_ring.get_snapshot_state(),
+            mfindex_secs: self.mfindex_start.as_secs(),
+            mfindex_nanos: self.mfindex_start.subsec_nanos(),
+            timer_id: self.timer_id.unwrap_or(u64::MAX),
+            bme: self.bme.load(Ordering::SeqCst).into(),
+        }
+    }
+
+    pub fn set_snapshot_state(&mut self, state: &XhciDevState) {
+        self.numports_2 = state.numports_2;
+        self.numports_3 = state.numports_3;
+
+        self.oper.set_snapshot_state(&state.oper_state);
+        self.cmd_ring.set_snapshot_state(&state.cmd_ring_state);
+        self.mfindex_start = Duration::new(state.mfindex_secs, state.mfindex_nanos);
+        if state.timer_id != u64::MAX {
+            self.mfwrap_update();
+        }
+        self.bme.store(state.bme != 0, Ordering::SeqCst);
+
+        for (i, port) in self.usb_ports.iter().enumerate() {
+            if i < XHCI_MAX_PORT as usize {
+                if let Some(saved_state) = state.ports_state.get(&(i as u8)) {
+                    port.lock().unwrap().set_snapshot_state(saved_state);
+                }
+            }
+        }
+
+        for (i, slot) in self.slots.iter_mut().enumerate() {
+            if i >= MAX_SLOTS as usize {
+                continue;
+            }
+
+            let Some(saved_state) = state.slots_state.get(&(i as u8)) else {
+                continue;
+            };
+
+            let (addressed, port_id) = slot.set_snapshot_state(saved_state);
+            if !addressed {
+                continue;
+            }
+
+            if port_id < 1 || port_id > self.usb_ports.len() as u8 {
+                error!(
+                    "Invalid port id: {} while loading snapshot for slot: {}",
+                    port_id,
+                    i + 1
+                );
+                slot.addressed = false;
+                slot.enabled = false;
+                slot.slot_ctx_addr = GuestAddress(0);
+                continue;
+            }
+
+            let usb_port = &self.usb_ports[(port_id - 1) as usize];
+            let mut locked_port = usb_port.lock().unwrap();
+            if locked_port.dev.is_none() {
+                error!(
+                    "Port has no dev: {} while loading snapshot for slot: {}",
+                    port_id,
+                    i + 1
+                );
+                slot.addressed = false;
+                slot.enabled = false;
+                slot.slot_ctx_addr = GuestAddress(0);
+                locked_port.portsc = 0;
+                locked_port.used = false;
+                locked_port.slot_id = INVALID_SLOT_ID;
+                continue;
+            }
+            slot.usb_port = Some(usb_port.clone());
+        }
+
+        for saved_state in state.intrs_state.iter() {
+            if saved_state.id < MAX_INTRS {
+                if let Some(intr) = self.intrs.get(saved_state.id as usize) {
+                    intr.lock().unwrap().set_snapshot_state(saved_state);
+                }
+            }
+        }
     }
 }
 
