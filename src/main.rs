@@ -168,7 +168,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             EventLoop::set_manager(vm.clone());
 
             for listener in listeners {
-                sockets.push(Socket::from_listener(listener, Some(vm.clone())));
+                sockets.push((
+                    Socket::from_listener(listener.0, Some(vm.clone())),
+                    listener.1,
+                ));
             }
             vm
         }
@@ -191,7 +194,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             }
 
             for listener in listeners {
-                sockets.push(Socket::from_listener(listener, Some(vm.clone())));
+                sockets.push((
+                    Socket::from_listener(listener.0, Some(vm.clone())),
+                    listener.1,
+                ));
             }
             vm
         }
@@ -205,7 +211,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             EventLoop::set_manager(vm.clone());
 
             for listener in listeners {
-                sockets.push(Socket::from_listener(listener, Some(vm.clone())));
+                sockets.push((
+                    Socket::from_listener(listener.0, Some(vm.clone())),
+                    listener.1,
+                ));
             }
             vm
         }
@@ -219,10 +228,10 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             .with_context(|| "Failed to register seccomp rules.")?;
     }
 
-    for socket in sockets {
+    for (socket, iothread) in sockets {
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(socket))),
-            None,
+            iothread.as_ref(),
         )
         .with_context(|| "Failed to add api event to MainLoop")?;
     }
