@@ -10,9 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use log::error;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::LazyLock;
+
+use anyhow::{Context, Result};
+use log::error;
+use serde::{Deserialize, Serialize};
 
 use super::config::*;
 use super::{UsbDeviceRequest, UsbPacket, UsbPacketStatus};
@@ -175,13 +178,37 @@ pub static CONSUMER_REPORT_DESCRIPTOR: LazyLock<Vec<u8>> = LazyLock::new(|| {
 });
 
 /// HID type
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum HidType {
     Mouse,
     Tablet,
     Keyboard,
     Consumer,
     UnKnown,
+}
+
+impl From<u8> for HidType {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => HidType::Mouse,
+            1 => HidType::Tablet,
+            2 => HidType::Keyboard,
+            3 => HidType::Consumer,
+            _ => HidType::UnKnown,
+        }
+    }
+}
+
+impl From<HidType> for u8 {
+    fn from(value: HidType) -> Self {
+        match value {
+            HidType::Mouse => 0,
+            HidType::Tablet => 1,
+            HidType::Keyboard => 2,
+            HidType::Consumer => 3,
+            HidType::UnKnown => u8::MAX,
+        }
+    }
 }
 
 /// HID keyboard including keycode and modifier.
@@ -192,6 +219,25 @@ pub struct HidKeyboard {
     /// Send keycode to driver.
     pub key_buf: [u8; QUEUE_LENGTH as usize],
     pub key_num: u32,
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+struct HidKeyboardState {
+    keycodes: [u32; QUEUE_LENGTH as usize],
+    modifiers: u16,
+    key_buf: [u8; QUEUE_LENGTH as usize],
+    key_num: u32,
+}
+
+impl Default for HidKeyboardState {
+    fn default() -> Self {
+        HidKeyboardState {
+            keycodes: [0; QUEUE_LENGTH as usize],
+            modifiers: 0,
+            key_buf: [0; QUEUE_LENGTH as usize],
+            key_num: 0,
+        }
+    }
 }
 
 impl HidKeyboard {
@@ -210,6 +256,22 @@ impl HidKeyboard {
         self.key_buf.iter_mut().for_each(|x| *x = 0);
         self.key_num = 0;
     }
+
+    fn get_state(&self) -> HidKeyboardState {
+        HidKeyboardState {
+            keycodes: self.keycodes,
+            modifiers: self.modifiers,
+            key_buf: self.key_buf,
+            key_num: self.key_num,
+        }
+    }
+
+    fn set_state(&mut self, state: &HidKeyboardState) {
+        self.keycodes = state.keycodes;
+        self.modifiers = state.modifiers;
+        self.key_buf = state.key_buf;
+        self.key_num = state.key_num;
+    }
 }
 
 /// HID pointer event including position and button state.
@@ -226,9 +288,51 @@ pub struct HidPointerEvent {
     pub button_state: u32,
 }
 
+#[derive(Copy, Clone, Deserialize, Serialize, Default)]
+struct HidPointerEventState {
+    pos_x: u32,
+    pos_y: u32,
+    v_wheel: i32,
+    h_wheel: i32,
+    button_state: u32,
+}
+
+impl HidPointerEvent {
+    fn get_state(&self) -> HidPointerEventState {
+        HidPointerEventState {
+            pos_x: self.pos_x,
+            pos_y: self.pos_y,
+            v_wheel: self.v_wheel,
+            h_wheel: self.h_wheel,
+            button_state: self.button_state,
+        }
+    }
+
+    fn set_state(&mut self, state: &HidPointerEventState) {
+        self.pos_x = state.pos_x;
+        self.pos_y = state.pos_y;
+        self.v_wheel = state.v_wheel;
+        self.h_wheel = state.h_wheel;
+        self.button_state = state.button_state;
+    }
+}
+
 /// HID pointer which include hid pointer event.
 pub struct HidPointer {
     pub queue: [HidPointerEvent; QUEUE_LENGTH as usize],
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+struct HidPointerState {
+    queue: [HidPointerEventState; QUEUE_LENGTH as usize],
+}
+
+impl Default for HidPointerState {
+    fn default() -> Self {
+        HidPointerState {
+            queue: [HidPointerEventState::default(); QUEUE_LENGTH as usize],
+        }
+    }
 }
 
 impl HidPointer {
@@ -243,10 +347,39 @@ impl HidPointer {
             .iter_mut()
             .for_each(|x| *x = HidPointerEvent::default());
     }
+
+    fn get_state(&self) -> HidPointerState {
+        let mut queue_state = [HidPointerEventState::default(); QUEUE_LENGTH as usize];
+
+        for (i, event) in self.queue.iter().enumerate() {
+            queue_state[i] = event.get_state();
+        }
+
+        HidPointerState { queue: queue_state }
+    }
+
+    fn set_state(&mut self, state: &HidPointerState) {
+        for (i, event_state) in state.queue.iter().enumerate() {
+            self.queue[i].set_state(event_state);
+        }
+    }
 }
 
 pub struct HidConsumer {
     pub keycodes: [u16; QUEUE_LENGTH as usize],
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+struct HidConsumerState {
+    keycodes: [u16; QUEUE_LENGTH as usize],
+}
+
+impl Default for HidConsumerState {
+    fn default() -> Self {
+        HidConsumerState {
+            keycodes: [0; QUEUE_LENGTH as usize],
+        }
+    }
 }
 
 impl HidConsumer {
@@ -258,6 +391,16 @@ impl HidConsumer {
 
     fn reset(&mut self) {
         self.keycodes.iter_mut().for_each(|x| *x = 0);
+    }
+
+    fn get_state(&self) -> HidConsumerState {
+        HidConsumerState {
+            keycodes: self.keycodes,
+        }
+    }
+
+    fn set_state(&mut self, state: &HidConsumerState) {
+        self.keycodes = state.keycodes;
     }
 }
 
@@ -271,6 +414,16 @@ pub struct Hid {
     pub(crate) keyboard: HidKeyboard,
     pub(crate) pointer: HidPointer,
     pub(crate) consumer: HidConsumer,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct HidDevState {
+    head: u32,
+    num: u32,
+    kind: u8,
+    protocol: u8,
+    idle: u8,
+    hid_state_buf: Vec<u8>,
 }
 
 impl Hid {
@@ -600,6 +753,56 @@ impl Hid {
             error!("Unhandled endpoint {}", p.ep_number);
             p.status = UsbPacketStatus::Stall;
         }
+    }
+
+    pub fn get_state(&self) -> Result<HidDevState> {
+        let hid_state_buf = match self.kind {
+            HidType::Keyboard => serde_json::to_vec(&self.keyboard.get_state())
+                .with_context(|| "Failed to get vec of kbd hid device")?,
+            HidType::Tablet => serde_json::to_vec(&self.pointer.get_state())
+                .with_context(|| "Failed to get vec of tablet hid device")?,
+            HidType::Consumer => serde_json::to_vec(&self.consumer.get_state())
+                .with_context(|| "Failed to get vec of consumer hid device")?,
+            _ => Vec::new(),
+        };
+
+        Ok(HidDevState {
+            head: self.head,
+            num: self.num,
+            kind: self.kind.into(),
+            protocol: self.protocol,
+            idle: self.idle,
+            hid_state_buf,
+        })
+    }
+
+    pub fn set_state(&mut self, state: &HidDevState) -> Result<()> {
+        self.head = state.head;
+        self.num = state.num;
+        self.kind = state.kind.into();
+        self.protocol = state.protocol;
+        self.idle = state.idle;
+
+        match self.kind {
+            HidType::Keyboard => {
+                let k_state: HidKeyboardState = serde_json::from_slice(&state.hid_state_buf[..])
+                    .with_context(|| "Failed to get HidKeyboardState from slice")?;
+                self.keyboard.set_state(&k_state);
+            }
+            HidType::Tablet => {
+                let p_state: HidPointerState = serde_json::from_slice(&state.hid_state_buf[..])
+                    .with_context(|| "Failed to get HidKeyboardState from slice")?;
+                self.pointer.set_state(&p_state);
+            }
+            HidType::Consumer => {
+                let c_state: HidConsumerState = serde_json::from_slice(&state.hid_state_buf[..])
+                    .with_context(|| "Failed to get HidConsumerState from slice")?;
+                self.consumer.set_state(&c_state);
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 }
 
