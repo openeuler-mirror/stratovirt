@@ -36,7 +36,8 @@ use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-use log::{debug, error};
+use log::{debug, error, info};
+use serde::{Deserialize, Serialize};
 
 use self::descriptor::USB_MAX_INTERFACES;
 use crate::DeviceBase;
@@ -188,6 +189,13 @@ pub struct UsbDeviceBase {
     pub unplugged: bool,
     /// The index of the interfaces.
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+pub struct UsbDevState {
+    addr: u8,
+    remote_wakeup: u32,
+    unplugged: u8,
 }
 
 impl UsbDeviceBase {
@@ -382,6 +390,20 @@ impl UsbDeviceBase {
         }
         Ok(true)
     }
+
+    pub fn get_usb_state(&self) -> UsbDevState {
+        UsbDevState {
+            addr: self.addr,
+            remote_wakeup: self.remote_wakeup,
+            unplugged: self.unplugged.into(),
+        }
+    }
+
+    pub fn set_usb_state(&mut self, usb_state: &UsbDevState) {
+        self.addr = usb_state.addr;
+        self.remote_wakeup = usb_state.remote_wakeup;
+        self.unplugged = usb_state.unplugged != 0;
+    }
 }
 
 impl Drop for UsbDeviceBase {
@@ -528,7 +550,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>, ep_id: u8) -> Result<(
         let port_status = locked_port.get_port_link_state();
         if port_status == PLS_U3 {
             locked_port.set_port_link_state(PLS_RESUME);
-            debug!(
+            info!(
                 "Update portsc when notify controller, port {} status {}",
                 locked_port.portsc, port_status
             );
