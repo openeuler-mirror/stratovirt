@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use log::error;
@@ -22,14 +22,14 @@ static NOTIFIER_MANAGER: Lazy<RwLock<NotifierManager>> =
 pub type PauseNOtifyCallback = dyn Fn(bool) + Send + Sync;
 
 struct NotifierManager {
-    pause_notifiers: HashMap<u64, Arc<PauseNOtifyCallback>>,
+    pause_notifiers: BTreeMap<u64, Arc<PauseNOtifyCallback>>,
     next_id: u64,
 }
 
 impl NotifierManager {
     fn new() -> Self {
         Self {
-            pause_notifiers: HashMap::new(),
+            pause_notifiers: BTreeMap::new(),
             next_id: 1,
         }
     }
