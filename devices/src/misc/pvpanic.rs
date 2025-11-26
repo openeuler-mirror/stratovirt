@@ -21,28 +21,27 @@ use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 
 use crate::pci::config::{
-    PciConfig, RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER,
-    PCI_CONFIG_SPACE_SIZE, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
-    PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID,
-    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+    RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER, PCI_CONFIG_SPACE_SIZE,
+    PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT,
+    PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE,
+    VENDOR_ID,
 };
-use crate::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::pci::{le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState};
 use crate::{convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 
 const PVPANIC_PCI_REVISION_ID: u8 = 1;
 const PVPANIC_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 
-#[cfg(target_arch = "aarch64")]
-// param size in Region::init_io_region must greater than 4
-const PVPANIC_REG_BAR_SIZE: u64 = 0x4;
-#[cfg(target_arch = "x86_64")]
-const PVPANIC_REG_BAR_SIZE: u64 = 0x1;
+const PVPANIC_REG_BAR_SIZE: u64 = 0x20;
+const PVPANIC_EVENT_OFFSET: u64 = 0;
 
-pub const PVPANIC_PANICKED: u32 = 1 << 0;
-pub const PVPANIC_CRASHLOADED: u32 = 1 << 1;
+pub const PVPANIC_PANICKED: u64 = 1 << 0;
+pub const PVPANIC_CRASHLOADED: u64 = 1 << 1;
 
 #[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 #[command(no_binary_name(true))]
@@ -56,11 +55,11 @@ pub struct PvpanicDevConfig {
     #[arg(long, value_parser = get_pci_df)]
     pub addr: (u8, u8),
     #[arg(long, alias = "supported-features", default_value = "3", value_parser = valid_supported_features)]
-    pub supported_features: u32,
+    pub supported_features: u64,
 }
 
-fn valid_supported_features(f: &str) -> Result<u32> {
-    let features = f.parse::<u32>()?;
+fn valid_supported_features(f: &str) -> Result<u64> {
+    let features = f.parse::<u64>()?;
     let supported_features = match features & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED) {
         0 => features,
         _ => bail!("Unsupported pvpanic device features {}", features),
@@ -70,18 +69,18 @@ fn valid_supported_features(f: &str) -> Result<u32> {
 
 #[derive(Copy, Clone)]
 pub struct PvPanicState {
-    supported_features: u32,
+    supported_features: u64,
 }
 
 impl PvPanicState {
-    fn new(supported_features: u32) -> Self {
+    fn new(supported_features: u64) -> Self {
         Self { supported_features }
     }
 
-    fn handle_event(&self, event: u32) -> Result<()> {
+    fn handle_write_event(&self, data: &[u8]) -> Result<()> {
+        let event = u64::from(data[0]);
         if (event & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED)) != 0 {
             error!("pvpanic: unknown event 0x{:X}", event);
-            bail!("pvpanic: unknown event 0x{:X}", event);
         }
 
         if (event & PVPANIC_PANICKED) == PVPANIC_PANICKED
@@ -100,12 +99,35 @@ impl PvPanicState {
 
         Ok(())
     }
+
+    fn get_state(&self) -> PvPanicDevState {
+        PvPanicDevState {
+            supported_features: self.supported_features,
+        }
+    }
+
+    fn set_state(&mut self, state: &PvPanicDevState) {
+        self.supported_features = state.supported_features;
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, DescSerde)]
+#[desc_version(current_version = "0.1.0")]
+struct PvPanicPciDevState {
+    pci_state: PciState,
+    dev_id: u16,
+    dev_state: PvPanicDevState,
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+struct PvPanicDevState {
+    supported_features: u64,
 }
 
 pub struct PvPanicPci {
     base: PciDevBase,
     dev_id: AtomicU16,
-    pvpanic: Arc<PvPanicState>,
+    pvpanic: Arc<Mutex<PvPanicState>>,
 }
 
 impl PvPanicPci {
@@ -118,33 +140,45 @@ impl PvPanicPci {
                 bme: Arc::new(AtomicBool::new(false)),
             },
             dev_id: AtomicU16::new(0),
-            pvpanic: Arc::new(PvPanicState::new(config.supported_features)),
+            pvpanic: Arc::new(Mutex::new(PvPanicState::new(config.supported_features))),
         }
     }
 
     fn register_bar(&mut self) -> Result<()> {
         let cloned_pvpanic_read = self.pvpanic.clone();
-        let bar0_read = Arc::new(move |data: &mut [u8], _: GuestAddress, _: u64| -> bool {
-            debug!(
-                "pvpanic: read bar0 called event {}",
-                cloned_pvpanic_read.supported_features
-            );
-
-            data[0] = cloned_pvpanic_read.supported_features as u8;
-            true
-        });
-
-        let cloned_pvpanic_write = self.pvpanic.clone();
-        let bar0_write = Arc::new(move |data: &[u8], _: GuestAddress, _: u64| -> bool {
-            debug!("pvpanic: write bar0 called event {:?}", data);
-            let val = u8::from_le_bytes(match data.try_into() {
-                Ok(value) => value,
-                Err(_) => {
+        let bar0_read = Arc::new(
+            move |data: &mut [u8], _: GuestAddress, offset: u64| -> bool {
+                debug!(
+                    "pvpanic: read bar0 called event {} with offset {}",
+                    cloned_pvpanic_read.lock().unwrap().supported_features,
+                    offset
+                );
+                if offset != PVPANIC_EVENT_OFFSET {
+                    error!("pvpanic: wrong offset {} with bar0 read request", offset);
                     return false;
                 }
-            });
+                data[0] = cloned_pvpanic_read.lock().unwrap().supported_features as u8;
+                true
+            },
+        );
 
-            matches!(cloned_pvpanic_write.handle_event(u32::from(val)), Ok(()))
+        let cloned_pvpanic_write = self.pvpanic.clone();
+        let bar0_write = Arc::new(move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
+            match offset {
+                PVPANIC_EVENT_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_write_event(data),
+                        Ok(())
+                    )
+                }
+                _ => {
+                    error!("pvpanic: wrong offset from front end driver");
+                    false
+                }
+            }
         });
 
         let bar0_region_ops = RegionOps {
@@ -154,7 +188,7 @@ impl PvPanicPci {
 
         let mut bar_region =
             Region::init_io_region(PVPANIC_REG_BAR_SIZE, bar0_region_ops, "PvPanic");
-        bar_region.set_access_size(1);
+        bar_region.set_access_size(8);
 
         self.base.config.register_bar(
             0,
@@ -211,6 +245,8 @@ impl Device for PvPanicPci {
         self.register_bar()
             .with_context(|| "pvpanic: device register bar failed")?;
 
+        let device_name = self.name();
+
         // Attach to the PCI bus.
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
@@ -223,10 +259,21 @@ impl Device for PvPanicPci {
             .store(device_id, Ordering::Release);
         locked_bus.attach_child(u64::from(devfn), dev.clone())?;
 
+        MigrationManager::register_device_instance(
+            PvPanicPciDevState::descriptor(),
+            dev.clone(),
+            &device_name,
+        );
+
         Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        MigrationManager::unregister_device_instance(
+            PvPanicPciDevState::descriptor(),
+            &self.name(),
+        );
+
         Ok(())
     }
 }
@@ -249,6 +296,53 @@ impl PciDevOps for PvPanicPci {
     }
 }
 
+impl StateTransfer for PvPanicPci {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = PvPanicPciDevState {
+            pci_state: self.base.get_pci_state(),
+            dev_id: self.dev_id.load(Ordering::Acquire),
+            dev_state: self.pvpanic.lock().unwrap().get_state(),
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        let pvpanic_pci_state: PvPanicPciDevState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("PVPANIC"))?;
+
+        self.dev_id
+            .store(pvpanic_pci_state.dev_id, Ordering::Release);
+        self.base.set_pci_state(&pvpanic_pci_state.pci_state);
+        self.pvpanic
+            .lock()
+            .unwrap()
+            .set_state(&pvpanic_pci_state.dev_state);
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&PvPanicPciDevState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for PvPanicPci {
+    fn resume(&mut self) -> Result<()> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        if let Err(e) = self.base.config.update_bar_mapping(
+            #[cfg(target_arch = "x86_64")]
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
+        ) {
+            bail!("Failed to update bar, error is {:?}", e);
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,7 +358,7 @@ mod tests {
         };
     }
 
-    fn init_pvpanic_dev(devfn: u8, supported_features: u32, dev_id: &str) -> Arc<Mutex<PciHost>> {
+    fn init_pvpanic_dev(devfn: u8, supported_features: u64, dev_id: &str) -> Arc<Mutex<PciHost>> {
         let pci_host = create_pci_host();
         let locked_pci_host = pci_host.lock().unwrap();
         let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
@@ -285,19 +379,26 @@ mod tests {
         pci_host
     }
 
+    fn get_pvpanic_dev(devfn: u8, supported_features: u64, dev_id: &str) -> Arc<Mutex<dyn Device>> {
+        let pci_host = init_pvpanic_dev(devfn, supported_features, dev_id);
+        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
+        PCI_BUS!(root_bus, locked_bus, pci_bus);
+        pci_bus.get_device(0, devfn).unwrap()
+    }
+
     #[test]
     fn test_pvpanic_cmdline_parser() {
-        // Test1: Right.
+        // Test1: supported-features Right.
         let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=0";
         let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
         assert_eq!(result.unwrap().supported_features, 0);
 
-        // Test2: Default value.
+        // Test2: supported-features Default value.
         let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7";
         let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
         assert_eq!(result.unwrap().supported_features, 3);
 
-        // Test3: Illegal value.
+        // Test3: supported-features Illegal value.
         let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=4";
         let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
         assert!(result.is_err());
@@ -325,41 +426,29 @@ mod tests {
 
     #[test]
     fn test_pvpanic_config() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+        let pvpanic_dev =
+            get_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
-        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, VENDOR_ID as usize)
-            .unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_VENDOR_ID_REDHAT);
 
-        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, DEVICE_ID as usize)
-            .unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_DEVICE_ID_REDHAT_PVPANIC);
+        let read_config_params: [(u8, u16); 5] = [
+            (VENDOR_ID, PCI_VENDOR_ID_REDHAT),
+            (DEVICE_ID, PCI_DEVICE_ID_REDHAT_PVPANIC),
+            (SUB_CLASS_CODE, PCI_CLASS_SYSTEM_OTHER),
+            (SUBSYSTEM_VENDOR_ID as u8, PVPANIC_PCI_VENDOR_ID),
+            (SUBSYSTEM_ID as u8, PCI_SUBDEVICE_ID_QEMU),
+        ];
 
-        let info = le_read_u16(
-            &pvpanic.pci_base_mut().config.config,
-            SUB_CLASS_CODE as usize,
-        )
-        .unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_CLASS_SYSTEM_OTHER);
-
-        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, SUBSYSTEM_VENDOR_ID)
-            .unwrap_or_else(|_| 0);
-        assert_eq!(info, PVPANIC_PCI_VENDOR_ID);
-
-        let info =
-            le_read_u16(&pvpanic.pci_base_mut().config.config, SUBSYSTEM_ID).unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_SUBDEVICE_ID_QEMU);
+        for &(offset, expected_content) in read_config_params.iter() {
+            let info = le_read_u16(&pvpanic.pci_base_mut().config.config, offset as usize)
+                .unwrap_or_else(|_| 0);
+            assert_eq!(info, expected_content);
+        }
     }
 
     #[test]
     fn test_pvpanic_read_features() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+        let pvpanic_dev =
+            get_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
         // test read supported_features
@@ -377,60 +466,27 @@ mod tests {
     }
 
     #[test]
-    fn test_pvpanic_write_panicked() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+    fn test_pvpanic_write_events() {
+        let pvpanic_dev =
+            get_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
-        // test write panicked event
-        let data_write = [PVPANIC_PANICKED as u8; 1];
-        let count = data_write.len() as u64;
-        let result = &pvpanic.pci_base_mut().config.bars[0]
-            .region
-            .as_ref()
-            .unwrap()
-            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
-        assert!(result.is_ok());
-    }
+        // test write events
+        let write_event_params: [u64; 3] = [
+            PVPANIC_PANICKED,
+            PVPANIC_CRASHLOADED,
+            (!(PVPANIC_PANICKED | PVPANIC_CRASHLOADED)),
+        ];
 
-    #[test]
-    fn test_pvpanic_write_crashload() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
-        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
-
-        // test write crashload event
-        let data_write = [PVPANIC_CRASHLOADED as u8; 1];
-        let count = data_write.len() as u64;
-        let result = &pvpanic.pci_base_mut().config.bars[0]
-            .region
-            .as_ref()
-            .unwrap()
-            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_pvpanic_write_unknown() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let locked_pci_host = pci_host.lock().unwrap();
-        let root_bus = locked_pci_host.child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
-        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
-
-        // test write unknown event
-        let data_write = [100u8; 1];
-        let count = data_write.len() as u64;
-        let result = &pvpanic.pci_base_mut().config.bars[0]
-            .region
-            .as_ref()
-            .unwrap()
-            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
-        assert!(result.is_err());
+        for &param in write_event_params.iter() {
+            let data_write = param.to_le_bytes();
+            let count = data_write.len() as u64;
+            let result = &pvpanic.pci_base_mut().config.bars[0]
+                .region
+                .as_ref()
+                .unwrap()
+                .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
+            assert!(result.is_ok());
+        }
     }
 }
