@@ -680,6 +680,13 @@ impl AudioExtension for OhAudioVolume {
     fn set_host_volume(&self, vol: u32) {
         set_ohos_volume(self.to_host_vol(vol));
     }
+
+    fn notify_guest_sync(&self) {
+        self.shm_dev
+            .lock()
+            .unwrap()
+            .trigger_msix(IVSHMEM_VOLUME_SYNC_VECTOR);
+    }
 }
 
 impl OhAudioVolume {
