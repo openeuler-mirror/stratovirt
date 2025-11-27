@@ -388,7 +388,7 @@ struct VirtioBaseState {
     config_generation: u8,
     queue_select: u16,
     config_vector: u16,
-    queues_config: [QueueConfig; 32],
+    queues_config: [QueueConfig; 64],
     /// The number of activated queues.
     queue_num: usize,
     queue_type: u16,
@@ -436,7 +436,7 @@ impl VirtioBase {
             config_generation: self.config_generation.load(Ordering::Acquire),
             queue_select: self.queue_select,
             config_vector: self.config_vector.load(Ordering::Acquire),
-            queues_config: [QueueConfig::default(); 32],
+            queues_config: [QueueConfig::default(); 64],
             queue_num: 0,
             queue_type: self.queue_type,
         };

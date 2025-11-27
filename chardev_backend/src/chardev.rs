@@ -276,6 +276,7 @@ impl Chardev {
             }
             ChardevType::Socket { .. } => {
                 if self.output.is_none() {
+                    warn!("Output is none. Discard outbuf data.");
                     return Ok(());
                 }
                 if listener_fd.is_none() {
