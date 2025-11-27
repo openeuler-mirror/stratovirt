@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
+use serde::{Deserialize, Serialize};
 
 use super::xhci_controller::dma_write_bytes;
 use super::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
@@ -129,6 +130,16 @@ pub struct XhciOperReg {
     pub config: u32,
 }
 
+#[derive(Copy, Clone, Deserialize, Serialize)]
+pub struct XhciOperRegState {
+    usb_cmd: u32,
+    usb_status: u32,
+    dev_notify_ctrl: u32,
+    cmd_ring_ctrl: u64,
+    dcbaap: u64,
+    config: u32,
+}
+
 impl XhciOperReg {
     pub fn reset(&mut self) {
         self.set_usb_cmd(0);
@@ -167,6 +178,27 @@ impl XhciOperReg {
     pub fn unset_usb_status_flag(&mut self, value: u32) {
         self.usb_status.fetch_and(!value, Ordering::SeqCst);
     }
+
+    pub fn get_snapshot_state(&self) -> XhciOperRegState {
+        XhciOperRegState {
+            usb_cmd: self.usb_cmd.load(Ordering::SeqCst),
+            usb_status: self.usb_status.load(Ordering::SeqCst),
+            dev_notify_ctrl: self.dev_notify_ctrl,
+            cmd_ring_ctrl: self.cmd_ring_ctrl,
+            dcbaap: self.dcbaap.raw_value(),
+            config: self.config,
+        }
+    }
+
+    pub fn set_snapshot_state(&mut self, oper_state: &XhciOperRegState) {
+        self.usb_cmd.store(oper_state.usb_cmd, Ordering::SeqCst);
+        self.usb_status
+            .store(oper_state.usb_status, Ordering::SeqCst);
+        self.dev_notify_ctrl = oper_state.dev_notify_ctrl;
+        self.cmd_ring_ctrl = oper_state.cmd_ring_ctrl;
+        self.dcbaap = GuestAddress(oper_state.dcbaap);
+        self.config = oper_state.config;
+    }
 }
 
 /// XHCI Interrupter
@@ -191,6 +223,20 @@ pub struct XhciInterrupter {
     pub er_start: GuestAddress,
     pub er_size: u32,
     pub er_ep_idx: u32,
+}
+
+#[derive(Copy, Clone, Default, Deserialize, Serialize)]
+pub struct XhciInterrupterState {
+    pub id: u32,
+    iman: u32,
+    imod: u32,
+    erstsz: u32,
+    erstba: u64,
+    erdp: u64,
+    er_pcs: u8,
+    er_start: u64,
+    er_size: u32,
+    er_ep_idx: u32,
 }
 
 impl XhciInterrupter {
@@ -360,6 +406,34 @@ impl XhciInterrupter {
         fence(Ordering::SeqCst);
         dma_write_bytes(&self.mem, addr.unchecked_add(12), &[cycle])?;
         Ok(())
+    }
+
+    pub fn get_snapshot_state(&self) -> XhciInterrupterState {
+        XhciInterrupterState {
+            id: self.id,
+            iman: self.iman,
+            imod: self.imod,
+            erstsz: self.erstsz,
+            erstba: self.erstba.raw_value(),
+            erdp: self.erdp.raw_value(),
+            er_pcs: self.er_pcs.into(),
+            er_start: self.er_start.raw_value(),
+            er_size: self.er_size,
+            er_ep_idx: self.er_ep_idx,
+        }
+    }
+
+    pub fn set_snapshot_state(&mut self, state: &XhciInterrupterState) {
+        self.id = state.id;
+        self.iman = state.iman;
+        self.imod = state.imod;
+        self.erstsz = state.erstsz;
+        self.erstba = GuestAddress(state.erstba);
+        self.erdp = GuestAddress(state.erdp);
+        self.er_pcs = state.er_pcs != 0;
+        self.er_start = GuestAddress(state.er_start);
+        self.er_size = state.er_size;
+        self.er_ep_idx = state.er_ep_idx;
     }
 }
 
