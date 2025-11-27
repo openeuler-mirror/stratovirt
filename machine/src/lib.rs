@@ -62,7 +62,7 @@ use devices::legacy::FwCfgOps;
 #[cfg(feature = "pvpanic")]
 use devices::misc::pvpanic::{PvPanicPci, PvpanicDevConfig};
 #[cfg(feature = "scream")]
-use devices::misc::scream::{Scream, ScreamConfig};
+use devices::misc::scream::{Scream, ScreamConfig, ScreamState};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::{DemoDev, DemoDevConfig};
 use devices::pci::{
@@ -1802,10 +1802,17 @@ pub trait MachineOps: MachineLifecycle {
             bail!("Object for share config is not on");
         }
 
+        let id = config.id.clone();
         let mut scream = Scream::new(mem_cfg.size, config, token_id)?;
         scream
             .realize(parent_bus)
-            .with_context(|| "Failed to realize scream device")
+            .with_context(|| "Failed to realize scream device")?;
+        MigrationManager::register_device_instance(
+            ScreamState::descriptor(),
+            Arc::new(Mutex::new(scream)),
+            &id,
+        );
+        Ok(())
     }
 
     /// Get the corresponding device from the PCI bus based on the device id and device type name.
