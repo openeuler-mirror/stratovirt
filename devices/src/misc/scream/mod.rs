@@ -28,6 +28,7 @@ use clap::{ArgAction, Parser};
 use core::time;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "scream_alsa")]
 use self::alsa::AlsaStreamData;
@@ -39,6 +40,9 @@ use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::notifier::register_vm_pause_notifier;
 use machine_manager::state_query::register_state_query_callback;
+use migration::StateTransfer;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager};
+use migration_derive::DescSerde;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use ohaudio::{OhAudio, OhAudioVolume};
 #[cfg(feature = "scream_pulseaudio")]
@@ -294,6 +298,19 @@ impl ScreamCond {
     fn stream_paused(&self) -> bool {
         *self.paused.lock().unwrap() != 0
     }
+
+    fn restore(&self, paused: u8) {
+        *self.paused.lock().unwrap() = paused;
+    }
+
+    fn save(&self) -> u8 {
+        let ret = *self.paused.lock().unwrap();
+        ret & !Self::VM_PAUSE_BIT
+    }
+
+    fn notify(&self) {
+        self.cond.notify_all();
+    }
 }
 
 /// Audio stream data structure.
@@ -535,7 +552,7 @@ pub struct ScreamConfig {
     #[arg(long)]
     pub classtype: String,
     #[arg(long, value_parser = valid_id)]
-    id: String,
+    pub id: String,
     #[arg(long)]
     pub bus: String,
     #[arg(long, value_parser = get_pci_df)]
@@ -559,6 +576,9 @@ pub struct Scream {
     config: ScreamConfig,
     token_id: Option<Arc<RwLock<u64>>>,
     interface_resource: Vec<Arc<Mutex<dyn AudioInterface>>>,
+    play_cond: Arc<ScreamCond>,
+    capt_cond: Arc<ScreamCond>,
+    audio_ext: Option<Arc<dyn AudioExtension>>,
 }
 
 impl Scream {
@@ -582,6 +602,9 @@ impl Scream {
             config,
             token_id,
             interface_resource: Vec::new(),
+            play_cond: ScreamCond::new(),
+            capt_cond: ScreamCond::new(),
+            audio_ext: None,
         })
     }
 
@@ -703,9 +726,9 @@ impl Scream {
         let ivshmem = ivshmem.realize()?;
         let ivshmem_cloned = ivshmem.clone();
 
-        let play_cond = ScreamCond::new();
-        let capt_cond = ScreamCond::new();
-        self.set_ivshmem_ops(ivshmem, play_cond.clone(), capt_cond.clone());
+        let play_cond = self.play_cond.clone();
+        let capt_cond = self.capt_cond.clone();
+        self.audio_ext = Some(self.set_ivshmem_ops(ivshmem, play_cond.clone(), capt_cond.clone()));
 
         let author_notify = Arc::new(move || {
             ivshmem_cloned
@@ -724,7 +747,7 @@ impl Scream {
         ivshmem: Arc<Mutex<Ivshmem>>,
         play_cond: Arc<ScreamCond>,
         capt_cond: Arc<ScreamCond>,
-    ) {
+    ) -> Arc<dyn AudioExtension> {
         let cloned_play_cond = play_cond.clone();
         let cloned_capt_cond = capt_cond.clone();
         let cb = Box::new(move || {
@@ -735,6 +758,7 @@ impl Scream {
         ivshmem.lock().unwrap().register_reset_callback(cb);
 
         let interface = self.create_audio_extension(ivshmem.clone());
+        let ret = interface.clone();
         let interface2 = interface.clone();
         let bar0_write = Arc::new(move |data: &[u8], offset: u64| {
             match offset {
@@ -773,6 +797,8 @@ impl Scream {
             .lock()
             .unwrap()
             .set_bar0_ops((bar0_write, bar0_read));
+
+        ret
     }
 
     fn create_audio_extension(&self, _ivshmem: Arc<Mutex<Ivshmem>>) -> Arc<dyn AudioExtension> {
@@ -804,6 +830,7 @@ pub trait AudioExtension: Send + Sync {
             false => 0,
         }
     }
+    fn notify_guest_sync(&self) {}
 }
 
 struct AudioExtensionDummy;
@@ -812,3 +839,48 @@ impl AudioExtension for AudioExtensionDummy {}
 unsafe impl Send for AudioExtensionDummy {}
 // SAFETY: it is a dummy
 unsafe impl Sync for AudioExtensionDummy {}
+
+/// Migration support of Scream device.
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct ScreamState {
+    play_state: u8,
+    capt_state: u8,
+}
+
+impl StateTransfer for Scream {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = ScreamState {
+            play_state: self.play_cond.save(),
+            capt_state: self.capt_cond.save(),
+        };
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        let scream_state: ScreamState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("Scream"))?;
+        self.play_cond.restore(scream_state.play_state);
+        self.capt_cond.restore(scream_state.capt_state);
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&ScreamState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for Scream {
+    fn resume(&mut self) -> Result<()> {
+        self.play_cond.notify();
+        self.capt_cond.notify();
+        // Notify the guest to synchronize volume.
+        if let Some(ext) = self.audio_ext.as_ref() {
+            ext.notify_guest_sync();
+        }
+        // Synchronize record authorization.
+        let auth = get_record_authority();
+        set_record_authority(auth);
+        Ok(())
+    }
+}
