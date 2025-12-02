@@ -367,8 +367,8 @@ struct AccelConfig {
 struct MemSizeConfig {
     #[arg(long, alias = "classtype", value_parser = parse_size)]
     size: u64,
-    #[arg(long, default_value = "262144", value_parser = parse_size)]
-    maxmem: u64,
+    #[arg(long, value_parser = parse_size)]
+    maxmem: Option<u64>,
 }
 
 #[derive(Parser)]
@@ -525,12 +525,24 @@ impl VmConfig {
         }
         let mem_cfg =
             MemSizeConfig::try_parse_from(str_slip_to_clap(mem_config, !has_size_label, false))?;
-        self.machine_config.mem_config.mem_size = mem_cfg.size;
-        self.machine_config.mem_config.max_size = mem_cfg.maxmem;
-        if mem_cfg.maxmem < mem_cfg.size {
-            bail!("maxmem must bigger than current memory size")
+        let memsize = mem_cfg.size;
+        let maxmem = mem_cfg.maxmem.unwrap_or(memsize);
+        if maxmem < memsize {
+            bail!(
+                "maxmem ({} bytes) must bigger than current memory size ({} bytes)",
+                maxmem,
+                memsize
+            );
         }
-        self.machine_config.mem_config.current_size = mem_cfg.size;
+
+        if memsize < MIN_MEMSIZE || maxmem > MAX_MEMSIZE {
+            bail!("current memory size ({} bytes) and maxmem ({} bytes) should in range of [{}, {}] bytes.",
+                    memsize, maxmem, MIN_MEMSIZE, MAX_MEMSIZE);
+        }
+
+        self.machine_config.mem_config.mem_size = memsize;
+        self.machine_config.mem_config.max_size = maxmem;
+        self.machine_config.mem_config.current_size = memsize;
 
         Ok(())
     }
@@ -931,23 +943,18 @@ mod tests {
         let mut vm_config = VmConfig::default();
         let memory_cfg = "size=8";
         let mem_cfg_ret = vm_config.add_memory(memory_cfg);
-        assert!(mem_cfg_ret.is_ok());
-        let mem_size = vm_config.machine_config.mem_config.mem_size;
-        assert_eq!(mem_size, 8 * 1024 * 1024);
-        let max_size = vm_config.machine_config.mem_config.max_size;
-        assert_eq!(max_size, 256 * 1024 * 1024 * 1024);
-
+        assert!(mem_cfg_ret.is_err());
         let memory_cfg = "size=8m";
         let mem_cfg_ret = vm_config.add_memory(memory_cfg);
-        assert!(mem_cfg_ret.is_ok());
-        let mem_size = vm_config.machine_config.mem_config.mem_size;
-        assert_eq!(mem_size, 8 * 1024 * 1024);
+        assert!(mem_cfg_ret.is_err());
 
         let memory_cfg = "size=8G";
         let mem_cfg_ret = vm_config.add_memory(memory_cfg);
         assert!(mem_cfg_ret.is_ok());
         let mem_size = vm_config.machine_config.mem_config.mem_size;
+        let max_size = vm_config.machine_config.mem_config.max_size;
         assert_eq!(mem_size, 8 * 1024 * 1024 * 1024);
+        assert_eq!(max_size, 8 * 1024 * 1024 * 1024);
 
         let memory_cfg = "size=8G,maxmem=32G";
         let mem_cfg_ret = vm_config.add_memory(memory_cfg);
