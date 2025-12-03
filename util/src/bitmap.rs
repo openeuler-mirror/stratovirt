@@ -288,6 +288,7 @@ impl<T: BitOps> Bitmap<T> {
         let mut offset = offset % T::len();
         for i in idx..size {
             if self.data[i] == T::full() {
+                offset = 0;
                 continue;
             }
             for j in offset..T::len() {
@@ -311,6 +312,7 @@ impl<T: BitOps> Bitmap<T> {
         let mut offset = offset % T::len();
         for i in idx..size {
             if self.data[i] == T::zero() {
+                offset = 0;
                 continue;
             }
             for j in offset..T::len() {
