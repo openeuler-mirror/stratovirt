@@ -140,6 +140,8 @@ pub struct VirtioSerialState {
     config_space: VirtioConsoleConfig,
     /// State of serial port.
     port_state: Vec<PortState>,
+    /// Device broken status.
+    broken: bool,
 }
 
 /// Virtio serial device structure.
@@ -387,6 +389,7 @@ impl StateTransfer for Serial {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
             config_space: self.config_space,
+            broken: self.base.broken.load(Ordering::SeqCst),
             ..Default::default()
         };
 
@@ -407,6 +410,7 @@ impl StateTransfer for Serial {
             .with_context(|| migration::error::MigrationError::FromBytesError("SERIAL"))?;
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;
+        self.base.broken.store(state.broken, Ordering::SeqCst);
         self.config_space = state.config_space;
 
         for port_state in state.port_state.iter() {
@@ -1133,6 +1137,7 @@ impl ChardevNotifyDevice for SerialPort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use machine_manager::notifier::pause_notify;
 
     #[test]
     fn test_set_driver_features() {
@@ -1224,5 +1229,63 @@ mod tests {
         let expect_data: Vec<u8> = vec![0, 0, 0, 0, max_ports, 0, 0, 0, 0, 0, 0, 0];
         assert!(serial.read_config(offset, &mut read_data).is_ok());
         assert_eq!(read_data, expect_data);
+    }
+
+    // Test register/unregister pause notifier.
+    #[test]
+    fn test_pause_notifier() {
+        let max_ports: u8 = 31;
+        let mut serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
+            id: "serial".to_string(),
+            multifunction: Some(false),
+            max_ports: u32::from(max_ports),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
+        });
+
+        // The realize() will call register_pause_notifier.
+        serial.realize().unwrap();
+        assert_ne!(serial.pause_notifier_id, 0);
+
+        pause_notify(true);
+        assert_eq!(serial.vm_paused.load(Ordering::SeqCst), true);
+
+        pause_notify(false);
+        assert_eq!(serial.vm_paused.load(Ordering::SeqCst), false);
+
+        serial.unregister_pause_notifier();
+        assert_eq!(serial.pause_notifier_id, 0);
+    }
+
+    // Test get/set device state.
+    #[test]
+    fn test_state_transfer() {
+        let max_ports: u8 = 31;
+        let mut serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
+            id: "serial".to_string(),
+            multifunction: Some(false),
+            max_ports: u32::from(max_ports),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
+        });
+        serial.realize().unwrap();
+
+        let device_features = serial.base.device_features;
+        let driver_features = serial.base.driver_features;
+        let broken = serial.base.broken.load(Ordering::SeqCst);
+
+        // Get and modify the device state.
+        let init_state = serial.get_state_vec().unwrap();
+        serial.base.device_features = 0;
+        serial.base.driver_features = 0;
+        serial.base.broken.store(true, Ordering::SeqCst);
+
+        // Set and check the device state.
+        serial.set_state_mut(&init_state).unwrap();
+        assert_eq!(device_features, serial.base.device_features);
+        assert_eq!(driver_features, serial.base.driver_features);
+        assert_eq!(broken, serial.base.broken.load(Ordering::SeqCst));
     }
 }
