@@ -60,13 +60,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, RegionCache};
 use devices::pci::register_pcidevops_type;
 use devices::sysbus::register_sysbusdevops_type;
-use machine_manager::config::ConfigCheck;
-use migration_derive::ByteCode;
+use machine_manager::config::{ConfigCheck, MAX_SERIAL_VIRTIO_QUEUE, MAX_VIRTIO_QUEUE};
 use util::aio::{iov_from_buf_direct, mem_to_buf, Iovec};
 use util::byte_code::ByteCode;
 use util::num_ops::{read_u32, write_u32};
@@ -378,7 +378,7 @@ pub struct VirtioBase {
     broken: Arc<AtomicBool>,
 }
 
-#[derive(Copy, Clone, ByteCode)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct VirtioBaseState {
     device_activated: bool,
     hfeatures_sel: u32,
@@ -388,7 +388,7 @@ struct VirtioBaseState {
     config_generation: u8,
     queue_select: u16,
     config_vector: u16,
-    queues_config: [QueueConfig; 64],
+    queues_config: Vec<QueueConfig>,
     /// The number of activated queues.
     queue_num: usize,
     queue_type: u16,
@@ -427,6 +427,7 @@ impl VirtioBase {
     }
 
     fn get_state(&self) -> VirtioBaseState {
+        let max_queues = std::cmp::max(MAX_VIRTIO_QUEUE, MAX_SERIAL_VIRTIO_QUEUE);
         let mut state = VirtioBaseState {
             device_activated: self.device_activated.load(Ordering::Acquire),
             hfeatures_sel: self.hfeatures_sel,
@@ -436,7 +437,7 @@ impl VirtioBase {
             config_generation: self.config_generation.load(Ordering::Acquire),
             queue_select: self.queue_select,
             config_vector: self.config_vector.load(Ordering::Acquire),
-            queues_config: [QueueConfig::default(); 64],
+            queues_config: vec![QueueConfig::default(); max_queues],
             queue_num: 0,
             queue_type: self.queue_type,
         };

@@ -51,10 +51,8 @@ use crate::{
 };
 #[cfg(feature = "demo_device")]
 use demo_device::DemoDev;
-use migration::{DeviceStateDesc, FieldDesc};
-use migration_derive::{ByteCode, Desc, DescSerde};
-
-use self::config::PCIE_CONFIG_SPACE_SIZE;
+use migration::DeviceStateDesc;
+use migration_derive::DescSerde;
 
 const BDF_FUNC_SHIFT: u8 = 3;
 pub const PCI_SLOT_MAX: u8 = 32;
@@ -142,17 +140,16 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
     ((header >> 20) & 0xffc) as usize
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct PcieState {
-    config: [u8; PCIE_CONFIG_SPACE_SIZE],
-    write_mask: [u8; PCIE_CONFIG_SPACE_SIZE],
-    write_clear_mask: [u8; PCIE_CONFIG_SPACE_SIZE],
+    config: Vec<u8>,
+    write_mask: Vec<u8>,
+    write_clear_mask: Vec<u8>,
     last_cap_end: u16,
     last_ext_cap_offset: u16,
     last_ext_cap_end: u16,
-    bme: u8,
+    bme: bool,
 }
 
 #[derive(Clone, DescSerde, Serialize, Deserialize)]
@@ -180,38 +177,25 @@ pub struct PciDevBase {
 
 impl PciDevBase {
     pub fn get_pcie_state(&self) -> PcieState {
-        let mut pcie_state = PcieState::default();
-
-        pcie_state.config.copy_from_slice(&self.config.config);
-        pcie_state
-            .write_mask
-            .copy_from_slice(&self.config.write_mask);
-        pcie_state
-            .write_clear_mask
-            .copy_from_slice(&self.config.write_clear_mask);
-        pcie_state.last_cap_end = self.config.last_cap_end;
-        pcie_state.last_ext_cap_offset = self.config.last_ext_cap_offset;
-        pcie_state.last_ext_cap_end = self.config.last_ext_cap_end;
-        pcie_state.bme = u8::from(self.bme.load(Ordering::Acquire));
-
-        pcie_state
+        PcieState {
+            config: self.config.config.clone(),
+            write_mask: self.config.write_mask.clone(),
+            write_clear_mask: self.config.write_clear_mask.clone(),
+            last_cap_end: self.config.last_cap_end,
+            last_ext_cap_offset: self.config.last_ext_cap_offset,
+            last_ext_cap_end: self.config.last_ext_cap_end,
+            bme: self.bme.load(Ordering::Acquire),
+        }
     }
 
-    pub fn set_pcie_state(&mut self, pcie_state: &PcieState) -> Result<()> {
-        self.config.config = pcie_state.config.to_vec();
-        self.config.write_mask = pcie_state.write_mask.to_vec();
-        self.config.write_clear_mask = pcie_state.write_clear_mask.to_vec();
+    pub fn set_pcie_state(&mut self, pcie_state: &PcieState) {
+        self.config.config = pcie_state.config.clone();
+        self.config.write_mask = pcie_state.write_mask.clone();
+        self.config.write_clear_mask = pcie_state.write_clear_mask.clone();
         self.config.last_cap_end = pcie_state.last_cap_end;
         self.config.last_ext_cap_offset = pcie_state.last_ext_cap_end;
         self.config.last_ext_cap_end = pcie_state.last_ext_cap_end;
-
-        if pcie_state.bme != 0 && pcie_state.bme != 1 {
-            bail!("Pcie bme state is error: {}", pcie_state.bme);
-        }
-        let bme = pcie_state.bme == 1;
-        self.bme.store(bme, Ordering::Release);
-
-        Ok(())
+        self.bme.store(pcie_state.bme, Ordering::Release);
     }
 
     pub fn get_pci_state(&self) -> PciState {

@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
@@ -28,9 +29,8 @@ use crate::{
 use address_space::{AddressRange, AddressSpace, GuestAddress, RegionIoEventFd};
 use devices::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use devices::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 use util::loop_context::create_new_eventfd;
 
@@ -113,9 +113,8 @@ impl HostNotifyInfo {
 }
 
 /// The state of virtio-mmio device.
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct VirtioMmioState {
     virtio_base: VirtioBaseState,
 }
@@ -517,17 +516,12 @@ impl StateTransfer for VirtioMmioDevice {
         let state = VirtioMmioState {
             virtio_base: self.device.lock().unwrap().virtio_base().get_state(),
         };
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let s_len = std::mem::size_of::<VirtioMmioState>();
-        if state.len() != s_len {
-            bail!("Invalid state length {}, expected {}", state.len(), s_len);
-        }
-
-        let mut mmio_state = VirtioMmioState::default();
-        mmio_state.as_mut_bytes().copy_from_slice(state);
+        let mmio_state: VirtioMmioState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("MMIO_DEVICE"))?;
 
         let mut locked_dev = self.device.lock().unwrap();
         locked_dev.virtio_base_mut().set_state(

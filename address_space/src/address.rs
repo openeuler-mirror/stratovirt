@@ -13,6 +13,8 @@
 use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::ops::{BitAnd, BitOr};
 
+use serde::{Deserialize, Serialize};
+
 use util::num_ops::{round_down, round_up};
 
 #[derive(PartialEq, Eq)]
@@ -25,7 +27,7 @@ pub enum AddressAttr {
 }
 
 /// Represent the address in given address space.
-#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct GuestAddress(pub u64);
 
 impl GuestAddress {
