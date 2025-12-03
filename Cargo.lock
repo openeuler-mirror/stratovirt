@@ -27,6 +27,8 @@ dependencies = [
  "migration_derive",
  "nix 0.26.2",
  "once_cell",
+ "serde",
+ "serde_json",
  "thiserror",
  "trace",
  "util",
