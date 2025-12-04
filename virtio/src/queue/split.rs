@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
+use serde::{Deserialize, Serialize};
 
 use super::{
     checked_offset_mem, ElemIovec, Element, VringOps, INVALID_VECTOR_NUM, VIRTQ_DESC_F_INDIRECT,
@@ -99,7 +100,7 @@ unsafe fn write_object_direct<T: ByteCode>(data: &T, host_addr: u64) -> Result<(
         .with_context(|| "Failed to write object via host address")
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Serialize, Deserialize)]
 pub struct VirtioAddrCache {
     /// Host virtual address of the descriptor table.
     pub desc_table_host: u64,
@@ -110,7 +111,7 @@ pub struct VirtioAddrCache {
 }
 
 /// The configuration of virtqueue.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Serialize, Deserialize)]
 pub struct QueueConfig {
     /// Guest physical address of the descriptor table.
     pub desc_table: GuestAddress,

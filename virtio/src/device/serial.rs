@@ -21,6 +21,8 @@ use std::thread::yield_now;
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
+
 use machine_manager::config::ChardevConfig;
 use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use vmm_sys_util::epoll::EventSet;
@@ -34,15 +36,12 @@ use crate::{
 use address_space::{AddressAttr, AddressSpace};
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
-    config::{
-        ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_SERIAL_PORTS_NUMBER,
-        DEFAULT_VIRTQUEUE_SIZE,
-    },
+    config::{ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::aio::iov_from_buf_direct;
 use util::byte_code::ByteCode;
 use util::gen_base_func;
@@ -92,7 +91,7 @@ struct VirtioConsoleControl {
 impl ByteCode for VirtioConsoleControl {}
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 struct VirtioConsoleConfig {
     // The size of the console is supplied if VIRTIO_CONSOLE_F_SIZE feature is set.
     cols: u16,
@@ -119,9 +118,7 @@ impl VirtioConsoleConfig {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Copy, Clone, Default, Serialize, Deserialize)]
 struct PortState {
     /// Number id.
     nr: u32,
@@ -132,9 +129,8 @@ struct PortState {
 }
 
 /// Status of serial device.
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct VirtioSerialState {
     /// Bit mask of features supported by the backend.
     device_features: u64,
@@ -142,10 +138,10 @@ pub struct VirtioSerialState {
     driver_features: u64,
     /// Virtio serial config space.
     config_space: VirtioConsoleConfig,
-    /// Number of serial port.
-    nr_ports: u32,
     /// State of serial port.
-    port_state: [PortState; DEFAULT_SERIAL_PORTS_NUMBER],
+    port_state: Vec<PortState>,
+    /// Device broken status.
+    broken: bool,
 }
 
 /// Virtio serial device structure.
@@ -393,32 +389,31 @@ impl StateTransfer for Serial {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
             config_space: self.config_space,
+            broken: self.base.broken.load(Ordering::SeqCst),
             ..Default::default()
         };
 
-        for (index, port) in self.ports.lock().unwrap().iter().enumerate() {
+        for port in self.ports.lock().unwrap().iter() {
             let locked_port = port.lock().unwrap();
-            state.port_state[index] = PortState {
+            state.port_state.push(PortState {
                 nr: locked_port.nr,
                 guest_connected: locked_port.guest_connected,
                 host_connected: locked_port.host_connected,
-            };
-            state.nr_ports += 1;
+            });
         }
 
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let state = VirtioSerialState::from_bytes(state)
+        let state: VirtioSerialState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("SERIAL"))?;
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;
+        self.base.broken.store(state.broken, Ordering::SeqCst);
         self.config_space = state.config_space;
 
-        let nr_ports = state.nr_ports as usize;
-        for i in 0..nr_ports {
-            let port_state = state.port_state[i];
+        for port_state in state.port_state.iter() {
             let port = find_port_by_nr(&self.ports, port_state.nr)
                 .with_context(|| format!("Don't find port {}", port_state.nr))?;
             let mut locked_port = port.lock().unwrap();
@@ -1142,6 +1137,7 @@ impl ChardevNotifyDevice for SerialPort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use machine_manager::notifier::pause_notify;
 
     #[test]
     fn test_set_driver_features() {
@@ -1233,5 +1229,63 @@ mod tests {
         let expect_data: Vec<u8> = vec![0, 0, 0, 0, max_ports, 0, 0, 0, 0, 0, 0, 0];
         assert!(serial.read_config(offset, &mut read_data).is_ok());
         assert_eq!(read_data, expect_data);
+    }
+
+    // Test register/unregister pause notifier.
+    #[test]
+    fn test_pause_notifier() {
+        let max_ports: u8 = 31;
+        let mut serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
+            id: "serial".to_string(),
+            multifunction: Some(false),
+            max_ports: u32::from(max_ports),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
+        });
+
+        // The realize() will call register_pause_notifier.
+        serial.realize().unwrap();
+        assert_ne!(serial.pause_notifier_id, 0);
+
+        pause_notify(true);
+        assert_eq!(serial.vm_paused.load(Ordering::SeqCst), true);
+
+        pause_notify(false);
+        assert_eq!(serial.vm_paused.load(Ordering::SeqCst), false);
+
+        serial.unregister_pause_notifier();
+        assert_eq!(serial.pause_notifier_id, 0);
+    }
+
+    // Test get/set device state.
+    #[test]
+    fn test_state_transfer() {
+        let max_ports: u8 = 31;
+        let mut serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
+            id: "serial".to_string(),
+            multifunction: Some(false),
+            max_ports: u32::from(max_ports),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
+        });
+        serial.realize().unwrap();
+
+        let device_features = serial.base.device_features;
+        let driver_features = serial.base.driver_features;
+        let broken = serial.base.broken.load(Ordering::SeqCst);
+
+        // Get and modify the device state.
+        let init_state = serial.get_state_vec().unwrap();
+        serial.base.device_features = 0;
+        serial.base.driver_features = 0;
+        serial.base.broken.store(true, Ordering::SeqCst);
+
+        // Set and check the device state.
+        serial.set_state_mut(&init_state).unwrap();
+        assert_eq!(device_features, serial.base.device_features);
+        assert_eq!(driver_features, serial.base.driver_features);
+        assert_eq!(broken, serial.base.broken.load(Ordering::SeqCst));
     }
 }

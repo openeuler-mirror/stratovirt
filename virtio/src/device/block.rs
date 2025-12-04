@@ -24,6 +24,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use clap::Parser;
 use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
@@ -49,10 +50,9 @@ use machine_manager::config::{
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use migration::{
-    migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
-    StateTransfer,
+    migration::Migratable, DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer,
 };
-use migration_derive::{ByteCode, Desc};
+use migration_derive::DescSerde;
 use util::aio::{
     iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioEngine, AioReqResult,
     Iovec, OpCode, WriteZeroesState,
@@ -982,7 +982,7 @@ impl EventNotifierHelper for BlockIoHandler {
 }
 
 #[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 struct VirtioBlkGeometry {
     cylinders: u16,
     heads: u8,
@@ -992,7 +992,7 @@ struct VirtioBlkGeometry {
 impl ByteCode for VirtioBlkGeometry {}
 
 #[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VirtioBlkConfig {
     /// The capacity in 512 byte sectors.
     capacity: u64,
@@ -1037,9 +1037,8 @@ pub struct VirtioBlkConfig {
 impl ByteCode for VirtioBlkConfig {}
 
 /// State of block device.
-#[repr(C)]
-#[derive(Clone, Copy, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct BlockState {
     /// Bitmask of features supported by the backend.
     pub device_features: u64,
@@ -1503,11 +1502,11 @@ impl StateTransfer for Block {
             config_space: self.config_space,
             broken: self.base.broken.load(Ordering::SeqCst),
         };
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let state = BlockState::from_bytes(state)
+        let state: BlockState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("BLOCK"))?;
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;

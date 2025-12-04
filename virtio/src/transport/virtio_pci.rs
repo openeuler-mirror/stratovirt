@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(feature = "virtio_gpu")]
@@ -52,8 +53,8 @@ use devices::pci::{
 use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::byte_code::ByteCode;
 use util::num_ops::{ranges_overlap, read_data_u32, write_data_u32};
 use util::{gen_base_func, offset_of};
@@ -283,9 +284,8 @@ impl VirtioPciNotifyCap {
 }
 
 /// The state of virtio-pci device.
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 struct VirtioPciState {
     dev_id: u16,
     pcie_state: PcieState,
@@ -1276,18 +1276,18 @@ impl StateTransfer for VirtioPciDevice {
         // Save virtio pci common config state.
         state.virtio_base = self.device.lock().unwrap().virtio_base().get_state();
 
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let virito_pci_state = VirtioPciState::from_bytes(state)
+        let virito_pci_state: VirtioPciState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("PCI_DEVICE"))?;
 
         self.dev_id
             .store(virito_pci_state.dev_id, Ordering::Release);
 
         // Set virtio pci config state.
-        self.base.set_pcie_state(&virito_pci_state.pcie_state)?;
+        self.base.set_pcie_state(&virito_pci_state.pcie_state);
 
         // Set virtio pci common config state.
         let mut locked_device = self.device.lock().unwrap();
