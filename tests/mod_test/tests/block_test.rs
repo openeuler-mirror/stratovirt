@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::mem::size_of;
 use std::os::linux::fs::MetadataExt;
+use std::process::Command;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use std::{thread, time};
@@ -23,16 +24,16 @@ use mod_test::libdriver::qcow2::{check_snapshot, create_snapshot, delete_snapsho
 use mod_test::libdriver::virtio::TestVringDescEntry;
 use mod_test::libdriver::virtio::{TestVirtQueue, VirtioDeviceOps};
 use mod_test::libdriver::virtio_block::{
-    add_blk_request, create_blk, set_up, tear_down, virtio_blk_default_feature, virtio_blk_read,
-    virtio_blk_read_write_zeroes, virtio_blk_request, virtio_blk_write, TestVirtBlkReq,
-    VirtBlkDiscardWriteZeroes, DEFAULT_IO_REQS, MAX_REQUEST_SECTORS, REQ_ADDR_LEN, REQ_DATA_LEN,
-    REQ_DATA_OFFSET, REQ_STATUS_LEN, TIMEOUT_US, VIRTIO_BLK_F_BARRIER, VIRTIO_BLK_F_BLK_SIZE,
-    VIRTIO_BLK_F_CONFIG_WCE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_GEOMETRY,
-    VIRTIO_BLK_F_LIFETIME, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SECURE_ERASE,
-    VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_F_WRITE_ZEROES,
-    VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD,
-    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_ILLGEAL, VIRTIO_BLK_T_IN,
-    VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
+    add_blk_request, create_blk, set_up, set_up_incoming, tear_down, virtio_blk_default_feature,
+    virtio_blk_read, virtio_blk_read_write_zeroes, virtio_blk_request, virtio_blk_write,
+    TestVirtBlkReq, VirtBlkDiscardWriteZeroes, DEFAULT_IO_REQS, MAX_REQUEST_SECTORS, REQ_ADDR_LEN,
+    REQ_DATA_LEN, REQ_DATA_OFFSET, REQ_STATUS_LEN, TIMEOUT_US, VIRTIO_BLK_F_BARRIER,
+    VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_CONFIG_WCE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
+    VIRTIO_BLK_F_GEOMETRY, VIRTIO_BLK_F_LIFETIME, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO,
+    VIRTIO_BLK_F_SECURE_ERASE, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_SIZE_MAX, VIRTIO_BLK_F_TOPOLOGY,
+    VIRTIO_BLK_F_WRITE_ZEROES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
+    VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_ILLGEAL,
+    VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
 };
 use mod_test::libdriver::virtio_pci_modern::TestVirtioPciDev;
 use mod_test::libtest::TestState;
@@ -2105,4 +2106,119 @@ fn blk_snapshot_basic2() {
     );
 
     tear_down(blk, test_state, alloc, virtqueues, image_path);
+}
+
+// Write data to image file
+fn test_rw(
+    blk: Rc<RefCell<TestVirtioPciDev>>,
+    test_state: Rc<RefCell<TestState>>,
+    alloc: Rc<RefCell<GuestAllocator>>,
+    virtqueue: Rc<RefCell<TestVirtQueue>>,
+) {
+    virtio_blk_write(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueue.clone(),
+        0,
+        true,
+    );
+    virtio_blk_read(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueue.clone(),
+        0,
+        true,
+    );
+}
+
+fn blk_memory_snapshot_save_restore(mapped: bool) {
+    // Start vm and save snapshot.
+    let (blk, test_state, alloc, image_path) = set_up(&ImageType::Qcow2);
+    let features = virtio_blk_default_feature(blk.clone());
+    let virtqueues = blk
+        .borrow_mut()
+        .init_device(test_state.clone(), alloc.clone(), features, 1);
+
+    test_rw(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+    );
+
+    let _output = Command::new("mkdir")
+        .arg("/tmp/snapshot")
+        .output()
+        .expect("Failed to mkdir dir");
+
+    let mapped_str = if mapped { "true" } else { "false" };
+    let json_str = format!(
+        "{{\"execute\":\"migrate\", \"arguments\":{{\"uri\":\"file:/tmp/snapshot,mapped={}\"}}}}",
+        mapped_str
+    );
+    test_state.borrow_mut().qmp(&json_str);
+    test_state.borrow_mut().qmp_read();
+
+    blk.borrow_mut().destroy_device(alloc, virtqueues);
+    test_state.borrow_mut().qmp("{\"execute\": \"quit\"}");
+    test_state.borrow_mut().qmp_read();
+
+    // Start vm and restore snapshot.
+    let incoming_str = format!("-incoming file:/tmp/snapshot,mapped={}", mapped_str);
+    let (blk, test_state, alloc, image_path) =
+        set_up_incoming(&ImageType::Qcow2, &image_path.to_string(), &incoming_str);
+    let features = virtio_blk_default_feature(blk.clone());
+    let virtqueues = blk
+        .borrow_mut()
+        .init_device(test_state.clone(), alloc.clone(), features, 1);
+
+    test_rw(
+        blk.clone(),
+        test_state.clone(),
+        alloc.clone(),
+        virtqueues[0].clone(),
+    );
+
+    let _output = Command::new("rm")
+        .arg("-rf")
+        .arg("/tmp/snapshot")
+        .output()
+        .expect("Failed to rm dir");
+    tear_down(blk, test_state, alloc, virtqueues, image_path);
+}
+
+/// Block device test memory snapshot.
+/// TestStep:
+///   1. Init block device.
+///   2. Do the I/O request.
+///   3. Create memory snapshot.
+///   4. Destroy device.
+///   5. Init block device.
+///   6. Recover memory snapshot, with 'mapped=true'.
+///   7. Do the I/O request.
+///   8. Destroy device.
+/// Expect:
+///   1-8: success.
+#[test]
+fn blk_migrate_mapped_true() {
+    blk_memory_snapshot_save_restore(true);
+}
+
+/// Block device test memory snapshot.
+/// TestStep:
+///   1. Init block device.
+///   2. Do the I/O request.
+///   3. Create memory snapshot.
+///   4. Destroy device.
+///   5. Init block device.
+///   6. Recover memory snapshot, with 'mapped=false'.
+///   7. Do the I/O request.
+///   8. Destroy device.
+/// Expect:
+///   1-8: success.
+#[test]
+fn blk_migrate_mapped_false() {
+    blk_memory_snapshot_save_restore(false);
 }
