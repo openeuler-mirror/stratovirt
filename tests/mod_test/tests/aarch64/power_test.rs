@@ -197,3 +197,49 @@ fn test_stop_resume() {
     ts.stop();
     tear_down();
 }
+
+/// Test the memory snapshot for power device.
+///
+/// Steps:
+///   1. Create memory snapshot with power device.
+///   2. CLose the vm by 'quit' qmp.
+///   3. Restore memory snapshot.
+///   4. Read power event.
+/// Expect:
+///   1-4: success.
+#[test]
+fn test_migrate_power() {
+    power_prepare_env();
+    let mut args: Vec<&str> = Vec::new();
+    power_args(&mut args);
+    let ts = test_init(args.clone());
+
+    let _output = Command::new("mkdir")
+        .arg("/tmp/snapshot")
+        .output()
+        .expect("Failed to mkdir dir");
+
+    ts.qmp(
+        "{\"execute\":\"migrate\", \"arguments\":{\"uri\":\"file:/tmp/snapshot,mapped=false\"}}",
+    );
+    ts.qmp_read();
+
+    ts.qmp("{\"execute\": \"quit\"}");
+    ts.qmp_read();
+
+    let mut incoming_args = "-incoming file:/tmp/snapshot".split(' ').collect();
+    args.append(&mut incoming_args);
+    let mut ts = test_init(args);
+
+    // If it can read value from power device.
+    let _ = power_read_evt(&ts, REG_IDX_ACAD_ON as u64);
+
+    let _output = Command::new("rm")
+        .arg("-rf")
+        .arg("/tmp/snapshot")
+        .output()
+        .expect("Failed to rm dir");
+
+    ts.stop();
+    tear_down();
+}
