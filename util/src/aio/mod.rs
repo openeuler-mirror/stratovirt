@@ -572,12 +572,9 @@ impl<T: Clone + 'static> Aio<T> {
                 OpCode::WriteZeroesUnmap,
             ]
             .contains(&cb.opcode)
+            || cb.is_misaligned()
         {
             return self.handle_sync_request(cb);
-        }
-
-        if cb.is_misaligned() {
-            return self.submit_thread_pool_async(cb);
         }
 
         cb.try_convert_to_write_zero();
@@ -588,7 +585,7 @@ impl<T: Clone + 'static> Aio<T> {
             return self.submit_async(cb);
         }
 
-        self.submit_thread_pool_async(cb)
+        self.handle_sync_request(cb)
     }
 
     fn handle_sync_request(&mut self, mut cb: AioCb<T>) -> Result<()> {
@@ -711,6 +708,7 @@ impl<T: Clone + 'static> Aio<T> {
         Ok(())
     }
 
+    #[allow(unused)]
     fn submit_thread_pool_async(&mut self, cb: AioCb<T>) -> Result<()> {
         let mut node = Box::new(Node::new(cb));
         node.value.user_data = (&mut (*node) as *mut CbNode<T>) as u64;
