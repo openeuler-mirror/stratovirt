@@ -427,6 +427,35 @@ pub fn virtio_blk_default_feature(blk: Rc<RefCell<TestVirtioPciDev>>) -> u64 {
     features
 }
 
+fn set_up_internal(
+    image_type: &ImageType,
+    image_path: &str,
+    other_args_str: &str,
+) -> (
+    Rc<RefCell<TestVirtioPciDev>>,
+    Rc<RefCell<TestState>>,
+    Rc<RefCell<GuestAllocator>>,
+    Rc<String>,
+) {
+    let img_path = if image_path == "" {
+        Rc::new(create_img(TEST_IMAGE_SIZE, 0, image_type))
+    } else {
+        Rc::new(image_path.to_string())
+    };
+    let device_args = Rc::new(String::from(""));
+    let drive_args = Rc::new(String::from(",direct=false"));
+    let other_args = Rc::new(String::from(other_args_str));
+    let (blk, test_state, alloc) = create_blk(
+        image_type,
+        img_path.clone(),
+        device_args,
+        drive_args,
+        other_args,
+    );
+
+    (blk, test_state, alloc, img_path)
+}
+
 pub fn set_up(
     image_type: &ImageType,
 ) -> (
@@ -435,19 +464,20 @@ pub fn set_up(
     Rc<RefCell<GuestAllocator>>,
     Rc<String>,
 ) {
-    let image_path = Rc::new(create_img(TEST_IMAGE_SIZE, 0, image_type));
-    let device_args = Rc::new(String::from(""));
-    let drive_args = Rc::new(String::from(",direct=false"));
-    let other_args = Rc::new(String::from(""));
-    let (blk, test_state, alloc) = create_blk(
-        image_type,
-        image_path.clone(),
-        device_args,
-        drive_args,
-        other_args,
-    );
+    set_up_internal(image_type, "", "")
+}
 
-    (blk, test_state, alloc, image_path)
+pub fn set_up_incoming(
+    image_type: &ImageType,
+    image_path: &str,
+    other_args_str: &str,
+) -> (
+    Rc<RefCell<TestVirtioPciDev>>,
+    Rc<RefCell<TestState>>,
+    Rc<RefCell<GuestAllocator>>,
+    Rc<String>,
+) {
+    set_up_internal(image_type, image_path, other_args_str)
 }
 
 pub fn tear_down(
