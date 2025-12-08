@@ -35,6 +35,7 @@ use address_space::AddressSpace;
 use machine_manager::{
     config::{get_pci_df, parse_bool, valid_id, DEFAULT_VIRTQUEUE_SIZE},
     event_loop::{register_event_helper, unregister_event_helper},
+    notifier::vm_paused,
 };
 use ui::input::MultitouchType;
 use util::byte_code::ByteCode;
@@ -322,6 +323,10 @@ impl InputIoHandler {
     fn process_status_queue(&mut self) -> Result<()> {
         let mut locked_status_queue = self.status_queue.lock().unwrap();
         loop {
+            if vm_paused() {
+                break;
+            }
+
             let elem = locked_status_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -403,6 +408,10 @@ impl InputIoHandler {
     fn do_event(&mut self) {
         let event_fd = &self.evdev_fd.clone().unwrap();
         loop {
+            if vm_paused() {
+                return;
+            }
+
             let mut evt = InputEvent::default();
             match event_fd.as_ref().read(evt.as_mut_bytes()) {
                 Ok(sz) => {
@@ -432,6 +441,10 @@ impl InputIoHandler {
     }
 
     pub fn send_event(&mut self, evt: &InputEvent) -> bool {
+        if vm_paused() {
+            return true;
+        }
+
         match self.input_event_send(evt) {
             Ok(_) => true,
             Err(e) => {

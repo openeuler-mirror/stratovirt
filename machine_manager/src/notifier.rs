@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use log::error;
@@ -18,6 +19,7 @@ use once_cell::sync::Lazy;
 
 static NOTIFIER_MANAGER: Lazy<RwLock<NotifierManager>> =
     Lazy::new(|| RwLock::new(NotifierManager::new()));
+static VM_PAUSED: AtomicBool = AtomicBool::new(false);
 
 pub type PauseNOtifyCallback = dyn Fn(bool) + Send + Sync;
 
@@ -69,5 +71,10 @@ pub fn unregister_vm_pause_notifier(id: u64) {
 }
 
 pub fn pause_notify(paused: bool) {
+    VM_PAUSED.store(paused, Ordering::SeqCst);
     NOTIFIER_MANAGER.read().unwrap().pause_notify(paused);
+}
+
+pub fn vm_paused() -> bool {
+    VM_PAUSED.load(Ordering::SeqCst)
 }
