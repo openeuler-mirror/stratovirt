@@ -563,4 +563,30 @@ mod tests {
         assert!(multitouch.reset().is_ok());
         assert!(multitouch.deactivate().is_ok());
     }
+
+    #[test]
+    fn test_state_transfer() {
+        let mut multitouch = get_default_test_multitouch(MultitouchType::Screen);
+        multitouch.realize().unwrap();
+
+        let device_features = multitouch.virtio_base().device_features;
+        let driver_features = multitouch.virtio_base().driver_features;
+        let broken = multitouch.virtio_base().broken.load(Ordering::SeqCst);
+
+        let init_state = multitouch.get_state_vec().unwrap();
+        multitouch.virtio_base_mut().device_features = 0;
+        multitouch.virtio_base_mut().driver_features = 0;
+        multitouch
+            .virtio_base()
+            .broken
+            .store(true, Ordering::SeqCst);
+
+        multitouch.set_state_mut(&init_state, 0u32).unwrap();
+        assert_eq!(device_features, multitouch.virtio_base().device_features);
+        assert_eq!(driver_features, multitouch.virtio_base().driver_features);
+        assert_eq!(
+            broken,
+            multitouch.virtio_base().broken.load(Ordering::SeqCst)
+        );
+    }
 }
