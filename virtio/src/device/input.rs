@@ -24,6 +24,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use libc::c_int;
 use log::{error, warn};
+use util::aio::IoRef;
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
@@ -317,11 +318,14 @@ pub struct InputIoHandler {
     evdev_fd: Option<Arc<File>>,
     /// multitouch type
     mt_type: Option<MultitouchType>,
+    /// io inflight
+    pub io_inflight: Arc<IoRef>,
 }
 
 impl InputIoHandler {
     fn process_status_queue(&mut self) -> Result<()> {
         let mut locked_status_queue = self.status_queue.lock().unwrap();
+        let _io_ref = self.io_inflight.inc_ref();
         loop {
             if vm_paused() {
                 break;
@@ -406,6 +410,7 @@ impl InputIoHandler {
     }
 
     fn do_event(&mut self) {
+        let _io_ref = self.io_inflight.inc_ref();
         let event_fd = &self.evdev_fd.clone().unwrap();
         loop {
             if vm_paused() {
@@ -441,10 +446,6 @@ impl InputIoHandler {
     }
 
     pub fn send_event(&mut self, evt: &InputEvent) -> bool {
-        if vm_paused() {
-            return true;
-        }
-
         match self.input_event_send(evt) {
             Ok(_) => true,
             Err(e) => {
@@ -522,8 +523,8 @@ impl EventNotifierHelper for InputIoHandler {
             let local_input = input.clone();
             let handler: Rc<NotifierCallback> = Rc::new(move |_, _| {
                 let mut locked_local_input = local_input.lock().unwrap();
-                if locked_local_input.device_broken.load(Ordering::SeqCst) {
-                    // The virtio-input device has broken, drop event
+                if locked_local_input.device_broken.load(Ordering::SeqCst) || vm_paused() {
+                    // The virtio-input device has broken or vm paused, drop event
                     let event_fd = &locked_local_input.evdev_fd.clone().unwrap();
                     let mut evt = InputEvent::default();
                     let _ = event_fd.as_ref().read(evt.as_mut_bytes());
@@ -549,6 +550,8 @@ pub struct Input {
     pub deactivate_evts: Vec<RawFd>,
     /// Event file fd.
     fd: Option<Arc<File>>,
+    /// Indicate if io is inflight.
+    pub io_inflight: Arc<IoRef>,
 }
 
 impl Input {
@@ -559,6 +562,7 @@ impl Input {
             evdev_cfg,
             deactivate_evts: Vec::new(),
             fd: None,
+            io_inflight: Arc::new(IoRef::default()),
         }
     }
 
@@ -582,6 +586,7 @@ impl Input {
             evdev_cfg,
             deactivate_evts: Vec::new(),
             fd: Some(Arc::new(fd)),
+            io_inflight: Arc::new(IoRef::default()),
         })
     }
 
@@ -619,6 +624,7 @@ impl Input {
             interrupt_cb: interrupt_cb.clone(),
             evdev_fd: self.fd.clone(),
             mt_type,
+            io_inflight: self.io_inflight.clone(),
         })
     }
 }
