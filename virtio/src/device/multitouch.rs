@@ -19,6 +19,7 @@ use ui::input::{
     register_mt_handler, unregister_mt_handler, MultiTouchAbsData, MultiTouchEventKind,
     MultitouchOps, MultitouchType,
 };
+use util::aio::{wait_io_done, DEFAULT_IO_TIMEOUT};
 
 use crate::{
     virtio_has_feature, VirtioBase, VirtioDevice, VirtioInterrupt, VIRTIO_INPUT_F_MTT_SCREEN,
@@ -28,6 +29,7 @@ use crate::{EvdevConfig, Input, InputIoHandler};
 use address_space::AddressSpace;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::notifier::vm_paused;
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
 use serde::{Deserialize, Serialize};
@@ -310,6 +312,11 @@ impl VirtioDevice for Multitouch {
 
 impl MultitouchOps for InputIoHandler {
     fn send_event(&mut self, mtt_evt: &MultiTouchAbsData) -> Result<()> {
+        if vm_paused() {
+            return Ok(());
+        }
+
+        let _io_ref = self.io_inflight.inc_ref();
         match mtt_evt.kind {
             MultiTouchEventKind::BEGIN | MultiTouchEventKind::UPDATE => {
                 let evts = [
@@ -357,6 +364,11 @@ impl MultitouchOps for InputIoHandler {
     }
 
     fn send_raw_event(&mut self, evt: &InputEvent) -> Result<()> {
+        if vm_paused() {
+            return Ok(());
+        }
+
+        let _io_ref = self.io_inflight.inc_ref();
         if !self.send_event(evt) {
             unregister_mt_handler(self.get_mt_type().unwrap());
             bail!(
@@ -368,6 +380,11 @@ impl MultitouchOps for InputIoHandler {
     }
 
     fn send_sync(&mut self) -> Result<()> {
+        if vm_paused() {
+            return Ok(());
+        }
+
+        let _io_ref = self.io_inflight.inc_ref();
         let evt = InputEvent::new(EV_SYN, SYN_REPORT, 0);
         if !self.send_event(&evt) {
             unregister_mt_handler(self.get_mt_type().unwrap());
@@ -390,6 +407,8 @@ pub struct MttState {
 
 impl StateTransfer for Multitouch {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
+        wait_io_done(&self.device.io_inflight, DEFAULT_IO_TIMEOUT, "Multitouch");
+
         let state = MttState {
             device_features: self.virtio_base().device_features,
             driver_features: self.virtio_base().driver_features,
