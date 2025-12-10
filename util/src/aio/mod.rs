@@ -55,6 +55,9 @@ const AIO_THREADS: &str = "threads";
 /// Max bytes of bounce buffer for IO.
 const MAX_LEN_BOUNCE_BUFF: u64 = 1 << 20;
 
+/// Default aligned IO size is 4KiB.
+pub const ALIGNMENT_SIZE: u64 = 4096;
+
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
 pub enum AioEngine {
     #[serde(alias = "off")]
