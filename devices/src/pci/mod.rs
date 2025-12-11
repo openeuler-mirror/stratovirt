@@ -142,18 +142,6 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
 
 #[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
 #[desc_version(current_version = "0.1.0")]
-pub struct PcieState {
-    config: Vec<u8>,
-    write_mask: Vec<u8>,
-    write_clear_mask: Vec<u8>,
-    last_cap_end: u16,
-    last_ext_cap_offset: u16,
-    last_ext_cap_end: u16,
-    bme: bool,
-}
-
-#[derive(Clone, DescSerde, Serialize, Deserialize)]
-#[desc_version(current_version = "0.1.0")]
 pub struct PciState {
     config: Vec<u8>,
     write_mask: Vec<u8>,
@@ -176,28 +164,6 @@ pub struct PciDevBase {
 }
 
 impl PciDevBase {
-    pub fn get_pcie_state(&self) -> PcieState {
-        PcieState {
-            config: self.config.config.clone(),
-            write_mask: self.config.write_mask.clone(),
-            write_clear_mask: self.config.write_clear_mask.clone(),
-            last_cap_end: self.config.last_cap_end,
-            last_ext_cap_offset: self.config.last_ext_cap_offset,
-            last_ext_cap_end: self.config.last_ext_cap_end,
-            bme: self.bme.load(Ordering::Acquire),
-        }
-    }
-
-    pub fn set_pcie_state(&mut self, pcie_state: &PcieState) {
-        self.config.config = pcie_state.config.clone();
-        self.config.write_mask = pcie_state.write_mask.clone();
-        self.config.write_clear_mask = pcie_state.write_clear_mask.clone();
-        self.config.last_cap_end = pcie_state.last_cap_end;
-        self.config.last_ext_cap_offset = pcie_state.last_ext_cap_end;
-        self.config.last_ext_cap_end = pcie_state.last_ext_cap_end;
-        self.bme.store(pcie_state.bme, Ordering::Release);
-    }
-
     pub fn get_pci_state(&self) -> PciState {
         PciState {
             config: self.config.config.clone(),

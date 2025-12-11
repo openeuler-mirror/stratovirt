@@ -45,10 +45,9 @@ use devices::pci::config::{
     SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use devices::pci::msix::MsixState;
-use devices::pci::PcieState;
 use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
-    PciBus, PciDevBase, PciDevOps, PciError,
+    PciBus, PciDevBase, PciDevOps, PciError, PciState,
 };
 use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 #[cfg(feature = "virtio_gpu")]
@@ -288,7 +287,7 @@ impl VirtioPciNotifyCap {
 #[desc_version(current_version = "0.1.0")]
 struct VirtioPciState {
     dev_id: u16,
-    pcie_state: PcieState,
+    pci_state: PciState,
     virtio_base: VirtioBaseState,
 }
 
@@ -1271,7 +1270,7 @@ impl StateTransfer for VirtioPciDevice {
         };
 
         // Save virtio pci config state.
-        state.pcie_state = self.base.get_pcie_state();
+        state.pci_state = self.base.get_pci_state();
 
         // Save virtio pci common config state.
         state.virtio_base = self.device.lock().unwrap().virtio_base().get_state();
@@ -1287,7 +1286,7 @@ impl StateTransfer for VirtioPciDevice {
             .store(virito_pci_state.dev_id, Ordering::Release);
 
         // Set virtio pci config state.
-        self.base.set_pcie_state(&virito_pci_state.pcie_state);
+        self.base.set_pci_state(&virito_pci_state.pci_state);
 
         // Set virtio pci common config state.
         let mut locked_device = self.device.lock().unwrap();
