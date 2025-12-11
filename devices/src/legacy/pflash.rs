@@ -1171,4 +1171,29 @@ mod test {
         unregister_ram_region(file_name.to_string());
         fs::remove_file(file_name).unwrap();
     }
+
+    #[test]
+    fn test_state_transfer() {
+        let file_name = "flash_vars_for_state_1.fd";
+        let dev = pflash_dev_init(file_name);
+        dev.lock().unwrap().write_cycle = 1;
+        dev.lock().unwrap().cmd = 2;
+        dev.lock().unwrap().status = 3;
+        dev.lock().unwrap().counter = 4;
+
+        let state = dev.lock().unwrap().get_state_vec().unwrap();
+        dev.lock().unwrap().write_cycle = 0;
+        dev.lock().unwrap().cmd = 0;
+        dev.lock().unwrap().status = 0;
+        dev.lock().unwrap().cmd = 0;
+
+        dev.lock().unwrap().set_state_mut(&state).unwrap();
+        assert_eq!(dev.lock().unwrap().write_cycle, 1);
+        assert_eq!(dev.lock().unwrap().cmd, 2);
+        assert_eq!(dev.lock().unwrap().status, 3);
+        assert_eq!(dev.lock().unwrap().counter, 4);
+
+        unregister_ram_region(file_name.to_string());
+        fs::remove_file(file_name).unwrap();
+    }
 }

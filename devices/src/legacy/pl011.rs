@@ -457,18 +457,24 @@ mod test {
     use crate::sysbus::sysbus_init;
     use machine_manager::config::{ChardevConfig, ChardevType};
 
-    #[test]
-    fn test_receive() {
+    fn create_serial() -> PL011 {
         let chardev_cfg = ChardevConfig {
             classtype: ChardevType::Stdio {
                 id: "chardev".to_string(),
             },
         };
+
         let config = SerialConfig {
             chardev: chardev_cfg,
         };
+
         let sysbus = sysbus_init();
-        let mut pl011_dev = PL011::new(config, &sysbus, 0x0900_0000, 0x0000_1000).unwrap();
+        PL011::new(config, &sysbus, 0x0900_0000, 0x0000_1000).unwrap()
+    }
+
+    #[test]
+    fn test_receive() {
+        let mut pl011_dev = create_serial();
         assert_eq!(pl011_dev.state.rfifo, [0; PL011_FIFO_SIZE]);
         assert_eq!(pl011_dev.state.flags, 0x90);
         assert_eq!(pl011_dev.state.lcr, 0);
@@ -491,6 +497,29 @@ mod test {
 
         let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
         pl011_dev.receive(&data);
+        assert_eq!(pl011_dev.state.read_count, data.len() as u32);
+        for i in 0..data.len() {
+            assert_eq!(pl011_dev.state.rfifo[i], u32::from(data[i]));
+        }
+        assert_eq!(pl011_dev.state.flags, 0xC0);
+        assert_eq!(pl011_dev.state.int_level, INT_RX);
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let mut pl011_dev = create_serial();
+        let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
+        pl011_dev.receive(&data);
+        let state = pl011_dev.get_state_vec().unwrap();
+
+        pl011_dev.state.read_count = 0;
+        for i in 0..data.len() {
+            pl011_dev.state.rfifo[i] = 0;
+        }
+        pl011_dev.state.flags = 0;
+        pl011_dev.state.int_level = 0;
+
+        pl011_dev.set_state_mut(&state).unwrap();
         assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
             assert_eq!(pl011_dev.state.rfifo[i], u32::from(data[i]));
