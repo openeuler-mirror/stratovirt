@@ -349,3 +349,45 @@ pub fn acpi_dsdt_add_power_button() -> AmlDevice {
 
     acpi_dev
 }
+
+#[cfg(test)]
+mod test {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use super::{AcpiEvent, Ged, GedEvent};
+    use crate::sysbus::sysbus_init;
+    use migration::StateTransfer;
+    use util::loop_context::create_new_eventfd;
+
+    #[test]
+    fn test_state_transfer() {
+        let sysbus = sysbus_init();
+        let power_button = Arc::new(create_new_eventfd().unwrap());
+        #[cfg(target_arch = "x86_64")]
+        let cpu_resize = Arc::new(create_new_eventfd().unwrap());
+        let mut ged = Ged::new(
+            false,
+            &sysbus,
+            0x0908_0000,
+            0x0000_0004,
+            GedEvent::new(
+                power_button,
+                #[cfg(target_arch = "x86_64")]
+                cpu_resize,
+            ),
+        )
+        .unwrap();
+        ged.notification_type
+            .store(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
+        let state = ged.get_state_vec().unwrap();
+        ged.notification_type
+            .store(AcpiEvent::Nothing as u32, Ordering::SeqCst);
+
+        ged.set_state_mut(&state).unwrap();
+        assert_eq!(
+            ged.notification_type.load(Ordering::Acquire) as u32,
+            AcpiEvent::PowerDown as u32
+        );
+    }
+}
