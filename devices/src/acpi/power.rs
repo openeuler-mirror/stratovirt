@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use log::{error, info};
+use serde::{Deserialize, Serialize};
 
 use crate::acpi::ged::{AcpiEvent, Ged};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps};
@@ -28,9 +29,10 @@ use acpi::{
 use address_space::GuestAddress;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::notifier::register_vm_pause_notifier;
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use migration::snapshot::POWER_SNAPSHOT_ID;
+use migration::MigrationError;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 use util::num_ops::write_data_u32;
 
@@ -64,9 +66,8 @@ const ACPI_BATTERY_STATE_CHARGING: u32 = 0x2;
 const ACAD_SYSFS_DIR: &str = "/sys/class/power_supply/Mains";
 const BAT_SYSFS_DIR: &str = "/sys/class/power_supply/Battery";
 
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Copy, Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 struct PowerDevState {
     last_acad_st: u32,
     last_bat_st: u32,
@@ -179,11 +180,12 @@ impl PowerDev {
 
 impl StateTransfer for PowerDev {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        Ok(self.state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&self.state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        self.state.as_mut_bytes().copy_from_slice(state);
+        self.state = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("PowerDevState"))?;
         Ok(())
     }
 
@@ -216,6 +218,12 @@ impl Device for PowerDev {
         pdev.send_power_event(AcpiEvent::BatteryInf);
         drop(pdev);
         power_status_update(&dev);
+
+        MigrationManager::register_device_instance(
+            PowerDevState::descriptor(),
+            dev.clone(),
+            POWER_SNAPSHOT_ID,
+        );
 
         Ok(dev)
     }
