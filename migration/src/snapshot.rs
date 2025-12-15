@@ -276,33 +276,33 @@ impl MigrationManager {
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
         // Restore transports state.
         for _ in 0..locked_vmm.transports.len() {
-            let (transport_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (transport_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(transport) = locked_vmm.transports.get(&id) {
                 transport
                     .lock()
                     .unwrap()
-                    .restore_mut_device(&transport_data)
+                    .restore_mut_device(&transport_data, old_version)
                     .with_context(|| "Failed to restore transport state")?;
             }
         }
 
         // Restore devices state.
         for _ in 0..locked_vmm.devices.len() {
-            let (device_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (device_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(device) = locked_vmm.devices.get(&id) {
                 device
                     .lock()
                     .unwrap()
-                    .restore_mut_device(&device_data)
+                    .restore_mut_device(&device_data, old_version)
                     .with_context(|| "Failed to restore device state")?;
             }
         }
 
         // Restore CPUs state.
         for _ in 0..locked_vmm.cpus.len() {
-            let (cpu_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (cpu_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(cpu) = locked_vmm.cpus.get(&id) {
-                cpu.restore_device(&cpu_data)
+                cpu.restore_device(&cpu_data, old_version)
                     .with_context(|| "Failed to restore cpu state")?;
             }
         }
@@ -311,8 +311,8 @@ impl MigrationManager {
         {
             // Restore kvm device state.
             if let Some(kvm) = &locked_vmm.kvm {
-                let (kvm_data, _) = Self::check_vm_state(fd, &snap_desc_db)?;
-                kvm.restore_device(&kvm_data)
+                let (kvm_data, _, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
+                kvm.restore_device(&kvm_data, old_version)
                     .with_context(|| "Failed to restore kvm state")?;
             }
         }
@@ -321,9 +321,9 @@ impl MigrationManager {
         {
             // Restore GIC group state.
             for _ in 0..locked_vmm.gic_group.len() {
-                let (gic_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+                let (gic_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
                 if let Some(gic) = locked_vmm.gic_group.get(&id) {
-                    gic.restore_device(&gic_data)
+                    gic.restore_device(&gic_data, old_version)
                         .with_context(|| "Failed to restore gic state")?;
                 }
             }

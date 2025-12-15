@@ -409,7 +409,7 @@ impl StateTransfer for PL011 {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         self.state = *PL011State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL011"))?;
 
@@ -519,7 +519,7 @@ mod test {
         pl011_dev.state.flags = 0;
         pl011_dev.state.int_level = 0;
 
-        pl011_dev.set_state_mut(&state).unwrap();
+        pl011_dev.set_state_mut(&state, 0u32).unwrap();
         assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
             assert_eq!(pl011_dev.state.rfifo[i], u32::from(data[i]));

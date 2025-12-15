@@ -971,7 +971,7 @@ impl StateTransfer for PFlash {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let pflash_state: PFlashState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("PFlashState"))?;
         self.write_cycle = pflash_state.write_cycle;
@@ -1187,7 +1187,7 @@ mod test {
         dev.lock().unwrap().status = 0;
         dev.lock().unwrap().cmd = 0;
 
-        dev.lock().unwrap().set_state_mut(&state).unwrap();
+        dev.lock().unwrap().set_state_mut(&state, 0u32).unwrap();
         assert_eq!(dev.lock().unwrap().write_cycle, 1);
         assert_eq!(dev.lock().unwrap().cmd, 2);
         assert_eq!(dev.lock().unwrap().status, 3);

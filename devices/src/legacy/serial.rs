@@ -441,7 +441,7 @@ impl StateTransfer for Serial {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let serial_state = *SerialState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("SERIAL"))?;
         let mut rbr = VecDeque::<u8>::default();
@@ -570,7 +570,7 @@ mod test {
         serial_state.thr_pending = 1;
 
         // Check state value recovered.
-        assert!(usart.set_state_mut(serial_state.as_bytes()).is_ok());
+        assert!(usart.set_state_mut(serial_state.as_bytes(), 0u32).is_ok());
         assert_eq!(usart.state.ier, 3);
         assert_eq!(usart.state.iir, 10);
         assert_eq!(usart.state.lcr, 8);

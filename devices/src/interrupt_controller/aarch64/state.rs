@@ -649,7 +649,7 @@ impl StateTransfer for GICv3 {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> Result<()> {
+    fn set_state(&self, state: &[u8], _version: u32) -> Result<()> {
         use migration::error::MigrationError;
 
         let state = GICv3State::from_bytes(state).unwrap();
@@ -731,7 +731,7 @@ impl StateTransfer for GICv3Its {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> Result<()> {
+    fn set_state(&self, state: &[u8], _version: u32) -> Result<()> {
         use migration::MigrationError;
 
         let mut its_state = *GICv3ItsState::from_bytes(state)

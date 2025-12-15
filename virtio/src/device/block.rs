@@ -1505,7 +1505,7 @@ impl StateTransfer for Block {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let state: BlockState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("BLOCK"))?;
         self.base.device_features = state.device_features;
@@ -1933,7 +1933,7 @@ mod tests {
         block.base.broken.store(true, Ordering::SeqCst);
 
         // Set and check the device state.
-        block.set_state_mut(&init_state).unwrap();
+        block.set_state_mut(&init_state, 0u32).unwrap();
         assert_eq!(device_features, block.base.device_features);
         assert_eq!(driver_features, block.base.driver_features);
         assert_eq!(broken, block.base.broken.load(Ordering::SeqCst));

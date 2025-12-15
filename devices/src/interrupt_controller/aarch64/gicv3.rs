@@ -192,7 +192,7 @@ impl GICv3 {
 
     fn reset_gic_state(&self) -> Result<()> {
         let reset_state = self.create_reset_state()?;
-        self.set_state(&reset_state)
+        self.set_state(&reset_state, 0u32)
             .with_context(|| "Failed to reset gic")
     }
 
