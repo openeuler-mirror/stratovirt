@@ -200,7 +200,7 @@ impl StateTransfer for CPU {
         Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> Result<()> {
+    fn set_state(&self, state: &[u8], _version: u32) -> Result<()> {
         let cpu_state = *ArmCPUState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("CPU"))?;
 

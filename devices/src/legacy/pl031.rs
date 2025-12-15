@@ -200,7 +200,7 @@ impl StateTransfer for PL031 {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         self.state = *PL031State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL031"))?;
 
@@ -282,7 +282,7 @@ mod test {
         LittleEndian::write_u32(&mut data, wtick_tmp);
         PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
 
-        rtc.set_state_mut(&state).unwrap();
+        rtc.set_state_mut(&state, 0u32).unwrap();
         PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
         let rtick = LittleEndian::read_u32(&data);
         assert_eq!(wtick, rtick);

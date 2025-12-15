@@ -57,6 +57,9 @@ pub fn snapshot(path: String) -> Response {
     if let Err(e) = MigrationManager::save_snapshot(&path) {
         error!("Failed to migrate to path \'{:?}\': {:?}", path, e);
         let _ = MigrationManager::set_status(MigrationStatus::Failed);
+        if let Err(e) = MigrationManager::notify_status(true, MigrationStatus::Failed) {
+            error!("Failed to notify status: {:?}", e);
+        }
         return Response::create_error_response(
             qmp_schema::QmpErrorClass::GenericError(e.to_string()),
             None,

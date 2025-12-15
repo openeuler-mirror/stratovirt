@@ -54,6 +54,7 @@ impl MigrationManager {
     pub fn save_snapshot(path: &str) -> Result<()> {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
+        MigrationManager::notify_status(true, MigrationStatus::Active)?;
 
         // Create snapshot dir.
         if let Err(e) = create_dir(path) {
@@ -88,6 +89,7 @@ impl MigrationManager {
 
         // Set status to `Completed`
         MigrationManager::set_status(MigrationStatus::Completed)?;
+        MigrationManager::notify_status(true, MigrationStatus::Completed)?;
 
         Ok(())
     }
@@ -106,6 +108,7 @@ impl MigrationManager {
     pub fn restore_snapshot(path: &str, mapped: bool) -> Result<()> {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
+        MigrationManager::notify_status(false, MigrationStatus::Active)?;
 
         let mut snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
@@ -141,6 +144,7 @@ impl MigrationManager {
 
         // Set status to `Completed`
         MigrationManager::set_status(MigrationStatus::Completed)?;
+        MigrationManager::notify_status(false, MigrationStatus::Completed)?;
 
         Ok(())
     }
@@ -272,33 +276,33 @@ impl MigrationManager {
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
         // Restore transports state.
         for _ in 0..locked_vmm.transports.len() {
-            let (transport_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (transport_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(transport) = locked_vmm.transports.get(&id) {
                 transport
                     .lock()
                     .unwrap()
-                    .restore_mut_device(&transport_data)
+                    .restore_mut_device(&transport_data, old_version)
                     .with_context(|| "Failed to restore transport state")?;
             }
         }
 
         // Restore devices state.
         for _ in 0..locked_vmm.devices.len() {
-            let (device_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (device_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(device) = locked_vmm.devices.get(&id) {
                 device
                     .lock()
                     .unwrap()
-                    .restore_mut_device(&device_data)
+                    .restore_mut_device(&device_data, old_version)
                     .with_context(|| "Failed to restore device state")?;
             }
         }
 
         // Restore CPUs state.
         for _ in 0..locked_vmm.cpus.len() {
-            let (cpu_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (cpu_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(cpu) = locked_vmm.cpus.get(&id) {
-                cpu.restore_device(&cpu_data)
+                cpu.restore_device(&cpu_data, old_version)
                     .with_context(|| "Failed to restore cpu state")?;
             }
         }
@@ -307,8 +311,8 @@ impl MigrationManager {
         {
             // Restore kvm device state.
             if let Some(kvm) = &locked_vmm.kvm {
-                let (kvm_data, _) = Self::check_vm_state(fd, &snap_desc_db)?;
-                kvm.restore_device(&kvm_data)
+                let (kvm_data, _, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
+                kvm.restore_device(&kvm_data, old_version)
                     .with_context(|| "Failed to restore kvm state")?;
             }
         }
@@ -317,11 +321,69 @@ impl MigrationManager {
         {
             // Restore GIC group state.
             for _ in 0..locked_vmm.gic_group.len() {
-                let (gic_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+                let (gic_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
                 if let Some(gic) = locked_vmm.gic_group.get(&id) {
-                    gic.restore_device(&gic_data)
+                    gic.restore_device(&gic_data, old_version)
                         .with_context(|| "Failed to restore gic state")?;
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Notify current migrate status to device. Allow the device do some special
+    /// operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `save` - current process doing save/restore operation.
+    /// * `status - current status in save/restore process.
+    pub fn notify_status(save: bool, status: MigrationStatus) -> Result<()> {
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        for (_, transport) in locked_vmm.transports.iter() {
+            transport
+                .lock()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to transport")?;
+        }
+
+        for (_, device) in locked_vmm.devices.iter() {
+            device
+                .lock()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to device")?;
+        }
+
+        for (_, cpu) in locked_vmm.cpus.iter() {
+            cpu.notify_status(save, status)
+                .with_context(|| "Failed to notify status to cpu")?;
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            locked_vmm
+                .kvm
+                .as_ref()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to kvm")?;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let gic_id = translate_id(GICV3_SNAPSHOT_ID);
+            if let Some(gic) = locked_vmm.gic_group.get(&gic_id) {
+                gic.notify_status(save, status)
+                    .with_context(|| "Failed to notify status to gic")?;
+            }
+
+            let its_id = translate_id(GICV3_ITS_SNAPSHOT_ID);
+            if let Some(its) = locked_vmm.gic_group.get(&its_id) {
+                its.notify_status(save, status)
+                    .with_context(|| "Failed to notify status to gic its")?;
             }
         }
 

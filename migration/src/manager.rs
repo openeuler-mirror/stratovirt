@@ -85,8 +85,9 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * `state` - The raw data which can be recovered to `DeviceState`.
-    fn restore_device(&self, state: &[u8]) -> Result<()> {
-        self.set_state(state)
+    /// * `version` - The restored device state `current_version` in vmstate file.
+    fn restore_device(&self, state: &[u8], version: u32) -> Result<()> {
+        self.set_state(state, version)
     }
 
     /// Restore device state from `[u8]` to mutable `Device`.
@@ -94,8 +95,9 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * `state` - The raw data which can be recovered to `DeviceState`.
-    fn restore_mut_device(&mut self, state: &[u8]) -> Result<()> {
-        self.set_state_mut(state)
+    /// * `version` - The restored device state `current_version` in vmstate file.
+    fn restore_mut_device(&mut self, state: &[u8], version: u32) -> Result<()> {
+        self.set_state_mut(state, version)
     }
 
     /// Save memory state to file object.
@@ -144,6 +146,17 @@ pub trait MigrationHook: StateTransfer {
     /// For some device, such as virtio-device or vhost-device, after restore
     /// device state, it need a step to wake up device to run.
     fn resume(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Notify current migrate status to device. Allow the device do some special
+    /// operation.
+    ///
+    /// # Arguments
+    ///
+    /// * _save - current process doing save/restore operation.
+    /// * _status - current status in save/restore process.
+    fn notify_status(&self, _save: bool, _status: MigrationStatus) -> Result<()> {
         Ok(())
     }
 }

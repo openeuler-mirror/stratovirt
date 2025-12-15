@@ -1058,7 +1058,7 @@ impl StateTransfer for FwCfgMem {
         self.fwcfg.get_state_vec()
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         self.fwcfg.set_state_mut(state)
     }
 
@@ -1246,7 +1246,7 @@ impl StateTransfer for FwCfgIO {
         self.fwcfg.get_state_vec()
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         self.fwcfg.set_state_mut(state)
     }
 

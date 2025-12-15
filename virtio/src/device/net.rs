@@ -1774,7 +1774,7 @@ impl StateTransfer for Net {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let s_len = std::mem::size_of::<VirtioNetState>();
         if state.len() != s_len {
             bail!("Invalid state length {}, expected {}", state.len(), s_len);

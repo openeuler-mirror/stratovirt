@@ -486,14 +486,16 @@ pub trait StateTransfer {
     /// Get `Device`'s state to `DeviceState` structure as bytes vector.
     fn get_state_vec(&self) -> Result<Vec<u8>>;
 
-    /// Set a `Device`'s state from bytes slice as `DeviceState` structure.
-    fn set_state(&self, _state: &[u8]) -> Result<()> {
+    /// Set a `Device`'s state from bytes slice as `DeviceState` structure,
+    /// and set the restored `current_version` in vmstate to device.
+    fn set_state(&self, _state: &[u8], _version: u32) -> Result<()> {
         Ok(())
     }
 
     /// Set a `Device`'s state in mutable `Device` structure from bytes slice
-    /// as `DeviceState` structure.
-    fn set_state_mut(&mut self, _state: &[u8]) -> Result<()> {
+    /// as `DeviceState` structure, and set the restored `current_version` in
+    /// vmstate to device.
+    fn set_state_mut(&mut self, _state: &[u8], _version: u32) -> Result<()> {
         Ok(())
     }
 
@@ -799,7 +801,7 @@ pub mod tests {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
             self.state = *DeviceV1State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -814,7 +816,7 @@ pub mod tests {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
             self.state = *DeviceV2State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -843,7 +845,7 @@ pub mod tests {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
             self.state = *DeviceV3State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -872,7 +874,7 @@ pub mod tests {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
             self.state = *DeviceV4State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -895,7 +897,7 @@ pub mod tests {
             Ok(self.state.as_bytes().to_vec())
         }
 
-        fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+        fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
             self.state = *DeviceV5State::from_bytes(state).unwrap();
             Ok(())
         }
@@ -936,7 +938,7 @@ pub mod tests {
         let mut device_v2 = DeviceV2 {
             state: DeviceV2State::default(),
         };
-        device_v2.set_state_mut(&current_slice).unwrap();
+        device_v2.set_state_mut(&current_slice, 0u32).unwrap();
         assert!(state_2_desc.current_version > state_1_desc.current_version);
         device_v2.upgrade_version();
 
@@ -977,7 +979,7 @@ pub mod tests {
         let mut device_v3 = DeviceV3 {
             state: DeviceV3State::default(),
         };
-        device_v3.set_state_mut(&current_slice).unwrap();
+        device_v3.set_state_mut(&current_slice, 0u32).unwrap();
         assert!(state_3_desc.current_version > state_2_desc.current_version);
 
         assert_eq!(device_v3.state.ier, u64::from(device_v2.state.ier));
@@ -1017,7 +1019,7 @@ pub mod tests {
         let mut device_v4 = DeviceV4 {
             state: DeviceV4State::default(),
         };
-        device_v4.set_state_mut(&current_slice).unwrap();
+        device_v4.set_state_mut(&current_slice, 0u32).unwrap();
         assert!(state_4_desc.current_version > state_3_desc.current_version);
 
         assert_eq!(device_v4.state.rei, device_v3.state.ier);
@@ -1057,7 +1059,7 @@ pub mod tests {
         let mut device_v5 = DeviceV5 {
             state: DeviceV5State::default(),
         };
-        device_v5.set_state_mut(&current_slice).unwrap();
+        device_v5.set_state_mut(&current_slice, 0u32).unwrap();
         assert!(state_5_desc.current_version > state_4_desc.current_version);
 
         assert_eq!(device_v5.state.rii, device_v4.state.rii);
@@ -1093,7 +1095,7 @@ pub mod tests {
         let mut device_v5 = DeviceV5 {
             state: DeviceV5State::default(),
         };
-        device_v5.set_state_mut(&current_slice).unwrap();
+        device_v5.set_state_mut(&current_slice, 0u32).unwrap();
         assert!(state_5_desc.current_version > state_2_desc.current_version);
 
         assert_eq!(device_v5.state.rii, u64::from(device_v2.state.iir));

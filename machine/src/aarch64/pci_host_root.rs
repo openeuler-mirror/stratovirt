@@ -108,7 +108,7 @@ impl StateTransfer for PciHostRoot {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let pci_host_root: PciHostRootState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("PciHostRootState"))?;
 
