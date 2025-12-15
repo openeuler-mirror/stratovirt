@@ -146,6 +146,17 @@ pub trait MigrationHook: StateTransfer {
     fn resume(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Notify current migrate status to device. Allow the device do some special
+    /// operation.
+    ///
+    /// # Arguments
+    ///
+    /// * _save - current process doing save/restore operation.
+    /// * _status - current status in save/restore process.
+    fn notify_status(&self, _save: bool, _status: MigrationStatus) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// The instance represents a single object in VM.

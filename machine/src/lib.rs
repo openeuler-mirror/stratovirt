@@ -109,7 +109,7 @@ use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
 use machine_manager::notifier::pause_notify;
 use machine_manager::{check_arg_exist, check_arg_nonexist};
-use migration::{MigrateOps, MigrationManager};
+use migration::{MigrateOps, MigrationManager, MigrationStatus};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::arg_parser;
@@ -2504,8 +2504,14 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
     let path = migrate_info.uri;
     match migrate_info.mode {
         MigrateMode::File => {
-            MigrationManager::restore_snapshot(&path, migrate_info.mapped)
-                .with_context(|| "Failed to restore snapshot")?;
+            let ret = MigrationManager::restore_snapshot(&path, migrate_info.mapped);
+            if ret.is_err() {
+                let _ = MigrationManager::set_status(MigrationStatus::Failed);
+                if let Err(e) = MigrationManager::notify_status(false, MigrationStatus::Failed) {
+                    error!("Failed to notify status: {:?}", e);
+                }
+                ret.with_context(|| "Failed to restore snapshot")?;
+            }
             vm.lock()
                 .unwrap()
                 .run(false)
