@@ -24,7 +24,6 @@ use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use machine_manager::config::ChardevConfig;
-use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -40,7 +39,7 @@ use machine_manager::{
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
-use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, MigrationStatus, StateTransfer};
 use migration_derive::DescSerde;
 use util::aio::iov_from_buf_direct;
 use util::byte_code::ByteCode;
@@ -155,14 +154,12 @@ pub struct Serial {
     pub max_nr_ports: u32,
     /// Serial port vector for serialport.
     pub ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
-    /// If the vm has been paused.
-    vm_paused: Arc<AtomicBool>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
     /// If there is a queue in processing.
     processing_queue: Arc<AtomicBool>,
     /// The queue notify events for handling IO.
     queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
-    /// The id for vm paused notifier.
-    pause_notifier_id: u64,
 }
 
 impl Serial {
@@ -181,7 +178,7 @@ impl Serial {
             base: VirtioBase::new(VIRTIO_TYPE_CONSOLE, queue_num, queue_size),
             config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
-            vm_paused: Arc::new(AtomicBool::new(false)),
+            migrating: Arc::new(AtomicBool::new(false)),
             processing_queue: Arc::new(AtomicBool::new(false)),
             queue_evts: Arc::new(Mutex::new(Vec::new())),
             ..Default::default()
@@ -207,7 +204,7 @@ impl Serial {
             driver_features: self.base.driver_features,
             device_broken,
             ports: self.ports.clone(),
-            vm_paused: self.vm_paused.clone(),
+            migrating: self.migrating.clone(),
             processing_queue: self.processing_queue.clone(),
         };
         self.queue_evts
@@ -223,37 +220,6 @@ impl Serial {
         register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
 
         Ok(())
-    }
-
-    fn register_pause_notifier(&mut self) {
-        let queue_evts = self.queue_evts.clone();
-        let vm_paused = self.vm_paused.clone();
-        let processing_queue = self.processing_queue.clone();
-        let pause_notify = Arc::new(move |paused: bool| {
-            info!("Set vm pause state {:?} for serial device", paused);
-            vm_paused.store(paused, Ordering::SeqCst);
-            if !paused {
-                let locked_evts = queue_evts.lock().unwrap();
-                for evt in locked_evts.iter() {
-                    if let Err(e) = evt.write(1) {
-                        error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
-                    }
-                }
-            } else {
-                while processing_queue.load(Ordering::SeqCst) {
-                    yield_now();
-                }
-                info!("No queue in processing for serial device");
-            }
-        });
-        self.pause_notifier_id = register_vm_pause_notifier(pause_notify);
-    }
-
-    fn unregister_pause_notifier(&mut self) {
-        if self.pause_notifier_id > 0 {
-            unregister_vm_pause_notifier(self.pause_notifier_id);
-            self.pause_notifier_id = 0;
-        }
     }
 }
 
@@ -285,7 +251,6 @@ impl VirtioDevice for Serial {
 
     fn realize(&mut self) -> Result<()> {
         self.init_config_features()?;
-        self.register_pause_notifier();
         Ok(())
     }
 
@@ -338,7 +303,7 @@ impl VirtioDevice for Serial {
                 device_broken: self.base.broken.clone(),
                 port: port.clone(),
                 nr,
-                vm_paused: self.vm_paused.clone(),
+                migrating: self.migrating.clone(),
                 processing_queue: self.processing_queue.clone(),
             };
             if port.is_some() {
@@ -374,11 +339,6 @@ impl VirtioDevice for Serial {
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
         self.queue_evts.lock().unwrap().clear();
 
-        Ok(())
-    }
-
-    fn unrealize(&mut self) -> Result<()> {
-        self.unregister_pause_notifier();
         Ok(())
     }
 }
@@ -443,6 +403,23 @@ impl MigrationHook for Serial {
         for evt in locked_evts.iter() {
             if let Err(e) = evt.write(1) {
                 error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
+            }
+        }
+        Ok(())
+    }
+
+    fn notify_status(&self, save: bool, status: MigrationStatus) -> Result<()> {
+        if save {
+            match status {
+                MigrationStatus::Active => {
+                    self.migrating.store(true, Ordering::SeqCst);
+                    while self.processing_queue.load(Ordering::SeqCst) {
+                        yield_now();
+                    }
+                    info!("No queue in processing for serial device");
+                }
+                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                _ => {}
             }
         }
         Ok(())
@@ -534,8 +511,8 @@ struct SerialPortHandler {
     device_broken: Arc<AtomicBool>,
     port: Option<Arc<Mutex<SerialPort>>>,
     nr: u32,
-    /// If the vm has been paused.
-    vm_paused: Arc<AtomicBool>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
     /// If there is a queue in processing.
     processing_queue: Arc<AtomicBool>,
 }
@@ -551,8 +528,8 @@ struct SerialControlHandler {
     /// Virtio serial device is broken or not.
     device_broken: Arc<AtomicBool>,
     ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
-    /// If the vm has been paused.
-    vm_paused: Arc<AtomicBool>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
     /// If there is a queue in processing.
     processing_queue: Arc<AtomicBool>,
 }
@@ -590,7 +567,7 @@ impl SerialPortHandler {
                     break;
                 }
             }
-            if self.vm_paused.load(Ordering::SeqCst) {
+            if self.migrating.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -700,7 +677,7 @@ impl SerialPortHandler {
 
         let mut written_count = 0_usize;
         loop {
-            if self.vm_paused.load(Ordering::SeqCst) {
+            if self.migrating.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -868,7 +845,7 @@ impl SerialControlHandler {
         let mut queue_lock = output_queue.lock().unwrap();
 
         loop {
-            if self.vm_paused.load(Ordering::SeqCst) {
+            if self.migrating.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -1008,7 +985,7 @@ impl SerialControlHandler {
         value: u16,
         extra: &[u8],
     ) -> Result<()> {
-        if self.vm_paused.load(Ordering::SeqCst) {
+        if self.migrating.load(Ordering::SeqCst) {
             return Ok(());
         }
 
@@ -1137,7 +1114,6 @@ impl ChardevNotifyDevice for SerialPort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use machine_manager::notifier::pause_notify;
 
     #[test]
     fn test_set_driver_features() {
@@ -1229,33 +1205,6 @@ mod tests {
         let expect_data: Vec<u8> = vec![0, 0, 0, 0, max_ports, 0, 0, 0, 0, 0, 0, 0];
         assert!(serial.read_config(offset, &mut read_data).is_ok());
         assert_eq!(read_data, expect_data);
-    }
-
-    // Test register/unregister pause notifier.
-    #[test]
-    fn test_pause_notifier() {
-        let max_ports: u8 = 31;
-        let mut serial = Serial::new(VirtioSerialInfo {
-            classtype: "virtio-serial-pci".to_string(),
-            id: "serial".to_string(),
-            multifunction: Some(false),
-            max_ports: u32::from(max_ports),
-            bus: Some("pcie.0".to_string()),
-            addr: Some((0, 0)),
-        });
-
-        // The realize() will call register_pause_notifier.
-        serial.realize().unwrap();
-        assert_ne!(serial.pause_notifier_id, 0);
-
-        pause_notify(true);
-        assert_eq!(serial.vm_paused.load(Ordering::SeqCst), true);
-
-        pause_notify(false);
-        assert_eq!(serial.vm_paused.load(Ordering::SeqCst), false);
-
-        serial.unregister_pause_notifier();
-        assert_eq!(serial.pause_notifier_id, 0);
     }
 
     // Test get/set device state.
