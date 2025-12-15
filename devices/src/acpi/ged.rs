@@ -234,7 +234,7 @@ impl StateTransfer for Ged {
         Ok(serde_json::to_vec(&ged_state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let ged_state: GedState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("GedState"))?;
         self.notification_type
@@ -384,7 +384,7 @@ mod test {
         ged.notification_type
             .store(AcpiEvent::Nothing as u32, Ordering::SeqCst);
 
-        ged.set_state_mut(&state).unwrap();
+        ged.set_state_mut(&state, 0u32).unwrap();
         assert_eq!(
             ged.notification_type.load(Ordering::Acquire) as u32,
             AcpiEvent::PowerDown as u32

@@ -60,7 +60,7 @@ impl StateTransfer for PciIntxState {
         Ok(serde_json::to_vec(&pci_intx_state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let pci_intx_state: PciIntxCountState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("PciIntxCountState"))?;
         self.irq_count = pci_intx_state.irq_count;
@@ -219,7 +219,7 @@ impl StateTransfer for Intx {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let intx_state: IntxState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("IntxState"))?;
         self.level = intx_state.level;

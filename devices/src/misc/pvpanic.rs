@@ -307,7 +307,7 @@ impl StateTransfer for PvPanicPci {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let pvpanic_pci_state: PvPanicPciDevState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("PVPANIC"))?;
 

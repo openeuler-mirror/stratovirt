@@ -296,7 +296,7 @@ impl StateTransfer for UsbKeyboard {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let usb_kbd_state: UsbKeyboardDevState =
             serde_json::from_slice(state).with_context(|| "Failed to get usb kbd state")?;
 

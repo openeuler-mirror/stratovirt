@@ -665,7 +665,7 @@ impl StateTransfer for RootPort {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let root_port_state: RootPortState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 

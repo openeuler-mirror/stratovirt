@@ -85,8 +85,9 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * `state` - The raw data which can be recovered to `DeviceState`.
-    fn restore_device(&self, state: &[u8]) -> Result<()> {
-        self.set_state(state)
+    /// * `version` - The restored device state `current_version` in vmstate file.
+    fn restore_device(&self, state: &[u8], version: u32) -> Result<()> {
+        self.set_state(state, version)
     }
 
     /// Restore device state from `[u8]` to mutable `Device`.
@@ -94,8 +95,9 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * `state` - The raw data which can be recovered to `DeviceState`.
-    fn restore_mut_device(&mut self, state: &[u8]) -> Result<()> {
-        self.set_state_mut(state)
+    /// * `version` - The restored device state `current_version` in vmstate file.
+    fn restore_mut_device(&mut self, state: &[u8], version: u32) -> Result<()> {
+        self.set_state_mut(state, version)
     }
 
     /// Save memory state to file object.

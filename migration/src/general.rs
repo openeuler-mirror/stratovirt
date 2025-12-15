@@ -164,7 +164,7 @@ impl MigrationManager {
     pub fn check_vm_state(
         fd: &mut dyn Read,
         desc_db: &HashMap<u64, DeviceStateDesc>,
-    ) -> Result<(Vec<u8>, u64)> {
+    ) -> Result<(Vec<u8>, u64, u32)> {
         let mut instance = Instance::default();
         fd.read_exact(
             // SAFETY: The pointer of instance can guaranteed not null.
@@ -206,9 +206,11 @@ impl MigrationManager {
         let mut state_data = vec![0; size as usize];
         fd.read_exact(&mut state_data)?;
 
+        let mut old_version: u32 = 0;
         match current_desc.check_version(snap_desc) {
             VersionCheck::Same => {}
             VersionCheck::Compat => {
+                old_version = snap_desc.current_version;
                 if snap_desc.size != 0 {
                     current_desc
                         .add_padding(snap_desc, &mut state_data)
@@ -223,7 +225,7 @@ impl MigrationManager {
             }
         }
 
-        Ok((state_data, instance.name))
+        Ok((state_data, instance.name, old_version))
     }
 
     /// Get `Device`'s alias from device type string.

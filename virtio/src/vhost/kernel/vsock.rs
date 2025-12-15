@@ -376,7 +376,7 @@ impl StateTransfer for Vsock {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let state = VsockState::from_bytes(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("VSOCK"))?;
         self.base.device_features = state.device_features;
