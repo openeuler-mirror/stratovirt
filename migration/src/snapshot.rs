@@ -54,6 +54,7 @@ impl MigrationManager {
     pub fn save_snapshot(path: &str) -> Result<()> {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
+        MigrationManager::notify_status(true, MigrationStatus::Active)?;
 
         // Create snapshot dir.
         if let Err(e) = create_dir(path) {
@@ -88,6 +89,7 @@ impl MigrationManager {
 
         // Set status to `Completed`
         MigrationManager::set_status(MigrationStatus::Completed)?;
+        MigrationManager::notify_status(true, MigrationStatus::Completed)?;
 
         Ok(())
     }
@@ -106,6 +108,7 @@ impl MigrationManager {
     pub fn restore_snapshot(path: &str, mapped: bool) -> Result<()> {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
+        MigrationManager::notify_status(false, MigrationStatus::Active)?;
 
         let mut snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
@@ -141,6 +144,7 @@ impl MigrationManager {
 
         // Set status to `Completed`
         MigrationManager::set_status(MigrationStatus::Completed)?;
+        MigrationManager::notify_status(false, MigrationStatus::Completed)?;
 
         Ok(())
     }
@@ -322,6 +326,64 @@ impl MigrationManager {
                     gic.restore_device(&gic_data)
                         .with_context(|| "Failed to restore gic state")?;
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Notify current migrate status to device. Allow the device do some special
+    /// operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `save` - current process doing save/restore operation.
+    /// * `status - current status in save/restore process.
+    pub fn notify_status(save: bool, status: MigrationStatus) -> Result<()> {
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        for (_, transport) in locked_vmm.transports.iter() {
+            transport
+                .lock()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to transport")?;
+        }
+
+        for (_, device) in locked_vmm.devices.iter() {
+            device
+                .lock()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to device")?;
+        }
+
+        for (_, cpu) in locked_vmm.cpus.iter() {
+            cpu.notify_status(save, status)
+                .with_context(|| "Failed to notify status to cpu")?;
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            locked_vmm
+                .kvm
+                .as_ref()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to kvm")?;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let gic_id = translate_id(GICV3_SNAPSHOT_ID);
+            if let Some(gic) = locked_vmm.gic_group.get(&gic_id) {
+                gic.notify_status(save, status)
+                    .with_context(|| "Failed to notify status to gic")?;
+            }
+
+            let its_id = translate_id(GICV3_ITS_SNAPSHOT_ID);
+            if let Some(its) = locked_vmm.gic_group.get(&its_id) {
+                its.notify_status(save, status)
+                    .with_context(|| "Failed to notify status to gic its")?;
             }
         }
 
