@@ -123,7 +123,11 @@ use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, 
 use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
 #[cfg(any(feature = "vhost_vsock", feature = "vhost_net"))]
 use virtio::VhostKern;
-#[cfg(any(feature = "vhostuser_block", feature = "vhostuser_net"))]
+#[cfg(any(
+    feature = "vhostuser_block",
+    feature = "vhostuser_net",
+    feature = "vhostuser_gpu"
+))]
 use virtio::VhostUser;
 use virtio::VhostUser::FsState;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
@@ -1537,6 +1541,44 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "vhostuser_gpu")]
+    fn add_vhost_user_gpu_pci(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+        if device_cfg.num_queues.is_none() {
+            bail!("invalid num_queues");
+        }
+
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user gpu",
+                    &device_cfg.chardev
+                )
+            })?;
+
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserGpu::new(&device_cfg, chardev_cfg, self.get_sys_mem())?,
+        ));
+
+        let root_bus = self.get_pci_host()?.lock().unwrap().child_bus().unwrap();
+        PCI_BUS!(root_bus, locked_bus, _root_pci_bus);
+        drop(locked_bus);
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), false, false)
+            .with_context(|| {
+                format!(
+                    "Failed to add virtio pci device, device id: {}",
+                    &device_cfg.id
+                )
+            })?;
+        Ok(())
+    }
+
     #[cfg(feature = "vhostuser_block")]
     fn add_vhost_user_blk_device(
         &mut self,
@@ -2142,6 +2184,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
                 #[cfg(feature = "vhostuser_block")]
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
+                #[cfg(feature = "vhostuser_gpu")]
+                ("vhost-user-gpu-pci",add_vhost_user_gpu_pci, vm_config, cfg_args),
                 #[cfg(feature = "vhost_vsock")]
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]

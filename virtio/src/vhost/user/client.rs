@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
@@ -30,7 +31,6 @@ use super::message::{
 };
 use super::sock::VhostUserSock;
 use super::VHOST_USER_F_PROTOCOL_FEATURES;
-use crate::device::block::VirtioBlkConfig;
 use crate::VhostUser::message::VhostUserConfig;
 use crate::{virtio_has_feature, Queue, QueueConfig};
 use address_space::{
@@ -45,6 +45,8 @@ use util::unix::do_mmap;
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
+/// Vhost supports reply ack
+pub const VHOST_USER_PROTOCOL_F_REPLY_ACK: u8 = 3;
 /// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 /// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
@@ -395,6 +397,7 @@ pub enum VhostBackendType {
     TypeNet,
     TypeBlock,
     TypeFs,
+    TypeGpu,
 }
 
 impl std::fmt::Display for VhostBackendType {
@@ -403,6 +406,7 @@ impl std::fmt::Display for VhostBackendType {
             VhostBackendType::TypeNet => write!(f, "net"),
             VhostBackendType::TypeBlock => write!(f, "block"),
             VhostBackendType::TypeFs => write!(f, "fs"),
+            VhostBackendType::TypeGpu => write!(f, "gpu"),
         }
     }
 }
@@ -602,7 +606,10 @@ impl VhostUserClient {
                 })?;
         }
 
-        if self.backend_type == VhostBackendType::TypeBlock {
+        if matches!(
+            self.backend_type,
+            VhostBackendType::TypeBlock | VhostBackendType::TypeGpu
+        ) {
             // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
             // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.
             // Currently, only vhost-user-blk device support negotiate VHOST_USER_F_PROTOCOL_FEATURES.
@@ -690,7 +697,6 @@ impl VhostUserClient {
         let features = client
             .wait_ack_msg::<u64>(request)
             .with_context(|| "Failed to wait ack msg for getting protocols features")?;
-
         Ok(features)
     }
 
@@ -704,7 +710,6 @@ impl VhostUserClient {
             .sock
             .send_msg(Some(&hdr), Some(&value), payload_opt, &[])
             .with_context(|| "Failed to send msg for setting value")?;
-
         Ok(())
     }
 
@@ -713,23 +718,20 @@ impl VhostUserClient {
         self.set_value(VhostUserMsgReq::SetProtocolFeatures, features)
     }
 
-    /// Get virtio blk config from vhost.
-    pub fn get_virtio_blk_config(&self) -> Result<VirtioBlkConfig> {
+    /// Get virtio config from vhost.
+    pub fn get_virtio_config<T: Default>(&self) -> Result<T> {
         let request = VhostUserMsgReq::GetConfig as u32;
-        let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
+        let config_len = size_of::<VhostUserConfig<T>>();
         let hdr = VhostUserMsgHdr::new(
             request,
             VhostUserHdrFlag::NeedReply as u32,
             config_len as u32,
         );
-        let cnf = VhostUserConfig::new(0, 0, VirtioBlkConfig::default())?;
+        let cnf = VhostUserConfig::<T>::new(0, 0, T::default())?;
         let body_opt: Option<&u32> = None;
         // SAFETY: the memory is allocated by us and it has been already aligned.
         let payload_opt: Option<&[u8]> = Some(unsafe {
-            from_raw_parts(
-                (&cnf as *const VhostUserConfig<VirtioBlkConfig>) as *const u8,
-                config_len,
-            )
+            from_raw_parts((&cnf as *const VhostUserConfig<T>) as *const u8, config_len)
         });
         let client = self.client.lock().unwrap();
         client
@@ -737,19 +739,19 @@ impl VhostUserClient {
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
             .with_context(|| "Failed to send msg for getting config")?;
         let res = client
-            .wait_ack_msg::<VhostUserConfig<VirtioBlkConfig>>(request)
+            .wait_ack_msg::<VhostUserConfig<T>>(request)
             .with_context(|| "Failed to wait ack msg for getting virtio blk config")?;
         Ok(res.config)
     }
 
-    /// Set virtio blk config to vhost.
-    pub fn set_virtio_blk_config(&self, cnf: VirtioBlkConfig) -> Result<()> {
+    /// Set virtio config to vhost.
+    pub fn set_virtio_config<T: Default>(&self, cnf: T) -> Result<()> {
         let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::SetConfig as u32;
-        let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
+        let config_len = size_of::<VhostUserConfig<T>>();
         let hdr = VhostUserMsgHdr::new(request, 0, config_len as u32);
         let payload_opt: Option<&[u8]> = None;
-        let config = VhostUserConfig::new(0, 0, cnf)?;
+        let config = VhostUserConfig::<T>::new(0, 0, cnf)?;
         client
             .sock
             .send_msg(Some(&hdr), Some(&config), payload_opt, &[])
@@ -881,7 +883,6 @@ impl VhostOps for VhostUserClient {
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
             .with_context(|| "Failed to send msg for setting owner")?;
-
         Ok(())
     }
 
@@ -1157,5 +1158,22 @@ impl VhostOps for VhostUserClient {
 
         trace::vhost_get_vring_base(queue_idx, res.value as u16);
         Ok(res.value as u16)
+    }
+
+    fn set_socket(&self, sender_fd: &UnixStream) -> Result<()> {
+        if self.backend_type != VhostBackendType::TypeGpu {
+            return Ok(());
+        }
+        let request = VhostUserMsgReq::SetSocket as u32;
+        let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::Version as u32, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
+        let raw_fd = sender_fd.as_raw_fd();
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[raw_fd])
+            .with_context(|| "Failed to send msg for getting vring base")?;
+        Ok(())
     }
 }

@@ -148,7 +148,7 @@ impl VirtioDevice for Block {
 
             if virtio_has_feature(protocol_features, u32::from(VHOST_USER_PROTOCOL_F_CONFIG)) {
                 let config = locked_client
-                    .get_virtio_blk_config()
+                    .get_virtio_config::<VirtioBlkConfig>()
                     .with_context(|| "Failed to get config for vhost-user blk")?;
                 self.config_space = config;
             } else {
@@ -217,7 +217,7 @@ impl VirtioDevice for Block {
             .with_context(|| "Failed to get client when writing config")?
             .lock()
             .unwrap()
-            .set_virtio_blk_config(self.config_space)
+            .set_virtio_config(self.config_space)
             .with_context(|| "Failed to set config for vhost-user blk")?;
 
         Ok(())

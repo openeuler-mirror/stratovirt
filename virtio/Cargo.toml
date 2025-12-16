@@ -32,6 +32,9 @@ clap = { version = "=4.1.4", default-features = false, features = [
     "std",
     "derive",
 ] }
+bytemuck = { version = "1.22.0", features = ["derive"] }
+vhost = { version = "0.15.0", features = ["vhost-user"] }
+vm-memory = "0.17.1"
 
 [features]
 default = []
@@ -43,3 +46,4 @@ vhost_vsock =[]
 vhostuser_block = []
 vhostuser_net = []
 vhost_net = []
+vhostuser_gpu = []

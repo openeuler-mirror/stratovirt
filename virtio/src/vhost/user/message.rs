@@ -58,7 +58,8 @@ pub enum VhostUserMsgReq {
     PostcopyEnd = 30,
     GetInflightFd = 31,
     SetInflightFd = 32,
-    MaxCmd = 33,
+    SetSocket = 33,
+    MaxCmd = 34,
 }
 
 impl From<u32> for VhostUserMsgReq {
@@ -255,7 +256,7 @@ impl Default for VhostUserMemContext {
 
 /// The configuration for the state of virtual ring.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct VhostUserVringState {
     /// Index for virtual ring.
     pub index: u32,
