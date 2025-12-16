@@ -14,6 +14,7 @@ pub mod kernel;
 pub mod user;
 
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -105,6 +106,10 @@ pub trait VhostOps {
     /// * `_queue_idx` - Index of the queue to set.
     /// * `_status` - Status of the virtqueue.
     fn set_vring_enable(&self, _queue_idx: usize, _status: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_socket(&self, _sender_fd: &UnixStream) -> Result<()> {
         Ok(())
     }
 }

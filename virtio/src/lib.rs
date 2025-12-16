@@ -177,8 +177,14 @@ pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 /// Unmap flags for write zeroes command.
 pub const VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP: u32 = 1;
+/// GPU virgl feature is supported.
+pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
 /// GPU EDID feature is supported.
 pub const VIRTIO_GPU_F_EDID: u32 = 1;
+/// GPU RESOURCE_UUID feature is supported.
+pub const VIRTIO_GPU_F_RESOURCE_UUID: u32 = 2;
+/// GPU blob resource is supported.
+pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
 /// TODO: need to change to 5 or bigger
 pub const VIRTIO_GPU_F_MONOCHROME: u32 = 4;
 
