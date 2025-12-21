@@ -13,11 +13,12 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use log::{error, info};
 
-static GLOBAL_TEMP_CLEANER: OnceLock<Mutex<TempCleaner>> = OnceLock::new();
+static GLOBAL_TEMP_CLEANER: OnceLock<TempCleaner> = OnceLock::new();
 
 pub type ExitNotifier = dyn Fn() + Send + Sync;
 
@@ -25,45 +26,45 @@ pub type ExitNotifier = dyn Fn() + Send + Sync;
 /// when Vm exit.
 pub struct TempCleaner {
     /// Path of files that should be removed after exiting the vm.
-    paths: Vec<String>,
+    paths: Mutex<Vec<String>>,
     /// Notifiers are used to release residual resources after exiting the vm.
-    notifiers: HashMap<String, Arc<ExitNotifier>>,
+    notifiers: Mutex<HashMap<String, Arc<ExitNotifier>>>,
     /// Indicate whether clean has been done.
-    executed: bool,
+    executed: AtomicBool,
 }
 
 impl TempCleaner {
     pub fn object_init() {
-        let _ = GLOBAL_TEMP_CLEANER.set(Mutex::new(TempCleaner {
-            paths: Vec::new(),
-            notifiers: HashMap::new(),
-            executed: false,
-        }));
+        let _ = GLOBAL_TEMP_CLEANER.set(TempCleaner {
+            paths: Mutex::new(Vec::new()),
+            notifiers: Mutex::new(HashMap::new()),
+            executed: AtomicBool::new(false),
+        });
     }
 
     /// Add to be removed file path
     pub fn add_path(path: String) {
         if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
-            tmp.lock().unwrap().paths.push(path);
+            tmp.paths.lock().unwrap().push(path);
         }
     }
 
     /// Add exit notifier.
     pub fn add_exit_notifier(id: String, exit: Arc<ExitNotifier>) {
         if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
-            tmp.lock().unwrap().notifiers.insert(id, exit);
+            tmp.notifiers.lock().unwrap().insert(id, exit);
         }
     }
 
     /// Remove exit notifier by id.
     pub fn remove_exit_notifier(id: &str) {
         if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
-            tmp.lock().unwrap().notifiers.remove(id);
+            tmp.notifiers.lock().unwrap().remove(id);
         }
     }
 
-    fn clean_files(&mut self) {
-        while let Some(path) = self.paths.pop() {
+    fn clean_files(&self) {
+        while let Some(path) = self.paths.lock().unwrap().pop() {
             if Path::new(&path).exists() {
                 if let Err(ref e) = fs::remove_file(&path) {
                     error!("Failed to delete console / socket file:{} :{}", &path, e);
@@ -76,8 +77,8 @@ impl TempCleaner {
         }
     }
 
-    fn exit_notifier(&mut self) {
-        for (_id, exit) in self.notifiers.iter() {
+    fn exit_notifier(&self) {
+        for (_id, exit) in self.notifiers.lock().unwrap().iter() {
             exit();
         }
     }
@@ -85,18 +86,17 @@ impl TempCleaner {
     /// Clean the resources
     pub fn clean() {
         if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
-            let mut locked_cleaner = tmp.lock().unwrap();
-            locked_cleaner.clean_files();
-            locked_cleaner.exit_notifier();
-            locked_cleaner.paths.clear();
-            locked_cleaner.notifiers.clear();
-            locked_cleaner.executed = true;
+            tmp.clean_files();
+            tmp.exit_notifier();
+            tmp.paths.lock().unwrap().clear();
+            tmp.notifiers.lock().unwrap().clear();
+            tmp.executed.store(true, Ordering::SeqCst);
         }
     }
 
     pub fn is_cleaned() -> bool {
         if let Some(tmp) = GLOBAL_TEMP_CLEANER.get() {
-            return tmp.lock().unwrap().executed;
+            return tmp.executed.load(Ordering::SeqCst);
         }
         true
     }
