@@ -55,6 +55,7 @@ pub enum EventType {
     TouchPadScroll = 16,
     TouchPadPinch = 17,
     TouchPadSwipe = 18,
+    ExpandedScreen = 19,
     #[default]
     Max,
 }
@@ -73,6 +74,20 @@ impl ByteCode for WindowInfoEvent {}
 impl WindowInfoEvent {
     pub fn new(width: u32, height: u32) -> Self {
         WindowInfoEvent { width, height }
+    }
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct ExpandedScreenEvent {
+    pub state: u32,
+}
+
+impl ByteCode for ExpandedScreenEvent {}
+
+impl ExpandedScreenEvent {
+    pub fn new(state: u32) -> Self {
+        ExpandedScreenEvent { state }
     }
 }
 
@@ -370,6 +385,8 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
             size_of::<TouchPadPinchEvent>(),
             // TouchPadSwipe
             size_of::<TouchPadSwipeEvent>(),
+            // ExpandedScreen
+            size_of::<ExpandedScreenEvent>(),
         ]
     });
 
