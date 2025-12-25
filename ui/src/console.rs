@@ -167,6 +167,8 @@ pub trait HardWareOperations {
     fn hw_update(&self, _con: Arc<Mutex<DisplayConsole>>) {}
     /// Ui configuration changed.
     fn hw_ui_info(&self, _con: Arc<Mutex<DisplayConsole>>, _width: u32, _height: u32) {}
+    /// Expanded screen changed.
+    fn hw_expanded_screen_info(&self, _con: Arc<Mutex<DisplayConsole>>, _state: u32) {}
 }
 
 /// Listen to the change of image and call the related
@@ -623,6 +625,15 @@ pub fn graphic_hardware_update(con_id: Option<usize>) {
         let con_opts = con.lock().unwrap().dev_opts.clone();
         (*con_opts).hw_update(con);
     }
+}
+
+pub fn graphic_hardware_ui_expanded_screen(
+    con: Arc<Mutex<DisplayConsole>>,
+    state: u32,
+) -> Result<()> {
+    let con_opts = con.lock().unwrap().dev_opts.clone();
+    (*con_opts).hw_expanded_screen_info(con.clone(), state);
+    Ok(())
 }
 
 pub fn graphic_hardware_ui_info(

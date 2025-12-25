@@ -27,8 +27,8 @@ use super::{
 };
 use crate::{
     console::{
-        get_active_console, get_dpy_standing, graphic_hardware_ui_info, set_dpy_rotation,
-        set_dpy_standing, Rotation,
+        get_active_console, get_dpy_standing, graphic_hardware_ui_expanded_screen,
+        graphic_hardware_ui_info, set_dpy_rotation, set_dpy_standing, Rotation,
     },
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
@@ -285,8 +285,10 @@ impl OhUiMsgHandler {
             return false;
         }
 
-        let ret =
-            matches!(et, EventType::WindowInfoExtension) || matches!(et, EventType::WindowInfo);
+        let ret = matches!(et, EventType::WindowInfoExtension)
+            || matches!(et, EventType::WindowInfo)
+            || matches!(et, EventType::VmViewChange)
+            || matches!(et, EventType::ExpandedScreen);
         !ret
     }
 
@@ -383,6 +385,20 @@ impl OhUiMsgHandler {
             }
         }
         trace::oh_event_windowinfo(wi.width, wi.height);
+    }
+
+    fn handle_expanded_screen(&self, expanded_screen: &ExpandedScreenEvent) {
+        let cons = get_active_console();
+
+        for con in cons {
+            if let Some(c) = con.upgrade() {
+                if let Err(e) =
+                    graphic_hardware_ui_expanded_screen(c.clone(), expanded_screen.state)
+                {
+                    error!("handle_expanded_screen failed with error {e}");
+                }
+            }
+        }
     }
 
     fn handle_windowinfo_extension(&self, wie: &WindowInfoExtensionEvent) -> Result<()> {
@@ -565,6 +581,8 @@ static MSG_HANDLER_TABLE: LazyLock<Vec<MsgHandleFunc>> = LazyLock::new(|| {
         Box::new(tp_pinch_handler),
         // TouchPadSwipe     18
         Box::new(tp_swipe_handler),
+        // ExpandedScreen    19
+        Box::new(expanded_screen_handler),
     ]
 });
 
@@ -654,6 +672,12 @@ fn tp_swipe_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<(
         return Ok(());
     }
     msg_handler.handle_touchpad_swipe(body)
+}
+
+fn expanded_screen_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = ExpandedScreenEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_expanded_screen(body);
+    Ok(())
 }
 
 fn send_input_device_change_msg(writer: Arc<Mutex<Option<MsgWriter>>>, reason: u64) {
