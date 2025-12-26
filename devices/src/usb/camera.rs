@@ -443,7 +443,7 @@ fn gen_desc_device_camera(fmt_list: Vec<CameraFormatList>) -> Result<Arc<UsbDesc
             // Refer to https://www.usb.org/defined-class-codes for details.
             bDeviceSubClass: 2,
             bDeviceProtocol: 1, // Interface Association
-            bMaxPacketSize0: 64,
+            bMaxPacketSize0: 9,
             bNumConfigurations: 1,
         },
         configs: vec![Arc::new(UsbDescConfig {
