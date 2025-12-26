@@ -249,7 +249,7 @@ impl<T: Clone + 'static> FileDriver<T> {
     // H3: hoff < 0, errno = ENXIO: start is beyond EOF.
     // H4: hoff < 0, errno != ENXIO: error.
     pub fn find_range_start(&mut self, start: u64, data_range: bool) -> Result<i64> {
-        if start > std::i64::MAX as u64 {
+        if start > i64::MAX as u64 {
             bail!("Too large offset {}", start);
         }
 
