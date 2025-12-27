@@ -616,7 +616,7 @@ impl UsbHost {
                     Direction::In => USB_TOKEN_IN,
                     Direction::Out => USB_TOKEN_OUT,
                 };
-                let ep_num = ep.number();
+                let ep_num = ep.address() & 0xf;
                 let ep_type = ep.transfer_type() as u8;
                 if ep_num == 0 {
                     trace::usb_host_parse_error(
