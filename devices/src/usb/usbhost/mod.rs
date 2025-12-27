@@ -16,6 +16,7 @@ mod ohusb;
 
 use std::{
     collections::LinkedList,
+    ffi::{c_char, CStr},
     os::unix::io::RawFd,
     rc::Rc,
     sync::{Arc, Mutex, Weak},
@@ -26,9 +27,10 @@ use std::{
 use anyhow::Context as anyhowContext;
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use libc::c_int;
+use libc::{c_int, c_void};
 use libusb1_sys::{
-    libusb_get_iso_packet_buffer_simple, libusb_set_iso_packet_lengths, libusb_transfer,
+    constants::LIBUSB_LOG_CB_GLOBAL, libusb_get_iso_packet_buffer_simple,
+    libusb_set_iso_packet_lengths, libusb_set_log_cb, libusb_transfer,
 };
 use log::{error, info, warn};
 use rusb::{
@@ -423,7 +425,15 @@ impl UsbHost {
         let oh_dev = OhUsbDev::new(config.hostbus, config.hostaddr)?;
 
         let mut context = Context::new()?;
-        context.set_log_level(rusb::LogLevel::None);
+        context.set_log_level(rusb::LogLevel::Error);
+        // SAFETY: all params for ffi have been checked.
+        unsafe {
+            libusb_set_log_cb(
+                context.as_raw(),
+                Some(libusb_log_callback),
+                LIBUSB_LOG_CB_GLOBAL,
+            );
+        }
         let iso_urb_frames = config.iso_urb_frames;
         let iso_urb_count = config.iso_urb_count;
         let id = config.id.clone();
@@ -1319,4 +1329,21 @@ pub fn check_device_valid(device: &Device<Context>) -> bool {
         return false;
     }
     true
+}
+
+extern "system" fn libusb_log_callback(
+    _ctx: *mut rusb::ffi::libusb_context,
+    _level: c_int,
+    str_ptr: *mut c_void,
+) {
+    if str_ptr.is_null() {
+        return;
+    }
+
+    // SAFETY: str_ptr is a valid ptr passed from libusb, and has been checked
+    let c_str = unsafe { CStr::from_ptr(str_ptr as *const c_char) };
+    let message = c_str.to_string_lossy();
+    let trimmed_message = message.trim();
+
+    error!("{trimmed_message}");
 }
