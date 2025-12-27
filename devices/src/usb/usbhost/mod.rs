@@ -621,6 +621,12 @@ impl UsbHost {
                 intf_desc.as_ref().unwrap().interface_number(),
                 intf_desc.as_ref().unwrap().setting_number(),
             );
+            // Avoid process crashes caused by non-standard device implementations.
+            // Skip calling endpoint_descriptors() on interface descriptors with an endpoint count of 0.
+            if intf_desc.as_ref().unwrap().num_endpoints() == 0 {
+                warn!("Encountered a weird device");
+                continue;
+            }
             for ep in intf_desc.as_ref().unwrap().endpoint_descriptors() {
                 let pid = match ep.direction() {
                     Direction::In => USB_TOKEN_IN,
