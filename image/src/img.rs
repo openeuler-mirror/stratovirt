@@ -2560,8 +2560,8 @@ mod test {
     fn test_image_convert_from_raw_to_qcow2() {
         let src_path = "/tmp/test_image_convert_src.raw";
         let dst_path = "/tmp/test_image_convert_dst.qcow2";
-        let _ = remove_file(src_path.clone());
-        let _ = remove_file(dst_path.clone());
+        let _ = remove_file(src_path);
+        let _ = remove_file(dst_path);
 
         let mut test_image = TestRawImage::create(src_path.to_string(), "10G".to_string());
         let mut src_driver = test_image.create_driver();
@@ -2621,6 +2621,6 @@ mod test {
         assert!(img_info.actual_size < 4 * M);
 
         // Clean.
-        assert!(remove_file(dst_path.clone()).is_ok());
+        assert!(remove_file(dst_path).is_ok());
     }
 }
