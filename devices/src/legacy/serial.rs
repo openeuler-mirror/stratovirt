@@ -135,7 +135,7 @@ impl Serial {
             paused: false,
             rbr: VecDeque::new(),
             state: SerialState::new(),
-            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
+            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev)?)),
         };
         serial.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
         serial
@@ -507,7 +507,7 @@ mod test {
         // for write_internal with first argument to work,
         // you need to set output at first
         assert!(usart.write_internal(0, 0x03).is_err());
-        let mut chardev = Chardev::new(chardev_cfg);
+        let mut chardev = Chardev::new(chardev_cfg).unwrap();
         chardev.output = Some(Arc::new(Mutex::new(std::io::stdout())));
         usart.chardev = Arc::new(Mutex::new(chardev));
 

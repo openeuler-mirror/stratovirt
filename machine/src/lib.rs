@@ -913,7 +913,7 @@ pub trait MachineOps: MachineLifecycle {
                 )
             })?;
 
-        let mut serial_port = SerialPort::new(serialport_cfg, chardev_cfg);
+        let mut serial_port = SerialPort::new(serialport_cfg, chardev_cfg)?;
         let port = Arc::new(Mutex::new(serial_port.clone()));
         serial_port.realize()?;
         if !is_console {
