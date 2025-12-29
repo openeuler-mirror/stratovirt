@@ -143,7 +143,7 @@ impl PL011 {
             },
             paused: false,
             state: PL011State::new(),
-            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
+            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev)?)),
         };
         pl011
             .set_sys_resource(sysbus, region_base, region_size, "PL011")
