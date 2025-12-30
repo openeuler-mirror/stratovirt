@@ -181,6 +181,7 @@ pub struct OhUiMsgHandler {
     pause_notifier_id: Mutex<u64>,
     input_state: Arc<Mutex<InputDeviceState>>,
     surface_size: RwLock<(u32, u32)>,
+    ui_size: RwLock<(u32, u32)>,
 }
 
 impl OhUiMsgHandler {
@@ -194,6 +195,7 @@ impl OhUiMsgHandler {
             pause_notifier_id: Mutex::new(0),
             input_state: Arc::new(Mutex::new(InputDeviceState::default())),
             surface_size: RwLock::new((0, 0)),
+            ui_size: RwLock::new((0, 0)),
         };
         handler.register_pause_notifier(handler.vm_pause.clone());
         handler.register_input_change_notifier();
@@ -252,6 +254,10 @@ impl OhUiMsgHandler {
 
     pub fn get_left_pressing(&self) -> bool {
         self.state.lock().unwrap().get_left_pressing()
+    }
+
+    pub fn get_ui_size(&self) -> (u32, u32) {
+        *self.ui_size.read().unwrap()
     }
 
     pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
@@ -405,6 +411,7 @@ impl OhUiMsgHandler {
                 }
             }
         }
+        *self.ui_size.write().unwrap() = (wi.width, wi.height);
         trace::oh_event_windowinfo(wi.width, wi.height);
     }
 
@@ -543,6 +550,15 @@ impl OhUiMsgHandler {
             let body = FrameBufferDirtyEvent::new(x, y, w, h);
             if let Err(e) = writer.send_message(EventType::FrameBufferDirty, &body) {
                 error!("handle_dirty_area: failed to send message with error {e}");
+            }
+        }
+    }
+
+    pub fn notify_snapshot_state(&self, state: u32) {
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = SnapshotState::new(state);
+            if let Err(e) = writer.send_message(EventType::SnapshotState, &body) {
+                error!("notify_snapshot_state: failed to send message with error {e}");
             }
         }
     }
