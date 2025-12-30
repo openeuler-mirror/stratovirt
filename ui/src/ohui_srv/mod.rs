@@ -47,6 +47,7 @@ use machine_manager::{
 use migration::snapshot::OHUI_SNAPSHOT_ID;
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
+use msg::SNAPSHOT_COMPLETE;
 use msg_handle::*;
 use util::{
     loop_context::{
@@ -234,6 +235,7 @@ impl OhUiServer {
             Arc::new(Mutex::new(OhUiMigration {
                 cursor,
                 ohui_srv: ohui_srv.clone(),
+                ui_size: (0, 0),
             })),
             OHUI_SNAPSHOT_ID,
         );
@@ -345,6 +347,14 @@ impl OhUiServer {
             self.msg_handler.reset();
             self.channel.lock().unwrap().disconnect();
         }
+    }
+
+    fn get_ui_size(&self) -> (u32, u32) {
+        self.msg_handler.get_ui_size()
+    }
+
+    fn notify_snapshot_state(&self, state: u32) {
+        self.msg_handler.notify_snapshot_state(state);
     }
 }
 
@@ -676,16 +686,23 @@ pub fn dup_fd(fd: RawFd) -> RawFd {
 #[derive(Clone, Debug, Default, DescSerde, Serialize, Deserialize)]
 #[desc_version(current_version = "0.1.0")]
 struct OhUiMigrationState {
+    // cursor info
     cursor_img: Vec<u8>,
     width: u32,
     height: u32,
     hot_x: u32,
     hot_y: u32,
+    // ui info
+    #[serde(default)]
+    ui_width: u32,
+    #[serde(default)]
+    ui_height: u32,
 }
 
 struct OhUiMigration {
     cursor: Arc<Mutex<CursorInfo>>,
     ohui_srv: Arc<OhUiServer>,
+    ui_size: (u32, u32),
 }
 
 impl StateTransfer for OhUiMigration {
@@ -706,6 +723,7 @@ impl StateTransfer for OhUiMigration {
         state.height = cursor.height;
         state.hot_x = cursor.hot_x;
         state.hot_y = cursor.hot_y;
+        (state.ui_width, state.ui_height) = self.ohui_srv.get_ui_size();
         Ok(serde_json::to_vec(&state)?)
     }
 
@@ -725,6 +743,7 @@ impl StateTransfer for OhUiMigration {
         cursor.height = mgt_state.height;
         cursor.hot_x = mgt_state.hot_x;
         cursor.hot_y = mgt_state.hot_y;
+        self.ui_size = (mgt_state.ui_width, mgt_state.ui_height);
         Ok(())
     }
 
@@ -743,6 +762,33 @@ impl MigrationHook for OhUiMigration {
             cursor.hot_y,
             bytes_per_pixel() as u32,
         );
+        Ok(())
+    }
+
+    fn notify_status(&self, save: bool, status: migration::MigrationStatus) -> Result<()> {
+        // If the ui size has changed, we need to delay snapshot animation 1500ms to
+        // mask Windows resolution adaptation.
+        const NOTIFY_CHANGE_DELAY: u64 = 1500;
+
+        if save {
+            return Ok(());
+        }
+
+        if status == migration::MigrationStatus::Completed {
+            if self.ui_size != self.ohui_srv.get_ui_size() {
+                let ohui_srv = self.ohui_srv.clone();
+                EventLoop::get_ctx(None).unwrap().timer_add(
+                    Box::new(move || {
+                        info!("delayed {}ms, notify snapshot complete", SNAPSHOT_COMPLETE);
+                        ohui_srv.notify_snapshot_state(SNAPSHOT_COMPLETE);
+                    }),
+                    Duration::from_millis(NOTIFY_CHANGE_DELAY),
+                );
+            } else {
+                info!("notify snapshot complete");
+                self.ohui_srv.notify_snapshot_state(SNAPSHOT_COMPLETE);
+            }
+        }
         Ok(())
     }
 }
