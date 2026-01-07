@@ -447,7 +447,7 @@ pub struct SerialPort {
 }
 
 impl SerialPort {
-    pub fn new(port_cfg: VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Self {
+    pub fn new(port_cfg: VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Result<Self> {
         // Console is default host connected. And pty chardev has opened by default in realize()
         // function.
         let is_console = matches!(port_cfg.classtype.as_str(), "virtconsole");
@@ -456,16 +456,16 @@ impl SerialPort {
             host_connected = true;
         }
 
-        SerialPort {
+        Ok(SerialPort {
             name: Some(port_cfg.id),
             paused: false,
-            chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg))),
+            chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg)?)),
             nr: port_cfg.nr.unwrap(),
             is_console,
             guest_connected: false,
             host_connected,
             ctrl_handler: None,
-        }
+        })
     }
 
     pub fn realize(&mut self) -> Result<()> {
@@ -564,7 +564,17 @@ impl SerialPortHandler {
                 let locked_port = port.lock().unwrap();
                 let locked_cdev = locked_port.chardev.lock().unwrap();
                 if locked_cdev.outbuf_is_full() {
+                    // disable further notifications until space appears
+                    queue_lock
+                        .vring
+                        .suppress_queue_notify(self.driver_features, true)
+                        .with_context(|| "Failed to disable tx queue notify")?;
                     break;
+                } else {
+                    queue_lock
+                        .vring
+                        .suppress_queue_notify(self.driver_features, false)
+                        .with_context(|| "Failed to enable tx queue notify")?;
                 }
             }
             if self.migrating.load(Ordering::SeqCst) {

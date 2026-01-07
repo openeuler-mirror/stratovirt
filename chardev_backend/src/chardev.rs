@@ -35,7 +35,8 @@ use machine_manager::{
 };
 use util::file::clear_file;
 use util::loop_context::{
-    gen_delete_notifiers, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
+    create_new_eventfd, gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper,
+    NotifierCallback, NotifierOperation,
 };
 use util::set_termi_raw_mode;
 use util::socket::{SocketListener, SocketStream};
@@ -91,13 +92,15 @@ pub struct Chardev {
     unpause_timer: Option<u64>,
     /// output listener to notify when output stream fd can be written
     output_listener_fd: Option<Arc<EventFd>>,
+    /// Event to kick output
+    kick_out_evt: Arc<EventFd>,
     /// output buffer queue
     outbuf: VecDeque<Vec<u8>>,
 }
 
 impl Chardev {
-    pub fn new(chardev_cfg: ChardevConfig) -> Self {
-        Chardev {
+    pub fn new(chardev_cfg: ChardevConfig) -> Result<Self> {
+        Ok(Chardev {
             id: chardev_cfg.id(),
             backend: chardev_cfg.classtype,
             listener: None,
@@ -109,8 +112,9 @@ impl Chardev {
             wait_port: false,
             unpause_timer: None,
             output_listener_fd: None,
+            kick_out_evt: Arc::new(create_new_eventfd()?),
             outbuf: VecDeque::with_capacity(BUF_QUEUE_SIZE),
-        }
+        })
     }
 
     pub fn realize(&mut self) -> Result<()> {
@@ -266,6 +270,10 @@ impl Chardev {
         self.outbuf.len() == self.outbuf.capacity()
     }
 
+    pub fn outbuf_free_size(&self) -> usize {
+        self.outbuf.capacity() - self.outbuf.len()
+    }
+
     pub fn fill_outbuf(&mut self, buf: Vec<u8>, listener_fd: Option<Arc<EventFd>>) -> Result<()> {
         match self.backend {
             ChardevType::File { .. } | ChardevType::Pty { .. } | ChardevType::Stdio { .. } => {
@@ -274,15 +282,10 @@ impl Chardev {
                 }
                 return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
             }
-            ChardevType::Socket { .. } => {
-                if self.output.is_none() {
-                    warn!("Output is none. Discard outbuf data.");
-                    return Ok(());
-                }
-                if listener_fd.is_none() {
-                    return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
-                }
-            }
+            ChardevType::Socket { .. } => (),
+        }
+        if self.output.is_none() {
+            return Ok(());
         }
 
         if self.outbuf_is_full() {
@@ -290,16 +293,13 @@ impl Chardev {
         }
         self.outbuf.push_back(buf);
         self.output_listener_fd = listener_fd;
+        let _ = self.kick_out_evt.as_ref().write(1);
 
-        let event_notifier = EventNotifier::new(
-            NotifierOperation::AddEvents,
-            self.stream_fd.unwrap(),
-            None,
-            EventSet::OUT,
-            Vec::new(),
-        );
-        EventLoop::update_event(vec![event_notifier], None)?;
         Ok(())
+    }
+
+    pub fn set_outbuf_listener(&mut self, listener_fd: Option<Arc<EventFd>>) {
+        self.output_listener_fd = listener_fd;
     }
 
     fn consume_outbuf(&mut self) -> Result<()> {
@@ -492,6 +492,7 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
         let stream_fd = stream.as_raw_fd();
         let stream_arc = Arc::new(Mutex::new(stream));
         let listener_fd = locked_chardev.listener.as_ref().unwrap().as_raw_fd();
+        let kick_out_fd = locked_chardev.kick_out_evt.as_ref().as_raw_fd();
         let notify_dev = locked_chardev.dev.clone();
 
         locked_chardev.stream_fd = Some(stream_fd);
@@ -511,6 +512,11 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             locked_chardev.output = None;
             locked_chardev.stream_fd = None;
             locked_chardev.cancel_unpause_timer();
+            locked_chardev.outbuf.clear();
+            if locked_chardev.output_listener_fd.is_some() {
+                let _ = locked_chardev.output_listener_fd.as_ref().unwrap().write(1);
+                locked_chardev.output_listener_fd = None;
+            }
             info!(
                 "Chardev \'{}\' event, connection closed: {}",
                 &locked_chardev.id, connection_info
@@ -525,7 +531,7 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
             // its lifetime with this notifier callback lifetime. It allows us to ensure
             // that socket fd be valid until we unregister it from epoll_fd subscription.
             let stream_fd = stream_arc.lock().unwrap().as_raw_fd();
-            Some(gen_delete_notifiers(&[stream_fd]))
+            Some(gen_delete_notifiers(&[stream_fd, kick_out_fd]))
         });
 
         let handling_chardev = cloned_chardev.clone();
@@ -591,53 +597,78 @@ fn get_socket_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
         });
 
         let handling_chardev = cloned_chardev.clone();
-        let output_handler = Rc::new(move |event, fd| {
-            if event & EventSet::OUT != EventSet::OUT {
-                return None;
-            }
+        let send_buffers = Rc::new(move || {
+            let mut locked_chardev = handling_chardev.lock().unwrap();
 
-            let mut locked_cdev = handling_chardev.lock().unwrap();
-            if let Err(e) = locked_cdev.consume_outbuf() {
+            if let Err(e) = locked_chardev.consume_outbuf() {
                 error!("Failed to consume outbuf with error {:?}", e);
-                locked_cdev.clear_outbuf();
+                locked_chardev.clear_outbuf();
                 return Some(vec![EventNotifier::new(
                     NotifierOperation::DeleteEvents,
-                    fd,
+                    stream_fd,
                     None,
                     EventSet::OUT,
                     Vec::new(),
                 )]);
             }
 
-            if locked_cdev.output_listener_fd.is_some() {
-                let fd = locked_cdev.output_listener_fd.as_ref().unwrap();
+            if locked_chardev.output_listener_fd.is_some() {
+                let fd = locked_chardev.output_listener_fd.as_ref().unwrap();
                 if let Err(e) = fd.write(1) {
                     error!("Failed to write eventfd with error {:?}", e);
                     return None;
                 }
-                locked_cdev.output_listener_fd = None;
+                locked_chardev.output_listener_fd = None;
             }
 
-            if locked_cdev.outbuf.is_empty() {
+            if locked_chardev.outbuf.is_empty() {
                 Some(vec![EventNotifier::new(
                     NotifierOperation::DeleteEvents,
-                    fd,
+                    stream_fd,
                     None,
                     EventSet::OUT,
                     Vec::new(),
                 )])
             } else {
-                None
+                Some(vec![EventNotifier::new(
+                    NotifierOperation::AddEvents,
+                    stream_fd,
+                    None,
+                    EventSet::OUT,
+                    Vec::new(),
+                )])
             }
         });
 
-        Some(vec![EventNotifier::new(
-            NotifierOperation::AddShared,
-            stream_fd,
-            Some(listener_fd),
-            EventSet::IN | EventSet::HANG_UP,
-            vec![input_handler, output_handler],
-        )])
+        let send_buffers_cb = send_buffers.clone();
+        let outavail_handler = Rc::new(move |event, _| {
+            if event & EventSet::OUT != EventSet::OUT {
+                return None;
+            }
+            send_buffers_cb()
+        });
+
+        let send_handler = Rc::new(move |_event, fd| {
+            read_fd(fd);
+            send_buffers()
+        });
+
+        Some(vec![
+            EventNotifier::new(
+                NotifierOperation::AddShared,
+                stream_fd,
+                Some(listener_fd),
+                EventSet::IN | EventSet::HANG_UP,
+                vec![input_handler, outavail_handler],
+            ),
+            EventNotifier::new(
+                NotifierOperation::AddShared,
+                kick_out_fd,
+                None,
+                EventSet::IN,
+                vec![send_handler],
+            ),
+        ])
     });
 
     let listener_fd = listener.as_ref().unwrap().as_raw_fd();

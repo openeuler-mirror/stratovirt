@@ -11,6 +11,8 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::VecDeque;
+use std::os::unix::prelude::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -34,7 +36,12 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
-use util::loop_context::{create_new_eventfd, EventNotifierHelper};
+use util::loop_context::{
+    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
+};
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
 pub const SERIAL_ADDR: u64 = 0x3f8;
 
@@ -121,6 +128,8 @@ pub struct Serial {
     state: SerialState,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
+    /// Event to register for tx-ready signal.
+    tx_ready_evt: Arc<EventFd>,
 }
 
 impl Serial {
@@ -135,7 +144,8 @@ impl Serial {
             paused: false,
             rbr: VecDeque::new(),
             state: SerialState::new(),
-            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
+            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev)?)),
+            tx_ready_evt: Arc::new(create_new_eventfd()?),
         };
         serial.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
         serial
@@ -143,6 +153,32 @@ impl Serial {
             .with_context(|| LegacyError::SetSysResErr)?;
         serial.set_parent_bus(sysbus.clone());
         Ok(serial)
+    }
+
+    fn register_tx_ready_handler(dev: Arc<Mutex<Self>>) {
+        let fd = dev.lock().unwrap().tx_ready_evt.as_raw_fd();
+
+        let tx_ready_handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
+
+            let mut locked_dev = dev.lock().unwrap();
+            // protect from spurious event
+            if !locked_dev.chardev.lock().unwrap().outbuf_is_full() {
+                locked_dev.state.lsr |= UART_LSR_TEMT | UART_LSR_THRE;
+                locked_dev.state.thr_pending = 1;
+                locked_dev.update_iir();
+            }
+            None
+        });
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            fd,
+            None,
+            EventSet::IN,
+            vec![tx_ready_handler],
+        );
+        let _ = EventLoop::update_event(vec![notifier], None);
     }
 
     fn unpause_rx(&mut self) {
@@ -257,14 +293,15 @@ impl Serial {
     // * fail to flush serial.
     fn write_internal(&mut self, offset: u64, data: u8) -> Result<()> {
         trace::serial_write(offset, data);
+        let mut maybe_err = Ok(());
         match offset {
             0 => {
                 if self.state.lcr & UART_LCR_DLAB != 0 {
                     self.state.div = (self.state.div & 0xff00) | u16::from(data);
                 } else {
-                    self.state.thr_pending = 1;
-
                     if self.state.mcr & UART_MCR_LOOP != 0 {
+                        self.state.thr_pending = 1;
+
                         // loopback mode
                         let len = self.rbr.len();
                         if len >= RECEIVER_BUFF_SIZE {
@@ -276,10 +313,25 @@ impl Serial {
 
                         self.rbr.push_back(data);
                         self.state.lsr |= UART_LSR_DR;
-                    } else if let Err(e) =
-                        self.chardev.lock().unwrap().fill_outbuf(vec![data], None)
-                    {
-                        bail!("Failed to append data to output buffer of chardev, {:?}", e);
+                    } else {
+                        let mut locked_chardev = self.chardev.lock().unwrap();
+                        if let Err(e) = locked_chardev.fill_outbuf(vec![data], None) {
+                            maybe_err = Err(e).with_context(|| {
+                                "Failed to append rs232 data to outbuf of chardev"
+                            });
+                            // We need signal INT_TX anyway. Otherwise guest will stop using port forever.
+                            // Fallback to signalling
+                        }
+
+                        // If outbuf is not full, signal INT_TX. Otherwise, enable listener callback.
+                        if locked_chardev.outbuf_is_full() {
+                            self.state.lsr &= !(UART_LSR_TEMT | UART_LSR_THRE);
+                            locked_chardev.set_outbuf_listener(Some(self.tx_ready_evt.clone()));
+                        } else {
+                            drop(locked_chardev);
+                            self.state.thr_pending = 1;
+                            self.state.lsr |= UART_LSR_TEMT | UART_LSR_THRE;
+                        }
                     }
 
                     self.update_iir();
@@ -304,6 +356,10 @@ impl Serial {
                 if data & UART_MCR_LOOP == 0 {
                     // loopback turned off. Unpause rx
                     self.unpause_rx();
+                } else if self.state.lsr & UART_LSR_TEMT == 0 {
+                    self.state.thr_pending = 1;
+                    self.state.lsr |= UART_LSR_TEMT | UART_LSR_THRE;
+                    self.update_iir();
                 }
                 self.state.mcr = data;
             }
@@ -313,7 +369,7 @@ impl Serial {
             _ => {}
         }
 
-        Ok(())
+        maybe_err
     }
 }
 
@@ -369,6 +425,9 @@ impl Device for Serial {
             dev.clone(),
             SERIAL_SNAPSHOT_ID,
         );
+
+        Self::register_tx_ready_handler(dev.clone());
+
         let locked_dev = dev.lock().unwrap();
         locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
@@ -450,6 +509,7 @@ impl StateTransfer for Serial {
         }
         self.rbr = rbr;
         self.state = serial_state;
+        let _ = self.tx_ready_evt.write(1); // signal resume TX, if it was paused
         self.unpause_rx();
 
         Ok(())
@@ -507,7 +567,7 @@ mod test {
         // for write_internal with first argument to work,
         // you need to set output at first
         assert!(usart.write_internal(0, 0x03).is_err());
-        let mut chardev = Chardev::new(chardev_cfg);
+        let mut chardev = Chardev::new(chardev_cfg).unwrap();
         chardev.output = Some(Arc::new(Mutex::new(std::io::stdout())));
         usart.chardev = Arc::new(Mutex::new(chardev));
 
