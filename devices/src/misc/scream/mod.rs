@@ -254,7 +254,9 @@ impl ScreamCond {
     fn wait_if_paused(&self, interface: Arc<Mutex<dyn AudioInterface>>) {
         let mut destroy_thread_handle = None;
         let mut locked_pause = self.paused.lock().unwrap();
+        let mut vm_pause: bool = false;
         while *locked_pause != 0 {
+            vm_pause = *locked_pause & Self::VM_PAUSE_BIT != 0;
             if destroy_thread_handle.is_none() {
                 let cloned_interface = interface.clone();
                 destroy_thread_handle = Some(
@@ -273,6 +275,13 @@ impl ScreamCond {
             if let Err(e) = handle.join() {
                 error!("failed to join destroy thread, {:?}", e);
             }
+        }
+
+        // Add a 100ms delay to ensure that the scream play/capture threads
+        // wake up later than the VCPU threads. This solves the issue of audio
+        // stuttering in scream after the VM is resumed from a pause.
+        if vm_pause {
+            thread::sleep(std::time::Duration::from_millis(100));
         }
     }
 
