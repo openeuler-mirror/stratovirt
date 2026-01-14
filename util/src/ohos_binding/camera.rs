@@ -16,6 +16,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use log::error;
 
 use super::hwf_adapter::camera::{
     BrokenProcessFn, BufferProcessFn, CamFuncTable, OhCameraCtx, ProfileRecorder,
@@ -31,6 +32,8 @@ pub const CAMERA_FORMAT_YUV420SP: i32 = 1003;
 pub const CAMERA_FORMAT_NV12: i32 = 1004;
 pub const CAMERA_FORMAT_YUYV422: i32 = 1005;
 pub const CAMERA_FORMAT_MJPEG: i32 = 2000;
+const CAMERA_ERRCODE_NULL_CTX: i32 = 1;
+const CAMERA_ERRCODE_FAILED_GET_CAMERA: i32 = 4;
 
 #[derive(Clone)]
 pub struct OhCamera {
@@ -46,31 +49,41 @@ impl Drop for OhCamera {
 }
 
 impl OhCamera {
-    pub fn new(id: String) -> Result<(OhCamera, i32)> {
+    pub fn new(id: String) -> Result<(OhCamera, i32), i32> {
         let capi = hwf_adapter_camera_api();
         // SAFETY: We call related API sequentially for specified ctx.
         let mut ctx = unsafe { (capi.create_ctx)() };
         if ctx.is_null() {
-            bail!("OH Camera: failed to create camera ctx");
+            error!("OH Camera: failed to create camera ctx");
+            return Err(CAMERA_ERRCODE_NULL_CTX);
         }
-        let id_c = CString::new(id).with_context(|| "failed to create CString id")?;
+        let id_c = match CString::new(id) {
+            Ok(id) => id,
+            Err(_) => {
+                error!("failed to create CString id");
+                return Err(CAMERA_ERRCODE_FAILED_GET_CAMERA);
+            }
+        };
         let fmt_cnt;
         // SAFETY: We call related API sequentially for specified ctx.
         unsafe {
             let n = (capi.init_camera)(ctx, id_c.as_ptr());
             if n < 0 {
                 (capi.destroy_ctx)(ptr::addr_of_mut!(ctx));
-                bail!("OH Camera: failed to init cameras");
+                error!("OH Camera: failed to init cameras");
+                return Err(-n);
             }
 
             fmt_cnt = (capi.init_profiles)(ctx);
             if fmt_cnt < 0 {
                 (capi.destroy_ctx)(ptr::addr_of_mut!(ctx));
-                bail!("OH Camera: failed to init profiles");
+                error!("OH Camera: failed to init profiles");
+                return Err(-fmt_cnt);
             }
         }
         if fmt_cnt > i32::from(u8::MAX) {
-            bail!("Invalid format counts: {fmt_cnt}");
+            error!("Invalid format counts: {fmt_cnt}");
+            return Err(CAMERA_ERRCODE_FAILED_GET_CAMERA);
         }
         Ok((Self { ctx, capi }, fmt_cnt))
     }
@@ -99,17 +112,24 @@ impl OhCamera {
         &self,
         buffer_proc: BufferProcessFn,
         broken_proc: BrokenProcessFn,
-    ) -> Result<()> {
+    ) -> Result<(), i32> {
+        let mut ret;
         // SAFETY: We call related API sequentially for specified ctx.
         unsafe {
-            if (self.capi.create_session)(self.ctx) != 0 {
-                bail!("OH Camera: failed to create session");
+            ret = (self.capi.create_session)(self.ctx);
+            if ret != 0 {
+                error!("OH Camera: failed to create session");
+                return Err(-ret);
             }
-            if (self.capi.pre_start)(self.ctx, buffer_proc, broken_proc) != 0 {
-                bail!("OH Camera: failed to prestart camera stream");
+            ret = (self.capi.pre_start)(self.ctx, buffer_proc, broken_proc);
+            if ret != 0 {
+                error!("OH Camera: failed to prestart camera stream");
+                return Err(-ret);
             }
-            if (self.capi.start)(self.ctx) != 0 {
-                bail!("OH Camera: failed to start camera stream");
+            ret = (self.capi.start)(self.ctx);
+            if ret != 0 {
+                error!("OH Camera: failed to start camera stream");
+                return Err(-ret);
             }
         }
         Ok(())
