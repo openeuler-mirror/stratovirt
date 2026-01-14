@@ -3,3 +3,27 @@ name = "STRATOVIRT_PVPANIC"
 event_type = "Fault"
 args = "event: String"
 enabled = true
+
+[[events]]
+name = "STRATOVIRT_PLAY_INIT_FAILED"
+event_type = "Fault"
+args = "ERRCODE: u32"
+enabled = true
+
+[[events]]
+name = "STRATOVIRT_CAPTURE_INIT_FAILED"
+event_type = "Fault"
+args = "ERRCODE: u32"
+enabled = true
+
+[[events]]
+name = "STRATOVIRT_PLAY_START_FAILED"
+event_type = "Fault"
+args = "ERRCODE: u32"
+enabled = true
+
+[[events]]
+name = "STRATOVIRT_CAPTURE_START_FAILED"
+event_type = "Fault"
+args = "ERRCODE: u32"
+enabled = true
