@@ -619,6 +619,9 @@ pub struct ScreamConfig {
     record: String,
     #[arg(long, default_value = "on", action = ArgAction::Append, value_parser = parse_bool)]
     record_auth: bool,
+    #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+    #[arg(long, default_value = "off", action = ArgAction::Append, value_parser = parse_bool)]
+    play_concurrency: bool,
 }
 
 /// Scream sound card device structure.
@@ -668,7 +671,9 @@ impl Scream {
             #[cfg(feature = "scream_pulseaudio")]
             ScreamInterface::PulseAudio => Arc::new(Mutex::new(PulseStreamData::init(name, dir))),
             #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
-            ScreamInterface::OhAudio => Arc::new(Mutex::new(OhAudio::init(dir))),
+            ScreamInterface::OhAudio => {
+                Arc::new(Mutex::new(OhAudio::init(dir, self.config.play_concurrency)))
+            }
             ScreamInterface::Demo => Arc::new(Mutex::new(AudioDemo::init(
                 dir,
                 self.config.playback.clone(),

@@ -199,6 +199,41 @@ pub type OhAudioCapturer = OH_AudioCapturerStruct;
 
 type PlaceHolderFn = std::option::Option<unsafe extern "C" fn() -> i32>;
 
+/// Define the result of the function execution.
+///
+/// @since 12
+pub type OHAudioCommonResult = ::std::os::raw::c_uint;
+
+/// Declare the audio session manager.
+/// The handle of audio session manager is used for audio session related functions.
+///
+/// @since 12
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct OH_AudioSessionManager {
+    _unused: [u8; 0],
+}
+pub type OHAudioSessionManager = OH_AudioSessionManager;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct OHAudioSessionStrategy {
+    pub mode: OHAudioSessionConcurrencyMode,
+}
+
+#[allow(unused)]
+pub const CONCURRENCY_DEFAULT: OHAudioSessionConcurrencyMode = 0;
+pub const CONCURRENCY_MIX_WITH_OTHERS: OHAudioSessionConcurrencyMode = 1;
+#[allow(unused)]
+pub const CONCURRENCY_DUCK_OTHERS: OHAudioSessionConcurrencyMode = 2;
+#[allow(unused)]
+pub const CONCURRENCY_PAUSE_OTHERS: OHAudioSessionConcurrencyMode = 3;
+
+/// Declare the audio concurrency modes.
+///
+/// @since 12
+pub type OHAudioSessionConcurrencyMode = ::std::os::raw::c_int;
+
 /// Declaring the callback struct for renderer stream.
 ///
 /// @since 10
@@ -375,4 +410,14 @@ extern "C" {
     pub fn OH_AudioCapturer_Start(capturer: *mut OhAudioCapturer) -> OhAudioStreamResult;
     pub fn OH_AudioCapturer_Release(capturer: *mut OhAudioCapturer) -> OhAudioStreamResult;
     pub fn OH_AudioCapturer_Stop(capturer: *mut OhAudioCapturer) -> OhAudioStreamResult;
+    pub fn OH_AudioManager_GetAudioSessionManager(
+        audioSessionManager: *mut *mut OHAudioSessionManager,
+    ) -> OHAudioCommonResult;
+    pub fn OH_AudioSessionManager_ActivateAudioSession(
+        audioSessionManager: *mut OHAudioSessionManager,
+        strategy: *const OHAudioSessionStrategy,
+    ) -> OHAudioCommonResult;
+    pub fn OH_AudioSessionManager_DeactivateAudioSession(
+        audioSessionManager: *mut OHAudioSessionManager,
+    ) -> OHAudioCommonResult;
 }

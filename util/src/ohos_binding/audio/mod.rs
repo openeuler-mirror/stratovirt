@@ -225,6 +225,7 @@ pub struct AudioContext {
     capturer: *mut capi::OhAudioCapturer,
     renderer: *mut capi::OhAudioRenderer,
     userdata: *mut c_void,
+    session_manager: *mut capi::OHAudioSessionManager,
 }
 
 impl Drop for AudioContext {
@@ -235,6 +236,10 @@ impl Drop for AudioContext {
         if !self.builder.is_null() {
             call_capi_nocheck!(OH_AudioStreamBuilder_Destroy(self.builder));
             self.builder = ptr::null_mut();
+        }
+        if !self.session_manager.is_null() {
+            self.deactivate_audio_session();
+            self.session_manager = ptr::null_mut();
         }
     }
 }
@@ -360,6 +365,7 @@ impl AudioContext {
             capturer: ptr::null_mut(),
             renderer: ptr::null_mut(),
             userdata: std::ptr::null_mut::<c_void>(),
+            session_manager: ptr::null_mut(),
         }
     }
 
@@ -425,6 +431,32 @@ impl AudioContext {
         other
             .set(size, rate, channels)
             .is_ok_and(|_| (self.spec == other))
+    }
+
+    pub fn activate_audio_session(
+        &mut self,
+        mode: capi::OHAudioSessionConcurrencyMode,
+    ) -> Result<(), OAErr> {
+        if self.session_manager.is_null() {
+            call_capi!(OH_AudioManager_GetAudioSessionManager(
+                &mut self.session_manager
+            ))?;
+        }
+        let strategy = capi::OHAudioSessionStrategy { mode };
+        call_capi!(OH_AudioSessionManager_ActivateAudioSession(
+            self.session_manager,
+            &strategy
+        ))
+    }
+
+    pub fn deactivate_audio_session(&self) {
+        // Deactivates the current audio session via the OH AudioSessionManager.
+        // No null-check is required for `self.session_manager` here, as the underlying
+        // HM implementation of `OH_AudioSessionManager_DeactivateAudioSession` already
+        // performs input validation and null-pointer checks internally.
+        call_capi_nocheck!(OH_AudioSessionManager_DeactivateAudioSession(
+            self.session_manager
+        ));
     }
 }
 
