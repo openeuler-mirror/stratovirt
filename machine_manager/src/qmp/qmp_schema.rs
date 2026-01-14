@@ -1836,6 +1836,25 @@ pub struct query_mem_gpa {
 }
 pub type QueryMemGpaArgument = query_mem_gpa;
 
+/// AudioState
+///
+/// Emitted when scream audio state changed.
+/// true means enabled, vice versa
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "AUDIO_CHANGED",
+///      "play": true,
+///      "capt": false,
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct AudioState {
+    pub play: bool,
+    pub capt: bool,
+}
+
 macro_rules! define_qmp_event_enum {
     ($($event:ident($name:expr, $data_type:ty $(, $serde_default:ident)?)),*) => {
         /// A enum to store all event struct
@@ -1865,7 +1884,8 @@ define_qmp_event_enum!(
     CpuResize("CPU_RESIZE", CpuResize, default),
     DeviceDeleted("DEVICE_DELETED", DeviceDeleted),
     BalloonChanged("BALLOON_CHANGED", BalloonInfo),
-    UsbHostAddRes("USB_HOST_ADD_RES", UsbHostAddRes)
+    UsbHostAddRes("USB_HOST_ADD_RES", UsbHostAddRes),
+    AudioChanged("AUDIO_CHANGED", AudioState)
 );
 
 /// Shutdown
