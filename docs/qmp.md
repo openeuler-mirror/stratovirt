@@ -638,6 +638,17 @@ Control if the scream device can use host's microphone record.
 <- { "return": {} }
  ```
 
+### detect-silent-audio
+
+Detect if the VM is playing silent audio.
+
+#### Example
+
+```json
+-> { "execute": "detect-silent-audio", "arguments": {} }
+<- { "return": true }
+```
+
 ## Event Notification
 
 When some events happen, connected client will receive QMP events.
