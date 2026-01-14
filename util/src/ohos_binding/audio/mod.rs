@@ -29,7 +29,11 @@ const RENDER_CB_FREQUENCY: i32 = 50;
 macro_rules! call_capi {
     ( $f: ident ( $($x: expr),* ) ) => {
         {
-            // SAFETY: OH Audio FrameWork's APIs guarantee safety.
+            // SAFETY:
+            // - `$f` should be a valid function pointer loaded from the OH Audio Framework C API library.
+            // - The dynamic library needs to be been successfully initialized before this call.
+            // - The arguments `$($x),*` are guaranteed to match the expected C ABI types
+            //   and remain valid for the duration of the call (no dangling pointers, no aliasing).
             let r = unsafe { capi::$f( $($x),* ) };
             if r != capi::OH_AUDIO_STREAM_RESULT_AUDIOSTREAM_SUCCESS {
                 error!("ohauadio_rapi: failed at {:?}", stringify!($f));
@@ -43,7 +47,11 @@ macro_rules! call_capi {
 
 macro_rules! call_capi_nocheck {
     ( $f: ident ( $($x: expr),* ) ) => {
-        // SAFETY: OH Audio FrameWork's APIs guarantee safety.
+        // SAFETY:
+        // - `$f` should be a valid function pointer loaded from the OH Audio Framework C API library.
+        // - The dynamic library needs to be been successfully initialized before this call.
+        // - The arguments `$($x),*` are guaranteed to match the expected C ABI types
+        //   and remain valid for the duration of the call (no dangling pointers, no aliasing).
         unsafe { capi::$f( $($x),* ) }
     };
 }
@@ -475,7 +483,9 @@ struct OhVolume {
 impl OhVolume {
     fn new() -> Self {
         let capi = hwf_adapter_volume_api();
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY:
+        // - `register_volume_change` is a valid function pointer loaded from the dynamic library.
+        // - We call related API sequentially for specified ctx.
         let ret = unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
         if ret != 0 {
             hisysevent::STRATOVIRT_SET_VOLUME_CB_FAILED(-ret);
@@ -488,7 +498,10 @@ impl OhVolume {
     }
 
     fn get_ohos_volume(&self) -> u32 {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY:
+        // - `get_volume` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
         let ret = unsafe { (self.capi.get_volume)() };
         if ret < 0 {
             hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
@@ -499,17 +512,28 @@ impl OhVolume {
     }
 
     fn get_max_volume(&self) -> u32 {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY:
+        // - `get_max_volume` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
         unsafe { (self.capi.get_max_volume)() as u32 }
     }
 
     fn get_min_volume(&self) -> u32 {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY:
+        // - `get_min_volume` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
         unsafe { (self.capi.get_min_volume)() as u32 }
     }
 
     fn set_ohos_volume(&self, volume: i32) -> i32 {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY:
+        // - `set_ohos_volume` is a valid function pointer loaded from the dynamic library.
+        // - `set_ohos_volume` operates only on the audio context owned by `self`, and does not access or
+        //   retain references to Rust-managed memory across the FFI boundary.
+        // - Calls are made sequentially for this `ctx`, ensuring no concurrent mutation or aliasing
+        //   of underlying state occurs.
         let ret = unsafe { (self.capi.set_volume)(volume) };
         if ret != 0 {
             hisysevent::STRATOVIRT_SET_VOLUME_FAILED(-ret);
