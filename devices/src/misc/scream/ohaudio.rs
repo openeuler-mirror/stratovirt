@@ -22,7 +22,7 @@ use log::{error, info, warn};
 
 use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{
-    AudioExtension, AudioInterface, AudioStatus, ScreamDirection, StreamData,
+    AudioExtension, AudioInterface, AudioStatus, GuestVol, HostVol, ScreamDirection, StreamData,
     IVSHMEM_VOLUME_SYNC_VECTOR, TARGET_LATENCY_MS,
 };
 use machine_manager::event_loop::EventLoop;
@@ -668,7 +668,7 @@ impl AudioInterface for OhAudio {
 
 pub struct OhAudioVolume {
     shm_dev: Arc<Mutex<Ivshmem>>,
-    ohos_vol: RwLock<u32>,
+    ohos_vol: Arc<Mutex<(HostVol, Option<HostVol>)>>,
     ohos_vol_max: u32,
     ohos_vol_min: u32,
 }
@@ -679,8 +679,11 @@ unsafe impl Send for OhAudioVolume {}
 unsafe impl Sync for OhAudioVolume {}
 
 impl GuestVolumeNotifier for OhAudioVolume {
-    fn notify(&self, vol: u32) {
-        *self.ohos_vol.write().unwrap() = self.to_guest_vol(vol);
+    fn notify(&self, h_vol: HostVol) {
+        info!("ohos volume changed to {}", h_vol);
+        let mut ohos_vol = self.ohos_vol.lock().unwrap();
+        let _ = ohos_vol.1.take();
+        ohos_vol.0 = h_vol;
         self.shm_dev
             .lock()
             .unwrap()
@@ -689,12 +692,16 @@ impl GuestVolumeNotifier for OhAudioVolume {
 }
 
 impl AudioExtension for OhAudioVolume {
-    fn get_host_volume(&self) -> u32 {
-        *self.ohos_vol.read().unwrap()
+    fn get_host_volume(&self) -> GuestVol {
+        let h_vol = self.ohos_vol.lock().unwrap().0;
+        info!("get ohos volume {}", h_vol);
+        self.to_guest_vol(h_vol)
     }
 
-    fn set_host_volume(&self, vol: u32) {
-        set_ohos_volume(self.to_host_vol(vol));
+    fn set_host_volume(&self, g_vol: GuestVol) {
+        let h_vol = self.to_host_vol(g_vol);
+        self.ohos_vol.lock().unwrap().1 = Some(h_vol);
+        self.try_set_host_volume();
     }
 
     fn notify_guest_sync(&self) {
@@ -709,31 +716,49 @@ impl OhAudioVolume {
     pub fn new(shm_dev: Arc<Mutex<Ivshmem>>) -> Arc<Self> {
         let vol = Arc::new(Self {
             shm_dev,
-            ohos_vol: RwLock::new(0),
+            ohos_vol: Arc::new(Mutex::new((get_ohos_volume(), None))),
             ohos_vol_max: get_ohos_volume_max(),
             ohos_vol_min: get_ohos_volume_min(),
         });
-        *vol.ohos_vol.write().unwrap() = vol.to_guest_vol(get_ohos_volume());
         register_guest_volume_notifier(vol.clone());
         vol
     }
 
-    fn to_guest_vol(&self, h_vol: u32) -> u32 {
+    fn to_guest_vol(&self, h_vol: HostVol) -> GuestVol {
         if self.ohos_vol_max > self.ohos_vol_min {
             return SCREAM_MAX_VOLUME * h_vol / (self.ohos_vol_max - self.ohos_vol_min);
         }
         0
     }
 
-    fn to_host_vol(&self, v_vol: u32) -> u32 {
-        if v_vol == 0 || self.ohos_vol_max <= self.ohos_vol_min {
+    fn to_host_vol(&self, g_vol: GuestVol) -> HostVol {
+        if g_vol == 0 || self.ohos_vol_max <= self.ohos_vol_min {
             return 0;
         }
-        let res = (self.ohos_vol_max - self.ohos_vol_min) * v_vol / SCREAM_MAX_VOLUME + 1;
+        let res = (self.ohos_vol_max - self.ohos_vol_min) * g_vol / SCREAM_MAX_VOLUME + 1;
         if res > self.ohos_vol_max {
             return self.ohos_vol_max;
         }
         res
+    }
+
+    fn try_set_host_volume(&self) {
+        let shm = self.shm_dev.clone();
+        let ohos_vol = self.ohos_vol.clone();
+        let func = Box::new(move || {
+            let mut locked_ohos_vol = ohos_vol.lock().unwrap();
+            if let Some(hvol) = locked_ohos_vol.1.take() {
+                if set_ohos_volume(hvol) != 0 {
+                    shm.lock().unwrap().trigger_msix(IVSHMEM_VOLUME_SYNC_VECTOR);
+                } else {
+                    locked_ohos_vol.0 = hvol;
+                }
+            }
+        });
+
+        EventLoop::get_ctx(None)
+            .unwrap()
+            .timer_add(func, Duration::ZERO);
     }
 }
 
