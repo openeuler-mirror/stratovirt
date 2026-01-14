@@ -21,7 +21,8 @@ mod pulseaudio;
 use std::str::FromStr;
 use std::sync::atomic::{fence, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
-use std::{mem, thread};
+use std::time::{Duration, Instant};
+use std::{mem, thread, thread::JoinHandle};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
@@ -40,6 +41,7 @@ use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::notifier::register_vm_pause_notifier;
 use machine_manager::state_query::register_state_query_callback;
+use machine_manager::temp_cleaner::TempCleaner;
 use machine_manager::{
     event, qmp::qmp_channel::QmpChannel, qmp::qmp_schema::AudioState,
     state_query::register_silent_audio_cb,
@@ -80,6 +82,9 @@ const STATUS_MIC_AVAIL_BIT: u32 = 0x4;
 const POLL_DELAY_US: u64 = (TARGET_LATENCY_MS as u64) * 1000 / 8;
 
 pub const SCREAM_MAGIC: u64 = 0x02032023;
+
+const CHECK_THREAD_EXIT_INTERVAL: u64 = 10; // ms
+const CHECK_THREAD_EXIT_TIMEOUT: u64 = 1000; // ms
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd)]
 pub enum AudioStatus {
@@ -247,6 +252,7 @@ struct ScreamCond {
 impl ScreamCond {
     const STREAM_PAUSE_BIT: u8 = 0x1;
     const VM_PAUSE_BIT: u8 = 0x2;
+    const VM_DESTROY_BIT: u8 = 0x4;
 
     fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -260,6 +266,9 @@ impl ScreamCond {
         let mut locked_pause = self.paused.lock().unwrap();
         let mut vm_pause: bool = false;
         while *locked_pause != 0 {
+            if Self::should_exit(*locked_pause) {
+                return;
+            }
             vm_pause = *locked_pause & Self::VM_PAUSE_BIT != 0;
             if destroy_thread_handle.is_none() {
                 let cloned_interface = interface.clone();
@@ -296,7 +305,7 @@ impl ScreamCond {
             true => *locked_pause = old_val | bv,
             false => *locked_pause = old_val & !bv,
         }
-        if *locked_pause == 0 {
+        if *locked_pause == 0 || Self::should_exit(*locked_pause) {
             self.cond.notify_all();
         }
     }
@@ -305,12 +314,20 @@ impl ScreamCond {
         self.set_value(Self::VM_PAUSE_BIT, paused);
     }
 
+    fn set_vm_destroy(&self, paused: bool) {
+        self.set_value(Self::VM_DESTROY_BIT, paused);
+    }
+
     fn set_stream_pause(&self, paused: bool) {
         self.set_value(Self::STREAM_PAUSE_BIT, paused);
     }
 
     fn stream_paused(&self) -> bool {
         *self.paused.lock().unwrap() != 0
+    }
+
+    fn should_exit(paused: u8) -> bool {
+        paused & Self::VM_DESTROY_BIT == Self::VM_DESTROY_BIT
     }
 
     fn restore(&self, paused: u8) {
@@ -369,6 +386,7 @@ impl StreamData {
         dir: ScreamDirection,
         hva: u64,
         cond: Arc<ScreamCond>,
+        vm_exiting: &mut bool,
     ) {
         // SAFETY: hva is the shared memory base address. It already verifies the validity
         // of the address range during the scream realize.
@@ -383,6 +401,10 @@ impl StreamData {
             let mut locked_paused = cond.paused.lock().unwrap();
             while *locked_paused != 0 {
                 interface.lock().unwrap().destroy();
+                if ScreamCond::should_exit(*locked_paused) {
+                    *vm_exiting = true;
+                    return;
+                }
                 locked_paused = cond.cond.wait(locked_paused).unwrap();
             }
 
@@ -449,6 +471,9 @@ impl StreamData {
 
         loop {
             cond.wait_if_paused(interface.clone());
+            if ScreamCond::should_exit(*cond.paused.lock().unwrap()) {
+                return;
+            }
 
             if play.fmt.fmt_generation != self.fmt.fmt_generation {
                 break;
@@ -494,6 +519,9 @@ impl StreamData {
 
         while capt.is_started != 0 {
             cond.wait_if_paused(interface.clone());
+            if ScreamCond::should_exit(*cond.paused.lock().unwrap()) {
+                return;
+            }
 
             if capt.fmt.fmt_generation != self.fmt.fmt_generation {
                 return;
@@ -646,7 +674,7 @@ impl Scream {
         );
     }
 
-    fn start_play_thread_fn(&mut self, cond: Arc<ScreamCond>) -> Result<()> {
+    fn start_play_thread_fn(&mut self, cond: Arc<ScreamCond>) -> Result<JoinHandle<()>> {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
@@ -661,13 +689,18 @@ impl Scream {
                 let mut play_data = StreamData::default();
                 play_data.register_pause_notifier(cond.clone());
 
+                let mut vm_exiting = false;
                 loop {
                     play_data.wait_for_ready(
                         clone_interface.clone(),
                         ScreamDirection::Playback,
                         hva,
                         cond.clone(),
+                        &mut vm_exiting,
                     );
+                    if vm_exiting {
+                        break;
+                    }
 
                     play_data.playback_trans(
                         hva,
@@ -676,12 +709,12 @@ impl Scream {
                         cond.clone(),
                     );
                 }
+                info!("scream play thread is exiting");
             })
-            .with_context(|| "Failed to create thread scream")?;
-        Ok(())
+            .with_context(|| "Failed to create thread scream")
     }
 
-    fn start_record_thread_fn(&mut self, cond: Arc<ScreamCond>) -> Result<()> {
+    fn start_record_thread_fn(&mut self, cond: Arc<ScreamCond>) -> Result<JoinHandle<()>> {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
@@ -695,13 +728,18 @@ impl Scream {
                 let mut capt_data = StreamData::default();
                 capt_data.register_pause_notifier(cond.clone());
 
+                let mut vm_exiting = false;
                 loop {
                     capt_data.wait_for_ready(
                         clone_interface.clone(),
                         ScreamDirection::Record,
                         hva,
                         cond.clone(),
+                        &mut vm_exiting,
                     );
+                    if vm_exiting {
+                        break;
+                    }
 
                     #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
                     if let Some(token_id) = &_ti {
@@ -710,9 +748,9 @@ impl Scream {
                     }
                     capt_data.capture_trans(hva, shmem_size, clone_interface.clone(), cond.clone());
                 }
+                info!("scream capture thread is exiting");
             })
-            .with_context(|| "Failed to create thread scream")?;
-        Ok(())
+            .with_context(|| "Failed to create thread scream")
     }
 
     fn register_state_query(&self, module: String, cond: Arc<ScreamCond>) {
@@ -761,8 +799,37 @@ impl Scream {
         });
         set_authority_notify(Some(author_notify));
 
-        self.start_play_thread_fn(play_cond)?;
-        self.start_record_thread_fn(capt_cond)
+        let play_thread_handle = self.start_play_thread_fn(play_cond.clone())?;
+        let capt_thread_handle = self.start_record_thread_fn(capt_cond.clone())?;
+        self.add_exit_notifier(play_cond, play_thread_handle, capt_cond, capt_thread_handle);
+
+        Ok(())
+    }
+
+    fn add_exit_notifier(
+        &self,
+        play_cond: Arc<ScreamCond>,
+        play_thread_handle: JoinHandle<()>,
+        capt_cond: Arc<ScreamCond>,
+        capt_thread_handle: JoinHandle<()>,
+    ) {
+        TempCleaner::add_exit_notifier(
+            "scream".to_string(),
+            Arc::new(move || {
+                info!("stop scream streams due to vm destroy");
+                play_cond.set_vm_destroy(true);
+                capt_cond.set_vm_destroy(true);
+
+                let now = Instant::now();
+                while !play_thread_handle.is_finished() || !capt_thread_handle.is_finished() {
+                    if now.elapsed() >= Duration::from_millis(CHECK_THREAD_EXIT_TIMEOUT) {
+                        error!("{}ms timeout", CHECK_THREAD_EXIT_TIMEOUT);
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(CHECK_THREAD_EXIT_INTERVAL));
+                }
+            }),
+        );
     }
 
     fn set_ivshmem_ops(
