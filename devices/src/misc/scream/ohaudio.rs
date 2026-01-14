@@ -167,7 +167,7 @@ struct OhAudioRender {
     ctx: Option<AudioContext>,
     stream_data: Arc<Mutex<StreamQueue>>,
     flushing: AtomicBool,
-    status: AudioStatus,
+    status: RwLock<AudioStatus>,
     cond: Condvar,
 }
 
@@ -177,7 +177,7 @@ impl Default for OhAudioRender {
             ctx: None,
             stream_data: Arc::new(Mutex::new(StreamQueue::new(STREAM_DATA_VEC_CAPACITY))),
             flushing: AtomicBool::new(false),
-            status: AudioStatus::default(),
+            status: RwLock::new(AudioStatus::default()),
             cond: Condvar::new(),
         }
     }
@@ -244,22 +244,23 @@ impl OhAudioProcess for OhAudioRender {
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
                 info!("Renderer start");
-                self.status = AudioStatus::Started;
+                *self.status.write().unwrap() = AudioStatus::Started;
                 trace::oh_scream_render_init(&self.ctx);
             }
             Err(e) => {
                 error!("failed to start oh audio renderer: {}", e);
             }
         }
-        self.status == AudioStatus::Started
+        *self.status.read().unwrap() == AudioStatus::Started
     }
 
     fn destroy(&mut self) {
         info!("Renderer destroy");
-        match self.status {
-            AudioStatus::Error | AudioStatus::Intr => {
+        let status = *self.status.read().unwrap();
+        match status {
+            AudioStatus::Error => {
                 self.ctx = None;
-                self.status = AudioStatus::Ready;
+                *self.status.write().unwrap() = AudioStatus::Ready;
                 return;
             }
             AudioStatus::Started => self.flush(),
@@ -268,14 +269,15 @@ impl OhAudioProcess for OhAudioRender {
         self.ctx = None;
         self.stream_data.lock().unwrap().clear();
         self.set_flushing(false);
-        self.status = AudioStatus::Ready;
+        *self.status.write().unwrap() = AudioStatus::Ready;
         trace::oh_scream_render_destroy();
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
-        if self.status == AudioStatus::Intr {
+        if *self.status.read().unwrap() == AudioStatus::Intr {
             return 0;
         }
+
         self.check_fmt_update(recv_data);
 
         fence(Ordering::Acquire);
@@ -288,16 +290,17 @@ impl OhAudioProcess for OhAudioRender {
         ));
         self.cond.notify_all();
 
-
-        if self.status == AudioStatus::Error || self.status == AudioStatus::IntrResume {
+        if *self.status.read().unwrap() == AudioStatus::Error
+            || *self.status.read().unwrap() == AudioStatus::IntrResume
+        {
             error!(
                 "Audio server {:?} occurred. Destroy and reconnect it.",
-                self.status
+                *self.status.read().unwrap()
             );
             self.destroy();
         }
 
-        if self.status == AudioStatus::Ready && !self.init(recv_data) {
+        if *self.status.read().unwrap() == AudioStatus::Ready && !self.init(recv_data) {
             error!("failed to init oh audio");
             self.destroy();
         }
@@ -305,7 +308,7 @@ impl OhAudioProcess for OhAudioRender {
     }
 
     fn get_status(&self) -> AudioStatus {
-        self.status
+        *self.status.read().unwrap()
     }
 }
 
@@ -364,7 +367,7 @@ impl CaptureStream {
 #[derive(Default)]
 struct OhAudioCapture {
     ctx: Option<AudioContext>,
-    status: AudioStatus,
+    status: RwLock<AudioStatus>,
     stream: CaptureStream,
     timer_start: bool,
     data_size_per_second: u64,
@@ -406,7 +409,7 @@ impl OhAudioProcess for OhAudioCapture {
         match self.ctx.as_ref().unwrap().start() {
             Ok(()) => {
                 info!("Capturer start");
-                self.status = AudioStatus::Started;
+                *self.status.write().unwrap() = AudioStatus::Started;
                 trace::oh_scream_capture_init(&self.ctx);
                 true
             }
@@ -419,7 +422,7 @@ impl OhAudioProcess for OhAudioCapture {
 
     fn destroy(&mut self) {
         info!("Capturer destroy");
-        self.status = AudioStatus::Ready;
+        *self.status.write().unwrap() = AudioStatus::Ready;
         self.ctx = None;
         self.stream.reset();
         trace::oh_scream_capture_destroy();
@@ -432,11 +435,13 @@ impl OhAudioProcess for OhAudioCapture {
 
         // We expect capture stream can be resumed when another stream stops interrupting it,
         // but OHOS does not resume it. We resume it manually.
-        if self.status == AudioStatus::Error || self.status == AudioStatus::IntrResume {
+        if *self.status.read().unwrap() == AudioStatus::Error
+            || *self.status.read().unwrap() == AudioStatus::IntrResume
+        {
             self.destroy();
         }
 
-        if self.status == AudioStatus::Ready && !self.init(recv_data) {
+        if *self.status.read().unwrap() == AudioStatus::Ready && !self.init(recv_data) {
             self.destroy();
             return -1;
         }
@@ -447,7 +452,7 @@ impl OhAudioProcess for OhAudioCapture {
                 recv_data.audio_size as usize,
             )
         };
-        if self.status == AudioStatus::Intr {
+        if *self.status.read().unwrap() == AudioStatus::Intr {
             // When capture stream is interrupted, we need to send mute data to front end. Without this,
             // some applications may pop-up error window for no data received.
             if !self.timer_start {
@@ -456,16 +461,16 @@ impl OhAudioProcess for OhAudioCapture {
                 return 0;
             }
         }
-        if !self.stream.wait_for_data(buf) && self.status != AudioStatus::Intr {
+        if !self.stream.wait_for_data(buf) && *self.status.read().unwrap() != AudioStatus::Intr {
             warn!("timed out to wait for capture audio data");
-            self.status = AudioStatus::Error;
+            *self.status.write().unwrap() = AudioStatus::Error;
             return 0;
         }
         1
     }
 
     fn get_status(&self) -> AudioStatus {
-        self.status
+        *self.status.read().unwrap()
     }
 }
 
@@ -481,7 +486,7 @@ fn mute_capture_data_gen(capture: *mut OhAudioCapture, period: u64, len: usize) 
         mute_capture_data_gen(capture, period, len);
     });
 
-    if capt.status == AudioStatus::Intr {
+    if *capt.status.read().unwrap() == AudioStatus::Intr {
         EventLoop::get_ctx(None)
             .unwrap()
             .timer_add(mute_capture_cb, Duration::from_millis(period));
@@ -508,9 +513,9 @@ extern "C" fn render_on_interrupt_cb(
             .unwrap_unchecked()
     };
     if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
-        render.status = AudioStatus::Intr;
+        *render.status.write().unwrap() = AudioStatus::Intr;
     } else if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_RESUME {
-        render.status = AudioStatus::IntrResume;
+        *render.status.write().unwrap() = AudioStatus::IntrResume;
     }
     0
 }
@@ -533,9 +538,9 @@ extern "C" fn capture_on_interrupt_cb(
             .unwrap_unchecked()
     };
     if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
-        capture.status = AudioStatus::Intr;
+        *capture.status.write().unwrap() = AudioStatus::Intr;
     } else if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_RESUME {
-        capture.status = AudioStatus::IntrResume;
+        *capture.status.write().unwrap() = AudioStatus::IntrResume;
     }
     0
 }
@@ -609,7 +614,7 @@ extern "C" fn on_read_data_cb(
 
     trace::trace_scope_start!(ohaudio_read_cb, args = (length));
 
-    if capture.status != AudioStatus::Started {
+    if *capture.status.read().unwrap() != AudioStatus::Started {
         return 0;
     }
 
