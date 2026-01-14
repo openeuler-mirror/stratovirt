@@ -55,18 +55,18 @@ pub const OH_AUDIO_STREAM_ENCODING_TYPE_AUDIOSTREAM_ENCODING_TYPE_RAW: OhAudioSt
 /// @since 10
 pub type OhAudioStreamEncodingType = ::std::os::raw::c_uint;
 
+pub type OhAudioScene = ::std::os::raw::c_int;
+
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_UNKNOWN: OhAudioStreamUsage = 0;
-#[allow(unused)]
-pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_MEDIA: OhAudioStreamUsage = 1;
-#[allow(unused)]
+pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_MUSIC: OhAudioStreamUsage = 1;
 pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_COMMUNICATION: OhAudioStreamUsage = 2;
 /// Define the audio stream usage.
 /// Audio stream usage is used to describe what work scenario
 /// the current stream is used for.
 ///
 /// @since 10
-pub type OhAudioStreamUsage = ::std::os::raw::c_uint;
+pub type OhAudioStreamUsage = ::std::os::raw::c_int;
 
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_CONTENT_AUDIOSTREAM_CONTENT_TYPE_UNKNOWN: OhAudioStreamContent = 0;
@@ -118,12 +118,10 @@ pub type OhAudioStreamState = ::std::os::raw::c_int;
 
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_INVALID: OHAudioStreamSourceType = -1;
-#[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_MIC: OHAudioStreamSourceType = 0;
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_RECOGNITION:
     OHAudioStreamSourceType = 1;
-#[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATION:
     OHAudioStreamSourceType = 7;
 /// Defines the audio source type.
@@ -296,7 +294,6 @@ extern "C" {
     pub fn OH_AudioRenderer_GetRendererInfo(
         renderer: *mut OhAudioRenderer,
         usage: *mut OhAudioStreamUsage,
-        content: *mut OhAudioStreamContent,
     ) -> OhAudioStreamResult;
     pub fn OH_AudioRenderer_GetEncodingType(
         renderer: *mut OhAudioRenderer,
@@ -352,7 +349,6 @@ extern "C" {
     pub fn OH_AudioStreamBuilder_SetRendererInfo(
         builder: *mut OhAudioStreamBuilder,
         usage: OhAudioStreamUsage,
-        content: OhAudioStreamContent,
     ) -> OhAudioStreamResult;
     pub fn OH_AudioStreamBuilder_SetCapturerInfo(
         builder: *mut OhAudioStreamBuilder,

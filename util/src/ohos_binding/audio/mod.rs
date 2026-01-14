@@ -230,7 +230,7 @@ pub struct AudioContext {
 impl Drop for AudioContext {
     fn drop(&mut self) {
         if !self.capturer.is_null() || !self.renderer.is_null() {
-            self.stop();
+            self.destroy();
         }
         if !self.builder.is_null() {
             call_capi_nocheck!(OH_AudioStreamBuilder_Destroy(self.builder));
@@ -281,7 +281,11 @@ impl AudioContext {
         ))
     }
 
-    fn create_renderer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
+    fn create_renderer(
+        &mut self,
+        cb: AudioProcessCb,
+        scene: capi::OhAudioScene,
+    ) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioRendererCallbacks::default();
         if let AudioProcessCb::RendererCb(data_cb, interrupt_cb) = cb {
             cbs.oh_audio_renderer_on_write_data = data_cb;
@@ -292,6 +296,7 @@ impl AudioContext {
             cbs,
             self.userdata
         ))?;
+        call_capi!(OH_AudioStreamBuilder_SetRendererInfo(self.builder, scene))?;
         call_capi!(OH_AudioStreamBuilder_GenerateRenderer(
             self.builder,
             &mut self.renderer
@@ -302,7 +307,11 @@ impl AudioContext {
         ))
     }
 
-    fn create_capturer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
+    fn create_capturer(
+        &mut self,
+        cb: AudioProcessCb,
+        scene: capi::OhAudioScene,
+    ) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioCapturerCallbacks::default();
         if let AudioProcessCb::CapturerCb(data_cb, interrupt_cb) = cb {
             cbs.oh_audio_capturer_on_read_data = data_cb;
@@ -313,20 +322,21 @@ impl AudioContext {
             cbs,
             self.userdata
         ))?;
-        call_capi!(OH_AudioStreamBuilder_SetCapturerInfo(
-            self.builder,
-            capi::OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATION
-        ))?;
+        call_capi!(OH_AudioStreamBuilder_SetCapturerInfo(self.builder, scene))?;
         call_capi!(OH_AudioStreamBuilder_GenerateCapturer(
             self.builder,
             &mut self.capturer
         ))
     }
 
-    fn create_processor(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
+    fn create_processor(
+        &mut self,
+        cb: AudioProcessCb,
+        scene: capi::OhAudioScene,
+    ) -> Result<(), OAErr> {
         match self.stream_type {
-            AudioStreamType::Capturer => self.create_capturer(cb),
-            AudioStreamType::Render => self.create_renderer(cb),
+            AudioStreamType::Capturer => self.create_capturer(cb, scene),
+            AudioStreamType::Render => self.create_renderer(cb, scene),
         }
     }
 
@@ -358,6 +368,7 @@ impl AudioContext {
         size: u8,
         rate: u32,
         channels: u8,
+        scene: capi::OhAudioScene,
         cb: AudioProcessCb,
         userdata: *mut c_void,
     ) -> Result<(), OAErr> {
@@ -369,7 +380,7 @@ impl AudioContext {
         if capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_RERNDERER == self.stream_type.into() {
             self.set_frame_size(rate as i32 / RENDER_CB_FREQUENCY)?;
         }
-        self.create_processor(cb)
+        self.create_processor(cb, scene)
     }
 
     pub fn start(&self) -> Result<(), OAErr> {
@@ -379,7 +390,18 @@ impl AudioContext {
         }
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
+        match self.stream_type {
+            AudioStreamType::Capturer => {
+                call_capi_nocheck!(OH_AudioCapturer_Stop(self.capturer));
+            }
+            AudioStreamType::Render => {
+                call_capi_nocheck!(OH_AudioRenderer_Stop(self.renderer));
+            }
+        }
+    }
+
+    pub fn destroy(&mut self) {
         match self.stream_type {
             AudioStreamType::Capturer => {
                 call_capi_nocheck!(OH_AudioCapturer_Stop(self.capturer));

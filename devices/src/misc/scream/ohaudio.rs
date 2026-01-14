@@ -23,7 +23,8 @@ use log::{error, info, warn};
 use crate::misc::ivshmem::Ivshmem;
 use crate::misc::scream::{
     AudioExtension, AudioInterface, AudioStatus, GuestVol, HostVol, ScreamDirection, StreamData,
-    IVSHMEM_VOLUME_SYNC_VECTOR, TARGET_LATENCY_MS,
+    AUDIO_SCENE_MAX, AUDIO_SCENE_MIC, AUDIO_SCENE_MUSIC, AUDIO_SCENE_VOIP_DOWNLINK,
+    AUDIO_SCENE_VOIP_UPLINK, IVSHMEM_VOLUME_SYNC_VECTOR, TARGET_LATENCY_MS,
 };
 use machine_manager::event_loop::EventLoop;
 use util::ohos_binding::audio::*;
@@ -166,7 +167,8 @@ impl StreamQueue {
 }
 
 struct OhAudioRender {
-    ctx: Option<AudioContext>,
+    ctx: Vec<Option<AudioContext>>,
+    scene: usize,
     stream_data: Arc<Mutex<StreamQueue>>,
     flushing: AtomicBool,
     status: RwLock<AudioStatus>,
@@ -175,8 +177,13 @@ struct OhAudioRender {
 
 impl Default for OhAudioRender {
     fn default() -> OhAudioRender {
+        let mut ctx = Vec::with_capacity(AUDIO_SCENE_MAX as usize);
+        for _ in 0..AUDIO_SCENE_MAX {
+            ctx.push(None);
+        }
         OhAudioRender {
-            ctx: None,
+            ctx,
+            scene: AUDIO_SCENE_MUSIC as usize,
             stream_data: Arc::new(Mutex::new(StreamQueue::new(STREAM_DATA_VEC_CAPACITY))),
             flushing: AtomicBool::new(false),
             status: RwLock::new(AudioStatus::default()),
@@ -187,14 +194,25 @@ impl Default for OhAudioRender {
 
 impl OhAudioRender {
     fn check_fmt_update(&mut self, recv_data: &StreamData) {
-        if self.ctx.is_some()
-            && !self.ctx.as_ref().unwrap().check_fmt(
+        let ctx = self.get_mut_ctx();
+        if ctx.is_some()
+            && !ctx.as_ref().unwrap().check_fmt(
                 recv_data.fmt.size,
                 recv_data.fmt.get_rate(),
                 recv_data.fmt.channels,
             )
         {
             self.destroy();
+            self.set_ctx(None);
+        }
+    }
+
+    fn get_audio_scene(&self) -> capi::OhAudioScene {
+        match self.scene as u8 {
+            AUDIO_SCENE_VOIP_DOWNLINK => {
+                capi::OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_COMMUNICATION
+            }
+            _ => capi::OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_MUSIC,
         }
     }
 
@@ -211,7 +229,7 @@ impl OhAudioRender {
     }
 
     fn flush_renderer(&self) {
-        let _ = self.ctx.as_ref().unwrap().flush_renderer();
+        let _ = self.get_ctx().as_ref().unwrap().flush_renderer();
     }
 
     #[inline(always)]
@@ -223,54 +241,98 @@ impl OhAudioRender {
     fn set_flushing(&mut self, flush: bool) {
         self.flushing.store(flush, Ordering::Release);
     }
-}
 
-impl OhAudioProcess for OhAudioRender {
-    fn init(&mut self, stream: &StreamData) -> bool {
-        if self.ctx.is_none() {
-            let mut context = AudioContext::new(AudioStreamType::Render);
-            match context.init(
-                stream.fmt.size,
-                stream.fmt.get_rate(),
-                stream.fmt.channels,
-                AudioProcessCb::RendererCb(Some(on_write_data_cb), Some(render_on_interrupt_cb)),
-                ptr::addr_of!(*self) as *mut c_void,
-            ) {
-                Ok(()) => self.ctx = Some(context),
-                Err(e) => {
-                    error!("failed to create oh audio render context: {}", e);
-                    hisysevent::STRATOVIRT_PLAY_INIT_FAILED(e as u32);
-                    return false;
-                }
-            }
-        }
-        match self.ctx.as_ref().unwrap().start() {
+    #[inline(always)]
+    fn get_ctx(&self) -> &Option<AudioContext> {
+        &self.ctx[self.scene]
+    }
+
+    #[inline(always)]
+    fn get_mut_ctx(&mut self) -> &mut Option<AudioContext> {
+        &mut self.ctx[self.scene]
+    }
+
+    #[inline(always)]
+    fn set_ctx(&mut self, ctx: Option<AudioContext>) {
+        self.ctx[self.scene] = ctx;
+    }
+
+    fn start_ctx(&mut self) -> bool {
+        match self.get_ctx().as_ref().unwrap().start() {
             Ok(()) => {
-                info!("Renderer start");
+                info!("Renderer start {}", self.scene);
                 *self.status.write().unwrap() = AudioStatus::Started;
-                trace::oh_scream_render_init(&self.ctx);
+                trace::oh_scream_render_init(self.get_ctx());
             }
             Err(e) => {
                 error!("failed to start oh audio renderer: {}", e);
+                *self.status.write().unwrap() = AudioStatus::Error;
                 hisysevent::STRATOVIRT_PLAY_START_FAILED(e as u32);
             }
         }
         *self.status.read().unwrap() == AudioStatus::Started
     }
 
+    fn stop_ctx(&mut self) {
+        if let Some(ctx) = self.get_ctx().as_ref() {
+            ctx.stop();
+        }
+    }
+
+    fn switch_ctx(&mut self, recv_data: &StreamData) {
+        if recv_data.fmt.audio_scene > AUDIO_SCENE_MAX {
+            return;
+        }
+        if recv_data.fmt.audio_scene as usize == self.scene {
+            return;
+        }
+        if self.get_status() != AudioStatus::Started {
+            self.scene = recv_data.fmt.audio_scene as usize;
+            return;
+        }
+
+        self.stop_ctx();
+        self.scene = recv_data.fmt.audio_scene as usize;
+        self.stream_data.lock().unwrap().clear();
+        *self.status.write().unwrap() = AudioStatus::Ready;
+    }
+}
+
+impl OhAudioProcess for OhAudioRender {
+    fn init(&mut self, stream: &StreamData) -> bool {
+        if self.get_ctx().is_none() {
+            let mut context = AudioContext::new(AudioStreamType::Render);
+            match context.init(
+                stream.fmt.size,
+                stream.fmt.get_rate(),
+                stream.fmt.channels,
+                self.get_audio_scene(),
+                AudioProcessCb::RendererCb(Some(on_write_data_cb), Some(render_on_interrupt_cb)),
+                ptr::addr_of!(*self) as *mut c_void,
+            ) {
+                Ok(()) => self.set_ctx(Some(context)),
+                Err(e) => {
+                    error!("failed to create oh audio render context: {}", e);
+                    *self.status.write().unwrap() = AudioStatus::Error;
+                    hisysevent::STRATOVIRT_PLAY_INIT_FAILED(e as u32);
+                    return false;
+                }
+            }
+        }
+        self.start_ctx()
+    }
+
     fn destroy(&mut self) {
         info!("Renderer destroy");
         let status = *self.status.read().unwrap();
         match status {
-            AudioStatus::Error => {
-                self.ctx = None;
-                *self.status.write().unwrap() = AudioStatus::Ready;
-                return;
+            AudioStatus::Error => self.set_ctx(None),
+            AudioStatus::Started => {
+                self.flush();
+                self.stop_ctx();
             }
-            AudioStatus::Started => self.flush(),
-            _ => {}
+            _ => self.stop_ctx(),
         }
-        self.ctx = None;
         self.stream_data.lock().unwrap().clear();
         self.set_flushing(false);
         *self.status.write().unwrap() = AudioStatus::Ready;
@@ -283,6 +345,7 @@ impl OhAudioProcess for OhAudioRender {
         }
 
         self.check_fmt_update(recv_data);
+        self.switch_ctx(recv_data);
 
         fence(Ordering::Acquire);
 
@@ -368,74 +431,155 @@ impl CaptureStream {
     }
 }
 
-#[derive(Default)]
 struct OhAudioCapture {
-    ctx: Option<AudioContext>,
+    ctx: Vec<Option<AudioContext>>,
+    scene: usize,
     status: RwLock<AudioStatus>,
     stream: CaptureStream,
     timer_start: bool,
     data_size_per_second: u64,
 }
 
+impl Default for OhAudioCapture {
+    fn default() -> OhAudioCapture {
+        let mut ctx = Vec::with_capacity(AUDIO_SCENE_MAX as usize);
+        for _ in 0..AUDIO_SCENE_MAX {
+            ctx.push(None);
+        }
+        OhAudioCapture {
+            ctx,
+            scene: AUDIO_SCENE_MIC as usize,
+            status: RwLock::new(AudioStatus::default()),
+            stream: CaptureStream::default(),
+            timer_start: false,
+            data_size_per_second: 0,
+        }
+    }
+}
+
 impl OhAudioCapture {
     fn check_fmt_update(&mut self, recv_data: &StreamData) {
-        if self.ctx.is_none()
-            || !self.ctx.as_ref().unwrap().check_fmt(
+        let ctx = self.get_mut_ctx();
+        if ctx.is_none()
+            || !ctx.as_ref().unwrap().check_fmt(
                 recv_data.fmt.size,
                 recv_data.fmt.get_rate(),
                 recv_data.fmt.channels,
             )
         {
             self.destroy();
+            self.set_ctx(None);
         }
     }
-}
 
-impl OhAudioProcess for OhAudioCapture {
-    fn init(&mut self, stream: &StreamData) -> bool {
-        let mut context = AudioContext::new(AudioStreamType::Capturer);
-        match context.init(
-            stream.fmt.size,
-            stream.fmt.get_rate(),
-            stream.fmt.channels,
-            AudioProcessCb::CapturerCb(Some(on_read_data_cb), Some(capture_on_interrupt_cb)),
-            ptr::addr_of!(*self) as *mut c_void,
-        ) {
-            Ok(()) => self.ctx = Some(context),
-            Err(e) => {
-                error!("failed to create oh audio capturer context: {}", e);
-                hisysevent::STRATOVIRT_CAPTURE_INIT_FAILED(e as u32);
-                return false;
+    fn get_audio_scene(&self) -> capi::OhAudioScene {
+        match self.scene as u8 {
+            AUDIO_SCENE_VOIP_UPLINK => {
+                capi::OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATION
             }
+            _ => capi::OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_MIC,
         }
-        self.data_size_per_second = (stream.fmt.size as u64 >> 3)
-            * stream.fmt.get_rate() as u64
-            * stream.fmt.channels as u64;
-        match self.ctx.as_ref().unwrap().start() {
+    }
+
+    #[inline(always)]
+    fn get_ctx(&self) -> &Option<AudioContext> {
+        &self.ctx[self.scene]
+    }
+
+    #[inline(always)]
+    fn get_mut_ctx(&mut self) -> &mut Option<AudioContext> {
+        &mut self.ctx[self.scene]
+    }
+
+    #[inline(always)]
+    fn set_ctx(&mut self, ctx: Option<AudioContext>) {
+        self.ctx[self.scene] = ctx;
+    }
+
+    fn start_ctx(&mut self) -> bool {
+        match self.get_ctx().as_ref().unwrap().start() {
             Ok(()) => {
-                info!("Capturer start");
+                info!("Capturer start {}", self.scene);
                 *self.status.write().unwrap() = AudioStatus::Started;
                 trace::oh_scream_capture_init(&self.ctx);
                 true
             }
             Err(e) => {
                 error!("failed to start oh audio capturer: {}", e);
+                *self.status.write().unwrap() = AudioStatus::Error;
                 hisysevent::STRATOVIRT_CAPTURE_START_FAILED(e as u32);
                 false
             }
         }
     }
 
+    fn stop_ctx(&mut self) {
+        if let Some(ctx) = self.get_ctx().as_ref() {
+            ctx.stop();
+        }
+    }
+
+    fn switch_ctx(&mut self, recv_data: &StreamData) {
+        if recv_data.fmt.audio_scene > AUDIO_SCENE_MAX {
+            return;
+        }
+        if recv_data.fmt.audio_scene as usize == self.scene {
+            return;
+        }
+        if self.get_status() != AudioStatus::Started {
+            self.scene = recv_data.fmt.audio_scene as usize;
+            return;
+        }
+
+        self.stop_ctx();
+        self.scene = recv_data.fmt.audio_scene as usize;
+        self.stream.reset();
+        *self.status.write().unwrap() = AudioStatus::Ready;
+    }
+}
+
+impl OhAudioProcess for OhAudioCapture {
+    fn init(&mut self, stream: &StreamData) -> bool {
+        if self.get_ctx().is_none() {
+            let mut context = AudioContext::new(AudioStreamType::Capturer);
+            match context.init(
+                stream.fmt.size,
+                stream.fmt.get_rate(),
+                stream.fmt.channels,
+                self.get_audio_scene(),
+                AudioProcessCb::CapturerCb(Some(on_read_data_cb), Some(capture_on_interrupt_cb)),
+                ptr::addr_of!(*self) as *mut c_void,
+            ) {
+                Ok(()) => self.set_ctx(Some(context)),
+                Err(e) => {
+                    error!("failed to create oh audio capture context: {}", e);
+                    *self.status.write().unwrap() = AudioStatus::Error;
+                    hisysevent::STRATOVIRT_PLAY_INIT_FAILED(e as u32);
+                    return false;
+                }
+            }
+        }
+        self.data_size_per_second = (stream.fmt.size as u64 >> 3)
+            * stream.fmt.get_rate() as u64
+            * stream.fmt.channels as u64;
+        self.start_ctx()
+    }
+
     fn destroy(&mut self) {
         info!("Capturer destroy");
-        *self.status.write().unwrap() = AudioStatus::Ready;
-        self.ctx = None;
+        if *self.status.read().unwrap() == AudioStatus::Error {
+            self.set_ctx(None);
+        } else {
+            self.stop_ctx();
+        }
         self.stream.reset();
+        *self.status.write().unwrap() = AudioStatus::Ready;
         trace::oh_scream_capture_destroy();
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
         self.check_fmt_update(recv_data);
+        self.switch_ctx(recv_data);
 
         trace::trace_scope_start!(ohaudio_capturer_process, args = (recv_data));
 

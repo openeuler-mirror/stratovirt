@@ -86,6 +86,12 @@ pub const SCREAM_MAGIC: u64 = 0x02032023;
 const CHECK_THREAD_EXIT_INTERVAL: u64 = 10; // ms
 const CHECK_THREAD_EXIT_TIMEOUT: u64 = 1000; // ms
 
+pub const AUDIO_SCENE_MUSIC: u8 = 0;
+pub const AUDIO_SCENE_VOIP_DOWNLINK: u8 = 1;
+pub const AUDIO_SCENE_MIC: u8 = 0;
+pub const AUDIO_SCENE_VOIP_UPLINK: u8 = 1;
+pub const AUDIO_SCENE_MAX: u8 = 2;
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd)]
 pub enum AudioStatus {
     // Processor is ready and waiting for play/capture.
@@ -213,7 +219,8 @@ pub struct ShmemStreamFmt {
     pub size: u8,
     /// Number of audio channel.
     pub channels: u8,
-    pad: u8,
+    /// Audio scene type.
+    pub audio_scene: u8,
     /// Mapping of audio channel.
     pub channel_map: u32,
     pad2: u32,
@@ -226,7 +233,7 @@ impl Default for ShmemStreamFmt {
             rate: 0,
             size: 0,
             channels: 2,
-            pad: 0,
+            audio_scene: 0,
             channel_map: 0x03,
             pad2: 0,
         }
@@ -501,6 +508,8 @@ impl StreamData {
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, play) {
                 return;
             }
+            self.fmt.audio_scene = play.fmt.audio_scene;
+
             interface.lock().unwrap().send(self);
         }
     }
@@ -530,6 +539,7 @@ impl StreamData {
             if !self.update_buffer_by_chunk_idx(hva, shmem_size, capt) {
                 return;
             }
+            self.fmt.audio_scene = capt.fmt.audio_scene;
 
             let recv_chunks_cnt: i32 = if get_record_authority() {
                 interface.lock().unwrap().receive(self)
