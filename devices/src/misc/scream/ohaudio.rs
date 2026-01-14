@@ -173,6 +173,8 @@ struct OhAudioRender {
     flushing: AtomicBool,
     status: RwLock<AudioStatus>,
     cond: Condvar,
+    /// Whether to allow concurrent mixing of the playback stream with HM other streams or not.
+    play_concurrency: bool,
 }
 
 impl Default for OhAudioRender {
@@ -188,11 +190,16 @@ impl Default for OhAudioRender {
             flushing: AtomicBool::new(false),
             status: RwLock::new(AudioStatus::default()),
             cond: Condvar::new(),
+            play_concurrency: false,
         }
     }
 }
 
 impl OhAudioRender {
+    fn set_play_concurrency(&mut self, play_concurrency: bool) {
+        self.play_concurrency = play_concurrency;
+    }
+
     fn check_fmt_update(&mut self, recv_data: &StreamData) {
         let ctx = self.get_mut_ctx();
         if ctx.is_some()
@@ -258,6 +265,17 @@ impl OhAudioRender {
     }
 
     fn start_ctx(&mut self) -> bool {
+        if self.play_concurrency {
+            if let Err(e) = self
+                .get_mut_ctx()
+                .as_mut()
+                .unwrap()
+                .activate_audio_session(capi::CONCURRENCY_MIX_WITH_OTHERS)
+            {
+                error!("Failed to set renderer concurrency with others: {}", e);
+            }
+        }
+
         match self.get_ctx().as_ref().unwrap().start() {
             Ok(()) => {
                 info!("Renderer start {}", self.scene);
@@ -276,6 +294,9 @@ impl OhAudioRender {
     fn stop_ctx(&mut self) {
         if let Some(ctx) = self.get_ctx().as_ref() {
             ctx.stop();
+            if self.play_concurrency {
+                ctx.deactivate_audio_session();
+            }
         }
     }
 
@@ -785,11 +806,15 @@ pub struct OhAudio {
 unsafe impl Send for OhAudio {}
 
 impl OhAudio {
-    pub fn init(dir: ScreamDirection) -> Self {
+    pub fn init(dir: ScreamDirection, play_concurrency: bool) -> Self {
         match dir {
-            ScreamDirection::Playback => Self {
-                processor: Box::<OhAudioRender>::default(),
-            },
+            ScreamDirection::Playback => {
+                let mut processor = Box::<OhAudioRender>::default();
+                if play_concurrency {
+                    processor.set_play_concurrency(play_concurrency);
+                }
+                Self { processor }
+            }
             ScreamDirection::Record => Self {
                 processor: Box::<OhAudioCapture>::default(),
             },
