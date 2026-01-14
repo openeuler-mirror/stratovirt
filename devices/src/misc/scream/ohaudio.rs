@@ -128,6 +128,7 @@ impl StreamQueue {
 
     fn clear(&mut self) {
         self.queue.clear();
+        self.data_size = 0;
     }
 
     #[inline]
@@ -272,6 +273,9 @@ impl OhAudioProcess for OhAudioRender {
     }
 
     fn process(&mut self, recv_data: &StreamData) -> i32 {
+        if self.status == AudioStatus::Intr {
+            return 0;
+        }
         self.check_fmt_update(recv_data);
 
         fence(Ordering::Acquire);
@@ -284,7 +288,8 @@ impl OhAudioProcess for OhAudioRender {
         ));
         self.cond.notify_all();
 
-        if self.status == AudioStatus::Error || self.status == AudioStatus::Intr {
+
+        if self.status == AudioStatus::Error || self.status == AudioStatus::IntrResume {
             error!(
                 "Audio server {:?} occurred. Destroy and reconnect it.",
                 self.status
@@ -504,6 +509,8 @@ extern "C" fn render_on_interrupt_cb(
     };
     if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_PAUSE {
         render.status = AudioStatus::Intr;
+    } else if hint == capi::AUDIOSTREAM_INTERRUPT_HINT_RESUME {
+        render.status = AudioStatus::IntrResume;
     }
     0
 }
