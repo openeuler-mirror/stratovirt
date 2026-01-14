@@ -298,7 +298,7 @@ impl AudioContext {
         ))?;
         call_capi!(OH_AudioRenderer_SetEffectMode(
             self.renderer,
-            capi::EFFECT_NONE
+            capi::EFFECT_DEFAULT
         ))
     }
 
