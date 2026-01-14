@@ -570,7 +570,7 @@ impl StreamData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, PartialEq)]
 enum ScreamInterface {
     #[cfg(feature = "scream_alsa")]
     Alsa,
@@ -578,6 +578,7 @@ enum ScreamInterface {
     PulseAudio,
     #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
     OhAudio,
+    #[default]
     Demo,
 }
 
@@ -598,7 +599,7 @@ impl FromStr for ScreamInterface {
     }
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 #[command(no_binary_name(true))]
 pub struct ScreamConfig {
     #[arg(long)]
@@ -1012,5 +1013,90 @@ impl MigrationHook for Scream {
         let auth = get_record_authority();
         set_record_authority(auth);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const IVSHMEM_DEFAULT_SIZE: u64 = 2 << 20;
+
+    #[test]
+    fn test_scream_new() {
+        let config = ScreamConfig::default();
+        assert_eq!(config.classtype, "");
+        assert_eq!(config.id, "");
+        assert_eq!(config.bus, "");
+        assert_eq!(config.addr, (0, 0));
+        assert_eq!(config.memdev, "");
+        assert_eq!(config.interface, ScreamInterface::Demo);
+        assert_eq!(config.playback, "");
+        assert_eq!(config.record, "");
+        assert_eq!(config.record_auth, false);
+        #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
+        assert_eq!(config.play_concurrency, false);
+
+        // If configured size is smaller than mem::size_of::<ShmemHeader>(), error happens.
+        let scream = Scream::new(
+            mem::size_of::<ShmemHeader>() as u64 - 1,
+            config.clone(),
+            None,
+        );
+        assert!(scream.is_err());
+
+        let scream = Scream::new(IVSHMEM_DEFAULT_SIZE, config, None).unwrap();
+        assert!(scream.audio_ext.is_none());
+        assert_eq!(scream.hva, 0);
+        assert_eq!(scream.play_cond.stream_paused(), true);
+        assert_eq!(scream.capt_cond.stream_paused(), true);
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let mut scream = Scream::new(IVSHMEM_DEFAULT_SIZE, ScreamConfig::default(), None).unwrap();
+
+        // Test stopped status of play and capture.
+        let stop_state = scream.get_state_vec().unwrap();
+        scream.set_state_mut(&stop_state, 0).unwrap();
+        assert_eq!(scream.play_cond.stream_paused(), true);
+        assert_eq!(scream.capt_cond.stream_paused(), true);
+
+        // Test started status of play and capture.
+        scream.play_cond.set_stream_pause(false);
+        scream.capt_cond.set_stream_pause(false);
+        let start_state = scream.get_state_vec().unwrap();
+        scream.play_cond.set_stream_pause(true);
+        scream.capt_cond.set_stream_pause(true);
+        scream.set_state_mut(&start_state, 0).unwrap();
+        assert_eq!(scream.play_cond.stream_paused(), false);
+        assert_eq!(scream.capt_cond.stream_paused(), false);
+
+        // Test combination of started status and vm paused for play and capture streams.
+        let mut scream = Scream::new(IVSHMEM_DEFAULT_SIZE, ScreamConfig::default(), None).unwrap();
+        // Start streams.
+        scream.play_cond.set_stream_pause(false);
+        scream.capt_cond.set_stream_pause(false);
+        // Set vm paused.
+        scream.play_cond.set_vm_pause(true);
+        scream.capt_cond.set_vm_pause(true);
+        let state = scream.get_state_vec().unwrap();
+        scream.play_cond.set_stream_pause(true);
+        scream.capt_cond.set_stream_pause(true);
+        scream.set_state_mut(&state, 0).unwrap();
+        assert_eq!(scream.play_cond.stream_paused(), false);
+        assert_eq!(scream.capt_cond.stream_paused(), false);
+        // After restore, vm pause bit should be cleared.
+        assert_eq!(
+            *scream.play_cond.paused.lock().unwrap() & ScreamCond::VM_PAUSE_BIT,
+            0
+        );
+        assert_eq!(
+            *scream.capt_cond.paused.lock().unwrap() & ScreamCond::VM_PAUSE_BIT,
+            0
+        );
+
+        scream.audio_ext = Some(Arc::new(AudioExtensionDummy {}));
+        assert!(scream.resume().is_ok());
     }
 }
