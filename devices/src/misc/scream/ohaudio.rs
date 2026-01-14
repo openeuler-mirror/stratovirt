@@ -650,7 +650,10 @@ fn mute_capture_data_gen(capture: *mut OhAudioCapture, period: u64, len: usize) 
     let buffer: Vec<u8> = vec![0; len];
     let buf = buffer.as_slice();
 
-    //SAFETY: we make sure that capture we passed is valid.
+    // SAFETY:
+    // 1. `capture` is guaranteed to be non-null and valid for this call.
+    // 2. No other mutable references to the same object exist.
+    // 3. The pointer is properly aligned and initialized.
     let capt = unsafe { capture.as_mut().unwrap_unchecked() };
     capt.stream.append_data(buf);
 

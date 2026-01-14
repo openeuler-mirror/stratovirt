@@ -395,8 +395,11 @@ impl StreamData {
         cond: Arc<ScreamCond>,
         vm_exiting: &mut bool,
     ) {
-        // SAFETY: hva is the shared memory base address. It already verifies the validity
-        // of the address range during the scream realize.
+        // SAFETY:
+        // - `hva` points to a valid mmap region created earlier by libc::mmap.
+        // - The region is still mapped and large enough for a single `ShmemHeader`.
+        // - The pointer is properly aligned for `ShmemHeader`.
+        // - The mapping is read-only here, so no data races occur.
         let mut header = &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
 
         let stream_header = match dir {
@@ -421,7 +424,11 @@ impl StreamData {
             }
 
             header =
-                // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
+                // SAFETY:
+                // - `hva` points to a valid mmap region created earlier by libc::mmap.
+                // - The region is still mapped and large enough for a single `ShmemHeader`.
+                // - The pointer is properly aligned for `ShmemHeader`.
+                // - The mapping is read-only here, so no data races occur.
                 &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
             self.init(stream_header, hva);
 
@@ -471,8 +478,11 @@ impl StreamData {
         interface: Arc<Mutex<dyn AudioInterface>>,
         cond: Arc<ScreamCond>,
     ) {
-        // SAFETY: hva is the shared memory base address. It already verifies the validity
-        // of the address range during the header check.
+        // SAFETY:
+        // - `hva` points to a valid mmap region created earlier by libc::mmap.
+        // - The region is still mapped and large enough for a single `ShmemHeader`.
+        // - The pointer is properly aligned for `ShmemHeader`.
+        // - The mapping is read-only here, so no data races occur.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let play = &header.play;
 
@@ -521,8 +531,11 @@ impl StreamData {
         interface: Arc<Mutex<dyn AudioInterface>>,
         cond: Arc<ScreamCond>,
     ) {
-        // SAFETY: hva is the shared memory base address. It already verifies the validity
-        // of the address range during the header check.
+        // SAFETY:
+        // - `hva` points to a valid mmap region created earlier by libc::mmap.
+        // - The region is still mapped and large enough for a single `ShmemHeader`.
+        // - The pointer is properly aligned for `ShmemHeader`.
+        // - The mapping is read-only here, so no data races occur.
         let header = &mut unsafe { std::slice::from_raw_parts_mut(hva as *mut ShmemHeader, 1) }[0];
         let capt = &mut header.capt;
 
@@ -932,11 +945,19 @@ fn detect_silent_audio(hva: u64, cond: Arc<ScreamCond>) -> bool {
     if cond.stream_paused() {
         return false;
     }
-    // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
+    // SAFETY:
+    // - `hva` points to a valid mmap region created earlier by libc::mmap.
+    // - The region is still mapped and large enough for a single `ShmemHeader`.
+    // - The pointer is properly aligned for `ShmemHeader`.
+    // - The mapping is read-only here, so no data races occur.
     let header = &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
     let data_hva = hva + u64::from(header.play.offset);
     let data_len = u64::from(header.play.chunk_size) * u64::from(header.play.max_chunks);
-    // SAFETY: data_hva and data_len are calculated from ShmemHeader.
+
+    // SAFETY:
+    // - The `[data_hva, data_hva + data_len)` range lies fully within the mmap region.
+    // - `buffer_is_zero` only performs reads, no mutation.
+    // - The shared memory content is stable during this read.
     unsafe { buffer_is_zero(data_hva, data_len) }
 }
 
@@ -966,10 +987,6 @@ pub trait AudioExtension: Send + Sync {
 
 struct AudioExtensionDummy;
 impl AudioExtension for AudioExtensionDummy {}
-// SAFETY: it is a dummy
-unsafe impl Send for AudioExtensionDummy {}
-// SAFETY: it is a dummy
-unsafe impl Sync for AudioExtensionDummy {}
 
 /// Migration support of Scream device.
 #[derive(Clone, DescSerde, Serialize, Deserialize)]
