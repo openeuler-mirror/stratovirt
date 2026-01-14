@@ -32,6 +32,7 @@ use crate::event_loop::EventLoop;
 use crate::machine::{MachineExternalInterface, VmState};
 use crate::socket::SocketHandler;
 use crate::socket::SocketRWHandler;
+use crate::state_query::detect_silent_audio;
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
@@ -599,6 +600,13 @@ fn qmp_command_exec(
                         None,
                     )
                 }
+                id
+            }
+            QmpCommand::detect_silent_audio { arguments: _, id } => {
+                qmp_response = Response::create_response(
+                    serde_json::to_value(detect_silent_audio()).unwrap(),
+                    None,
+                );
                 id
             }
             _ => None,

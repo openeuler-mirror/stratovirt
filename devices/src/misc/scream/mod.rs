@@ -40,7 +40,10 @@ use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::notifier::register_vm_pause_notifier;
 use machine_manager::state_query::register_state_query_callback;
-use machine_manager::{event, qmp::qmp_channel::QmpChannel, qmp::qmp_schema::AudioState};
+use machine_manager::{
+    event, qmp::qmp_channel::QmpChannel, qmp::qmp_schema::AudioState,
+    state_query::register_silent_audio_cb,
+};
 use migration::StateTransfer;
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager};
 use migration_derive::DescSerde;
@@ -48,6 +51,7 @@ use migration_derive::DescSerde;
 use ohaudio::{OhAudio, OhAudioVolume};
 #[cfg(feature = "scream_pulseaudio")]
 use pulseaudio::PulseStreamData;
+use util::aio::buffer_is_zero;
 #[cfg(all(target_env = "ohos", feature = "scream_ohaudio"))]
 use util::ohos_binding::misc::bound_tokenid;
 
@@ -635,12 +639,21 @@ impl Scream {
         }
     }
 
+    fn register_silent_data_detect(&self, hva: u64, cond: Arc<ScreamCond>) {
+        register_silent_audio_cb(
+            "scream".to_string(),
+            Arc::new(move || detect_silent_audio(hva, cond.clone())),
+        );
+    }
+
     fn start_play_thread_fn(&mut self, cond: Arc<ScreamCond>) -> Result<()> {
         let hva = self.hva;
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
         self.interface_resource.push(interface.clone());
         self.register_state_query("scream-play".to_string(), cond.clone());
+        self.register_silent_data_detect(hva, cond.clone());
+
         thread::Builder::new()
             .name("scream audio play worker".to_string())
             .spawn(move || {
@@ -830,6 +843,18 @@ fn notify_audio_changed_event(play_cond: Arc<ScreamCond>, capt_cond: Arc<ScreamC
         capt: !capt_cond.stream_paused(),
     };
     event!(AudioChanged; audio_state);
+}
+
+fn detect_silent_audio(hva: u64, cond: Arc<ScreamCond>) -> bool {
+    if cond.stream_paused() {
+        return false;
+    }
+    // SAFETY: hva is allocated by libc:::mmap, it can be guaranteed to be legal.
+    let header = &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
+    let data_hva = hva + u64::from(header.play.offset);
+    let data_len = u64::from(header.play.chunk_size) * u64::from(header.play.max_chunks);
+    // SAFETY: data_hva and data_len are calculated from ShmemHeader.
+    unsafe { buffer_is_zero(data_hva, data_len) }
 }
 
 pub trait AudioInterface: Send {

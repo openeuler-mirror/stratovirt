@@ -140,7 +140,8 @@ define_qmp_command_enum!(
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg),
     trace_get_state("trace-get-state", trace_get_state),
     trace_set_state("trace-set-state", trace_set_state),
-    query_workloads("query-workloads", query_workloads)
+    query_workloads("query-workloads", query_workloads),
+    detect_silent_audio("detect-silent-audio", DetectSilentAudio)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -2110,6 +2111,20 @@ pub type TraceSetArgument = trace_set_state;
 #[serde(deny_unknown_fields)]
 pub struct query_workloads {}
 generate_command_impl!(query_workloads, Empty);
+
+/// Detect Silent Audio Data
+///
+/// Detect the playing audio data if silent.
+///
+/// # Examples
+///
+/// ```text
+/// -> {"execute": "detect-silent-audio", "arguments": {}}
+/// <- {"return": true}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetectSilentAudio {}
 
 #[cfg(test)]
 mod tests {
