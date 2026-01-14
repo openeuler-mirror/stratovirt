@@ -167,6 +167,16 @@ pub struct OH_AudioStreamBuilderStruct {
 /// @since 10
 pub type OhAudioStreamBuilder = OH_AudioStreamBuilderStruct;
 
+/// Defines the audio effect mode.
+///
+/// @since 12
+pub type OhAudioStreamAudioEffectMode = ::std::os::raw::c_int;
+
+#[allow(unused)]
+pub const EFFECT_NONE: OhAudioStreamAudioEffectMode = 0;
+#[allow(unused)]
+pub const EFFECT_DEFAULT: OhAudioStreamAudioEffectMode = 1;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct OH_AudioRendererStruct {
@@ -262,6 +272,10 @@ extern "C" {
     pub fn OH_AudioRenderer_GetSamplingRate(
         renderer: *mut OhAudioRenderer,
         rate: *mut i32,
+    ) -> OhAudioStreamResult;
+    pub fn OH_AudioRenderer_SetEffectMode(
+        renderer: *mut OhAudioRenderer,
+        effectMode: OhAudioStreamAudioEffectMode,
     ) -> OhAudioStreamResult;
     pub fn OH_AudioRenderer_GetStreamId(
         renderer: *mut OhAudioRenderer,

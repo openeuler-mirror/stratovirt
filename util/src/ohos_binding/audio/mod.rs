@@ -295,6 +295,10 @@ impl AudioContext {
         call_capi!(OH_AudioStreamBuilder_GenerateRenderer(
             self.builder,
             &mut self.renderer
+        ))?;
+        call_capi!(OH_AudioRenderer_SetEffectMode(
+            self.renderer,
+            capi::EFFECT_NONE
         ))
     }
 
