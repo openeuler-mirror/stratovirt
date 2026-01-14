@@ -52,7 +52,8 @@ struct StreamUnit {
 impl Read for StreamUnit {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let len = cmp::min(self.len, buf.len());
-        // SAFETY: all the source data are in scream BAR.
+        // SAFETY: we have checked the validation of address and length in OhAudioRender::process().
+        // Only if they are valid, we push StreamUnit to StreamQueue.
         unsafe { ptr::copy_nonoverlapping(self.addr as *const u8, buf.as_mut_ptr(), len) };
         self.len -= len;
         self.addr += len;
@@ -156,7 +157,8 @@ impl StreamQueue {
     }
 
     fn read_zero(&mut self, buf: &mut [u8]) {
-        // SAFETY: the buffer is guaranteed by the caller.
+        // SAFETY: the buffer is provided by OH audio framework and we have
+        // checked its validation in on_write_data_cb().
         unsafe {
             ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
         }
@@ -449,7 +451,8 @@ impl OhAudioProcess for OhAudioCapture {
             self.destroy();
             return -1;
         }
-        // SAFETY: the buffer is from ivshmem and the caller ensures its validation.
+        // SAFETY: the buffer is in BAR 0 of ivshmem device and we have checked audio_base and
+        // audio size before calling this function.
         let buf = unsafe {
             std::slice::from_raw_parts_mut(
                 recv_data.audio_base as *mut u8,
@@ -568,7 +571,8 @@ extern "C" fn on_write_data_cb(
     };
 
     let len = length as usize;
-    // SAFETY: the buffer is guaranteed by OH audio framework.
+    // SAFETY: as OH audio document, the buffer provided by OH audio framework must be valid.
+    // In addition, we have checked it above.
     let wbuf = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, len) };
 
     trace::oh_scream_on_write_data_cb(len);
@@ -622,7 +626,8 @@ extern "C" fn on_read_data_cb(
         return 0;
     }
 
-    // SAFETY: the buffer is checked above.
+    // SAFETY: as OH audio document, the buffer must be valid.
+    // In addition, we also checked the buffer above.
     let buf = unsafe { std::slice::from_raw_parts(buffer as *mut u8, length as usize) };
     capture.stream.append_data(buf);
     0
