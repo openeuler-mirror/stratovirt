@@ -237,6 +237,7 @@ impl OhAudioProcess for OhAudioRender {
                 Ok(()) => self.ctx = Some(context),
                 Err(e) => {
                     error!("failed to create oh audio render context: {}", e);
+                    hisysevent::STRATOVIRT_PLAY_INIT_FAILED(e as u32);
                     return false;
                 }
             }
@@ -249,6 +250,7 @@ impl OhAudioProcess for OhAudioRender {
             }
             Err(e) => {
                 error!("failed to start oh audio renderer: {}", e);
+                hisysevent::STRATOVIRT_PLAY_START_FAILED(e as u32);
             }
         }
         *self.status.read().unwrap() == AudioStatus::Started
@@ -400,6 +402,7 @@ impl OhAudioProcess for OhAudioCapture {
             Ok(()) => self.ctx = Some(context),
             Err(e) => {
                 error!("failed to create oh audio capturer context: {}", e);
+                hisysevent::STRATOVIRT_CAPTURE_INIT_FAILED(e as u32);
                 return false;
             }
         }
@@ -415,6 +418,7 @@ impl OhAudioProcess for OhAudioCapture {
             }
             Err(e) => {
                 error!("failed to start oh audio capturer: {}", e);
+                hisysevent::STRATOVIRT_CAPTURE_START_FAILED(e as u32);
                 false
             }
         }
