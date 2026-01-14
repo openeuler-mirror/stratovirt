@@ -407,7 +407,7 @@ impl AudioContext {
 }
 
 // From here, the code is related to ohaudio volume.
-static OH_VOLUME_ADAPTER: Lazy<RwLock<OhVolume>> = Lazy::new(|| RwLock::new(OhVolume::new()));
+static OH_VOLUME_ADAPTER: Lazy<OhVolume> = Lazy::new(OhVolume::new);
 
 pub trait GuestVolumeNotifier: Send + Sync {
     fn notify(&self, vol: u32);
@@ -415,7 +415,7 @@ pub trait GuestVolumeNotifier: Send + Sync {
 
 struct OhVolume {
     capi: Arc<VolumeFuncTable>,
-    notifiers: Vec<Arc<dyn GuestVolumeNotifier>>,
+    notifiers: RwLock<Vec<Arc<dyn GuestVolumeNotifier>>>,
 }
 
 impl OhVolume {
@@ -429,7 +429,7 @@ impl OhVolume {
         }
         Self {
             capi,
-            notifiers: Vec::new(),
+            notifiers: RwLock::new(Vec::new()),
         }
     }
 
@@ -454,58 +454,50 @@ impl OhVolume {
         unsafe { (self.capi.get_min_volume)() as u32 }
     }
 
-    fn set_ohos_volume(&self, volume: i32) {
+    fn set_ohos_volume(&self, volume: i32) -> i32 {
         // SAFETY: We call related API sequentially for specified ctx.
         let ret = unsafe { (self.capi.set_volume)(volume) };
         if ret != 0 {
             hisysevent::STRATOVIRT_SET_VOLUME_FAILED(-ret);
             error!("set_ohos_volume failed, ret is {}", -ret);
         }
+        ret
     }
 
     fn notify_volume_change(&self, volume: i32) {
-        for notifier in self.notifiers.iter() {
+        for notifier in self.notifiers.read().unwrap().iter() {
             notifier.notify(volume as u32);
         }
     }
 
-    fn register_guest_notifier(&mut self, notifier: Arc<dyn GuestVolumeNotifier>) {
-        self.notifiers.push(notifier);
+    fn register_guest_notifier(&self, notifier: Arc<dyn GuestVolumeNotifier>) {
+        self.notifiers.write().unwrap().push(notifier);
     }
 }
 
 // SAFETY: use RW lock to ensure the security of resources.
 unsafe extern "C" fn on_ohos_volume_changed(volume: i32) {
-    OH_VOLUME_ADAPTER
-        .read()
-        .unwrap()
-        .notify_volume_change(volume);
+    OH_VOLUME_ADAPTER.notify_volume_change(volume);
 }
 
 pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) {
-    OH_VOLUME_ADAPTER
-        .write()
-        .unwrap()
-        .register_guest_notifier(notifier);
+    OH_VOLUME_ADAPTER.register_guest_notifier(notifier);
 }
 
 pub fn get_ohos_volume_max() -> u32 {
-    OH_VOLUME_ADAPTER.read().unwrap().get_max_volume()
+    OH_VOLUME_ADAPTER.get_max_volume()
 }
 
 pub fn get_ohos_volume_min() -> u32 {
-    OH_VOLUME_ADAPTER.read().unwrap().get_min_volume()
+    OH_VOLUME_ADAPTER.get_min_volume()
 }
 
 pub fn get_ohos_volume() -> u32 {
-    OH_VOLUME_ADAPTER.read().unwrap().get_ohos_volume()
+    OH_VOLUME_ADAPTER.get_ohos_volume()
 }
 
-pub fn set_ohos_volume(vol: u32) {
-    OH_VOLUME_ADAPTER
-        .read()
-        .unwrap()
-        .set_ohos_volume(vol as i32);
+pub fn set_ohos_volume(vol: u32) -> i32 {
+    OH_VOLUME_ADAPTER.set_ohos_volume(vol as i32)
 }
 
 #[cfg(test)]

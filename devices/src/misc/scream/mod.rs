@@ -758,6 +758,9 @@ impl Scream {
         play_cond: Arc<ScreamCond>,
         capt_cond: Arc<ScreamCond>,
     ) -> Arc<dyn AudioExtension> {
+        let interface = self.create_audio_extension(ivshmem.clone());
+        let ret = interface.clone();
+
         let cloned_play_cond = play_cond.clone();
         let cloned_capt_cond = capt_cond.clone();
         let cb = Box::new(move || {
@@ -767,8 +770,6 @@ impl Scream {
         });
         ivshmem.lock().unwrap().register_reset_callback(cb);
 
-        let interface = self.create_audio_extension(ivshmem.clone());
-        let ret = interface.clone();
         let interface2 = interface.clone();
         let bar0_write = Arc::new(move |data: &[u8], offset: u64| {
             match offset {
@@ -838,9 +839,12 @@ pub trait AudioInterface: Send {
     fn get_status(&self) -> AudioStatus;
 }
 
+pub type GuestVol = u32;
+pub type HostVol = u32;
+
 pub trait AudioExtension: Send + Sync {
-    fn set_host_volume(&self, _vol: u32) {}
-    fn get_host_volume(&self) -> u32 {
+    fn set_host_volume(&self, _vol: GuestVol) {}
+    fn get_host_volume(&self) -> GuestVol {
         0
     }
     fn get_status_register(&self) -> u32 {
