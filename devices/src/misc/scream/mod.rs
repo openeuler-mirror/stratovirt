@@ -40,6 +40,7 @@ use address_space::{GuestAddress, HostMemMapping, Region};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::notifier::register_vm_pause_notifier;
 use machine_manager::state_query::register_state_query_callback;
+use machine_manager::{event, qmp::qmp_channel::QmpChannel, qmp::qmp_schema::AudioState};
 use migration::StateTransfer;
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager};
 use migration_derive::DescSerde;
@@ -772,6 +773,7 @@ impl Scream {
                     } else {
                         capt_cond.set_stream_pause(val & STATUS_START_BIT != STATUS_START_BIT);
                     }
+                    notify_audio_changed_event(play_cond.clone(), capt_cond.clone());
                 }
                 _ => {
                     info!("ivshmem-scream: unsupported write: {offset}");
@@ -810,6 +812,14 @@ impl Scream {
             _ => Arc::new(AudioExtensionDummy {}),
         }
     }
+}
+
+fn notify_audio_changed_event(play_cond: Arc<ScreamCond>, capt_cond: Arc<ScreamCond>) {
+    let audio_state = AudioState {
+        play: !play_cond.stream_paused(),
+        capt: !capt_cond.stream_paused(),
+    };
+    event!(AudioChanged; audio_state);
 }
 
 pub trait AudioInterface: Send {
