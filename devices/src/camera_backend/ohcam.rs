@@ -166,7 +166,7 @@ impl OhCameraBackend {
             Ok(v) => v,
             Err(code) => {
                 hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
-                return Err(anyhow!("Failed to init OhCamera"));
+                return Err(anyhow!("Failed to init OhCamera, code is {code}."));
             }
         };
 
@@ -226,7 +226,7 @@ impl CameraBackend for OhCameraBackend {
         }
         if let Err(code) = self.ctx.start_stream(on_buffer_available, on_broken) {
             hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
-            return Err(anyhow!("Failed to start camera stream"));
+            return Err(anyhow!("Failed to start camera stream, code is {code}."));
         }
         self.stream_on = true;
         Ok(())
@@ -470,6 +470,7 @@ unsafe extern "C" fn on_broken(camid: *const u8) {
         "".to_string()
     });
     hisysevent::STRATOVIRT_CAMERA_ON_BROKEN(cam.clone());
+    error!("Camera:{} stream broken", cam);
     if let Some(cb) = OHCAM_CALLBACKS.read().unwrap().get(&cam) {
         cb.broken();
     }

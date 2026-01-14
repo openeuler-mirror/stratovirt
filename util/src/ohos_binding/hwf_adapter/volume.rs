@@ -23,7 +23,7 @@ pub type VolumeChangedCallBack = unsafe extern "C" fn(c_int);
 type OhSysAudioGetVolumeFn = unsafe extern "C" fn() -> c_int;
 type OhSysAudioGetMaxVolumeFn = unsafe extern "C" fn() -> c_int;
 type OhSysAudioGetMinVolumeFn = unsafe extern "C" fn() -> c_int;
-type OhSysAudioSetVolumeFn = unsafe extern "C" fn(c_int);
+type OhSysAudioSetVolumeFn = unsafe extern "C" fn(c_int) -> c_int;
 type OhSysAudioRegisterVolumeChangeFn = unsafe extern "C" fn(VolumeChangedCallBack) -> c_int;
 
 pub struct VolumeFuncTable {

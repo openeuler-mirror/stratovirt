@@ -418,7 +418,11 @@ impl OhVolume {
     fn new() -> Self {
         let capi = hwf_adapter_volume_api();
         // SAFETY: We call related API sequentially for specified ctx.
-        unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
+        let ret = unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
+        if ret != 0 {
+            hisysevent::STRATOVIRT_SET_VOLUME_CB_FAILED(-ret);
+            error!("register_volume_change failed, ret is {}", -ret);
+        }
         Self {
             capi,
             notifiers: Vec::new(),
@@ -427,7 +431,13 @@ impl OhVolume {
 
     fn get_ohos_volume(&self) -> u32 {
         // SAFETY: We call related API sequentially for specified ctx.
-        unsafe { (self.capi.get_volume)() as u32 }
+        let ret = unsafe { (self.capi.get_volume)() };
+        if ret < 0 {
+            hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
+            error!("get_ohos_volume failed, ret is {}", -ret);
+            return 0;
+        }
+        ret as u32
     }
 
     fn get_max_volume(&self) -> u32 {
@@ -442,7 +452,11 @@ impl OhVolume {
 
     fn set_ohos_volume(&self, volume: i32) {
         // SAFETY: We call related API sequentially for specified ctx.
-        unsafe { (self.capi.set_volume)(volume) };
+        let ret = unsafe { (self.capi.set_volume)(volume) };
+        if ret != 0 {
+            hisysevent::STRATOVIRT_SET_VOLUME_FAILED(-ret);
+            error!("set_ohos_volume failed, ret is {}", -ret);
+        }
     }
 
     fn notify_volume_change(&self, volume: i32) {
