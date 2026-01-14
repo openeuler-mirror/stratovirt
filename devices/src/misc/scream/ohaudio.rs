@@ -683,6 +683,10 @@ impl GuestVolumeNotifier for OhAudioVolume {
         info!("ohos volume changed to {}", h_vol);
         let mut ohos_vol = self.ohos_vol.lock().unwrap();
         let _ = ohos_vol.1.take();
+
+        if ohos_vol.0 == h_vol {
+            return;
+        }
         ohos_vol.0 = h_vol;
         self.shm_dev
             .lock()
