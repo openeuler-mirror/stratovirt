@@ -472,7 +472,7 @@ impl VirtioPciDevice {
             let mut queue_num = locked_dev.queue_num();
             // No need to create call event for control queue.
             // It will be polled in StratoVirt when activating the device.
-            if locked_dev.has_control_queue() && queue_num % 2 != 0 {
+            if locked_dev.has_control_queue() && !queue_num.is_multiple_of(2) {
                 queue_num -= 1;
             }
             let call_evts = NotifyEventFds::new(queue_num);
@@ -979,7 +979,7 @@ impl VirtioPciDevice {
         for (queue_index, queue_mutex) in queues.iter().enumerate() {
             if locked_dev.has_control_queue()
                 && queue_index + 1 == queues.len()
-                && queues.len() % 2 != 0
+                && !queues.len().is_multiple_of(2)
             {
                 break;
             }
