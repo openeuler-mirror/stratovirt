@@ -85,7 +85,7 @@ pub struct CreateOptions {
 
 impl CreateOptions {
     fn check(&self) -> Result<()> {
-        if self.img_size == 0 || self.img_size % SECTOR_SIZE != 0 {
+        if self.img_size == 0 || !self.img_size.is_multiple_of(SECTOR_SIZE) {
             bail!(
                 "Image size {} is invalid, it can't be zero and it must be multiple of {}",
                 self.img_size,

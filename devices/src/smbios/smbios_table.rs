@@ -1008,11 +1008,7 @@ impl SmbiosTable {
             self.build_type17(smbios.type17.clone(), i, memdev_size);
         }
 
-        let offset = if mem_num > (TYPE19_HANDLE - TYPE17_HANDLE) {
-            mem_num - (TYPE19_HANDLE - TYPE17_HANDLE)
-        } else {
-            0_u16
-        };
+        let offset = mem_num.saturating_sub(TYPE19_HANDLE - TYPE17_HANDLE);
         for (index, (start, size)) in mem_arr.iter().enumerate() {
             self.build_type19(offset + index as u16, *start, *size);
         }

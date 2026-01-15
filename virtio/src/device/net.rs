@@ -1579,7 +1579,7 @@ impl VirtioDevice for Net {
         let ctrl_info = Arc::new(Mutex::new(CtrlInfo::new(self.config_space.clone())));
         self.ctrl_info = Some(ctrl_info.clone());
         let driver_features = self.base.driver_features;
-        if (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0) {
+        if (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (!queue_num.is_multiple_of(2)) {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();
 

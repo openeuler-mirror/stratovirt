@@ -244,7 +244,7 @@ struct MemRegionState {
 impl MemRegionState {
     fn new(addr: u64, region_size: u64, block_size: u64, host_addr: u64) -> Self {
         assert!(block_size != 0);
-        assert!((region_size % block_size) == 0);
+        assert!(region_size.is_multiple_of(block_size));
         let nr_blocks = region_size / block_size;
         Self {
             base_gpa: addr,
@@ -290,7 +290,7 @@ impl MemRegionState {
 
         // 2. check gpa addr aligned with block size
         let addr_offset = gpa - self.base_gpa;
-        let block_offset: u64 = if addr_offset % self.block_size == 0 {
+        let block_offset: u64 = if addr_offset.is_multiple_of(self.block_size) {
             addr_offset / self.block_size
         } else {
             return VIRTIO_MEM_RESP_ERROR;
@@ -759,7 +759,7 @@ impl Memory {
         if request_size > self.config.lock().unwrap().region_size {
             bail!("request size out of the device region size")
         }
-        if request_size % self.config.lock().unwrap().block_size != 0 {
+        if !request_size.is_multiple_of(self.config.lock().unwrap().block_size) {
             bail!("requested_size not aligned with device block size")
         }
         let old_requested_size = self.config.lock().unwrap().requested_size;

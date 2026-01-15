@@ -619,7 +619,7 @@ impl DirtyBitmap {
 
         let mut num_pages = len / page_size;
         // Page alignment.
-        if len % page_size > 0 {
+        if !len.is_multiple_of(page_size) {
             num_pages += 1;
         }
         let size = num_pages / 64 + 1;

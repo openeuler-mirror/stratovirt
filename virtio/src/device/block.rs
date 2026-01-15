@@ -529,7 +529,7 @@ impl Request {
     fn io_range_valid(&self, disk_sectors: u64, devid: &str) -> bool {
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
-                if self.data_len % SECTOR_SIZE != 0 {
+                if !self.data_len.is_multiple_of(SECTOR_SIZE) {
                     error!("Failed to process block request with size not aligned to 512B");
                     return false;
                 }

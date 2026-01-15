@@ -146,6 +146,7 @@ pub struct UsbSuperSpeedCapDescriptor {
 impl ByteCode for UsbSuperSpeedCapDescriptor {}
 
 /// USB super speed endpoint companion descriptor for transfer.
+#[cfg(any(feature = "usb_camera", feature = "usb_uas"))]
 #[allow(non_snake_case)]
 #[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -157,6 +158,7 @@ pub struct UsbSuperSpeedEndpointCompDescriptor {
     pub wBytesPerInterval: u16,
 }
 
+#[cfg(any(feature = "usb_camera", feature = "usb_uas"))]
 impl ByteCode for UsbSuperSpeedEndpointCompDescriptor {}
 
 /// USB device descriptor.

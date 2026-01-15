@@ -335,7 +335,7 @@ fn da_draw_callback(gs: &Rc<RefCell<GtkDisplayScreen>>, cr: &cairo::Context) -> 
     }
 
     cr.rectangle(0.0, 0.0, window_width, window_height);
-    cr.rectangle(mx + surface_width, my, surface_width * -1.0, surface_height);
+    cr.rectangle(mx + surface_width, my, -surface_width, surface_height);
     cr.fill()?;
     cr.scale(borrowed_gs.scale_x, borrowed_gs.scale_y);
     if let Some(image) = &borrowed_gs.cairo_image {

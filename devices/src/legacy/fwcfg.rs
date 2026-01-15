@@ -855,11 +855,11 @@ impl FwCfgCommon {
 }
 
 fn get_io_count(data_len: usize) -> usize {
-    if data_len % 8 == 0 {
+    if data_len.is_multiple_of(8) {
         8
-    } else if data_len % 4 == 0 {
+    } else if data_len.is_multiple_of(4) {
         4
-    } else if data_len % 2 == 0 {
+    } else if data_len.is_multiple_of(2) {
         2
     } else {
         1
