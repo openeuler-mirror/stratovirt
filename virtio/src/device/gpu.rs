@@ -656,8 +656,8 @@ pub fn cal_image_hostmem(format: u32, width: u32, height: u32) -> (Option<usize>
     if format == VIRTIO_GPU_FORMAT_MONOCHROME {
         if width as usize > VIRTIO_GPU_CURSOR_SIZE
             || height as usize > VIRTIO_GPU_CURSOR_SIZE
-            || width % 8 != 0
-            || height % 8 != 0
+            || !width.is_multiple_of(8)
+            || !height.is_multiple_of(8)
         {
             error!(
                 "GuestError: monochrome cursor use invalid size: {} {}.",

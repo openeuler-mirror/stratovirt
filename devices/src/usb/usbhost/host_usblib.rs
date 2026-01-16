@@ -430,7 +430,7 @@ impl PollFds {
         }
     }
 
-    pub fn iter(&self) -> PollFdIter {
+    pub fn iter(&self) -> PollFdIter<'_> {
         let mut len: usize = 0;
         // SAFETY: self.poll_fds is acquired from libusb_get_pollfds which is guaranteed to be valid.
         unsafe {

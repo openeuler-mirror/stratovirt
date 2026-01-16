@@ -34,6 +34,7 @@ use util::loop_context::EventNotifierHelper;
 use util::test_helper::{is_test_enabled, set_test_enabled};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
 
+#[allow(dead_code)]
 #[derive(Error, Debug)]
 enum MainError {
     #[error("Manager")]

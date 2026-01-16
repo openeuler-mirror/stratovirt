@@ -771,7 +771,7 @@ mod tests {
             )
     }
 
-    fn create_test_arg_matches(cmdline_str: &str) -> ArgMatches {
+    fn create_test_arg_matches(cmdline_str: &str) -> ArgMatches<'_> {
         let mut arg_parser = create_test_arg();
         let input_vec = cmdline_str
             .split(' ')

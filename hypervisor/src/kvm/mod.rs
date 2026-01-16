@@ -878,9 +878,9 @@ impl MsiIrqManager for KVMInterruptManager {
     }
 
     fn trigger(&self, irq_fd: Option<Arc<EventFd>>, vector: MsiVector, dev_id: u32) -> Result<()> {
-        if irq_fd.is_some() {
-            trace::kvm_trigger_irqfd(irq_fd.as_ref().unwrap());
-            irq_fd.unwrap().write(1)?;
+        if let Some(fd) = irq_fd.as_ref() {
+            trace::kvm_trigger_irqfd(fd);
+            fd.write(1)?;
         } else {
             #[cfg(target_arch = "aarch64")]
             let flags: u32 = kvm_bindings::KVM_MSI_VALID_DEVID;
