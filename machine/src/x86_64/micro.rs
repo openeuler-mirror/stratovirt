@@ -144,7 +144,7 @@ impl MachineOps for LightMachine {
         let mut locked_vm = vm.lock().unwrap();
 
         trace::sysbus(&locked_vm.base.sysbus);
-        trace::vm_state(&locked_vm.base.vm_state);
+        trace::vm_state(locked_vm.get_vm_state());
 
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
