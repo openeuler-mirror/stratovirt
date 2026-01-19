@@ -183,7 +183,7 @@ pub enum AudioProcessCb {
         Option<
             extern "C" fn(
                 capturer: *mut capi::OhAudioCapturer,
-                userData: *mut c_void,
+                user_data: *mut c_void,
                 buffer: *mut c_void,
                 length: i32,
             ) -> i32,
@@ -191,7 +191,7 @@ pub enum AudioProcessCb {
         Option<
             extern "C" fn(
                 capturer: *mut capi::OhAudioCapturer,
-                userData: *mut c_void,
+                user_data: *mut c_void,
                 source_type: capi::OHAudioInterruptSourceType,
                 hint: capi::OHAudioInterruptHint,
             ) -> i32,
@@ -201,7 +201,7 @@ pub enum AudioProcessCb {
         Option<
             extern "C" fn(
                 renderer: *mut capi::OhAudioRenderer,
-                userData: *mut c_void,
+                user_data: *mut c_void,
                 buffer: *mut c_void,
                 length: i32,
             ) -> i32,
@@ -209,7 +209,7 @@ pub enum AudioProcessCb {
         Option<
             extern "C" fn(
                 capturer: *mut capi::OhAudioRenderer,
-                userData: *mut c_void,
+                user_data: *mut c_void,
                 source_type: capi::OHAudioInterruptSourceType,
                 hint: capi::OHAudioInterruptHint,
             ) -> i32,

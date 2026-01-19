@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
-use thiserror::Error;
 
 use machine::{type_init, LightMachine, MachineOps, StdMachine};
 use machine_manager::{
@@ -34,31 +33,6 @@ use machine_manager::{
 use util::loop_context::EventNotifierHelper;
 use util::test_helper::{is_test_enabled, set_test_enabled};
 use util::{arg_parser, daemonize::daemonize, logger, set_termi_canon_mode};
-
-#[allow(dead_code)]
-#[derive(Error, Debug)]
-enum MainError {
-    #[error("Manager")]
-    Manager {
-        #[from]
-        source: machine_manager::error::MachineManagerError,
-    },
-    #[error("Util")]
-    Util {
-        #[from]
-        source: util::error::UtilError,
-    },
-    #[error("Machine")]
-    Machine {
-        #[from]
-        source: machine::error::MachineError,
-    },
-    #[error("Io")]
-    Io {
-        #[from]
-        source: std::io::Error,
-    },
-}
 
 fn main() -> ExitCode {
     match run() {

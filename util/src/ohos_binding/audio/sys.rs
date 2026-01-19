@@ -202,7 +202,7 @@ pub struct OhAudioRendererCallbacks {
     pub oh_audio_renderer_on_write_data: ::std::option::Option<
         extern "C" fn(
             renderer: *mut OhAudioRenderer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             buffer: *mut ::std::os::raw::c_void,
             length: i32,
         ) -> i32,
@@ -211,7 +211,7 @@ pub struct OhAudioRendererCallbacks {
     pub oh_audio_renderer_on_interrupt_event: ::std::option::Option<
         extern "C" fn(
             renderer: *mut OhAudioRenderer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             source_type: OHAudioInterruptSourceType,
             hint: OHAudioInterruptHint,
         ) -> i32,
@@ -230,7 +230,7 @@ pub struct OhAudioCapturerCallbacks {
     pub oh_audio_capturer_on_read_data: ::std::option::Option<
         extern "C" fn(
             capturer: *mut OhAudioCapturer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             buffer: *mut ::std::os::raw::c_void,
             length: i32,
         ) -> i32,
@@ -239,7 +239,7 @@ pub struct OhAudioCapturerCallbacks {
     pub oh_audio_capturer_on_interrupt_event: ::std::option::Option<
         extern "C" fn(
             capturer: *mut OhAudioCapturer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             source_type: OHAudioInterruptSourceType,
             hint: OHAudioInterruptHint,
         ) -> i32,
