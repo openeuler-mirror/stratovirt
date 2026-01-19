@@ -24,6 +24,7 @@ use machine_manager::{
     config::MachineType,
     config::VmConfig,
     event_loop::EventLoop,
+    machine::MachineExternalInterface,
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_socket::Socket,
     signal_handler::{exit_with_code, handle_signal, register_kill_signal, VM_EXIT_GENE_ERR},
@@ -156,8 +157,12 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
     register_kill_signal();
 
     let listeners = check_api_channel(cmd_args, vm_config)?;
-    let mut sockets = Vec::new();
-    let vm: Arc<Mutex<dyn MachineOps + Send + Sync>> = match vm_config.machine_config.mach_type {
+
+    #[allow(clippy::type_complexity)]
+    let (vm, vmi): (
+        Arc<Mutex<dyn MachineOps + Send + Sync>>,
+        Arc<Mutex<dyn MachineExternalInterface>>,
+    ) = match vm_config.machine_config.mach_type {
         MachineType::MicroVm => {
             if is_test_enabled() {
                 panic!("module test framework does not support microvm.")
@@ -167,14 +172,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             ));
             MachineOps::realize(&vm, vm_config).with_context(|| "Failed to realize micro VM.")?;
             EventLoop::set_manager(vm.clone());
-
-            for listener in listeners {
-                sockets.push((
-                    Socket::from_listener(listener.0, Some(vm.clone())),
-                    listener.1,
-                ));
-            }
-            vm
+            (vm.clone(), vm)
         }
         MachineType::StandardVm => {
             let vm = Arc::new(Mutex::new(
@@ -193,14 +191,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
                 )
                 .with_context(|| "Failed to add test socket to MainLoop")?;
             }
-
-            for listener in listeners {
-                sockets.push((
-                    Socket::from_listener(listener.0, Some(vm.clone())),
-                    listener.1,
-                ));
-            }
-            vm
+            (vm.clone(), vm)
         }
         MachineType::None => {
             if is_test_enabled() {
@@ -210,14 +201,7 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
                 StdMachine::new(vm_config).with_context(|| "Failed to init NoneVM")?,
             ));
             EventLoop::set_manager(vm.clone());
-
-            for listener in listeners {
-                sockets.push((
-                    Socket::from_listener(listener.0, Some(vm.clone())),
-                    listener.1,
-                ));
-            }
-            vm
+            (vm.clone(), vm)
         }
     };
 
@@ -229,7 +213,9 @@ fn real_main(cmd_args: &arg_parser::ArgMatches, vm_config: &mut VmConfig) -> Res
             .with_context(|| "Failed to register seccomp rules.")?;
     }
 
-    for (socket, iothread) in sockets {
+    for listener in listeners {
+        let socket = Socket::from_listener(listener.0, Some(vmi.clone()));
+        let iothread = listener.1;
         EventLoop::update_event(
             EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(socket))),
             iothread.as_ref(),
