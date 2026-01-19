@@ -574,14 +574,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(
-            &self.base.cpus,
-            #[cfg(target_arch = "aarch64")]
-            &self.base.irq_chip,
-            &mut self.base.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        ) {
+        if let Err(e) = self.vm_state_transfer(old, new) {
             error!("VM state transfer failed: {:?}", e);
             return false;
         }
