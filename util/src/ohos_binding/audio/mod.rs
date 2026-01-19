@@ -438,7 +438,7 @@ impl AudioContext {
         let mut other = AudioSpec::default();
         other
             .set(size, rate, channels)
-            .is_ok_and(|_| (self.spec == other))
+            .is_ok_and(|_| self.spec == other)
     }
 
     pub fn activate_audio_session(

@@ -392,7 +392,7 @@ extern "C" {
     pub fn OH_AudioStreamBuilder_SetRendererCallback(
         builder: *mut OhAudioStreamBuilder,
         callbacks: OhAudioRendererCallbacks,
-        userData: *mut ::std::os::raw::c_void,
+        user_data: *mut ::std::os::raw::c_void,
     ) -> OhAudioStreamResult;
     pub fn OH_AudioStreamBuilder_SetCapturerCallback(
         builder: *mut OhAudioStreamBuilder,
