@@ -31,13 +31,12 @@ pub use standard_common::StdMachine;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
 use std::net::TcpListener;
-use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
 #[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
+use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
 #[cfg(feature = "usb_host")]
 use std::thread;
 #[cfg(feature = "windows_emu_pid")]
@@ -163,7 +162,7 @@ pub struct MachineBase {
     /// System bus.
     sysbus: Arc<Mutex<SysBus>>,
     /// VM running state.
-    vm_state: Arc<(Mutex<VmState>, Condvar)>,
+    vm_state: Arc<Mutex<VmState>>,
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// All configuration information of virtual machine.
@@ -244,7 +243,7 @@ impl MachineBase {
             #[cfg(target_arch = "x86_64")]
             sys_io,
             sysbus: Arc::new(Mutex::new(sysbus)),
-            vm_state: Arc::new((Mutex::new(VmState::Created), Condvar::new())),
+            vm_state: Arc::new(Mutex::new(VmState::Created)),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
@@ -670,7 +669,7 @@ pub trait MachineOps: MachineLifecycle {
         self.machine_base().vm_config.clone()
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<VmState>, Condvar)> {
+    fn get_vm_state(&self) -> &Arc<Mutex<VmState>> {
         &self.machine_base().vm_state
     }
 
@@ -2193,7 +2192,7 @@ pub trait MachineOps: MachineLifecycle {
 
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();
-        let vm_state = self.get_vm_state().deref().0.lock().unwrap();
+        let vm_state = self.get_vm_state().lock().unwrap();
         if *vm_state == VmState::Running && !drive_file.locked {
             if let Err(e) = lock_file(&drive_file.file, path, read_only) {
                 VmConfig::remove_drive_file(&mut drive_files, path)?;
@@ -2251,7 +2250,7 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
     fn run(&self, paused: bool) -> Result<()> {
-        self.vm_start(&mut self.machine_base().vm_state.0.lock().unwrap(), paused)
+        self.vm_start(&mut self.get_vm_state().lock().unwrap(), paused)
     }
 
     /// Start machine as `Running` or `Paused` state.
@@ -2376,7 +2375,7 @@ pub trait MachineOps: MachineLifecycle {
     fn vm_state_transfer(&self, old_state: VmState, new_state: VmState) -> Result<()> {
         use VmState::*;
 
-        let mut vm_state = self.machine_base().vm_state.0.lock().unwrap();
+        let mut vm_state = self.get_vm_state().lock().unwrap();
         if *vm_state != old_state {
             bail!("Vm lifecycle error: state check failed.");
         }
@@ -2442,7 +2441,7 @@ fn register_shutdown_event(
 fn handle_destroy_request(vm: &Arc<Mutex<dyn MachineOps>>) -> bool {
     let locked_vm = vm.lock().unwrap();
     let vmstate: VmState = {
-        let state = locked_vm.machine_base().vm_state.deref().0.lock().unwrap();
+        let state = locked_vm.get_vm_state().lock().unwrap();
         *state
     };
 
@@ -2559,7 +2558,7 @@ fn check_windows_emu_pid(
     if !Path::new(&pid_path).exists() {
         info!("Detect emulator exited, let VM exits now");
         let locked_vm = vm.lock().unwrap();
-        let mut vm_state = locked_vm.get_vm_state().deref().0.lock().unwrap();
+        let mut vm_state = locked_vm.get_vm_state().lock().unwrap();
         if *vm_state == VmState::Paused {
             info!("VM state is paused, resume VM before exit");
             if let Err(e) = locked_vm.vm_resume(&mut vm_state) {
