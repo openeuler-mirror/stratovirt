@@ -31,13 +31,12 @@ pub use standard_common::StdMachine;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
 use std::net::TcpListener;
-use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
 #[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
+use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
 #[cfg(feature = "usb_host")]
 use std::thread;
 #[cfg(feature = "windows_emu_pid")]
@@ -163,7 +162,7 @@ pub struct MachineBase {
     /// System bus.
     sysbus: Arc<Mutex<SysBus>>,
     /// VM running state.
-    vm_state: Arc<(Mutex<VmState>, Condvar)>,
+    vm_state: Arc<Mutex<VmState>>,
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// All configuration information of virtual machine.
@@ -244,7 +243,7 @@ impl MachineBase {
             #[cfg(target_arch = "x86_64")]
             sys_io,
             sysbus: Arc::new(Mutex::new(sysbus)),
-            vm_state: Arc::new((Mutex::new(VmState::Created), Condvar::new())),
+            vm_state: Arc::new(Mutex::new(VmState::Created)),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
@@ -670,7 +669,7 @@ pub trait MachineOps: MachineLifecycle {
         self.machine_base().vm_config.clone()
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<VmState>, Condvar)> {
+    fn get_vm_state(&self) -> &Arc<Mutex<VmState>> {
         &self.machine_base().vm_state
     }
 
@@ -2193,7 +2192,7 @@ pub trait MachineOps: MachineLifecycle {
 
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();
-        let vm_state = self.get_vm_state().deref().0.lock().unwrap();
+        let vm_state = self.get_vm_state().lock().unwrap();
         if *vm_state == VmState::Running && !drive_file.locked {
             if let Err(e) = lock_file(&drive_file.file, path, read_only) {
                 VmConfig::remove_drive_file(&mut drive_files, path)?;
@@ -2245,32 +2244,28 @@ pub trait MachineOps: MachineLifecycle {
     where
         Self: Sized;
 
-    /// Run `LightMachine` with `paused` flag.
+    /// Run `Machine` with `paused` flag.
     ///
     /// # Arguments
     ///
     /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
     fn run(&self, paused: bool) -> Result<()> {
-        self.vm_start(
-            paused,
-            &self.machine_base().cpus,
-            &mut self.machine_base().vm_state.0.lock().unwrap(),
-        )
+        self.vm_start(&mut self.get_vm_state().lock().unwrap(), paused)
     }
 
     /// Start machine as `Running` or `Paused` state.
     ///
     /// # Arguments
     ///
-    /// * `paused` - After started, paused all vcpu or not.
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
+    /// * `paused` - After started, paused all vcpu or not.
+    fn vm_start(&self, vm_state: &mut VmState, paused: bool) -> Result<()> {
         if !paused {
             EventLoop::get_ctx(None).unwrap().enable_clock();
             self.active_drive_files()?;
         }
 
+        let cpus = &self.machine_base().cpus;
         let nr_vcpus = cpus.len();
         let cpus_thread_barrier = Arc::new(Barrier::new(nr_vcpus + 1));
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -2295,20 +2290,15 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_pause(
-        &self,
-        cpus: &[Arc<CPU>],
-        #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut VmState,
-    ) -> Result<()> {
+    fn vm_pause(&self, vm_state: &mut VmState) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().disable_clock();
 
         // Deactive files so that VM on the other end can active files.
         if MigrationManager::is_active() {
             self.deactive_drive_files()?;
         }
+        let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             if let Err(e) = cpu.pause() {
                 if MigrationManager::is_active() {
@@ -2319,8 +2309,11 @@ pub trait MachineOps: MachineLifecycle {
         }
 
         #[cfg(target_arch = "aarch64")]
-        // SAFETY: ARM architecture must have interrupt controllers in user mode.
-        irq_chip.as_ref().unwrap().stop();
+        {
+            let irq_chip = &self.machine_base().irq_chip;
+            // SAFETY: ARM architecture must have interrupt controllers in user mode.
+            irq_chip.as_ref().unwrap().stop();
+        }
 
         *vm_state = VmState::Paused;
 
@@ -2334,9 +2327,8 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
+    fn vm_resume(&self, vm_state: &mut VmState) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().enable_clock();
 
         self.active_drive_files()?;
@@ -2344,6 +2336,7 @@ pub trait MachineOps: MachineLifecycle {
         // Notify VM resumed.
         pause_notify(false);
 
+        let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             if let Err(e) = cpu.resume() {
                 self.deactive_drive_files()?;
@@ -2360,9 +2353,9 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
+    fn vm_destroy(&self, vm_state: &mut VmState) -> Result<()> {
+        let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.destroy()
                 .with_context(|| format!("Failed to destroy vcpu{}", cpu_index))?;
@@ -2377,41 +2370,28 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm state.
     /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
-    fn vm_state_transfer(
-        &self,
-        cpus: &[Arc<CPU>],
-        #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut VmState,
-        old_state: VmState,
-        new_state: VmState,
-    ) -> Result<()> {
+    fn vm_state_transfer(&self, old_state: VmState, new_state: VmState) -> Result<()> {
         use VmState::*;
 
+        let mut vm_state = self.get_vm_state().lock().unwrap();
         if *vm_state != old_state {
             bail!("Vm lifecycle error: state check failed.");
         }
 
         match (old_state, new_state) {
             (Created, Running) => self
-                .vm_start(false, cpus, vm_state)
+                .vm_start(&mut vm_state, false)
                 .with_context(|| "Failed to start vm.")?,
             (Running, Paused) => self
-                .vm_pause(
-                    cpus,
-                    #[cfg(target_arch = "aarch64")]
-                    irq_chip,
-                    vm_state,
-                )
+                .vm_pause(&mut vm_state)
                 .with_context(|| "Failed to pause vm.")?,
             (Paused, Running) => self
-                .vm_resume(cpus, vm_state)
+                .vm_resume(&mut vm_state)
                 .with_context(|| "Failed to resume vm.")?,
             (_, Shutdown) => self
-                .vm_destroy(cpus, vm_state)
+                .vm_destroy(&mut vm_state)
                 .with_context(|| "Failed to destroy vm.")?,
             (_, _) => {
                 bail!("Vm lifecycle error: this transform is illegal.");
@@ -2461,7 +2441,7 @@ fn register_shutdown_event(
 fn handle_destroy_request(vm: &Arc<Mutex<dyn MachineOps>>) -> bool {
     let locked_vm = vm.lock().unwrap();
     let vmstate: VmState = {
-        let state = locked_vm.machine_base().vm_state.deref().0.lock().unwrap();
+        let state = locked_vm.get_vm_state().lock().unwrap();
         *state
     };
 
@@ -2578,10 +2558,10 @@ fn check_windows_emu_pid(
     if !Path::new(&pid_path).exists() {
         info!("Detect emulator exited, let VM exits now");
         let locked_vm = vm.lock().unwrap();
-        let mut vm_state = locked_vm.get_vm_state().deref().0.lock().unwrap();
+        let mut vm_state = locked_vm.get_vm_state().lock().unwrap();
         if *vm_state == VmState::Paused {
             info!("VM state is paused, resume VM before exit");
-            if let Err(e) = locked_vm.vm_resume(&locked_vm.machine_base().cpus, &mut vm_state) {
+            if let Err(e) = locked_vm.vm_resume(&mut vm_state) {
                 log::error!("Failed to resume VM when check windows emu pid: {:?}", e);
             }
         }

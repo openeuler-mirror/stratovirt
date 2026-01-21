@@ -32,7 +32,6 @@ pub mod syscall;
 
 use std::fmt;
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::vec::Vec;
@@ -574,14 +573,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(
-            &self.base.cpus,
-            #[cfg(target_arch = "aarch64")]
-            &self.base.irq_chip,
-            &mut self.base.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        ) {
+        if let Err(e) = self.vm_state_transfer(old, new) {
             error!("VM state transfer failed: {:?}", e);
             return false;
         }
@@ -618,7 +610,7 @@ impl MachineAddressInterface for LightMachine {
 
 impl DeviceInterface for LightMachine {
     fn query_status(&self) -> Response {
-        let vmstate = self.get_vm_state().deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().lock().unwrap();
         let qmp_state = match *vmstate {
             VmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
@@ -1062,7 +1054,7 @@ impl MachineExternalInterface for LightMachine {}
 
 impl EventLoopManager for LightMachine {
     fn loop_should_exit(&self) -> bool {
-        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().lock().unwrap();
         *vmstate == VmState::Shutdown
     }
 

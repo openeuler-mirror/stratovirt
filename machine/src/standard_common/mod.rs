@@ -15,7 +15,6 @@ pub mod syscall;
 pub use crate::error::MachineError;
 
 use std::mem::size_of;
-use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::os::unix::prelude::AsRawFd;
 use std::rc::Rc;
@@ -1009,14 +1008,7 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(
-            &self.base.cpus,
-            #[cfg(target_arch = "aarch64")]
-            &self.base.irq_chip,
-            &mut self.base.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        ) {
+        if let Err(e) = self.vm_state_transfer(old, new) {
             error!("VM state transfer failed: {:?}", e);
             return false;
         }
@@ -1061,7 +1053,7 @@ impl MachineTestInterface for StdMachine {}
 
 impl EventLoopManager for StdMachine {
     fn loop_should_exit(&self) -> bool {
-        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().lock().unwrap();
         *vmstate == VmState::Shutdown
     }
 
@@ -1093,8 +1085,7 @@ impl MachineAddressInterface for StdMachine {
 
 impl DeviceInterface for StdMachine {
     fn query_status(&self) -> Response {
-        let vm_state = self.get_vm_state();
-        let vmstate = vm_state.deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().lock().unwrap();
         let qmp_state = match *vmstate {
             VmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
