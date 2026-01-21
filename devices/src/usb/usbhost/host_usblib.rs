@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use libc::{c_int, c_short, c_uint, c_void, EPOLLIN, EPOLLOUT};
+use libc::{c_int, c_short, c_uchar, c_uint, c_void, size_t, EPOLLIN, EPOLLOUT};
 #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
 use libusb1_sys::{constants::LIBUSB_SUCCESS, libusb_context, libusb_set_option};
 use libusb1_sys::{
@@ -30,8 +30,8 @@ use libusb1_sys::{
         LIBUSB_TRANSFER_COMPLETED, LIBUSB_TRANSFER_ERROR, LIBUSB_TRANSFER_NO_DEVICE,
         LIBUSB_TRANSFER_STALL, LIBUSB_TRANSFER_TIMED_OUT, LIBUSB_TRANSFER_TYPE_ISOCHRONOUS,
     },
-    libusb_free_pollfds, libusb_get_pollfds, libusb_iso_packet_descriptor, libusb_pollfd,
-    libusb_transfer,
+    libusb_device_handle, libusb_free_pollfds, libusb_get_pollfds, libusb_iso_packet_descriptor,
+    libusb_pollfd, libusb_transfer,
 };
 use log::error;
 use rusb::{Context, DeviceHandle, Error, Result, TransferType, UsbContext};
@@ -272,7 +272,13 @@ pub fn fill_transfer_by_type(
     // SAFETY: node only deleted when request completed.
     let packet = unsafe { (*node).value.packet.clone() };
     // SAFETY: the reason is same as above.
-    let buffer_ptr = unsafe { (*node).value.buffer.as_mut_ptr() };
+    let buffer_ptr = unsafe {
+        if (*node).value.dev_mem.is_some() {
+            (*node).value.dev_mem.as_ref().unwrap().mem
+        } else {
+            (*node).value.buffer.as_mut().unwrap().as_mut_ptr()
+        }
+    };
     let size = packet.lock().unwrap().get_iovecs_size();
 
     if transfer.is_null() {
@@ -388,6 +394,40 @@ pub fn set_option(opt: u32) -> Result<()> {
         return Err(from_libusb(err));
     }
 
+    Ok(())
+}
+
+// These APIs are not included in libusb1-sys crate.
+extern "system" {
+    pub fn libusb_dev_mem_alloc(
+        dev_handle: *mut libusb_device_handle,
+        length: size_t,
+    ) -> *mut c_uchar;
+    pub fn libusb_dev_mem_free(
+        dev_handle: *mut libusb_device_handle,
+        buffer: *mut c_uchar,
+        length: size_t,
+    ) -> c_int;
+}
+
+pub fn dev_mem_alloc(dev_handle: &mut DeviceHandle<Context>, length: size_t) -> Result<&mut [u8]> {
+    // SAFETY: dev_handle is valid.
+    unsafe {
+        let ptr = libusb_dev_mem_alloc(dev_handle.as_raw(), length);
+        if ptr.is_null() {
+            return Err(from_libusb(LIBUSB_ERROR_NO_MEM));
+        }
+        Ok(slice::from_raw_parts_mut(ptr, length))
+    }
+}
+
+pub fn dev_mem_free(dev_handle: &mut DeviceHandle<Context>, dev_mem: &mut [u8]) -> Result<()> {
+    // SAFETY: dev_handle is valid.
+    try_unsafe!(libusb_dev_mem_free(
+        dev_handle.as_raw(),
+        dev_mem.as_mut_ptr(),
+        dev_mem.len(),
+    ));
     Ok(())
 }
 
