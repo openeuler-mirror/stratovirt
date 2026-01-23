@@ -10,14 +10,21 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{
+use std::{
+    convert::TryInto,
+    fs::{metadata, read_dir, remove_file, File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
     atomic::{AtomicBool, AtomicU16, Ordering},
     Arc, Mutex, Weak,
+    },
+    time::SystemTime,
 };
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::pci::config::{
@@ -28,20 +35,28 @@ use crate::pci::config::{
 };
 use crate::pci::{le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState};
 use crate::{convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
-use address_space::{GuestAddress, Region, RegionOps};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, Region, RegionOps};
 use machine_manager::config::{get_pci_df, valid_id};
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
 use util::gen_base_func;
+use util::time::{get_format_time, gettime};
 
 const PVPANIC_PCI_REVISION_ID: u8 = 1;
 const PVPANIC_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 
 const PVPANIC_REG_BAR_SIZE: u64 = 0x20;
 const PVPANIC_EVENT_OFFSET: u64 = 0;
+const PVPANIC_DUMP_FILE_INIT_OFFSET: u64 = 8;
+const PVPANIC_BUFFER_ADDRESS_OFFSET: u64 = 16;
+const PVPANIC_BUFFER_SIZE_OFFSET: u64 = 24;
 
 pub const PVPANIC_PANICKED: u64 = 1 << 0;
 pub const PVPANIC_CRASHLOADED: u64 = 1 << 1;
+pub const PVPANIC_BSOD: u64 = 1 << 2;
+
+const PVPANIC_MAX_DMP_FILES: usize = 10;
+const PVPANIC_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 
 #[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 #[command(no_binary_name(true))]
@@ -54,30 +69,125 @@ pub struct PvpanicDevConfig {
     pub bus: String,
     #[arg(long, value_parser = get_pci_df)]
     pub addr: (u8, u8),
-    #[arg(long, alias = "supported-features", default_value = "3", value_parser = valid_supported_features)]
+    #[arg(
+        long,
+        alias = "supported-features",
+        default_value = "3",
+        value_parser = valid_supported_features
+    )]
     pub supported_features: u64,
+    #[arg(long, alias = "dumpfile-path", default_value = "./", value_parser = valid_dumpfolder_path)]
+    pub dump_folder_path: String,
 }
 
 fn valid_supported_features(f: &str) -> Result<u64> {
     let features = f.parse::<u64>()?;
-    let supported_features = match features & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED) {
-        0 => features,
+    let supported_features =
+        match features & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD) {
+            0 => {
+                if (features & PVPANIC_BSOD) != 0 && (features & PVPANIC_CRASHLOADED) == 0 {
+                    bail!("pvpanic: BSOD cannot be enabled without enabling CRASHLOADED.");
+                }
+                features
+            }
         _ => bail!("Unsupported pvpanic device features {}", features),
     };
     Ok(supported_features)
 }
 
-#[derive(Copy, Clone)]
+fn valid_dumpfolder_path(f: &str) -> Result<String> {
+    let path = Path::new(f);
+    let dump_folder_path = match std::fs::metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                warn!("pvpanic: dump file path configuration error: not a directory.");
+            }
+            f.to_string()
+        }
+        Err(e) => {
+            warn!("pvpanic: dump file path configuration error: {}", e);
+            f.to_string()
+        }
+    };
+    Ok(dump_folder_path)
+}
+
 pub struct PvPanicState {
-    supported_features: u64,
+    pub(crate) supported_features: u64,
+    pub sys_mem: Arc<AddressSpace>,
+    pub guest_physical_address: GuestAddress,
+    pub dump_folder_path: String,
+    pub dump_file_path: Option<String>,
+    pub dump_file: Option<File>,
+    pub current_dump_file_size: u64,
+    pub file_size_limit_violation: bool,
+    pub sys_mem_read_error: bool,
 }
 
 impl PvPanicState {
-    fn new(supported_features: u64) -> Self {
-        Self { supported_features }
+    fn new(supported_features: u64, sys_mem: Arc<AddressSpace>, dump_folder_path: String) -> Self {
+        Self {
+            supported_features,
+            sys_mem,
+            guest_physical_address: GuestAddress(0),
+            dump_folder_path,
+            dump_file_path: None,
+            dump_file: None,
+            current_dump_file_size: 0_u64,
+            file_size_limit_violation: false,
+            sys_mem_read_error: false,
+        }
     }
 
-    fn handle_write_event(&self, data: &[u8]) -> Result<()> {
+    fn clear_current_folder(&mut self) -> bool {
+        let mut file_count: usize = 0;
+        let mut unremovable_file_count: usize = 0;
+        if let Ok(entries) = read_dir(&self.dump_folder_path) {
+            let mut dmp_files: Vec<(SystemTime, PathBuf)> = entries
+                .filter_map(|entry| {
+                    entry.ok().and_then(|e| {
+                        let path = e.path();
+                        if path.extension().is_some_and(|ext| ext == "dmp") {
+                            metadata(&path)
+                                .and_then(|metadata| metadata.created().map(|time| (time, path)))
+                                .ok()
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+
+            dmp_files.sort_by_key(|(time, _)| *time);
+
+            while dmp_files.len() >= PVPANIC_MAX_DMP_FILES
+                || dmp_files.len() + unremovable_file_count >= PVPANIC_MAX_DMP_FILES
+            {
+                let (_, path) = dmp_files.remove(0);
+                if let Err(e) = remove_file(&path) {
+                    unremovable_file_count += 1;
+                    error!(
+                        "pvpanic: failed to remove old dump file {}: {:?}",
+                        path.display(),
+                        e
+                    );
+                }
+                if dmp_files.is_empty() {
+                    break;
+                }
+            }
+            file_count = dmp_files.len() + unremovable_file_count;
+        } else {
+            warn!(
+                "pvpanic: failed to read directory {}",
+                &self.dump_folder_path
+            );
+        }
+
+        file_count <= PVPANIC_MAX_DMP_FILES
+    }
+
+    fn handle_write_event(&mut self, data: &[u8]) -> Result<()> {
         let event = u64::from(data[0]);
         if (event & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED)) != 0 {
             error!("pvpanic: unknown event 0x{:X}", event);
@@ -100,10 +210,179 @@ impl PvPanicState {
         Ok(())
     }
 
-    fn get_state(&self) -> PvPanicDevState {
-        PvPanicDevState {
-            supported_features: self.supported_features,
+    fn handle_init_dump_file(&mut self, data: &[u8]) -> Result<()> {
+        if (self.supported_features & PVPANIC_BSOD) == 0 {
+            error!("pvpanic: try to init dump file without enabling BSOD feature");
+            return Ok(());
         }
+
+        if !self.clear_current_folder() {
+            warn!("pvpanic: try to clear current folder failed");
+            self.dump_file = None;
+            self.current_dump_file_size = 0_u64;
+            self.file_size_limit_violation = false;
+            return Ok(());
+        }
+
+        let tag_data: [u8; 8] = match data.try_into() {
+            Ok(temp_data) => temp_data,
+            Err(_) => {
+                error!("pvpanic: tag slice sent by init_dump_file command is not 8 bytes long");
+                [0; 8]
+            }
+        };
+        let tag = u64::from_le_bytes(tag_data);
+
+        let (sec, _nsec) = gettime().unwrap_or_else(|e| {
+            error!("pvpanic: get system time secs error: {:?}", e);
+            (0, 0)
+        });
+        let format_time = get_format_time(sec);
+
+        let sys_time_now = format!(
+            "{:02}{:02}{:02}-{:02}{:02}{:02}",
+            format_time[0] % 100,
+            format_time[1],
+            format_time[2],
+            format_time[3],
+            format_time[4],
+            format_time[5]
+        );
+
+        let mut dump_path = PathBuf::from(&self.dump_folder_path);
+        dump_path.push(sys_time_now.as_str());
+        if tag != 0 {
+            dump_path.push(format!("_{}", tag));
+        }
+        dump_path.set_extension("dmp");
+
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dump_path.clone())
+        {
+            Ok(file) => {
+                self.dump_file_path = Some(String::from(dump_path.to_str().unwrap()));
+                self.dump_file = Some(file);
+            }
+            Err(e) => {
+                error!(
+                    "pvpanic: Failed to append open potential dump file {} : {:?}",
+                    dump_path.display(),
+                    e
+                );
+                self.dump_file = None;
+            }
+        }
+
+        self.current_dump_file_size = 0_u64;
+        self.file_size_limit_violation = false;
+
+        Ok(())
+    }
+
+    fn handle_write_buffer_address(&mut self, data: &[u8]) -> Result<()> {
+        if (self.supported_features & PVPANIC_BSOD) == 0 {
+            error!("pvpanic: try to write buffer address without enabling BSOD feature");
+            return Ok(());
+        }
+
+        if self.dump_file.is_none() {
+            error!("pvpanic: try to write buffer address without init dump file first");
+            return Ok(());
+        }
+
+        let addr_data: [u8; 8] = match data.try_into() {
+            Ok(temp_data) => temp_data,
+            Err(_) => {
+                error!("pvpanic: Slice is not 8 bytes long");
+                return Ok(());
+            }
+        };
+        let addr = u64::from_le_bytes(addr_data);
+        self.guest_physical_address = GuestAddress(addr);
+        debug!("pvpanic: buffer GPA is 0x{:X}", addr);
+
+        Ok(())
+    }
+
+    fn handle_write_buffer_size(&mut self, data: &[u8]) -> Result<()> {
+        if (self.supported_features & PVPANIC_BSOD) == 0 {
+            error!("pvpanic: try to write buffer size without enabling BSOD feature");
+            return Ok(());
+        }
+
+        if (self.supported_features & PVPANIC_CRASHLOADED) == PVPANIC_CRASHLOADED
+            && self.dump_file.is_some()
+        {
+            let buffer_length_data: [u8; 8] = match data.try_into() {
+                Ok(temp_data) => temp_data,
+                Err(_) => {
+                    error!("pvpanic: Slice is not 8 bytes long");
+                    return Ok(());
+                }
+            };
+            let buffer_length = u64::from_le_bytes(buffer_length_data);
+
+            let mut_file = self.dump_file.as_mut().unwrap();
+
+            if self.current_dump_file_size + buffer_length > PVPANIC_MAX_FILE_SIZE {
+                if !self.file_size_limit_violation {
+                    error!(
+                        "pvpanic: current dump file size {}, buffer length {}, exceeds the maximum allowed size {}",
+                        self.current_dump_file_size,
+                        buffer_length,
+                        PVPANIC_MAX_FILE_SIZE
+                    );
+                    self.file_size_limit_violation = true;
+                }
+                return Ok(());
+            }
+
+            match self.sys_mem.read(
+                mut_file,
+                self.guest_physical_address,
+                buffer_length,
+                AddressAttr::Ram,
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    if !self.sys_mem_read_error {
+                        error!("pvpanic: Failed to write data to file: {:?}", e);
+                        self.sys_mem_read_error = true;
+                    }
+                    return Ok(());
+                }
+            }
+
+            match mut_file.flush() {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("pvpanic: Failed to flush data to file: {:?}", e);
+                }
+            }
+
+            self.current_dump_file_size += buffer_length;
+        }
+
+        Ok(())
+    }
+
+    fn close_file(&mut self) -> Result<()> {
+        if self.dump_file.is_some() {
+            self.dump_file_path = None;
+            self.dump_file = None;
+        }
+
+        Ok(())
+    }
+
+    pub fn get_state(&self) -> PvPanicDevState {
+        let pvpanic_state = PvPanicDevState {
+            supported_features: self.supported_features,
+        };
+
+        pvpanic_state
     }
 
     fn set_state(&mut self, state: &PvPanicDevState) {
@@ -120,18 +399,23 @@ struct PvPanicPciDevState {
 }
 
 #[derive(Copy, Clone, Deserialize, Serialize)]
-struct PvPanicDevState {
+pub struct PvPanicDevState {
     supported_features: u64,
 }
 
 pub struct PvPanicPci {
     base: PciDevBase,
     dev_id: AtomicU16,
-    pvpanic: Arc<Mutex<PvPanicState>>,
+    pub pvpanic: Arc<Mutex<PvPanicState>>,
 }
 
 impl PvPanicPci {
-    pub fn new(config: &PvpanicDevConfig, devfn: u8, parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
+    pub fn new(
+        config: &PvpanicDevConfig,
+        devfn: u8,
+        parent_bus: Weak<Mutex<dyn Bus>>,
+        sys_mem: Arc<AddressSpace>,
+    ) -> Self {
         Self {
             base: PciDevBase {
                 base: DeviceBase::new(config.id.clone(), false, Some(parent_bus)),
@@ -140,7 +424,11 @@ impl PvPanicPci {
                 bme: Arc::new(AtomicBool::new(false)),
             },
             dev_id: AtomicU16::new(0),
-            pvpanic: Arc::new(Mutex::new(PvPanicState::new(config.supported_features))),
+            pvpanic: Arc::new(Mutex::new(PvPanicState::new(
+                config.supported_features,
+                sys_mem,
+                config.dump_folder_path.clone(),
+            ))),
         }
     }
 
@@ -163,6 +451,7 @@ impl PvPanicPci {
         );
 
         let cloned_pvpanic_write = self.pvpanic.clone();
+
         let bar0_write = Arc::new(move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
             match offset {
                 PVPANIC_EVENT_OFFSET => {
@@ -171,6 +460,33 @@ impl PvPanicPci {
                             .lock()
                             .unwrap()
                             .handle_write_event(data),
+                        Ok(())
+                    )
+                }
+                PVPANIC_DUMP_FILE_INIT_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_init_dump_file(data),
+                        Ok(())
+                    )
+                }
+                PVPANIC_BUFFER_ADDRESS_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_write_buffer_address(data),
+                        Ok(())
+                    )
+                }
+                PVPANIC_BUFFER_SIZE_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_write_buffer_size(data),
                         Ok(())
                     )
                 }
@@ -202,6 +518,12 @@ impl PvPanicPci {
 
 impl Device for PvPanicPci {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        let mut locked_pvpanic = self.pvpanic.lock().unwrap();
+        locked_pvpanic.sys_mem_read_error = false;
+        locked_pvpanic.close_file()
+    }
 
     fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
@@ -274,7 +596,8 @@ impl Device for PvPanicPci {
             &self.name(),
         );
 
-        Ok(())
+        let mut locked_pvpanic = self.pvpanic.lock().unwrap();
+        locked_pvpanic.close_file()
     }
 }
 

@@ -1197,7 +1197,8 @@ pub trait MachineOps: MachineLifecycle {
         let config = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let bdf = PciBdf::new(config.bus.clone(), config.addr);
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let pcidev = PvPanicPci::new(&config, devfn, parent_bus);
+        let sys_mem = self.get_sys_mem();
+        let pcidev = PvPanicPci::new(&config, devfn, parent_bus, sys_mem.clone());
         pcidev
             .realize()
             .with_context(|| "Failed to realize pvpanic device")?;
