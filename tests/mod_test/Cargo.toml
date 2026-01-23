@@ -20,3 +20,4 @@ acpi = { path = "../../acpi" }
 machine = { path = "../../machine" }
 machine_manager = { path = "../../machine_manager"}
 virtio = { path = "../../virtio", features = ["virtio_gpu"] }
+regex = "1"

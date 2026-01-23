@@ -1101,6 +1101,7 @@ dependencies = [
  "machine",
  "machine_manager",
  "rand",
+ "regex",
  "serde",
  "serde_json",
  "util",
