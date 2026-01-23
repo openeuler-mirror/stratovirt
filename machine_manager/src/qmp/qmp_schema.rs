@@ -140,7 +140,8 @@ define_qmp_command_enum!(
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg),
     trace_get_state("trace-get-state", trace_get_state),
     trace_set_state("trace-set-state", trace_set_state),
-    query_workloads("query-workloads", query_workloads)
+    query_workloads("query-workloads", query_workloads),
+    detect_silent_audio("detect-silent-audio", DetectSilentAudio)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -1836,6 +1837,25 @@ pub struct query_mem_gpa {
 }
 pub type QueryMemGpaArgument = query_mem_gpa;
 
+/// AudioState
+///
+/// Emitted when scream audio state changed.
+/// true means enabled, vice versa
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "AUDIO_CHANGED",
+///      "play": true,
+///      "capt": false,
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct AudioState {
+    pub play: bool,
+    pub capt: bool,
+}
+
 macro_rules! define_qmp_event_enum {
     ($($event:ident($name:expr, $data_type:ty $(, $serde_default:ident)?)),*) => {
         /// A enum to store all event struct
@@ -1865,7 +1885,8 @@ define_qmp_event_enum!(
     CpuResize("CPU_RESIZE", CpuResize, default),
     DeviceDeleted("DEVICE_DELETED", DeviceDeleted),
     BalloonChanged("BALLOON_CHANGED", BalloonInfo),
-    UsbHostAddRes("USB_HOST_ADD_RES", UsbHostAddRes)
+    UsbHostAddRes("USB_HOST_ADD_RES", UsbHostAddRes),
+    AudioChanged("AUDIO_CHANGED", AudioState)
 );
 
 /// Shutdown
@@ -2090,6 +2111,20 @@ pub type TraceSetArgument = trace_set_state;
 #[serde(deny_unknown_fields)]
 pub struct query_workloads {}
 generate_command_impl!(query_workloads, Empty);
+
+/// Detect Silent Audio Data
+///
+/// Detect the playing audio data if silent.
+///
+/// # Examples
+///
+/// ```text
+/// -> {"execute": "detect-silent-audio", "arguments": {}}
+/// <- {"return": true}
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetectSilentAudio {}
 
 #[cfg(test)]
 mod tests {

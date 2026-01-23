@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::sync::RwLock;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use once_cell::sync::Lazy;
 
@@ -162,7 +162,13 @@ impl Drop for OhCameraBackend {
 
 impl OhCameraBackend {
     pub fn new(id: String, cam_name: String, tokenid: u64) -> Result<Self> {
-        let (ctx, profile_cnt) = OhCamera::new(cam_name.clone())?;
+        let (ctx, profile_cnt) = match OhCamera::new(cam_name.clone()) {
+            Ok(v) => v,
+            Err(code) => {
+                hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
+                return Err(anyhow!("Failed to init OhCamera, code is {code}."));
+            }
+        };
 
         Ok(OhCameraBackend {
             id,
@@ -218,7 +224,10 @@ impl CameraBackend for OhCameraBackend {
         if self.tokenid != 0 {
             bound_tokenid(self.tokenid)?;
         }
-        self.ctx.start_stream(on_buffer_available, on_broken)?;
+        if let Err(code) = self.ctx.start_stream(on_buffer_available, on_broken) {
+            hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
+            return Err(anyhow!("Failed to start camera stream, code is {code}."));
+        }
         self.stream_on = true;
         Ok(())
     }
@@ -460,6 +469,8 @@ unsafe extern "C" fn on_broken(camid: *const u8) {
         error!("{e}");
         "".to_string()
     });
+    hisysevent::STRATOVIRT_CAMERA_ON_BROKEN(cam.clone());
+    error!("Camera:{} stream broken", cam);
     if let Some(cb) = OHCAM_CALLBACKS.read().unwrap().get(&cam) {
         cb.broken();
     }

@@ -20,15 +20,18 @@ static STATE_QUERY_MANAGER: Lazy<RwLock<StateQueryManager>> =
     Lazy::new(|| RwLock::new(StateQueryManager::new()));
 
 pub type StateQueryCallback = dyn Fn() -> String + Send + Sync;
+pub type CheckStatusCallback = dyn Fn() -> bool + Send + Sync;
 
 struct StateQueryManager {
     query_callbacks: HashMap<String, Arc<StateQueryCallback>>,
+    detect_silent_audio_cbs: HashMap<String, Arc<CheckStatusCallback>>,
 }
 
 impl StateQueryManager {
     fn new() -> Self {
         Self {
             query_callbacks: HashMap::new(),
+            detect_silent_audio_cbs: HashMap::new(),
         }
     }
 
@@ -48,6 +51,25 @@ impl StateQueryManager {
             .map(|(module, query)| (module.clone(), query()))
             .collect()
     }
+
+    fn register_silent_audio_cb(&mut self, key: String, cb: Arc<CheckStatusCallback>) {
+        self.detect_silent_audio_cbs.insert(key, cb);
+    }
+
+    fn unregister_silent_audio_cb(&mut self, key: &str) {
+        if self.detect_silent_audio_cbs.remove(key).is_none() {
+            error!("{} silent audio detect callback not found", key);
+        }
+    }
+
+    fn detect_silent_audio(&self) -> bool {
+        for (_, cb) in self.detect_silent_audio_cbs.iter() {
+            if !cb() {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 pub fn register_state_query_callback(key: String, callback: Arc<StateQueryCallback>) {
@@ -66,4 +88,22 @@ pub fn unregister_state_query_callback(key: &str) {
 
 pub fn query_workloads() -> Vec<(String, String)> {
     STATE_QUERY_MANAGER.read().unwrap().query_workloads()
+}
+
+pub fn register_silent_audio_cb(key: String, cb: Arc<CheckStatusCallback>) {
+    STATE_QUERY_MANAGER
+        .write()
+        .unwrap()
+        .register_silent_audio_cb(key, cb);
+}
+
+pub fn unregister_silent_audio_cb(key: &str) {
+    STATE_QUERY_MANAGER
+        .write()
+        .unwrap()
+        .unregister_silent_audio_cb(key);
+}
+
+pub fn detect_silent_audio() -> bool {
+    STATE_QUERY_MANAGER.read().unwrap().detect_silent_audio()
 }

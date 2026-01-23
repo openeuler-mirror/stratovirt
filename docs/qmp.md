@@ -638,6 +638,17 @@ Control if the scream device can use host's microphone record.
 <- { "return": {} }
  ```
 
+### detect-silent-audio
+
+Detect if the VM is playing silent audio.
+
+#### Example
+
+```json
+-> { "execute": "detect-silent-audio", "arguments": {} }
+<- { "return": true }
+```
+
 ## Event Notification
 
 When some events happen, connected client will receive QMP events.
@@ -651,6 +662,7 @@ Now StratoVirt supports these events:
 - `POWERDOWN`: Emitted when the virtual machine powerdown execution.
 - `DEVICE_DELETED`: Emitted whenever the device removal completion is acknowledged by the guest.
 - `BALLOON_CHANGED`: Emitted when the virtual machine changes the actual BALLOON level.
+- `AUDIO_CHANGED`: Emitted when scream audio state changed.
 
 ## Flow control
 

@@ -29,7 +29,11 @@ const RENDER_CB_FREQUENCY: i32 = 50;
 macro_rules! call_capi {
     ( $f: ident ( $($x: expr),* ) ) => {
         {
-            // SAFETY: OH Audio FrameWork's APIs guarantee safety.
+            // SAFETY:
+            // - `$f` should be a valid function pointer loaded from the OH Audio Framework C API library.
+            // - The dynamic library needs to be been successfully initialized before this call.
+            // - The arguments `$($x),*` are guaranteed to match the expected C ABI types
+            //   and remain valid for the duration of the call (no dangling pointers, no aliasing).
             let r = unsafe { capi::$f( $($x),* ) };
             if r != capi::OH_AUDIO_STREAM_RESULT_AUDIOSTREAM_SUCCESS {
                 error!("ohauadio_rapi: failed at {:?}", stringify!($f));
@@ -43,7 +47,11 @@ macro_rules! call_capi {
 
 macro_rules! call_capi_nocheck {
     ( $f: ident ( $($x: expr),* ) ) => {
-        // SAFETY: OH Audio FrameWork's APIs guarantee safety.
+        // SAFETY:
+        // - `$f` should be a valid function pointer loaded from the OH Audio Framework C API library.
+        // - The dynamic library needs to be been successfully initialized before this call.
+        // - The arguments `$($x),*` are guaranteed to match the expected C ABI types
+        //   and remain valid for the duration of the call (no dangling pointers, no aliasing).
         unsafe { capi::$f( $($x),* ) }
     };
 }
@@ -225,16 +233,21 @@ pub struct AudioContext {
     capturer: *mut capi::OhAudioCapturer,
     renderer: *mut capi::OhAudioRenderer,
     userdata: *mut c_void,
+    session_manager: *mut capi::OHAudioSessionManager,
 }
 
 impl Drop for AudioContext {
     fn drop(&mut self) {
         if !self.capturer.is_null() || !self.renderer.is_null() {
-            self.stop();
+            self.destroy();
         }
         if !self.builder.is_null() {
             call_capi_nocheck!(OH_AudioStreamBuilder_Destroy(self.builder));
             self.builder = ptr::null_mut();
+        }
+        if !self.session_manager.is_null() {
+            self.deactivate_audio_session();
+            self.session_manager = ptr::null_mut();
         }
     }
 }
@@ -281,7 +294,11 @@ impl AudioContext {
         ))
     }
 
-    fn create_renderer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
+    fn create_renderer(
+        &mut self,
+        cb: AudioProcessCb,
+        scene: capi::OhAudioScene,
+    ) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioRendererCallbacks::default();
         if let AudioProcessCb::RendererCb(data_cb, interrupt_cb) = cb {
             cbs.oh_audio_renderer_on_write_data = data_cb;
@@ -292,13 +309,22 @@ impl AudioContext {
             cbs,
             self.userdata
         ))?;
+        call_capi!(OH_AudioStreamBuilder_SetRendererInfo(self.builder, scene))?;
         call_capi!(OH_AudioStreamBuilder_GenerateRenderer(
             self.builder,
             &mut self.renderer
+        ))?;
+        call_capi!(OH_AudioRenderer_SetEffectMode(
+            self.renderer,
+            capi::EFFECT_DEFAULT
         ))
     }
 
-    fn create_capturer(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
+    fn create_capturer(
+        &mut self,
+        cb: AudioProcessCb,
+        scene: capi::OhAudioScene,
+    ) -> Result<(), OAErr> {
         let mut cbs = capi::OhAudioCapturerCallbacks::default();
         if let AudioProcessCb::CapturerCb(data_cb, interrupt_cb) = cb {
             cbs.oh_audio_capturer_on_read_data = data_cb;
@@ -309,20 +335,21 @@ impl AudioContext {
             cbs,
             self.userdata
         ))?;
-        call_capi!(OH_AudioStreamBuilder_SetCapturerInfo(
-            self.builder,
-            capi::OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATION
-        ))?;
+        call_capi!(OH_AudioStreamBuilder_SetCapturerInfo(self.builder, scene))?;
         call_capi!(OH_AudioStreamBuilder_GenerateCapturer(
             self.builder,
             &mut self.capturer
         ))
     }
 
-    fn create_processor(&mut self, cb: AudioProcessCb) -> Result<(), OAErr> {
+    fn create_processor(
+        &mut self,
+        cb: AudioProcessCb,
+        scene: capi::OhAudioScene,
+    ) -> Result<(), OAErr> {
         match self.stream_type {
-            AudioStreamType::Capturer => self.create_capturer(cb),
-            AudioStreamType::Render => self.create_renderer(cb),
+            AudioStreamType::Capturer => self.create_capturer(cb, scene),
+            AudioStreamType::Render => self.create_renderer(cb, scene),
         }
     }
 
@@ -346,6 +373,7 @@ impl AudioContext {
             capturer: ptr::null_mut(),
             renderer: ptr::null_mut(),
             userdata: std::ptr::null_mut::<c_void>(),
+            session_manager: ptr::null_mut(),
         }
     }
 
@@ -354,6 +382,7 @@ impl AudioContext {
         size: u8,
         rate: u32,
         channels: u8,
+        scene: capi::OhAudioScene,
         cb: AudioProcessCb,
         userdata: *mut c_void,
     ) -> Result<(), OAErr> {
@@ -365,7 +394,7 @@ impl AudioContext {
         if capi::OH_AUDIO_STREAM_TYPE_AUDIOSTREAM_TYPE_RERNDERER == self.stream_type.into() {
             self.set_frame_size(rate as i32 / RENDER_CB_FREQUENCY)?;
         }
-        self.create_processor(cb)
+        self.create_processor(cb, scene)
     }
 
     pub fn start(&self) -> Result<(), OAErr> {
@@ -375,7 +404,18 @@ impl AudioContext {
         }
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
+        match self.stream_type {
+            AudioStreamType::Capturer => {
+                call_capi_nocheck!(OH_AudioCapturer_Stop(self.capturer));
+            }
+            AudioStreamType::Render => {
+                call_capi_nocheck!(OH_AudioRenderer_Stop(self.renderer));
+            }
+        }
+    }
+
+    pub fn destroy(&mut self) {
         match self.stream_type {
             AudioStreamType::Capturer => {
                 call_capi_nocheck!(OH_AudioCapturer_Stop(self.capturer));
@@ -398,12 +438,38 @@ impl AudioContext {
         let mut other = AudioSpec::default();
         other
             .set(size, rate, channels)
-            .is_ok_and(|_| (self.spec == other))
+            .is_ok_and(|_| self.spec == other)
+    }
+
+    pub fn activate_audio_session(
+        &mut self,
+        mode: capi::OHAudioSessionConcurrencyMode,
+    ) -> Result<(), OAErr> {
+        if self.session_manager.is_null() {
+            call_capi!(OH_AudioManager_GetAudioSessionManager(
+                &mut self.session_manager
+            ))?;
+        }
+        let strategy = capi::OHAudioSessionStrategy { mode };
+        call_capi!(OH_AudioSessionManager_ActivateAudioSession(
+            self.session_manager,
+            &strategy
+        ))
+    }
+
+    pub fn deactivate_audio_session(&self) {
+        // Deactivates the current audio session via the OH AudioSessionManager.
+        // No null-check is required for `self.session_manager` here, as the underlying
+        // HM implementation of `OH_AudioSessionManager_DeactivateAudioSession` already
+        // performs input validation and null-pointer checks internally.
+        call_capi_nocheck!(OH_AudioSessionManager_DeactivateAudioSession(
+            self.session_manager
+        ));
     }
 }
 
 // From here, the code is related to ohaudio volume.
-static OH_VOLUME_ADAPTER: Lazy<RwLock<OhVolume>> = Lazy::new(|| RwLock::new(OhVolume::new()));
+static OH_VOLUME_ADAPTER: Lazy<OhVolume> = Lazy::new(OhVolume::new);
 
 pub trait GuestVolumeNotifier: Send + Sync {
     fn notify(&self, vol: u32);
@@ -411,83 +477,105 @@ pub trait GuestVolumeNotifier: Send + Sync {
 
 struct OhVolume {
     capi: Arc<VolumeFuncTable>,
-    notifiers: Vec<Arc<dyn GuestVolumeNotifier>>,
+    notifiers: RwLock<Vec<Arc<dyn GuestVolumeNotifier>>>,
 }
 
 impl OhVolume {
     fn new() -> Self {
         let capi = hwf_adapter_volume_api();
-        // SAFETY: We call related API sequentially for specified ctx.
-        unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
+        // SAFETY:
+        // - `register_volume_change` is a valid function pointer loaded from the dynamic library.
+        // - We call related API sequentially for specified ctx.
+        let ret = unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
+        if ret != 0 {
+            hisysevent::STRATOVIRT_SET_VOLUME_CB_FAILED(-ret);
+            error!("register_volume_change failed, ret is {}", -ret);
+        }
         Self {
             capi,
-            notifiers: Vec::new(),
+            notifiers: RwLock::new(Vec::new()),
         }
     }
 
     fn get_ohos_volume(&self) -> u32 {
-        // SAFETY: We call related API sequentially for specified ctx.
-        unsafe { (self.capi.get_volume)() as u32 }
+        // SAFETY:
+        // - `get_volume` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
+        let ret = unsafe { (self.capi.get_volume)() };
+        if ret < 0 {
+            hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
+            error!("get_ohos_volume failed, ret is {}", -ret);
+            return 0;
+        }
+        ret as u32
     }
 
     fn get_max_volume(&self) -> u32 {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY:
+        // - `get_max_volume` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
         unsafe { (self.capi.get_max_volume)() as u32 }
     }
 
     fn get_min_volume(&self) -> u32 {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY:
+        // - `get_min_volume` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
         unsafe { (self.capi.get_min_volume)() as u32 }
     }
 
-    fn set_ohos_volume(&self, volume: i32) {
-        // SAFETY: We call related API sequentially for specified ctx.
-        unsafe { (self.capi.set_volume)(volume) };
+    fn set_ohos_volume(&self, volume: i32) -> i32 {
+        // SAFETY:
+        // - `set_ohos_volume` is a valid function pointer loaded from the dynamic library.
+        // - `set_ohos_volume` operates only on the audio context owned by `self`, and does not access or
+        //   retain references to Rust-managed memory across the FFI boundary.
+        // - Calls are made sequentially for this `ctx`, ensuring no concurrent mutation or aliasing
+        //   of underlying state occurs.
+        let ret = unsafe { (self.capi.set_volume)(volume) };
+        if ret != 0 {
+            hisysevent::STRATOVIRT_SET_VOLUME_FAILED(-ret);
+            error!("set_ohos_volume failed, ret is {}", -ret);
+        }
+        ret
     }
 
     fn notify_volume_change(&self, volume: i32) {
-        for notifier in self.notifiers.iter() {
+        for notifier in self.notifiers.read().unwrap().iter() {
             notifier.notify(volume as u32);
         }
     }
 
-    fn register_guest_notifier(&mut self, notifier: Arc<dyn GuestVolumeNotifier>) {
-        self.notifiers.push(notifier);
+    fn register_guest_notifier(&self, notifier: Arc<dyn GuestVolumeNotifier>) {
+        self.notifiers.write().unwrap().push(notifier);
     }
 }
 
 // SAFETY: use RW lock to ensure the security of resources.
 unsafe extern "C" fn on_ohos_volume_changed(volume: i32) {
-    OH_VOLUME_ADAPTER
-        .read()
-        .unwrap()
-        .notify_volume_change(volume);
+    OH_VOLUME_ADAPTER.notify_volume_change(volume);
 }
 
 pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) {
-    OH_VOLUME_ADAPTER
-        .write()
-        .unwrap()
-        .register_guest_notifier(notifier);
+    OH_VOLUME_ADAPTER.register_guest_notifier(notifier);
 }
 
 pub fn get_ohos_volume_max() -> u32 {
-    OH_VOLUME_ADAPTER.read().unwrap().get_max_volume()
+    OH_VOLUME_ADAPTER.get_max_volume()
 }
 
 pub fn get_ohos_volume_min() -> u32 {
-    OH_VOLUME_ADAPTER.read().unwrap().get_min_volume()
+    OH_VOLUME_ADAPTER.get_min_volume()
 }
 
 pub fn get_ohos_volume() -> u32 {
-    OH_VOLUME_ADAPTER.read().unwrap().get_ohos_volume()
+    OH_VOLUME_ADAPTER.get_ohos_volume()
 }
 
-pub fn set_ohos_volume(vol: u32) {
-    OH_VOLUME_ADAPTER
-        .read()
-        .unwrap()
-        .set_ohos_volume(vol as i32);
+pub fn set_ohos_volume(vol: u32) -> i32 {
+    OH_VOLUME_ADAPTER.set_ohos_volume(vol as i32)
 }
 
 #[cfg(test)]
