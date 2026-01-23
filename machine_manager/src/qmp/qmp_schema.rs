@@ -1886,7 +1886,8 @@ define_qmp_event_enum!(
     DeviceDeleted("DEVICE_DELETED", DeviceDeleted),
     BalloonChanged("BALLOON_CHANGED", BalloonInfo),
     UsbHostAddRes("USB_HOST_ADD_RES", UsbHostAddRes),
-    AudioChanged("AUDIO_CHANGED", AudioState)
+    AudioChanged("AUDIO_CHANGED", AudioState),
+    VmNotifyEvent("VM_NOTIFY_EVENT", VmNotifyEvent)
 );
 
 /// Shutdown
@@ -2125,6 +2126,33 @@ generate_command_impl!(query_workloads, Empty);
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DetectSilentAudio {}
+
+/// VmNotifyEvent
+///
+/// Emitted when a virtual machine notify message needs to be sent.
+///
+/// # Examples
+///
+/// ```text
+/// <- { "event": "VM_NOTIFY_EVENT",
+///      "data": { "class": 0, "type": 0, "code": 0, "message": 0 },
+///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct VmNotifyEvent {
+    #[serde(rename = "class")]
+    pub klass: u32,
+    #[serde(rename = "type")]
+    pub type_t: u32,
+    pub code: u32,
+    pub message: Option<String>,
+}
+
+// VmNotifyEvent klass
+pub const DEVICE_CLASS_ID: u32 = 1;
+// types for DEVICE_CLASS_ID
+pub const PVPANIC_TYPE: u32 = 3;
 
 #[cfg(test)]
 mod tests {

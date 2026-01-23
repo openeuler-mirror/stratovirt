@@ -663,6 +663,7 @@ Now StratoVirt supports these events:
 - `DEVICE_DELETED`: Emitted whenever the device removal completion is acknowledged by the guest.
 - `BALLOON_CHANGED`: Emitted when the virtual machine changes the actual BALLOON level.
 - `AUDIO_CHANGED`: Emitted when scream audio state changed.
+- `VM_NOTIFY_EVENT`: Emitted when a virtual machine notify message needs to be sent.
 
 ## Flow control
 
