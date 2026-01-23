@@ -36,7 +36,12 @@ use crate::pci::config::{
 use crate::pci::{le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState};
 use crate::{convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
 use address_space::{AddressAttr, AddressSpace, GuestAddress, Region, RegionOps};
-use machine_manager::config::{get_pci_df, valid_id};
+use machine_manager::{
+    config::{get_pci_df, valid_id},
+    event,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, PVPANIC_TYPE},
+};
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
 use util::gen_base_func;
@@ -197,6 +202,19 @@ impl PvPanicState {
             && (self.supported_features & PVPANIC_PANICKED) == PVPANIC_PANICKED
         {
             hisysevent::STRATOVIRT_PVPANIC("PANICKED".to_string());
+
+            if QmpChannel::is_connected() {
+                let panicked_msg = VmNotifyEvent {
+                    klass: DEVICE_CLASS_ID,
+                    type_t: PVPANIC_TYPE,
+                    code: PVPANIC_PANICKED as u32,
+                    message: None,
+                };
+                event!(VmNotifyEvent; panicked_msg);
+            } else {
+                debug!("Qmp channel is not connected while sending guest panicked message");
+            }
+
             info!("pvpanic: panicked event");
         }
 
@@ -204,6 +222,19 @@ impl PvPanicState {
             && (self.supported_features & PVPANIC_CRASHLOADED) == PVPANIC_CRASHLOADED
         {
             hisysevent::STRATOVIRT_PVPANIC("CRASHLOADED".to_string());
+
+            if QmpChannel::is_connected() {
+                let crashloaded_msg = VmNotifyEvent {
+                    klass: DEVICE_CLASS_ID,
+                    type_t: PVPANIC_TYPE,
+                    code: PVPANIC_CRASHLOADED as u32,
+                    message: None,
+                };
+                event!(VmNotifyEvent; crashloaded_msg);
+            } else {
+                debug!("Qmp channel is not connected while sending guest crashloaded message");
+            }
+
             info!("pvpanic: crashloaded event");
         }
 
