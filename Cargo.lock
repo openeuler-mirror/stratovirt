@@ -401,6 +401,7 @@ dependencies = [
  "migration_derive",
  "once_cell",
  "rand",
+ "regex",
  "rusb",
  "serde",
  "serde_json",
