@@ -380,13 +380,46 @@ impl PvPanicState {
     pub fn get_state(&self) -> PvPanicDevState {
         let pvpanic_state = PvPanicDevState {
             supported_features: self.supported_features,
+            guest_physical_address: self.guest_physical_address.0,
+            dump_folder_path: self.dump_folder_path.clone(),
+            dump_file_path: self
+                .dump_file_path
+                .is_some()
+                .then(|| self.dump_file_path.as_ref().unwrap().clone()),
+            current_dump_file_size: self.current_dump_file_size,
+            file_size_limit_violation: self.file_size_limit_violation.into(),
+            sys_mem_read_error: self.sys_mem_read_error.into(),
         };
 
         pvpanic_state
     }
 
-    fn set_state(&mut self, state: &PvPanicDevState) {
-        self.supported_features = state.supported_features;
+    pub fn set_state(&mut self, pvpanic_dev_state: &PvPanicDevState) {
+        self.supported_features = pvpanic_dev_state.supported_features;
+        self.guest_physical_address = GuestAddress(pvpanic_dev_state.guest_physical_address);
+
+        // set dump folder path
+        self.dump_folder_path = pvpanic_dev_state.dump_folder_path.clone();
+
+        // set dump file path, and open the file if config says so
+        match &pvpanic_dev_state.dump_file_path {
+            Some(path) => {
+                self.dump_file_path = Some(path.clone());
+                self.dump_file = File::open(path)
+                    .inspect_err(|e| {
+                        error!("Failed to open file {}: {:?}", path, e);
+                    })
+                    .ok();
+            }
+            None => {
+                self.dump_file_path = None;
+                self.dump_file = None;
+            }
+        }
+
+        self.current_dump_file_size = pvpanic_dev_state.current_dump_file_size;
+        self.file_size_limit_violation = matches!(pvpanic_dev_state.file_size_limit_violation, 1);
+        self.sys_mem_read_error = matches!(pvpanic_dev_state.sys_mem_read_error, 1);
     }
 }
 
@@ -398,9 +431,15 @@ struct PvPanicPciDevState {
     dev_state: PvPanicDevState,
 }
 
-#[derive(Copy, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct PvPanicDevState {
     supported_features: u64,
+    pub guest_physical_address: u64,
+    pub dump_folder_path: String,
+    pub dump_file_path: Option<String>,
+    pub current_dump_file_size: u64,
+    pub file_size_limit_violation: u8,
+    pub sys_mem_read_error: u8,
 }
 
 pub struct PvPanicPci {
