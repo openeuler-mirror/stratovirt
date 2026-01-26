@@ -72,6 +72,47 @@ impl Into<u32> for OhCamStatus {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum OhCamErrorCode {
+    Success,
+    NoSystemAppPermission,
+    ParameterError,
+    InvalidArgument,
+    OperationNotAllowed,
+    SessionNotConfig,
+    SessionNotRunning,
+    SessionConfigLocked,
+    DeviceSettingLocked,
+    ConflictCamera,
+    DeviceDisabled,
+    DevicePreempted,
+    UnresolvedConflictsBetweenStreams,
+    ServiceFatlError,
+    Unknown,
+}
+
+impl From<i32> for OhCamErrorCode {
+    fn from(val: i32) -> OhCamErrorCode {
+        match val {
+            0 => OhCamErrorCode::Success,
+            202 => OhCamErrorCode::NoSystemAppPermission,
+            401 => OhCamErrorCode::ParameterError,
+            7400101 => OhCamErrorCode::InvalidArgument,
+            7400102 => OhCamErrorCode::OperationNotAllowed,
+            7400103 => OhCamErrorCode::SessionNotConfig,
+            7400104 => OhCamErrorCode::SessionNotRunning,
+            7400105 => OhCamErrorCode::SessionConfigLocked,
+            7400106 => OhCamErrorCode::DeviceSettingLocked,
+            7400107 => OhCamErrorCode::ConflictCamera,
+            7400108 => OhCamErrorCode::DeviceDisabled,
+            7400109 => OhCamErrorCode::DevicePreempted,
+            7400110 => OhCamErrorCode::UnresolvedConflictsBetweenStreams,
+            7400201 => OhCamErrorCode::ServiceFatlError,
+            _ => OhCamErrorCode::Unknown,
+        }
+    }
+}
+
 #[derive(Default)]
 struct OhCamCallBack {
     /// Callback to used to notify when data is coming.
@@ -155,6 +196,21 @@ impl OhCamCallBack {
             send_ohcam_status_msg(&self.camid, OhCamStatus::Preempted);
         } else if let Some(avail_cb) = &self.avail_cb {
             avail_cb();
+        }
+    }
+
+    fn on_error(&mut self, error_type: i32) {
+        let error_code = OhCamErrorCode::from(error_type);
+        if error_code == OhCamErrorCode::DevicePreempted {
+            self.avail = false;
+        }
+
+        if !self.owned {
+            return;
+        }
+
+        if OhCamErrorCode::from(error_type) == OhCamErrorCode::DevicePreempted {
+            send_ohcam_status_msg(&self.camid, OhCamStatus::Preempted);
         }
     }
 
@@ -336,9 +392,9 @@ impl CameraBackend for OhCameraBackend {
         if self.tokenid != 0 {
             bound_tokenid(self.tokenid)?;
         }
-        if let Err(code) = self
-            .ctx
-            .start_stream(on_buffer_available, on_broken, on_status_avail)
+        if let Err(code) =
+            self.ctx
+                .start_stream(on_buffer_available, on_broken, on_status_avail, on_error)
         {
             hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
             send_ohcam_status_msg(&self.camid, OhCamStatus::StartFailed);
@@ -713,5 +769,16 @@ unsafe extern "C" fn on_status_avail(avail: bool, camid: *const u8) {
     });
     if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&cam) {
         cb.avail(avail);
+    }
+}
+
+// SAFETY: use RW lock to ensure the security of resources.
+unsafe extern "C" fn on_error(error_type: i32, camid: *const u8) {
+    let cam = cstr_to_string(camid).unwrap_or_else(|e| {
+        error!("{e}");
+        "".to_string()
+    });
+    if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&cam) {
+        cb.on_error(error_type);
     }
 }
