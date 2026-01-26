@@ -61,6 +61,7 @@ pub enum FmtType {
     Rgb565,
     Mjpg,
     Nv12,
+    Nv21,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +70,12 @@ pub struct CameraFrame {
     pub height: u32,
     pub index: u8,
     pub interval: u32,
+}
+
+impl PartialEq for CameraFrame {
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width && self.height == other.height && self.interval == other.interval
+    }
 }
 
 #[derive(Clone)]

@@ -445,6 +445,7 @@ fn cam_fmt_to_v4l2(t: &FmtType) -> u32 {
         FmtType::Rgb565 => PIXFMT_RGB565,
         FmtType::Mjpg => PIXFMT_MJPG,
         FmtType::Nv12 => PIXFMT_NV12,
+        FmtType::Nv21 => PIXFMT_NV12,
     }
 }
 
