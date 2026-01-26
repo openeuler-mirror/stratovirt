@@ -36,6 +36,26 @@ pub const CAMERA_FORMAT_MJPEG: i32 = 2000;
 const CAMERA_ERRCODE_NULL_CTX: i32 = 1;
 const CAMERA_ERRCODE_FAILED_GET_CAMERA: i32 = 4;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CamConnectionType {
+    BuiltIn,
+    UsbPlugin,
+    Remote,
+}
+
+impl TryFrom<i32> for CamConnectionType {
+    type Error = &'static str;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(CamConnectionType::BuiltIn),
+            1 => Ok(CamConnectionType::UsbPlugin),
+            2 => Ok(CamConnectionType::Remote),
+            _ => Err("Unknown camera connection type"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct OhCamera {
     ctx: *mut OhCameraCtx,
@@ -50,7 +70,7 @@ impl Drop for OhCamera {
 }
 
 impl OhCamera {
-    pub fn new(id: String) -> Result<(OhCamera, i32), i32> {
+    pub fn new(id: String) -> Result<(OhCamera, i32, CamConnectionType, Option<i32>), i32> {
         let capi = hwf_adapter_camera_api();
         // SAFETY: We call related API sequentially for specified ctx.
         let mut ctx = unsafe { (capi.create_ctx)() };
@@ -66,13 +86,15 @@ impl OhCamera {
             }
         };
         let fmt_cnt;
+        let connection_type;
+        let mut orientation = None;
         // SAFETY: We call related API sequentially for specified ctx.
         unsafe {
-            let n = (capi.init_camera)(ctx, id_c.as_ptr());
-            if n < 0 {
+            let mut ret = (capi.init_camera)(ctx, id_c.as_ptr());
+            if ret < 0 {
                 (capi.destroy_ctx)(ptr::addr_of_mut!(ctx));
                 error!("OH Camera: failed to init cameras");
-                return Err(-n);
+                return Err(-ret);
             }
 
             fmt_cnt = (capi.init_profiles)(ctx);
@@ -81,12 +103,26 @@ impl OhCamera {
                 error!("OH Camera: failed to init profiles");
                 return Err(-fmt_cnt);
             }
+
+            ret = (capi.get_connection_type)(ctx);
+            connection_type = match CamConnectionType::try_from(ret) {
+                Ok(v) => v,
+                Err(e) => {
+                    (capi.destroy_ctx)(ptr::addr_of_mut!(ctx));
+                    error!("OH Camera: {:?}, type: {}", e, ret);
+                    return Err(ret);
+                }
+            };
+
+            if connection_type == CamConnectionType::BuiltIn {
+                orientation = Some((capi.get_orientation)(ctx));
+            }
         }
         if fmt_cnt > i32::from(u8::MAX) {
             error!("Invalid format counts: {fmt_cnt}");
             return Err(CAMERA_ERRCODE_FAILED_GET_CAMERA);
         }
-        Ok((Self { ctx, capi }, fmt_cnt))
+        Ok((Self { ctx, capi }, fmt_cnt, connection_type, orientation))
     }
 
     pub fn release_camera(&self) {

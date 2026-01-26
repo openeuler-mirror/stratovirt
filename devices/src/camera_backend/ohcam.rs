@@ -293,14 +293,35 @@ impl OhCameraAsyncScope {
 #[derive(Clone)]
 struct OhCameraRotate {
     check_rotate: bool,
+    cam_orientation: Option<Rotation>,
     rotate_buffer: Vec<u8>,
     rotate_enabled: bool,
 }
 
 impl OhCameraRotate {
-    fn new(check_rotate: bool) -> Self {
+    fn new(connection_type: CamConnectionType, orientation: Option<i32>) -> Self {
+        let mut check_rotate = false;
+        let mut cam_orientation = None;
+
+        if let Some(value) = orientation {
+            match value {
+                0 => cam_orientation = Some(Rotation::Rotation0),
+                90 => cam_orientation = Some(Rotation::Rotation90),
+                180 => cam_orientation = Some(Rotation::Rotation180),
+                270 => cam_orientation = Some(Rotation::Rotation270),
+                _ => {
+                    error!("OH Camera: invalid camera orientation value: {}", value);
+                }
+            }
+        }
+
+        if connection_type == CamConnectionType::BuiltIn && cam_orientation.is_some() {
+            check_rotate = true;
+        }
+
         Self {
             check_rotate,
+            cam_orientation,
             rotate_buffer: Vec::new(),
             rotate_enabled: false,
         }
@@ -356,7 +377,8 @@ impl Drop for OhCameraBackend {
 
 impl OhCameraBackend {
     pub fn new(id: String, cam_name: String, tokenid: u64) -> Result<Self> {
-        let (ctx, profile_cnt) = match OhCamera::new(cam_name.clone()) {
+        let (ctx, profile_cnt, connection_type, orientation) = match OhCamera::new(cam_name.clone())
+        {
             Ok(v) => v,
             Err(code) => {
                 hisysevent::STRATOVIRT_CAMERA_INIT_FAILED(code);
@@ -364,8 +386,6 @@ impl OhCameraBackend {
             }
         };
 
-        // only check rotation for the camera on board
-        let check_rotate = &cam_name == "device/0";
         Ok(OhCameraBackend {
             id,
             camid: cam_name,
@@ -383,7 +403,7 @@ impl OhCameraBackend {
             async_scope: Box::<OhCameraAsyncScope>::default(),
             tokenid,
             fmt: None,
-            camera_rotate: OhCameraRotate::new(check_rotate),
+            camera_rotate: OhCameraRotate::new(connection_type, orientation),
         })
     }
 }
@@ -681,18 +701,17 @@ impl OhCameraBackend {
         }
 
         if let Some(rotation) = get_rotation() {
-            match rotation {
-                Rotation::Rotation0 => self.rotate_frame_by_angle(src, RotationMode::Rotate270)?,
-                Rotation::Rotation90 => self.rotate_frame_by_angle(src, RotationMode::Rotate180)?,
-                Rotation::Rotation180 => (),
-                Rotation::Rotation270 => (),
-            }
+            self.rotate_frame_by_angle(src, self.camera_rotate.cam_orientation.unwrap() - rotation)?
         }
 
         Ok(())
     }
 
-    fn rotate_frame_by_angle(&mut self, src: u64, rotation: RotationMode) -> Result<()> {
+    fn rotate_frame_by_angle(&mut self, src: u64, rotation: Rotation) -> Result<()> {
+        if rotation == Rotation::Rotation0 {
+            return Ok(());
+        }
+
         let fmt = self.fmt.as_ref().unwrap();
         let width = fmt.width as i32;
         let height = fmt.height as i32;
@@ -737,13 +756,7 @@ impl OhCameraBackend {
         Ok(())
     }
 
-    fn rotate_nv(
-        &mut self,
-        src: u64,
-        width: i32,
-        height: i32,
-        rotation: RotationMode,
-    ) -> Result<()> {
+    fn rotate_nv(&mut self, src: u64, width: i32, height: i32, rotation: Rotation) -> Result<()> {
         self.check_rotate_frame(width, height)?;
 
         let half_height = height >> 1;
@@ -755,7 +768,7 @@ impl OhCameraBackend {
         let u_plane = y_plane + y_size;
         let v_plane = u_plane + u_size;
         let (i420_stride_y, i420_stride_u, i420_stride_v) = match rotation {
-            RotationMode::Rotate90 | RotationMode::Rotate270 => (height, half_height, half_height),
+            Rotation::Rotation90 | Rotation::Rotation270 => (height, half_height, half_height),
             _ => (width, half_width, half_width),
         };
 
@@ -775,13 +788,13 @@ impl OhCameraBackend {
             i420_stride_v,
             width,
             height,
-            rotation.into(),
+            rotation.to_degree(),
         );
         if ret < 0 {
             bail!("Failed to rotate nv to i420: {}", ret);
         }
 
-        if rotation == RotationMode::Rotate270 {
+        if rotation == Rotation::Rotation270 || rotation == Rotation::Rotation90 {
             let scale_src = v_plane + v_size;
             self.scale_i420(width, height, y_plane, u_plane, v_plane, scale_src)?;
         }
@@ -797,13 +810,7 @@ impl OhCameraBackend {
         Ok(())
     }
 
-    fn rotate_yuy2(
-        &mut self,
-        src: u64,
-        width: i32,
-        height: i32,
-        rotation: RotationMode,
-    ) -> Result<()> {
+    fn rotate_yuy2(&mut self, src: u64, width: i32, height: i32, rotation: Rotation) -> Result<()> {
         self.check_rotate_frame(width, height)?;
 
         let half_height = height >> 1;
@@ -836,7 +843,7 @@ impl OhCameraBackend {
         let rotated_v_plane = rotated_u_plane + u_size;
 
         let (dst_stride_y, dst_stride_u, dst_stride_v) = match rotation {
-            RotationMode::Rotate90 | RotationMode::Rotate270 => (height, half_height, half_height),
+            Rotation::Rotation90 | Rotation::Rotation270 => (height, half_height, half_height),
             _ => (width, half_width, half_width),
         };
 
@@ -855,13 +862,13 @@ impl OhCameraBackend {
             dst_stride_v,
             width,
             height,
-            rotation.into(),
+            rotation.to_degree(),
         );
         if ret < 0 {
             bail!("Failed to rotate to i420: {}", ret);
         }
 
-        if rotation == RotationMode::Rotate270 {
+        if rotation == Rotation::Rotation270 || rotation == Rotation::Rotation90 {
             let scale_src = y_plane;
             self.scale_i420(
                 width,
