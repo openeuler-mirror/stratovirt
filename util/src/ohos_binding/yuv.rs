@@ -228,8 +228,28 @@ impl OhYuvApi {
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - src_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * height
+/// - src_vu should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_vu * height / 2
+/// - dst_stride_y should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_y * height or dst_stride_y * width according to
+///   the rotation degree indicated by mode.
+/// - dst_u should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_u * height / 4 or dst_stride_u * width / 4
+///   according to the rotation degree indicated by mode.
+/// - dst_v should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_v * height / 4 or dst_stride_v * width / 4
+///   according to the rotation degree indicated by mode.
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn nv12_to_i420_rotate(
+pub unsafe fn nv12_to_i420_rotate(
     src_y: u64,
     src_stride_y: i32,
     src_vu: u64,
@@ -244,28 +264,42 @@ pub fn nv12_to_i420_rotate(
     height: i32,
     mode: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.nv12_to_i420_rotate)(
-            src_y as *const u8,
-            src_stride_y,
-            src_vu as *const u8,
-            src_stride_vu,
-            dst_y as *mut u8,
-            dst_stride_y,
-            dst_u as *mut u8,
-            dst_stride_u,
-            dst_v as *mut u8,
-            dst_stride_v,
-            width,
-            height,
-            mode,
-        )
-    }
+    (*LIB_YUV.nv12_to_i420_rotate)(
+        src_y as *const u8,
+        src_stride_y,
+        src_vu as *const u8,
+        src_stride_vu,
+        dst_y as *mut u8,
+        dst_stride_y,
+        dst_u as *mut u8,
+        dst_stride_u,
+        dst_v as *mut u8,
+        dst_stride_v,
+        width,
+        height,
+        mode,
+    )
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - src_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * height
+/// - src_u should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_u * height / 4
+/// - src_v should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_v * height / 4
+/// - dst_y should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_y * height
+/// - dst_vu should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_vu * height / 2
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn i420_to_nv12(
+pub unsafe fn i420_to_nv12(
     src_y: u64,
     src_stride_y: i32,
     src_u: u64,
@@ -279,27 +313,39 @@ pub fn i420_to_nv12(
     width: i32,
     height: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.i420_to_nv12)(
-            src_y as *const u8,
-            src_stride_y,
-            src_u as *const u8,
-            src_stride_u,
-            src_v as *const u8,
-            src_stride_v,
-            dst_y as *mut u8,
-            dst_stride_y,
-            dst_vu as *mut u8,
-            dst_stride_vu,
-            width,
-            height,
-        )
-    }
+    (*LIB_YUV.i420_to_nv12)(
+        src_y as *const u8,
+        src_stride_y,
+        src_u as *const u8,
+        src_stride_u,
+        src_v as *const u8,
+        src_stride_v,
+        dst_y as *mut u8,
+        dst_stride_y,
+        dst_vu as *mut u8,
+        dst_stride_vu,
+        width,
+        height,
+    )
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - src_yuy2 should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_yuy2 * height
+/// - dst_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * height
+/// - dst_u should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_u * height / 4
+/// - dst_v should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_v * height / 4
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn yuy2_to_i420(
+pub unsafe fn yuy2_to_i420(
     src_yuy2: u64,
     src_stride_yuy2: i32,
     dst_y: u64,
@@ -311,25 +357,44 @@ pub fn yuy2_to_i420(
     width: i32,
     height: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.yuy2_to_i420)(
-            src_yuy2 as *const u8,
-            src_stride_yuy2,
-            dst_y as *mut u8,
-            dst_stride_y,
-            dst_u as *mut u8,
-            dst_stride_u,
-            dst_v as *mut u8,
-            dst_stride_v,
-            width,
-            height,
-        )
-    }
+    (*LIB_YUV.yuy2_to_i420)(
+        src_yuy2 as *const u8,
+        src_stride_yuy2,
+        dst_y as *mut u8,
+        dst_stride_y,
+        dst_u as *mut u8,
+        dst_stride_u,
+        dst_v as *mut u8,
+        dst_stride_v,
+        width,
+        height,
+    )
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - src_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * height
+/// - src_u should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_u * height / 4
+/// - src_v should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_v * height / 4
+/// - dst_y should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_y * height or dst_stride_y * width according
+///   to rotation
+/// - dst_u should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_u * height / 4 or dst_stride_u * width / 4
+///   according to rotation
+/// - dst_v should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_v * height / 4 or dst_stride_v * width / 4
+///   according to rotation
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn i420_rotate(
+pub unsafe fn i420_rotate(
     src_y: u64,
     src_stride_y: i32,
     src_u: u64,
@@ -346,30 +411,42 @@ pub fn i420_rotate(
     height: i32,
     rotation: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.i420_rotate)(
-            src_y as *const u8,
-            src_stride_y,
-            src_u as *const u8,
-            src_stride_u,
-            src_v as *const u8,
-            src_stride_v,
-            dst_y as *mut u8,
-            dst_stride_y,
-            dst_u as *mut u8,
-            dst_stride_u,
-            dst_v as *mut u8,
-            dst_stride_v,
-            width,
-            height,
-            rotation,
-        )
-    }
+    (*LIB_YUV.i420_rotate)(
+        src_y as *const u8,
+        src_stride_y,
+        src_u as *const u8,
+        src_stride_u,
+        src_v as *const u8,
+        src_stride_v,
+        dst_y as *mut u8,
+        dst_stride_y,
+        dst_u as *mut u8,
+        dst_stride_u,
+        dst_v as *mut u8,
+        dst_stride_v,
+        width,
+        height,
+        rotation,
+    )
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - src_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * height
+/// - src_u should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_u * height / 4
+/// - src_v should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_v * height / 4
+/// - dst_yuy2 should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_yuy2 * height
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn i420_to_yuy2(
+pub unsafe fn i420_to_yuy2(
     src_y: u64,
     src_stride_y: i32,
     src_u: u64,
@@ -381,25 +458,41 @@ pub fn i420_to_yuy2(
     width: i32,
     height: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.i420_to_yuy2)(
-            src_y as *const u8,
-            src_stride_y,
-            src_u as *const u8,
-            src_stride_u,
-            src_v as *const u8,
-            src_stride_v,
-            dst_yuy2 as *mut u8,
-            dst_stride_yuy2,
-            width,
-            height,
-        )
-    }
+    (*LIB_YUV.i420_to_yuy2)(
+        src_y as *const u8,
+        src_stride_y,
+        src_u as *const u8,
+        src_stride_u,
+        src_v as *const u8,
+        src_stride_v,
+        dst_yuy2 as *mut u8,
+        dst_stride_yuy2,
+        width,
+        height,
+    )
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - src_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * src_height
+/// - src_u should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_u * src_height / 4
+/// - src_v should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_v * src_height / 4
+/// - dst_y should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_y * src_height
+/// - dst_u should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_u * dst_height / 4
+/// - dst_v should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_v * dst_height / 4
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn i420_scale(
+pub unsafe fn i420_scale(
     src_y: u64,
     src_stride_y: i32,
     src_u: u64,
@@ -418,32 +511,44 @@ pub fn i420_scale(
     dst_height: i32,
     filtering: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.i420_scale)(
-            src_y as *const u8,
-            src_stride_y,
-            src_u as *const u8,
-            src_stride_u,
-            src_v as *const u8,
-            src_stride_v,
-            src_width,
-            src_height,
-            dst_y as *mut u8,
-            dst_stride_y,
-            dst_u as *mut u8,
-            dst_stride_u,
-            dst_v as *mut u8,
-            dst_stride_v,
-            dst_width,
-            dst_height,
-            filtering,
-        )
-    }
+    (*LIB_YUV.i420_scale)(
+        src_y as *const u8,
+        src_stride_y,
+        src_u as *const u8,
+        src_stride_u,
+        src_v as *const u8,
+        src_stride_v,
+        src_width,
+        src_height,
+        dst_y as *mut u8,
+        dst_stride_y,
+        dst_u as *mut u8,
+        dst_stride_u,
+        dst_v as *mut u8,
+        dst_stride_v,
+        dst_width,
+        dst_height,
+        filtering,
+    )
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - dst_y should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_y * height
+/// - dst_u should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_u * height / 4
+/// - dst_v should be valid address and the buffer indicated by it should be
+///   equal or greater than dst_stride_v * height / 4
+/// - the rectangle describe by (x, y, width, height) should be within the
+///   dst_stride_y * height.
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn i420_rect(
+pub unsafe fn i420_rect(
     dst_y: u64,
     dst_stride_y: i32,
     dst_u: u64,
@@ -458,28 +563,44 @@ pub fn i420_rect(
     value_u: i32,
     value_v: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.i420_rect)(
-            dst_y as *const u8,
-            dst_stride_y,
-            dst_u as *const u8,
-            dst_stride_u,
-            dst_v as *const u8,
-            dst_stride_v,
-            x,
-            y,
-            width,
-            height,
-            value_y,
-            value_u,
-            value_v,
-        )
-    }
+    (*LIB_YUV.i420_rect)(
+        dst_y as *const u8,
+        dst_stride_y,
+        dst_u as *const u8,
+        dst_stride_u,
+        dst_v as *const u8,
+        dst_stride_v,
+        x,
+        y,
+        width,
+        height,
+        value_y,
+        value_u,
+        value_v,
+    )
 }
 
+/// # Safety
+///
+/// This function is unsafe because we pass memory addresses to C API of libyuv.
+/// The caller must ensure that the buffers are valid.
+///
+/// - src_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * height
+/// - src_u should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_u * height / 4
+/// - src_v should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_v * height / 4
+/// - dst_y should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_y * height
+/// - dst_u should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_u * height / 4
+/// - dst_v should be valid address and the buffer indicated by it should be
+///   equal or greater than src_stride_v * height / 4
+///
+/// Failure to meet these conditions will lead to undefined behavior.
 #[allow(clippy::too_many_arguments)]
-pub fn i420_copy(
+pub unsafe fn i420_copy(
     src_y: u64,
     src_stride_y: i32,
     src_u: u64,
@@ -495,23 +616,20 @@ pub fn i420_copy(
     width: i32,
     height: i32,
 ) -> i32 {
-    // SAFETY: call dll function
-    unsafe {
-        (*LIB_YUV.i420_copy)(
-            src_y as *const u8,
-            src_stride_y,
-            src_u as *const u8,
-            src_stride_u,
-            src_v as *const u8,
-            src_stride_v,
-            dst_y as *mut u8,
-            dst_stride_y,
-            dst_u as *mut u8,
-            dst_stride_u,
-            dst_v as *mut u8,
-            dst_stride_v,
-            width,
-            height,
-        )
-    }
+    (*LIB_YUV.i420_copy)(
+        src_y as *const u8,
+        src_stride_y,
+        src_u as *const u8,
+        src_stride_u,
+        src_v as *const u8,
+        src_stride_v,
+        dst_y as *mut u8,
+        dst_stride_y,
+        dst_u as *mut u8,
+        dst_stride_u,
+        dst_v as *mut u8,
+        dst_stride_v,
+        width,
+        height,
+    )
 }
