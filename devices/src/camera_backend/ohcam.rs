@@ -52,10 +52,11 @@ const FRAME_FORMAT_WHITELIST: [i32; 3] = [
 ];
 const FPS_WHITELIST: [i32; 3] = [30, 15, 10];
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum OhCamStatus {
+    #[default]
     Preempted,
-    StartSuccess,
+    Started,
     StartFailed,
     Release,
 }
@@ -65,7 +66,7 @@ impl Into<u32> for OhCamStatus {
     fn into(self) -> u32 {
         match self {
             OhCamStatus::Preempted => 1,
-            OhCamStatus::StartSuccess => 2,
+            OhCamStatus::Started => 2,
             OhCamStatus::StartFailed => 3,
             OhCamStatus::Release => 4,
         }
@@ -127,6 +128,8 @@ struct OhCamCallBack {
     owned: bool,
     /// Flag for whether to OH camera status available or not.
     avail: bool,
+    /// Record OH camera status.
+    status: OhCamStatus,
     ptr: Option<u64>,
     buffer_size: u64,
 }
@@ -140,6 +143,7 @@ impl OhCamCallBack {
             camid,
             owned: false,
             avail: false,
+            status: OhCamStatus::Release,
             ptr: None,
             buffer_size: 0,
         }
@@ -193,7 +197,7 @@ impl OhCamCallBack {
         }
 
         if !self.avail {
-            send_ohcam_status_msg(&self.camid, OhCamStatus::Preempted);
+            self.send_status(OhCamStatus::Preempted);
         } else if let Some(avail_cb) = &self.avail_cb {
             avail_cb();
         }
@@ -210,26 +214,31 @@ impl OhCamCallBack {
         }
 
         if OhCamErrorCode::from(error_type) == OhCamErrorCode::DevicePreempted {
-            send_ohcam_status_msg(&self.camid, OhCamStatus::Preempted);
+            self.send_status(OhCamStatus::Preempted);
         }
     }
 
     fn get_avail(&self) -> bool {
         self.avail
     }
-}
 
-fn send_ohcam_status_msg(camid: &str, status: OhCamStatus) {
-    if QmpChannel::is_connected() {
-        let success_msg = VmNotifyEvent {
-            klass: DEVICE_CLASS_ID,
-            type_t: CAMERA_TYPE,
-            code: status.into(),
-            message: Some(camid.to_owned()),
-        };
-        event!(VmNotifyEvent; success_msg);
-    } else {
-        warn!("Qmp channel is not connected while sending camera status message");
+    fn send_status(&mut self, status: OhCamStatus) {
+        if self.status == status {
+            return;
+        }
+
+        self.status = status;
+        if QmpChannel::is_connected() {
+            let success_msg = VmNotifyEvent {
+                klass: DEVICE_CLASS_ID,
+                type_t: CAMERA_TYPE,
+                code: status.into(),
+                message: Some(self.camid.to_owned()),
+            };
+            event!(VmNotifyEvent; success_msg);
+        } else {
+            warn!("Qmp channel is not connected while sending camera status message");
+        }
     }
 }
 
@@ -245,6 +254,12 @@ fn ohcam_cb_get_avail(camid: &String) -> Option<bool> {
     }
 
     None
+}
+
+fn ohcam_set_status(camid: &String, status: OhCamStatus) {
+    if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(camid) {
+        cb.send_status(status);
+    }
 }
 
 #[cfg(any(
@@ -397,17 +412,18 @@ impl CameraBackend for OhCameraBackend {
                 .start_stream(on_buffer_available, on_broken, on_status_avail, on_error)
         {
             hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
-            send_ohcam_status_msg(&self.camid, OhCamStatus::StartFailed);
+            ohcam_set_status(&self.camid, OhCamStatus::StartFailed);
             return Err(anyhow!("Failed to start camera stream, code is {code}."));
         }
         self.stream_on = true;
         ohcam_cb_set_owned(&self.camid, true);
-        send_ohcam_status_msg(&self.camid, OhCamStatus::StartSuccess);
+        ohcam_set_status(&self.camid, OhCamStatus::Started);
         Ok(())
     }
 
     fn video_stream_off(&mut self) -> Result<()> {
         if !self.stream_on {
+            ohcam_set_status(&self.camid, OhCamStatus::Release);
             return Ok(());
         }
         self.ctx.stop_stream();
@@ -416,13 +432,13 @@ impl CameraBackend for OhCameraBackend {
             cb.clear_buffer();
         }
         self.stream_on = false;
+        ohcam_set_status(&self.camid, OhCamStatus::Release);
         #[cfg(any(
             feature = "trace_to_logger",
             feature = "trace_to_ftrace",
             all(target_env = "ohos", feature = "trace_to_hitrace")
         ))]
         self.async_scope.stop();
-        send_ohcam_status_msg(&self.camid, OhCamStatus::Release);
         Ok(())
     }
 
@@ -611,26 +627,18 @@ impl CameraBackend for OhCameraBackend {
         }
 
         if paused {
-            // If stream is off, we don't need to set self.paused.
-            // Because it's not required to re-open stream while
-            // vm is resuming.
-            if !self.stream_on {
-                return;
-            }
             self.paused = true;
             self.video_stream_off().unwrap_or_else(|e| {
                 error!("ohcam pause: failed to pause stream {:?}", e);
             });
         } else {
             self.paused = false;
-            self.video_stream_on().unwrap_or_else(|e| {
+            if let Err(e) = self.video_stream_on() {
                 error!("ohcam resume: failed to resume stream {:?}", e);
-                if let Some(avail) = ohcam_cb_get_avail(&self.camid) {
-                    if !avail {
-                        send_ohcam_status_msg(&self.camid, OhCamStatus::Preempted);
-                    }
+                if let Some(false) = ohcam_cb_get_avail(&self.camid) {
+                    ohcam_set_status(&self.camid, OhCamStatus::Preempted);
                 }
-            })
+            }
         }
     }
 }
