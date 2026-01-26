@@ -270,7 +270,7 @@ impl OhCameraBackend {
         let (ctx, profile_cnt) = match OhCamera::new(cam_name.clone()) {
             Ok(v) => v,
             Err(code) => {
-                hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
+                hisysevent::STRATOVIRT_CAMERA_INIT_FAILED(code);
                 return Err(anyhow!("Failed to init OhCamera, code is {code}."));
             }
         };
