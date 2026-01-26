@@ -43,6 +43,7 @@ type OhcamCreateSessionFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamReleaseSessionFn = unsafe extern "C" fn(*mut OhCameraCtx);
 type OhcamInitCameraFn = unsafe extern "C" fn(*mut OhCameraCtx, *const c_char) -> c_int;
 type OhcamGetConnectionTypeFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
+type OhcamGetPositionFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamGetCameraOrientationFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamInitProfilesFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamGetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, *mut c_void) -> c_int;
@@ -65,6 +66,7 @@ pub struct CamFuncTable {
     pub create_session: RawSymbol<OhcamCreateSessionFn>,
     pub release_session: RawSymbol<OhcamReleaseSessionFn>,
     pub init_camera: RawSymbol<OhcamInitCameraFn>,
+    pub get_position: RawSymbol<OhcamGetPositionFn>,
     pub get_connection_type: RawSymbol<OhcamGetConnectionTypeFn>,
     pub get_orientation: RawSymbol<OhcamGetCameraOrientationFn>,
     pub init_profiles: RawSymbol<OhcamInitProfilesFn>,
@@ -85,6 +87,7 @@ impl CamFuncTable {
             create_session: get_libfn!(library, OhcamCreateSessionFn, OhcamCreateSession),
             release_session: get_libfn!(library, OhcamReleaseSessionFn, OhcamReleaseSession),
             init_camera: get_libfn!(library, OhcamInitCameraFn, OhcamInitCamera),
+            get_position: get_libfn!(library, OhcamGetPositionFn, OhcamGetPosition),
             get_connection_type: get_libfn!(
                 library,
                 OhcamGetConnectionTypeFn,

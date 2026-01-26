@@ -56,6 +56,28 @@ impl TryFrom<i32> for CamConnectionType {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CamPosition {
+    Unspecified,
+    Back,
+    Front,
+    FoldInner,
+}
+
+impl TryFrom<i32> for CamPosition {
+    type Error = &'static str;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(CamPosition::Unspecified),
+            1 => Ok(CamPosition::Back),
+            2 => Ok(CamPosition::Front),
+            3 => Ok(CamPosition::FoldInner),
+            _ => Err("Unknown camera position"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct OhCamera {
     ctx: *mut OhCameraCtx,
@@ -70,7 +92,9 @@ impl Drop for OhCamera {
 }
 
 impl OhCamera {
-    pub fn new(id: String) -> Result<(OhCamera, i32, CamConnectionType, Option<i32>), i32> {
+    pub fn new(
+        id: String,
+    ) -> Result<(OhCamera, i32, CamConnectionType, CamPosition, Option<i32>), i32> {
         let capi = hwf_adapter_camera_api();
         // SAFETY: We call related API sequentially for specified ctx.
         let mut ctx = unsafe { (capi.create_ctx)() };
@@ -87,7 +111,9 @@ impl OhCamera {
         };
         let fmt_cnt;
         let connection_type;
+        let mut position = CamPosition::Unspecified;
         let mut orientation = None;
+
         // SAFETY: We call related API sequentially for specified ctx.
         unsafe {
             let mut ret = (capi.init_camera)(ctx, id_c.as_ptr());
@@ -115,6 +141,14 @@ impl OhCamera {
             };
 
             if connection_type == CamConnectionType::BuiltIn {
+                ret = (capi.get_position)(ctx);
+                position = match CamPosition::try_from(ret) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        error!("OH Camera: {:?}, value: {}", e, ret);
+                        CamPosition::Unspecified
+                    }
+                };
                 orientation = Some((capi.get_orientation)(ctx));
             }
         }
@@ -122,7 +156,13 @@ impl OhCamera {
             error!("Invalid format counts: {fmt_cnt}");
             return Err(CAMERA_ERRCODE_FAILED_GET_CAMERA);
         }
-        Ok((Self { ctx, capi }, fmt_cnt, connection_type, orientation))
+        Ok((
+            Self { ctx, capi },
+            fmt_cnt,
+            connection_type,
+            position,
+            orientation,
+        ))
     }
 
     pub fn release_camera(&self) {

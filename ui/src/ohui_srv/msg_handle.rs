@@ -24,7 +24,7 @@ use super::{
     msg::*,
 };
 use crate::{
-    console::{get_active_console, graphic_hardware_ui_info, set_rotation, Rotation},
+    console::{get_active_console, graphic_hardware_ui_info, set_dpy_rotation, Rotation},
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
         release_all_btn, release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED,
@@ -344,7 +344,7 @@ impl OhUiMsgHandler {
             height: wi_v2.height,
         };
         self.handle_windowinfo(&wi);
-        set_rotation(Rotation::try_from(wi_v2.rotation).map_err(|e| anyhow!("{:?}", e))?);
+        set_dpy_rotation(Rotation::try_from(wi_v2.rotation).map_err(|e| anyhow!("{:?}", e))?);
         Ok(())
     }
 

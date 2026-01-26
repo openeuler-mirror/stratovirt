@@ -13,7 +13,7 @@
 use std::{
     cmp,
     mem::size_of,
-    ops::Sub,
+    ops::{Add, Sub},
     ptr,
     sync::{Arc, Mutex, Weak},
     time::Duration,
@@ -252,6 +252,16 @@ pub enum Rotation {
     Rotation270,
 }
 
+impl Rotation {
+    /// Lookup table for all rotation states in 90-degree steps.
+    const ROTATIONS: [Rotation; 4] = [
+        Rotation::Rotation0,
+        Rotation::Rotation90,
+        Rotation::Rotation180,
+        Rotation::Rotation270,
+    ];
+}
+
 impl TryFrom<u32> for Rotation {
     type Error = &'static str;
 
@@ -271,13 +281,16 @@ impl Sub for Rotation {
 
     fn sub(self, rhs: Self) -> Self::Output {
         let diff = (self as u8 + 4 - rhs as u8) % 4;
-        const ROTATIONS: [Rotation; 4] = [
-            Rotation::Rotation0,
-            Rotation::Rotation90,
-            Rotation::Rotation180,
-            Rotation::Rotation270,
-        ];
-        ROTATIONS[diff as usize]
+        Rotation::ROTATIONS[diff as usize]
+    }
+}
+
+impl Add for Rotation {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let diff = (self as u8 + rhs as u8) % 4;
+        Rotation::ROTATIONS[diff as usize]
     }
 }
 
@@ -404,12 +417,12 @@ pub fn get_run_stage() -> VmRunningStage {
 }
 
 /// set rotation
-pub fn set_rotation(rotation: Rotation) {
+pub fn set_dpy_rotation(rotation: Rotation) {
     DISPLAY_STATE.lock().unwrap().rotation = Some(rotation);
 }
 
 /// get rotation
-pub fn get_rotation() -> Option<Rotation> {
+pub fn get_dpy_rotation() -> Option<Rotation> {
     DISPLAY_STATE.lock().unwrap().rotation
 }
 

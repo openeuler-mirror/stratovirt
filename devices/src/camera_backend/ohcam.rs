@@ -17,7 +17,7 @@ use std::sync::RwLock;
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
 use once_cell::sync::Lazy;
-use ui::console::{get_rotation, Rotation};
+use ui::console::{get_dpy_rotation, Rotation};
 
 use crate::camera_backend::{
     CamBasicFmt, CameraAvailCallback, CameraBackend, CameraBrokenCallback, CameraFormatList,
@@ -291,16 +291,25 @@ impl OhCameraAsyncScope {
 }
 
 #[derive(Clone)]
-struct OhCameraRotate {
-    check_rotate: bool,
+struct OhPhysCamState {
+    /// The physical position where the camera is mounted (e.g., Back, Front, FoldInner)
+    cam_position: CamPosition,
+    /// The actual mounting angle of the physical camera lens
     cam_orientation: Option<Rotation>,
-    rotate_buffer: Vec<u8>,
-    rotate_enabled: bool,
+    /// Whether the camera frame needs to be rotated
+    rotation_required: bool,
+    /// Whether the camera frame rotation is enabled
+    rotation_enabled: bool,
+    rotation_buffer: Vec<u8>,
 }
 
-impl OhCameraRotate {
-    fn new(connection_type: CamConnectionType, orientation: Option<i32>) -> Self {
-        let mut check_rotate = false;
+impl OhPhysCamState {
+    fn new(
+        connection_type: CamConnectionType,
+        position: CamPosition,
+        orientation: Option<i32>,
+    ) -> Self {
+        let mut rotation_required = false;
         let mut cam_orientation = None;
 
         if let Some(value) = orientation {
@@ -316,14 +325,15 @@ impl OhCameraRotate {
         }
 
         if connection_type == CamConnectionType::BuiltIn && cam_orientation.is_some() {
-            check_rotate = true;
+            rotation_required = true;
         }
 
         Self {
-            check_rotate,
+            cam_position: position,
             cam_orientation,
-            rotate_buffer: Vec::new(),
-            rotate_enabled: false,
+            rotation_required,
+            rotation_enabled: false,
+            rotation_buffer: Vec::new(),
         }
     }
 }
@@ -348,7 +358,7 @@ pub struct OhCameraBackend {
     async_scope: Box<OhCameraAsyncScope>,
     tokenid: u64,
     fmt: Option<CamBasicFmt>,
-    camera_rotate: OhCameraRotate,
+    cam_state: OhPhysCamState,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type.
@@ -377,14 +387,14 @@ impl Drop for OhCameraBackend {
 
 impl OhCameraBackend {
     pub fn new(id: String, cam_name: String, tokenid: u64) -> Result<Self> {
-        let (ctx, profile_cnt, connection_type, orientation) = match OhCamera::new(cam_name.clone())
-        {
-            Ok(v) => v,
-            Err(code) => {
-                hisysevent::STRATOVIRT_CAMERA_INIT_FAILED(code);
-                return Err(anyhow!("Failed to init OhCamera, code is {code}."));
-            }
-        };
+        let (ctx, profile_cnt, connection_type, position, orientation) =
+            match OhCamera::new(cam_name.clone()) {
+                Ok(v) => v,
+                Err(code) => {
+                    hisysevent::STRATOVIRT_CAMERA_INIT_FAILED(code);
+                    return Err(anyhow!("Failed to init OhCamera, code is {code}."));
+                }
+            };
 
         Ok(OhCameraBackend {
             id,
@@ -403,7 +413,7 @@ impl OhCameraBackend {
             async_scope: Box::<OhCameraAsyncScope>::default(),
             tokenid,
             fmt: None,
-            camera_rotate: OhCameraRotate::new(connection_type, orientation),
+            cam_state: OhPhysCamState::new(connection_type, position, orientation),
         })
     }
 }
@@ -454,8 +464,8 @@ impl CameraBackend for OhCameraBackend {
             return Err(anyhow!("Failed to start camera stream, code is {code}."));
         }
         self.stream_on = true;
-        if self.camera_rotate.check_rotate {
-            self.camera_rotate.rotate_enabled = true;
+        if self.cam_state.rotation_required {
+            self.cam_state.rotation_enabled = true;
         }
         ohcam_cb_set_owned(&self.camid, true);
         ohcam_set_status(&self.camid, OhCamStatus::Started);
@@ -613,11 +623,11 @@ impl CameraBackend for OhCameraBackend {
             bail!("Invalid frame src_len {}", src_len);
         }
 
-        if frame_offset == 0 && self.camera_rotate.check_rotate && self.camera_rotate.rotate_enabled
+        if frame_offset == 0 && self.cam_state.rotation_required && self.cam_state.rotation_enabled
         {
             if let Err(e) = self.rotate_frame(src.unwrap()) {
                 error!("ohcam: {:?}", e);
-                self.camera_rotate.rotate_enabled = false;
+                self.cam_state.rotation_enabled = false;
             }
         }
 
@@ -700,11 +710,35 @@ impl OhCameraBackend {
             return Ok(());
         }
 
-        if let Some(rotation) = get_rotation() {
-            self.rotate_frame_by_angle(src, self.camera_rotate.cam_orientation.unwrap() - rotation)?
+        if let (Some(dpy_rotation), Some(cam_orientation)) =
+            (get_dpy_rotation(), self.cam_state.cam_orientation)
+        {
+            self.rotate_frame_by_angle(
+                src,
+                self.calc_compensated_angle(dpy_rotation, cam_orientation)?,
+            )?;
         }
 
         Ok(())
+    }
+
+    // Calculates the net rotation angle required to align camera orientation
+    // with display orientation. The logic is based on oh camera mounting:
+    // - Front-facing cameras are mirrored relative to display, so subtract.
+    // - Back-facing cameras align directly, so add.
+    fn calc_compensated_angle(
+        &self,
+        dpy_rotation: Rotation,
+        cam_orientation: Rotation,
+    ) -> Result<Rotation> {
+        match self.cam_state.cam_position {
+            CamPosition::Front => Ok(cam_orientation - dpy_rotation),
+            CamPosition::Back => Ok(cam_orientation + dpy_rotation),
+            _ => bail!(
+                "unsupported camera position: {:?}",
+                self.cam_state.cam_position
+            ),
+        }
     }
 
     fn rotate_frame_by_angle(&mut self, src: u64, rotation: Rotation) -> Result<()> {
@@ -749,8 +783,8 @@ impl OhCameraBackend {
             .checked_mul(3)
             .with_context(|| format!("Invalid width {} or height {}", width, height))?;
 
-        if self.camera_rotate.rotate_buffer.len() < buffer_size {
-            self.camera_rotate.rotate_buffer.resize(buffer_size, 0u8);
+        if self.cam_state.rotation_buffer.len() < buffer_size {
+            self.cam_state.rotation_buffer.resize(buffer_size, 0u8);
         }
 
         Ok(())
@@ -764,7 +798,7 @@ impl OhCameraBackend {
         let y_size = (width * height) as u64;
         let u_size = (half_height * half_width) as u64;
         let v_size = u_size;
-        let y_plane = self.camera_rotate.rotate_buffer.as_mut_ptr() as u64;
+        let y_plane = self.cam_state.rotation_buffer.as_mut_ptr() as u64;
         let u_plane = y_plane + y_size;
         let v_plane = u_plane + u_size;
         let (i420_stride_y, i420_stride_u, i420_stride_v) = match rotation {
@@ -818,7 +852,7 @@ impl OhCameraBackend {
         let y_size = (width * height) as u64;
         let u_size = (half_height * half_width) as u64;
         let v_size = u_size;
-        let y_plane = self.camera_rotate.rotate_buffer.as_mut_ptr() as u64;
+        let y_plane = self.cam_state.rotation_buffer.as_mut_ptr() as u64;
         let u_plane = y_plane + y_size;
         let v_plane = u_plane + u_size;
 
