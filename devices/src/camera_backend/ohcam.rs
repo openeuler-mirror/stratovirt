@@ -809,21 +809,27 @@ impl OhCameraBackend {
         let src_y = src;
         let src_vu = src + y_size;
 
-        let mut ret = nv12_to_i420_rotate(
-            src_y,
-            width,
-            src_vu,
-            width,
-            y_plane,
-            i420_stride_y,
-            u_plane,
-            i420_stride_u,
-            v_plane,
-            i420_stride_v,
-            width,
-            height,
-            rotation.to_degree(),
-        );
+        // SAFETY: we have checked the buffer size indicated by src which must
+        // be correct. The parameters passed to nv12_to_i420_rotate() are carefully
+        // calculated above. And the destination buffer has been checked and resized
+        // if needed in check_rotate_frame().
+        let mut ret = unsafe {
+            nv12_to_i420_rotate(
+                src_y,
+                width,
+                src_vu,
+                width,
+                y_plane,
+                i420_stride_y,
+                u_plane,
+                i420_stride_u,
+                v_plane,
+                i420_stride_v,
+                width,
+                height,
+                rotation.to_degree(),
+            )
+        };
         if ret < 0 {
             bail!("Failed to rotate nv to i420: {}", ret);
         }
@@ -833,10 +839,13 @@ impl OhCameraBackend {
             self.scale_i420(width, height, y_plane, u_plane, v_plane, scale_src)?;
         }
 
-        ret = i420_to_nv12(
-            y_plane, width, u_plane, half_width, v_plane, half_width, src_y, width, src_vu, width,
-            width, height,
-        );
+        // SAFETY: the reason is same as above.
+        ret = unsafe {
+            i420_to_nv12(
+                y_plane, width, u_plane, half_width, v_plane, half_width, src_y, width, src_vu,
+                width, width, height,
+            )
+        };
         if ret < 0 {
             bail!("Failed to transfer from i420 to nv: {}", ret);
         }
@@ -856,18 +865,24 @@ impl OhCameraBackend {
         let u_plane = y_plane + y_size;
         let v_plane = u_plane + u_size;
 
-        let mut ret = yuy2_to_i420(
-            src,
-            width << 1,
-            y_plane,
-            width,
-            u_plane,
-            half_width,
-            v_plane,
-            half_width,
-            width,
-            height,
-        );
+        // SAFETY: we have checked the buffer size indicated by src which must
+        // be correct. The parameters passed to yuy2_to_i420() are carefully
+        // calculated above. And the destination buffer has been checked and resized
+        // if needed in check_rotate_frame().
+        let mut ret = unsafe {
+            yuy2_to_i420(
+                src,
+                width << 1,
+                y_plane,
+                width,
+                u_plane,
+                half_width,
+                v_plane,
+                half_width,
+                width,
+                height,
+            )
+        };
         if ret < 0 {
             bail!("Failed to transfer from yuy2 to i420: {}", ret);
         }
@@ -881,23 +896,26 @@ impl OhCameraBackend {
             _ => (width, half_width, half_width),
         };
 
-        ret = i420_rotate(
-            y_plane,
-            width,
-            u_plane,
-            half_width,
-            v_plane,
-            half_width,
-            rotated_y_plane,
-            dst_stride_y,
-            rotated_u_plane,
-            dst_stride_u,
-            rotated_v_plane,
-            dst_stride_v,
-            width,
-            height,
-            rotation.to_degree(),
-        );
+        // SAFETY: the reason is same as above.
+        ret = unsafe {
+            i420_rotate(
+                y_plane,
+                width,
+                u_plane,
+                half_width,
+                v_plane,
+                half_width,
+                rotated_y_plane,
+                dst_stride_y,
+                rotated_u_plane,
+                dst_stride_u,
+                rotated_v_plane,
+                dst_stride_v,
+                width,
+                height,
+                rotation.to_degree(),
+            )
+        };
         if ret < 0 {
             bail!("Failed to rotate to i420: {}", ret);
         }
@@ -914,18 +932,21 @@ impl OhCameraBackend {
             )?;
         }
 
-        ret = i420_to_yuy2(
-            rotated_y_plane,
-            width,
-            rotated_u_plane,
-            half_width,
-            rotated_v_plane,
-            half_width,
-            src,
-            width << 1,
-            width,
-            height,
-        );
+        // SAFETY: the reason is same as above.
+        ret = unsafe {
+            i420_to_yuy2(
+                rotated_y_plane,
+                width,
+                rotated_u_plane,
+                half_width,
+                rotated_v_plane,
+                half_width,
+                src,
+                width << 1,
+                width,
+                height,
+            )
+        };
         if ret < 0 {
             bail!("Failed to transfer from i420 to yuy2: {}", ret);
         }
@@ -966,34 +987,41 @@ impl OhCameraBackend {
         let scale_v_plane = scale_u_plane + scale_u_plane_size;
 
         // Scales a YUV 4:2:0 image from the src width and height to the dst width and height.
-        let mut ret = i420_scale(
-            y_plane,
-            height,
-            u_plane,
-            half_height,
-            v_plane,
-            half_height,
-            height,
-            width,
-            scale_y_plane,
-            scale_width,
-            scale_u_plane,
-            half_scale_width,
-            scale_v_plane,
-            half_scale_width,
-            scale_width,
-            scale_height,
-            FilterMode::FilterNone.into(),
-        );
+        // SAFETY: we have checked and carefully calculated the parameters and all the buffers
+        // are valid.
+        let mut ret = unsafe {
+            i420_scale(
+                y_plane,
+                height,
+                u_plane,
+                half_height,
+                v_plane,
+                half_height,
+                height,
+                width,
+                scale_y_plane,
+                scale_width,
+                scale_u_plane,
+                half_scale_width,
+                scale_v_plane,
+                half_scale_width,
+                scale_width,
+                scale_height,
+                FilterMode::FilterNone.into(),
+            )
+        };
         if ret < 0 {
             bail!("Failed to scale i420: {}", ret);
         }
 
         // Fill in the I420 data in black
-        ret = i420_rect(
-            y_plane, width, u_plane, half_width, v_plane, half_width, 0, 0, width, height, 0, 128,
-            128,
-        );
+        // SAFETY: the reason is same as above.
+        ret = unsafe {
+            i420_rect(
+                y_plane, width, u_plane, half_width, v_plane, half_width, 0, 0, width, height, 0,
+                128, 128,
+            )
+        };
         if ret < 0 {
             bail!("Failed to fill in I420 data in black: {}", ret);
         }
@@ -1001,22 +1029,26 @@ impl OhCameraBackend {
         let offset = ((width - scale_width) >> 1) & !1;
         let half_offset = offset >> 1;
         // Filling the scaled-down I420 image centred in the source I420
-        ret = i420_copy(
-            scale_y_plane,
-            scale_width,
-            scale_u_plane,
-            half_scale_width,
-            scale_v_plane,
-            half_scale_width,
-            y_plane + (offset as u64),
-            width,
-            u_plane + (half_offset as u64),
-            half_width,
-            v_plane + (half_offset as u64),
-            half_width,
-            scale_width,
-            scale_height,
-        );
+        // SAFETY: the buffers are valid and we have checked all parameters
+        // related to size.
+        ret = unsafe {
+            i420_copy(
+                scale_y_plane,
+                scale_width,
+                scale_u_plane,
+                half_scale_width,
+                scale_v_plane,
+                half_scale_width,
+                y_plane + (offset as u64),
+                width,
+                u_plane + (half_offset as u64),
+                half_width,
+                v_plane + (half_offset as u64),
+                half_width,
+                scale_width,
+                scale_height,
+            )
+        };
         if ret < 0 {
             bail!("Failed to copy I420 data: {}", ret);
         }
