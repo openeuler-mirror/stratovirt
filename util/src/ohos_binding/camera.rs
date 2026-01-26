@@ -19,7 +19,7 @@ use anyhow::{bail, Context, Result};
 use log::error;
 
 use super::hwf_adapter::camera::{
-    BrokenProcessFn, BufferProcessFn, CamFuncTable, OhCameraCtx, ProfileRecorder,
+    AvailCallBackFn, BrokenProcessFn, BufferProcessFn, CamFuncTable, OhCameraCtx, ProfileRecorder,
 };
 use super::hwf_adapter::hwf_adapter_camera_api;
 
@@ -112,6 +112,7 @@ impl OhCamera {
         &self,
         buffer_proc: BufferProcessFn,
         broken_proc: BrokenProcessFn,
+        avail_proc: AvailCallBackFn,
     ) -> Result<(), i32> {
         let mut ret;
         // SAFETY: We call related API sequentially for specified ctx.
@@ -121,7 +122,7 @@ impl OhCamera {
                 error!("OH Camera: failed to create session");
                 return Err(-ret);
             }
-            ret = (self.capi.pre_start)(self.ctx, buffer_proc, broken_proc);
+            ret = (self.capi.pre_start)(self.ctx, buffer_proc, broken_proc, avail_proc);
             if ret != 0 {
                 error!("OH Camera: failed to prestart camera stream");
                 return Err(-ret);

@@ -2152,6 +2152,7 @@ pub struct VmNotifyEvent {
 // VmNotifyEvent klass
 pub const DEVICE_CLASS_ID: u32 = 1;
 // types for DEVICE_CLASS_ID
+pub const CAMERA_TYPE: u32 = 1;
 pub const PVPANIC_TYPE: u32 = 3;
 
 #[cfg(test)]

@@ -15,13 +15,18 @@ use std::ffi::CStr;
 use std::sync::RwLock;
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::error;
+use log::{error, warn};
 use once_cell::sync::Lazy;
 use ui::console::{get_rotation, Rotation};
 
 use crate::camera_backend::{
-    CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
-    CameraNotifyCallback, FmtType,
+    CamBasicFmt, CameraAvailCallback, CameraBackend, CameraBrokenCallback, CameraFormatList,
+    CameraFrame, CameraNotifyCallback, FmtType,
+};
+use machine_manager::{
+    event,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_schema::{VmNotifyEvent, CAMERA_TYPE, DEVICE_CLASS_ID},
 };
 #[cfg(any(
     feature = "trace_to_logger",
@@ -47,17 +52,57 @@ const FRAME_FORMAT_WHITELIST: [i32; 3] = [
 ];
 const FPS_WHITELIST: [i32; 3] = [30, 15, 10];
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum OhCamStatus {
+    Preempted,
+    StartSuccess,
+    StartFailed,
+    Release,
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<u32> for OhCamStatus {
+    fn into(self) -> u32 {
+        match self {
+            OhCamStatus::Preempted => 1,
+            OhCamStatus::StartSuccess => 2,
+            OhCamStatus::StartFailed => 3,
+            OhCamStatus::Release => 4,
+        }
+    }
+}
+
 #[derive(Default)]
 struct OhCamCallBack {
     /// Callback to used to notify when data is coming.
     notify_cb: Option<CameraNotifyCallback>,
     /// Callback to used to notify the broken.
     broken_cb: Option<CameraNotifyCallback>,
+    /// Callback to used to notify when status available or not.
+    avail_cb: Option<CameraAvailCallback>,
+    /// ID of OH camera device.
+    camid: String,
+    /// Flag whether the camera is turned on by ourselves or not.
+    owned: bool,
+    /// Flag for whether to OH camera status available or not.
+    avail: bool,
     ptr: Option<u64>,
     buffer_size: u64,
 }
 
 impl OhCamCallBack {
+    fn new(camid: String) -> Self {
+        OhCamCallBack {
+            notify_cb: None,
+            broken_cb: None,
+            avail_cb: None,
+            camid,
+            owned: false,
+            avail: false,
+            ptr: None,
+            buffer_size: 0,
+        }
+    }
     fn set_buffer(&mut self, addr: u64, s: i32) {
         self.buffer_size = s as u64;
         self.ptr = Some(addr);
@@ -80,6 +125,10 @@ impl OhCamCallBack {
         self.broken_cb = Some(cb);
     }
 
+    fn set_avail_cb(&mut self, cb: CameraAvailCallback) {
+        self.avail_cb = Some(cb);
+    }
+
     fn notify(&self) {
         if let Some(notify_cb) = &self.notify_cb {
             notify_cb();
@@ -91,6 +140,55 @@ impl OhCamCallBack {
             broken_cb();
         }
     }
+
+    fn set_owned(&mut self, owned: bool) {
+        self.owned = owned;
+    }
+
+    fn avail(&mut self, avail: bool) {
+        self.avail = avail;
+        if !self.owned {
+            return;
+        }
+
+        if !self.avail {
+            send_ohcam_status_msg(&self.camid, OhCamStatus::Preempted);
+        } else if let Some(avail_cb) = &self.avail_cb {
+            avail_cb();
+        }
+    }
+
+    fn get_avail(&self) -> bool {
+        self.avail
+    }
+}
+
+fn send_ohcam_status_msg(camid: &str, status: OhCamStatus) {
+    if QmpChannel::is_connected() {
+        let success_msg = VmNotifyEvent {
+            klass: DEVICE_CLASS_ID,
+            type_t: CAMERA_TYPE,
+            code: status.into(),
+            message: Some(camid.to_owned()),
+        };
+        event!(VmNotifyEvent; success_msg);
+    } else {
+        warn!("Qmp channel is not connected while sending camera status message");
+    }
+}
+
+fn ohcam_cb_set_owned(camid: &String, owned: bool) {
+    if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(camid) {
+        cb.set_owned(owned);
+    }
+}
+
+fn ohcam_cb_get_avail(camid: &String) -> Option<bool> {
+    if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(camid) {
+        return Some(cb.get_avail());
+    }
+
+    None
 }
 
 #[cfg(any(
@@ -232,19 +330,32 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn video_stream_on(&mut self) -> Result<()> {
+        if self.stream_on {
+            return Ok(());
+        }
         if self.tokenid != 0 {
             bound_tokenid(self.tokenid)?;
         }
-        if let Err(code) = self.ctx.start_stream(on_buffer_available, on_broken) {
+        if let Err(code) = self
+            .ctx
+            .start_stream(on_buffer_available, on_broken, on_status_avail)
+        {
             hisysevent::STRATOVIRT_CAMERA_START_FAILED(code);
+            send_ohcam_status_msg(&self.camid, OhCamStatus::StartFailed);
             return Err(anyhow!("Failed to start camera stream, code is {code}."));
         }
         self.stream_on = true;
+        ohcam_cb_set_owned(&self.camid, true);
+        send_ohcam_status_msg(&self.camid, OhCamStatus::StartSuccess);
         Ok(())
     }
 
     fn video_stream_off(&mut self) -> Result<()> {
+        if !self.stream_on {
+            return Ok(());
+        }
         self.ctx.stop_stream();
+        ohcam_cb_set_owned(&self.camid, false);
         if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&self.camid) {
             cb.clear_buffer();
         }
@@ -255,6 +366,7 @@ impl CameraBackend for OhCameraBackend {
             all(target_env = "ohos", feature = "trace_to_hitrace")
         ))]
         self.async_scope.stop();
+        send_ohcam_status_msg(&self.camid, OhCamStatus::Release);
         Ok(())
     }
 
@@ -415,7 +527,7 @@ impl CameraBackend for OhCameraBackend {
             .write()
             .unwrap()
             .entry(self.camid.clone())
-            .or_insert(OhCamCallBack::default())
+            .or_insert(OhCamCallBack::new(self.camid.clone()))
             .set_notify_cb(cb);
     }
 
@@ -424,8 +536,17 @@ impl CameraBackend for OhCameraBackend {
             .write()
             .unwrap()
             .entry(self.camid.clone())
-            .or_insert(OhCamCallBack::default())
+            .or_insert(OhCamCallBack::new(self.camid.clone()))
             .set_broken_cb(cb);
+    }
+
+    fn register_avail_cb(&mut self, cb: CameraAvailCallback) {
+        OHCAM_CALLBACKS
+            .write()
+            .unwrap()
+            .entry(self.camid.clone())
+            .or_insert(OhCamCallBack::new(self.camid.clone()))
+            .set_avail_cb(cb);
     }
 
     fn pause(&mut self, paused: bool) {
@@ -448,6 +569,11 @@ impl CameraBackend for OhCameraBackend {
             self.paused = false;
             self.video_stream_on().unwrap_or_else(|e| {
                 error!("ohcam resume: failed to resume stream {:?}", e);
+                if let Some(avail) = ohcam_cb_get_avail(&self.camid) {
+                    if !avail {
+                        send_ohcam_status_msg(&self.camid, OhCamStatus::Preempted);
+                    }
+                }
             })
         }
     }
@@ -576,5 +702,16 @@ unsafe extern "C" fn on_broken(camid: *const u8) {
     error!("Camera:{} stream broken", cam);
     if let Some(cb) = OHCAM_CALLBACKS.read().unwrap().get(&cam) {
         cb.broken();
+    }
+}
+
+// SAFETY: use RW lock to ensure the security of resources.
+unsafe extern "C" fn on_status_avail(avail: bool, camid: *const u8) {
+    let cam = cstr_to_string(camid).unwrap_or_else(|e| {
+        error!("{e}");
+        "".to_string()
+    });
+    if let Some(cb) = OHCAM_CALLBACKS.write().unwrap().get_mut(&cam) {
+        cb.avail(avail);
     }
 }

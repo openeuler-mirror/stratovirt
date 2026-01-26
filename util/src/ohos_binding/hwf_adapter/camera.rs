@@ -35,6 +35,7 @@ pub struct ProfileRecorder {
 
 pub type BufferProcessFn = unsafe extern "C" fn(src_buffer: u64, length: i32, camid: *const c_char);
 pub type BrokenProcessFn = unsafe extern "C" fn(camid: *const c_char);
+pub type AvailCallBackFn = unsafe extern "C" fn(bool, camid: *const c_char);
 
 type OhcamCreateCtxFn = unsafe extern "C" fn() -> *mut OhCameraCtx;
 type OhcamCreateSessionFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
@@ -43,8 +44,12 @@ type OhcamInitCameraFn = unsafe extern "C" fn(*mut OhCameraCtx, *const c_char) -
 type OhcamInitProfilesFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamGetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, *mut c_void) -> c_int;
 type OhcamSetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int) -> c_int;
-type OhcamPreStartFn =
-    unsafe extern "C" fn(*mut OhCameraCtx, BufferProcessFn, BrokenProcessFn) -> c_int;
+type OhcamPreStartFn = unsafe extern "C" fn(
+    *mut OhCameraCtx,
+    BufferProcessFn,
+    BrokenProcessFn,
+    AvailCallBackFn,
+) -> c_int;
 type OhcamStartFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamStopOutputFn = unsafe extern "C" fn(*mut OhCameraCtx);
 type OhcamReleaseFn = unsafe extern "C" fn(*mut OhCameraCtx);

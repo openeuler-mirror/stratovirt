@@ -155,6 +155,9 @@ pub type CameraNotifyCallback = Arc<dyn Fn() + Send + Sync>;
 /// Callback function which is called when backend is broken.
 pub type CameraBrokenCallback = Arc<dyn Fn() + Send + Sync>;
 
+/// Callback function which is called when status available or not.
+pub type CameraAvailCallback = Arc<dyn Fn() + Send + Sync>;
+
 pub trait CameraBackend: Send + Sync {
     /// Set a specific format.
     fn set_fmt(&mut self, fmt: &CamBasicFmt) -> Result<()>;
@@ -191,6 +194,9 @@ pub trait CameraBackend: Send + Sync {
 
     /// Register broken callback which is called when backend is broken.
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
+
+    /// Register avail callback which is called when status available or not.
+    fn register_avail_cb(&mut self, _cb: CameraAvailCallback) {}
 
     /// Pause/resume stream.
     fn pause(&mut self, _paused: bool) {}

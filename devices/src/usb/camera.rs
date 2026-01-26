@@ -27,8 +27,9 @@ use vmm_sys_util::eventfd::EventFd;
 use super::camera_media_type_guid::MEDIA_TYPE_GUID_HASHMAP;
 use super::xhci::xhci_controller::XhciDevice;
 use crate::camera_backend::{
-    create_cam_backend, get_bit_rate, get_video_frame_size, CamBasicFmt, CameraBackend,
-    CameraBrokenCallback, CameraFormatList, CameraFrame, CameraNotifyCallback, FmtType,
+    create_cam_backend, get_bit_rate, get_video_frame_size, CamBasicFmt, CameraAvailCallback,
+    CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame, CameraNotifyCallback,
+    FmtType,
 };
 use crate::usb::config::*;
 use crate::usb::descriptor::*;
@@ -112,6 +113,7 @@ pub struct UsbCamera {
     payload: Arc<Mutex<UvcPayload>>,               // uvc payload
     listening: bool,                               // if the camera is listening or not
     broken: Arc<AtomicBool>,                       // if the device broken or not
+    avail: Arc<AtomicBool>,                        // if the camera is available or not
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
     notifier_id: u64,
@@ -513,6 +515,7 @@ impl UsbCamera {
             payload: Arc::new(Mutex::new(UvcPayload::new())),
             listening: false,
             broken: Arc::new(AtomicBool::new(false)),
+            avail: Arc::new(AtomicBool::new(false)),
             iothread: config.iothread,
             delete_evts: Vec::new(),
             notifier_id: 0,
@@ -541,9 +544,20 @@ impl UsbCamera {
                 error!("Failed to notify camera fd {:?}", e);
             }
         });
+
+        let clone_fd = self.camera_fd.clone();
+        let clone_avail = self.avail.clone();
+        let avail_cb: CameraAvailCallback = Arc::new(move || {
+            clone_avail.store(true, Ordering::SeqCst);
+            // Notify the camera becomes available.
+            if let Err(e) = clone_fd.write(1) {
+                error!("Failed to notify camera avail {:?}", e);
+            }
+        });
         let mut locked_camera = self.camera_backend.lock().unwrap();
         locked_camera.register_notify_cb(notify_cb);
         locked_camera.register_broken_cb(broken_cb);
+        locked_camera.register_avail_cb(avail_cb);
     }
 
     fn activate(&mut self, fmt: &CamBasicFmt) -> Result<()> {
@@ -568,6 +582,7 @@ impl UsbCamera {
             &self.camera_backend,
             &self.payload,
             &self.broken,
+            &self.avail,
         )));
         register_event_helper(
             EventNotifierHelper::internal_notifiers(cam_handler),
@@ -580,6 +595,7 @@ impl UsbCamera {
 
     fn deactivate(&mut self) -> Result<()> {
         info!("USB Camera {} deactivate", self.device_id());
+        self.unregister_camera_fd()?;
         if self.broken.load(Ordering::Acquire) {
             info!(
                 "USB Camera {} broken when deactivate, reset it.",
@@ -590,7 +606,6 @@ impl UsbCamera {
         } else {
             self.camera_backend.lock().unwrap().video_stream_off()?;
         }
-        self.unregister_camera_fd()?;
         self.packet_list.lock().unwrap().clear();
         Ok(())
     }
@@ -946,6 +961,7 @@ struct CameraIoHandler {
     packet_list: Arc<Mutex<LinkedList<Arc<Mutex<UsbPacket>>>>>,
     payload: Arc<Mutex<UvcPayload>>,
     broken: Arc<AtomicBool>,
+    avail: Arc<AtomicBool>,
 }
 
 impl CameraIoHandler {
@@ -955,6 +971,7 @@ impl CameraIoHandler {
         camera: &Arc<Mutex<dyn CameraBackend>>,
         payload: &Arc<Mutex<UvcPayload>>,
         broken: &Arc<AtomicBool>,
+        avail: &Arc<AtomicBool>,
     ) -> Self {
         CameraIoHandler {
             camera: camera.clone(),
@@ -962,6 +979,7 @@ impl CameraIoHandler {
             packet_list: list.clone(),
             payload: payload.clone(),
             broken: broken.clone(),
+            avail: avail.clone(),
         }
     }
 
@@ -1048,6 +1066,12 @@ impl EventNotifierHelper for CameraIoHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |_event, fd: RawFd| {
             read_fd(fd);
             let mut locked_handler = cloned_io_handler.lock().unwrap();
+            if locked_handler.avail.load(Ordering::Acquire) {
+                // TODO: Need to add the function of automatic recovery when the camera is available.
+                locked_handler.avail.store(false, Ordering::SeqCst);
+                return None;
+            }
+
             if locked_handler.broken.load(Ordering::Acquire) {
                 let mut locked_list = locked_handler.packet_list.lock().unwrap();
                 while let Some(p) = locked_list.pop_front() {
