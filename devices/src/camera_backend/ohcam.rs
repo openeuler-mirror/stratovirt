@@ -38,7 +38,7 @@ static OHCAM_CALLBACKS: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(HashMap::new())
 // In UVC, interval's unit is 100ns.
 // So, fps * interval / 10_000_000 == 1.
 const FPS_INTERVAL_TRANS: u32 = 10_000_000;
-const RESOLUTION_WHITELIST: [(i32, i32); 2] = [(640, 480), (1280, 720)];
+const MIN_WIDTH: i32 = 640;
 const FRAME_FORMAT_WHITELIST: [i32; 3] = [
     CAMERA_FORMAT_YUYV422,
     CAMERA_FORMAT_NV12,
@@ -211,7 +211,6 @@ impl CameraBackend for OhCameraBackend {
                 if fps != cam_fmt.fps {
                     continue;
                 }
-
                 self.selected_profile = fmt.fmt_index - 1;
                 self.ctx.set_fmt(i32::from(self.selected_profile))?;
                 return Ok(());
@@ -258,7 +257,7 @@ impl CameraBackend for OhCameraBackend {
             match self.ctx.get_profile(i32::from(idx)) {
                 Ok((fmt, width, height, fps)) => {
                     if !FRAME_FORMAT_WHITELIST.iter().any(|&x| x == fmt)
-                        || !RESOLUTION_WHITELIST.iter().any(|&x| x == (width, height))
+                        || width < MIN_WIDTH
                         || !FPS_WHITELIST.iter().any(|&x| x == fps)
                     {
                         continue;
@@ -286,7 +285,7 @@ impl CameraBackend for OhCameraBackend {
         fmt_list = remove_duplicate_nv21(fmt_list);
         // Just for APP ToDesk, This stupid APP uses the format reported first
         // to realize camera-related functions. It doesn't support NV12, so
-        // we put YUY2 forward.s
+        // we put YUY2 forward.
         fmt_list.sort_by(|a, b| a.format.partial_cmp(&b.format).unwrap());
         self.fmt_list = fmt_list.clone();
         Ok(fmt_list)
