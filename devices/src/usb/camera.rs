@@ -87,6 +87,10 @@ const UVC_FID: u8 = 1;
 const VS_PROBE_CONTROL: u8 = 1;
 const VS_COMMIT_CONTROL: u8 = 2;
 
+// USB 3.0 Spec Rev 1.0. Table 9-7, Suspend Options
+const USB_3_SUSPEND_LOW_POWER: u8 = 1;
+const USB_3_SUSPEND_REMOTE_WAKE: u8 = 2;
+
 const MAX_PAYLOAD: u32 = FRAME_SIZE_1280_720;
 const FRAME_SIZE_1280_720: u32 = 1280 * 720 * 2;
 const USB_CAMERA_BUFFER_LEN: usize = 12 * 1024;
@@ -636,6 +640,20 @@ impl UsbCamera {
             }
             USB_INTERFACE_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_SET_FEATURE {
+                    if (device_req.index >> 8) as u8 & USB_3_SUSPEND_REMOTE_WAKE
+                        == USB_3_SUSPEND_REMOTE_WAKE
+                    {
+                        self.base.remote_wakeup = 1;
+                    } else {
+                        self.base.remote_wakeup = 0;
+                    }
+                    if (device_req.index >> 8) as u8 & USB_3_SUSPEND_LOW_POWER
+                        == USB_3_SUSPEND_LOW_POWER
+                    {
+                        return self
+                            .deactivate()
+                            .with_context(|| "Failed to deactivate device");
+                    }
                     return Ok(());
                 }
             }
@@ -651,9 +669,7 @@ impl UsbCamera {
             }
             USB_ENDPOINT_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_CLEAR_FEATURE {
-                    return self
-                        .deactivate()
-                        .with_context(|| "Failed to deactivate device");
+                    return Ok(());
                 }
             }
             _ => (),
