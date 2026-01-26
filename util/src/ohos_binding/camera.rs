@@ -96,7 +96,8 @@ impl OhCamera {
         id: String,
     ) -> Result<(OhCamera, i32, CamConnectionType, CamPosition, Option<i32>), i32> {
         let capi = hwf_adapter_camera_api();
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: The memory of context is returned by C API create_ctx() and
+        // we will check the returned value.
         let mut ctx = unsafe { (capi.create_ctx)() };
         if ctx.is_null() {
             error!("OH Camera: failed to create camera ctx");
@@ -114,7 +115,8 @@ impl OhCamera {
         let mut position = CamPosition::Unspecified;
         let mut orientation = None;
 
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: All C APIs called below only take context as the parameter
+        // which is created above and we have checked its validation.
         unsafe {
             let mut ret = (capi.init_camera)(ctx, id_c.as_ptr());
             if ret < 0 {
@@ -171,13 +173,14 @@ impl OhCamera {
     }
 
     pub fn destroy_ctx(&mut self) {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: as the comment of destroy_ctx(), ctx can be NULL.
         unsafe { (self.capi.destroy_ctx)(ptr::addr_of_mut!(self.ctx)) }
     }
 
     pub fn set_fmt(&self, profile_idx: i32) -> Result<()> {
         let ret =
-            // SAFETY: We call related API sequentially for specified ctx.
+            // SAFETY: context is null or valid and as the comment of set_profile()
+            // context can be null.
             unsafe { (self.capi.set_profile)(self.ctx, profile_idx as c_int) };
         if ret < 0 {
             bail!("OH Camera: failed to get camera profile");
@@ -193,7 +196,9 @@ impl OhCamera {
         error_proc: OnErrorCallBackFn,
     ) -> Result<(), i32> {
         let mut ret;
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: all C APIs called below has returned value. We check all the
+        // returned value and return error to the caller. In addition, context
+        // can be NULL.
         unsafe {
             ret = (self.capi.create_session)(self.ctx);
             if ret != 0 {
@@ -216,7 +221,9 @@ impl OhCamera {
 
     pub fn reset_camera(&self, id: String) -> Result<()> {
         let id_cstr = CString::new(id).with_context(|| "failed to create CString id")?;
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: as the comment of below C APIs, they can process context
+        // with NULL value and although they have no returned value but the
+        // other APIs called later will return error.
         unsafe {
             (self.capi.init_camera)(self.ctx, id_cstr.as_ptr());
             (self.capi.init_profiles)(self.ctx);
@@ -225,7 +232,9 @@ impl OhCamera {
     }
 
     pub fn stop_stream(&self) {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: as the comment of below C APIs, they can process context
+        // with NULL value and although they have no returned value but the
+        // other APIs called later will return error.
         unsafe {
             (self.capi.stop_output)(self.ctx);
             (self.capi.release_session)(self.ctx);
@@ -234,7 +243,7 @@ impl OhCamera {
 
     pub fn get_profile(&self, profile_idx: i32) -> Result<(i32, i32, i32, i32)> {
         let pr = ProfileRecorder::default();
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: we check the returned value and return the error to the caller.
         unsafe {
             let ret = (self.capi.get_profile)(
                 self.ctx,
@@ -249,7 +258,7 @@ impl OhCamera {
     }
 
     pub fn next_frame(&self) {
-        // SAFETY: We call related API sequentially for specified ctx.
+        // SAFETY: as the comment of allow_next_frame(), context can be NULL.
         unsafe {
             (self.capi.allow_next_frame)(self.ctx);
         }
