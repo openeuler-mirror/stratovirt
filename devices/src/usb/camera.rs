@@ -677,6 +677,7 @@ impl UsbCamera {
             USB_ENDPOINT_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_CLEAR_FEATURE {
                     self.pause = true;
+                    self.packet_list.lock().unwrap().clear();
                     return self.camera_backend.lock().unwrap().video_stream_off();
                 }
             }
