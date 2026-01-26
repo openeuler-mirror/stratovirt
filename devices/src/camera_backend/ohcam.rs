@@ -46,10 +46,11 @@ static OHCAM_CALLBACKS: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(HashMap::new())
 // So, fps * interval / 10_000_000 == 1.
 const FPS_INTERVAL_TRANS: u32 = 10_000_000;
 const MIN_WIDTH: i32 = 640;
-const FRAME_FORMAT_WHITELIST: [i32; 3] = [
+const FRAME_FORMAT_WHITELIST: [i32; 4] = [
     CAMERA_FORMAT_YUYV422,
     CAMERA_FORMAT_NV12,
     CAMERA_FORMAT_YUV420SP,
+    CAMERA_FORMAT_MJPEG,
 ];
 const FPS_WHITELIST: [i32; 3] = [30, 15, 10];
 
