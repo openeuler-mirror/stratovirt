@@ -15,7 +15,7 @@ use std::ffi::CStr;
 use std::sync::RwLock;
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{error, warn};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use ui::console::{get_dpy_rotation, Rotation};
 
@@ -438,6 +438,10 @@ impl CameraBackend for OhCameraBackend {
                 }
                 self.selected_profile = fmt.fmt_index - 1;
                 self.ctx.set_fmt(i32::from(self.selected_profile))?;
+                info!(
+                    "OHCAM {}: set format {:?}, width {}, height {}",
+                    self.camid, cam_fmt.fmttype, cam_fmt.width, cam_fmt.height
+                );
                 self.fmt = Some(*cam_fmt);
                 return Ok(());
             }
