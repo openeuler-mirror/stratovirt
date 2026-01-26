@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use anyhow::{Context, Result};
+use log::error;
 use regex::Regex;
 
 use super::{get_class_type, VmConfig};
@@ -124,7 +125,7 @@ impl VmConfig {
     }
 
     pub fn del_device_by_id(&mut self, dev_id: String) {
-        let rex = format!("id={}(,|$)", dev_id);
+        let rex = format!("id={}(,|$)", regex::escape(&dev_id));
         let re = Regex::new(rex.as_str()).unwrap();
 
         for (index, (_, dev_info)) in self.devices.iter().enumerate() {
@@ -133,5 +134,7 @@ impl VmConfig {
                 return;
             }
         }
+
+        error!("Device ID {} not found", dev_id);
     }
 }
