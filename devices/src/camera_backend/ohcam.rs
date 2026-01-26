@@ -362,8 +362,14 @@ pub struct OhCameraBackend {
     cam_state: OhPhysCamState,
 }
 
-// SAFETY: Send and Sync is not auto-implemented for raw pointer type.
-// implementing them is safe because ctx field is access.
+// SAFETY:
+// - The `OhCamera` type internally holds a raw pointer to a `OhCameraCtx` provided by
+//   the Oh camera framework.
+// - Although raw pointers are not `Send` or `Sync` by default, this backend ensures
+//   that the camera handle (`ctx`) is only accessed through thread-safe API calls.
+// - All operations on `OhCameraBackend` are protected by higher-level synchronization (i.g. mutex).
+// - No aliasing mutable references to `ctx` are ever created across threads.
+// - Therefore, it is safe to mark `CameraBackend` as `Send` and `Sync` under these invariants.
 unsafe impl Send for OhCameraBackend {}
 // SAFETY: Same reason as above.
 unsafe impl Sync for OhCameraBackend {}
@@ -624,8 +630,13 @@ impl CameraBackend for OhCameraBackend {
             bail!("Invalid frame src")
         }
 
-        if src_len == 0_u64 {
-            bail!("Invalid frame src_len {}", src_len);
+        if src_len == 0_u64 || (src_len - frame_offset as u64) < len as u64 {
+            bail!(
+                "Invalid frame src_len of {}, frame_offset of {}, packet expects len of {}",
+                src_len,
+                frame_offset,
+                len
+            );
         }
 
         if frame_offset == 0 && self.cam_state.rotation_required && self.cam_state.rotation_enabled
@@ -645,7 +656,16 @@ impl CameraBackend for OhCameraBackend {
             }
             let cnt = std::cmp::min(iov.iov_len as usize, len - copied);
             let src_ptr = src.unwrap() + frame_offset as u64 + copied as u64;
-            // SAFETY: the address is not out of range.
+            // SAFETY: The safety of this operation is guaranteed by the checks above.
+            // - `src_ptr` is valid for reads of `cnt` bytes:
+            //    - `src_addr` is a non-null address provided by an external component (`get_buffer`).
+            //    - We have explicitly checked that `(src_len - frame_offset) >= len`, ensuring that
+            //      any read within the loop, where `copied` goes from `0` to `len`, remains
+            //      within the bounds of the source buffer .
+            // - `iov.iov_base` is valid for writes of `cnt` bytes:
+            //    - The usb packet from xhci provide `iovecs` where each `iov_base` points to a valid,
+            //      writable memory buffer of at least `iov_len` bytes.
+            // - The source and destination memory regions do not overlap
             unsafe {
                 std::ptr::copy_nonoverlapping(src_ptr as *const u8, iov.iov_base as *mut u8, cnt);
             }
@@ -1080,11 +1100,18 @@ fn remove_duplicate_nv21(mut list: Vec<CameraFormatList>) -> Vec<CameraFormatLis
     list
 }
 
-fn cstr_to_string(src: *const u8) -> Result<String> {
+/// SAFETY:
+/// The caller must ensure:
+/// - `src` is non-null.
+/// - `src` points to a valid, null-terminated C string.
+/// - The memory referenced by `src` is valid for the duration of this call.
+///
+/// If these conditions are not met, undefined behavior may occur.
+unsafe fn cstr_to_string(src: *const u8) -> Result<String> {
     if src.is_null() {
         bail!("cstr_to_string: src is null");
     }
-    // SAFETY: we promise that 'src' ends with "null" symbol.
+    // SAFETY: preconditions guaranteed by caller (see function safety contract).
     let src_cstr = unsafe { CStr::from_ptr(src) };
     let target_string = src_cstr
         .to_str()
@@ -1094,7 +1121,20 @@ fn cstr_to_string(src: *const u8) -> Result<String> {
     Ok(target_string)
 }
 
-// SAFETY: use RW lock to ensure the security of resources.
+/// # Safety
+///
+/// This function is called from the oh camera framework side as a callback.
+/// The caller (C side) must guarantee the following preconditions:
+///
+/// - `camid` is a valid, non-null pointer to a null-terminated C string
+///   representing the camera ID, and remains valid for the duration of the call.
+/// - `src_buffer` and `length` together describe a valid memory region
+///   accessible for the callback’s lifetime.
+///
+/// The internal `RwLock` ensures thread-safe access to the global
+/// `OHCAM_CALLBACKS` registry.
+///
+/// Violating any of the above may cause undefined behavior.
 unsafe extern "C" fn on_buffer_available(src_buffer: u64, length: i32, camid: *const u8) {
     let cam = cstr_to_string(camid).unwrap_or_else(|e| {
         error!("{e}");
@@ -1106,7 +1146,20 @@ unsafe extern "C" fn on_buffer_available(src_buffer: u64, length: i32, camid: *c
     }
 }
 
-// SAFETY: use RW lock to ensure the security of resources.
+/// # Safety
+///
+/// This function is called from the oh camera framework side as a callback.
+/// The caller (C side) must guarantee the following preconditions:
+///
+/// - `camid` is a valid, non-null pointer to a null-terminated C string
+///   representing the camera ID, and remains valid for the duration of the call.
+/// - `src_buffer` and `length` together describe a valid memory region
+///   accessible for the callback’s lifetime.
+///
+/// The internal `RwLock` ensures thread-safe access to the global
+/// `OHCAM_CALLBACKS` registry.
+///
+/// Violating any of the above may cause undefined behavior.
 unsafe extern "C" fn on_broken(camid: *const u8) {
     let cam = cstr_to_string(camid).unwrap_or_else(|e| {
         error!("{e}");
@@ -1119,7 +1172,20 @@ unsafe extern "C" fn on_broken(camid: *const u8) {
     }
 }
 
-// SAFETY: use RW lock to ensure the security of resources.
+/// # Safety
+///
+/// This function is called from the oh camera framework side as a callback.
+/// The caller (C side) must guarantee the following preconditions:
+///
+/// - `camid` is a valid, non-null pointer to a null-terminated C string
+///   representing the camera ID, and remains valid for the duration of the call.
+/// - `src_buffer` and `length` together describe a valid memory region
+///   accessible for the callback’s lifetime.
+///
+/// The internal `RwLock` ensures thread-safe access to the global
+/// `OHCAM_CALLBACKS` registry.
+///
+/// Violating any of the above may cause undefined behavior.
 unsafe extern "C" fn on_status_avail(avail: bool, camid: *const u8) {
     let cam = cstr_to_string(camid).unwrap_or_else(|e| {
         error!("{e}");
@@ -1130,7 +1196,20 @@ unsafe extern "C" fn on_status_avail(avail: bool, camid: *const u8) {
     }
 }
 
-// SAFETY: use RW lock to ensure the security of resources.
+/// # Safety
+///
+/// This function is called from the oh camera framework side as a callback.
+/// The caller (C side) must guarantee the following preconditions:
+///
+/// - `camid` is a valid, non-null pointer to a null-terminated C string
+///   representing the camera ID, and remains valid for the duration of the call.
+/// - `src_buffer` and `length` together describe a valid memory region
+///   accessible for the callback’s lifetime.
+///
+/// The internal `RwLock` ensures thread-safe access to the global
+/// `OHCAM_CALLBACKS` registry.
+///
+/// Violating any of the above may cause undefined behavior.
 unsafe extern "C" fn on_error(error_type: i32, camid: *const u8) {
     let cam = cstr_to_string(camid).unwrap_or_else(|e| {
         error!("{e}");
