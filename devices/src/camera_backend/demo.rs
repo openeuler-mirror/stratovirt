@@ -243,6 +243,7 @@ impl ImageFrame {
             FmtType::Yuy2 => convert_to_yuy2(&data, width, height),
             FmtType::Rgb565 => data,
             FmtType::Nv12 => convert_to_nv12(&data, width, height),
+            FmtType::Nv21 => convert_to_nv12(&data, width, height),
         };
         self.frame_idx += 1;
         if self.frame_idx > FRAME_IDX_LIMIT {

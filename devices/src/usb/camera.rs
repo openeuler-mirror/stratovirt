@@ -1132,7 +1132,7 @@ fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
         _ => 0,
     };
     let header = match fmt.format {
-        FmtType::Yuy2 | FmtType::Rgb565 | FmtType::Nv12 => VsDescUncompressedFmt {
+        FmtType::Yuy2 | FmtType::Rgb565 | FmtType::Nv12 | FmtType::Nv21 => VsDescUncompressedFmt {
             bLength: 0x1B,
             bDescriptorType: CS_INTERFACE,
             bDescriptorSubtype: VS_FORMAT_UNCOMPRESSED,
@@ -1173,7 +1173,7 @@ fn gen_fmt_header(fmt: &CameraFormatList) -> Result<Vec<u8>> {
 #[inline(always)]
 fn get_subtype(pixfmt: FmtType) -> u8 {
     match pixfmt {
-        FmtType::Yuy2 | FmtType::Rgb565 | FmtType::Nv12 => VS_FRAME_UNCOMPRESSED,
+        FmtType::Yuy2 | FmtType::Rgb565 | FmtType::Nv12 | FmtType::Nv21 => VS_FRAME_UNCOMPRESSED,
         FmtType::Mjpg => VS_FRAME_MJPEG,
     }
 }

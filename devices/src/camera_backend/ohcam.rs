@@ -39,8 +39,12 @@ static OHCAM_CALLBACKS: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(HashMap::new())
 // So, fps * interval / 10_000_000 == 1.
 const FPS_INTERVAL_TRANS: u32 = 10_000_000;
 const RESOLUTION_WHITELIST: [(i32, i32); 2] = [(640, 480), (1280, 720)];
-const FRAME_FORMAT_WHITELIST: [i32; 2] = [CAMERA_FORMAT_YUYV422, CAMERA_FORMAT_NV12];
-const FPS_WHITELIST: [i32; 1] = [30];
+const FRAME_FORMAT_WHITELIST: [i32; 3] = [
+    CAMERA_FORMAT_YUYV422,
+    CAMERA_FORMAT_NV12,
+    CAMERA_FORMAT_YUV420SP,
+];
+const FPS_WHITELIST: [i32; 3] = [30, 15, 10];
 
 #[derive(Default)]
 struct OhCamCallBack {
@@ -144,7 +148,7 @@ unsafe impl Sync for OhCameraBackend {}
 
 fn cam_fmt_from_oh(t: i32) -> Result<FmtType> {
     let fmt = match t {
-        CAMERA_FORMAT_YUV420SP => FmtType::Nv12,
+        CAMERA_FORMAT_YUV420SP => FmtType::Nv21,
         CAMERA_FORMAT_NV12 => FmtType::Nv12,
         CAMERA_FORMAT_YUYV422 => FmtType::Yuy2,
         CAMERA_FORMAT_MJPEG => FmtType::Mjpg,
@@ -279,6 +283,7 @@ impl CameraBackend for OhCameraBackend {
             }
         }
 
+        fmt_list = remove_duplicate_nv21(fmt_list);
         // Just for APP ToDesk, This stupid APP uses the format reported first
         // to realize camera-related functions. It doesn't support NV12, so
         // we put YUY2 forward.s
@@ -435,6 +440,24 @@ impl CameraBackend for OhCameraBackend {
             })
         }
     }
+}
+
+fn remove_duplicate_nv21(mut list: Vec<CameraFormatList>) -> Vec<CameraFormatList> {
+    let list_clone = list.clone();
+    list.retain_mut(|f| {
+        if f.format != FmtType::Nv21 {
+            return true;
+        }
+        f.format = FmtType::Nv12;
+
+        for fmt in &list_clone {
+            if fmt.format == FmtType::Nv12 && fmt.frame[0] == f.frame[0] {
+                return false;
+            }
+        }
+        true
+    });
+    list
 }
 
 fn cstr_to_string(src: *const u8) -> Result<String> {
