@@ -37,6 +37,7 @@ use trace::trace_scope::Scope;
 use util::aio::Iovec;
 use util::ohos_binding::camera::*;
 use util::ohos_binding::misc::bound_tokenid;
+use util::ohos_binding::yuv::*;
 
 type OhCamCB = RwLock<HashMap<String, OhCamCallBack>>;
 static OHCAM_CALLBACKS: Lazy<OhCamCB> = Lazy::new(|| RwLock::new(HashMap::new()));
@@ -290,6 +291,23 @@ impl OhCameraAsyncScope {
 }
 
 #[derive(Clone)]
+struct OhCameraRotate {
+    check_rotate: bool,
+    rotate_buffer: Vec<u8>,
+    rotate_enabled: bool,
+}
+
+impl OhCameraRotate {
+    fn new(check_rotate: bool) -> Self {
+        Self {
+            check_rotate,
+            rotate_buffer: Vec::new(),
+            rotate_enabled: false,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct OhCameraBackend {
     // ID for this OhCameraBackend.
     id: String,
@@ -309,7 +327,7 @@ pub struct OhCameraBackend {
     async_scope: Box<OhCameraAsyncScope>,
     tokenid: u64,
     fmt: Option<CamBasicFmt>,
-    check_rotate: bool,
+    camera_rotate: OhCameraRotate,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type.
@@ -365,7 +383,7 @@ impl OhCameraBackend {
             async_scope: Box::<OhCameraAsyncScope>::default(),
             tokenid,
             fmt: None,
-            check_rotate,
+            camera_rotate: OhCameraRotate::new(check_rotate),
         })
     }
 }
@@ -416,6 +434,9 @@ impl CameraBackend for OhCameraBackend {
             return Err(anyhow!("Failed to start camera stream, code is {code}."));
         }
         self.stream_on = true;
+        if self.camera_rotate.check_rotate {
+            self.camera_rotate.rotate_enabled = true;
+        }
         ohcam_cb_set_owned(&self.camid, true);
         ohcam_set_status(&self.camid, OhCamStatus::Started);
         Ok(())
@@ -556,7 +577,7 @@ impl CameraBackend for OhCameraBackend {
         Ok(())
     }
 
-    fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize> {
+    fn get_frame(&mut self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize> {
         let (src, src_len) = OHCAM_CALLBACKS
             .read()
             .unwrap()
@@ -572,8 +593,12 @@ impl CameraBackend for OhCameraBackend {
             bail!("Invalid frame src_len {}", src_len);
         }
 
-        if frame_offset == 0 && self.check_rotate {
-            self.rotate_frame(src.unwrap());
+        if frame_offset == 0 && self.camera_rotate.check_rotate && self.camera_rotate.rotate_enabled
+        {
+            if let Err(e) = self.rotate_frame(src.unwrap()) {
+                error!("ohcam: {:?}", e);
+                self.camera_rotate.rotate_enabled = false;
+            }
         }
 
         trace::trace_scope_start!(ohcam_get_frame, args = (frame_offset, len));
@@ -650,71 +675,312 @@ impl CameraBackend for OhCameraBackend {
 }
 
 impl OhCameraBackend {
-    fn rotate_frame(&self, src: u64) {
+    fn rotate_frame(&mut self, src: u64) -> Result<()> {
         if self.fmt.is_none() {
-            return;
+            return Ok(());
         }
 
-        if let Some(Rotation::Rotation90) = get_rotation() {
-            self.flip_frame(src);
+        if let Some(rotation) = get_rotation() {
+            match rotation {
+                Rotation::Rotation0 => self.rotate_frame_by_angle(src, RotationMode::Rotate270)?,
+                Rotation::Rotation90 => self.rotate_frame_by_angle(src, RotationMode::Rotate180)?,
+                Rotation::Rotation180 => (),
+                Rotation::Rotation270 => (),
+            }
         }
+
+        Ok(())
     }
 
-    fn flip_frame(&self, src: u64) {
+    fn rotate_frame_by_angle(&mut self, src: u64, rotation: RotationMode) -> Result<()> {
         let fmt = self.fmt.as_ref().unwrap();
-        let width = fmt.width as u64;
-        let height = fmt.height as u64;
+        let width = fmt.width as i32;
+        let height = fmt.height as i32;
 
         match fmt.fmttype {
-            FmtType::Yuy2 => rotate_yuy2_180(src, width, height),
-            FmtType::Nv12 | FmtType::Nv21 => rotate_nv_180(src, width, height),
-            FmtType::Mjpg => error!("rotation for mjpg not supported"),
-            FmtType::Rgb565 => error!("rotation for rgb565 not supported"),
+            FmtType::Yuy2 => {
+                self.rotate_yuy2(src, width, height, rotation)
+                    .with_context(|| format!("Failed to rotate {:?} yuv2 frame", rotation))?;
+            }
+            FmtType::Nv12 | FmtType::Nv21 => {
+                self.rotate_nv(src, width, height, rotation)
+                    .with_context(|| format!("Failed to rotate {:?} nv frame", rotation))?;
+            }
+            FmtType::Mjpg => {
+                bail!("rotation for mjpg not supported");
+            }
+            FmtType::Rgb565 => {
+                bail!("rotation for rgb565 not supported");
+            }
         }
+
+        Ok(())
     }
-}
 
-fn rotate_nv_180(src: u64, width: u64, height: u64) {
-    let stride = width;
-    // rotate Y plane
-    rotate_plane_180(src, stride, height);
-    // rotate UV plane
-    let src = src + stride * height;
-    rotate_plane_180(src, stride, height >> 1);
-}
-
-fn rotate_yuy2_180(src: u64, width: u64, height: u64) {
-    let stride = width * 2;
-    rotate_plane_180(src, stride, height);
-}
-
-fn rotate_plane_180(src: u64, stride: u64, height: u64) {
-    let mut row_data = vec![0u8; stride as usize];
-    let half_height = (height + 1) >> 1;
-    let mut src_row = src;
-    let mut dst_row = src + (height - 1) * stride;
-
-    for _ in 0..half_height {
-        // SAFETY: the caller should guarantee address validation.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                src_row as *const u8,
-                row_data.as_mut_ptr(),
-                stride as usize,
-            );
-            std::ptr::copy_nonoverlapping(
-                dst_row as *const u8,
-                src_row as *mut u8,
-                stride as usize,
-            );
-            std::ptr::copy_nonoverlapping(
-                row_data.as_mut_ptr(),
-                dst_row as *mut u8,
-                stride as usize,
-            );
+    fn check_rotate_frame(&mut self, width: i32, height: i32) -> Result<()> {
+        if width % 2 != 0 && height % 2 != 0 {
+            bail!("Invalid width {} or height {}", width, height);
         }
-        src_row += stride;
-        dst_row -= stride;
+
+        let size = width
+            .checked_mul(height)
+            .with_context(|| format!("Invalid width {} or height {}", width, height))?;
+
+        let buffer_size = (size as usize)
+            .checked_mul(3)
+            .with_context(|| format!("Invalid width {} or height {}", width, height))?;
+
+        if self.camera_rotate.rotate_buffer.len() < buffer_size {
+            self.camera_rotate.rotate_buffer.resize(buffer_size, 0u8);
+        }
+
+        Ok(())
+    }
+
+    fn rotate_nv(
+        &mut self,
+        src: u64,
+        width: i32,
+        height: i32,
+        rotation: RotationMode,
+    ) -> Result<()> {
+        self.check_rotate_frame(width, height)?;
+
+        let half_height = height >> 1;
+        let half_width = width >> 1;
+        let y_size = (width * height) as u64;
+        let u_size = (half_height * half_width) as u64;
+        let v_size = u_size;
+        let y_plane = self.camera_rotate.rotate_buffer.as_mut_ptr() as u64;
+        let u_plane = y_plane + y_size;
+        let v_plane = u_plane + u_size;
+        let (i420_stride_y, i420_stride_u, i420_stride_v) = match rotation {
+            RotationMode::Rotate90 | RotationMode::Rotate270 => (height, half_height, half_height),
+            _ => (width, half_width, half_width),
+        };
+
+        let src_y = src;
+        let src_vu = src + y_size;
+
+        let mut ret = nv12_to_i420_rotate(
+            src_y,
+            width,
+            src_vu,
+            width,
+            y_plane,
+            i420_stride_y,
+            u_plane,
+            i420_stride_u,
+            v_plane,
+            i420_stride_v,
+            width,
+            height,
+            rotation.into(),
+        );
+        if ret < 0 {
+            bail!("Failed to rotate nv to i420: {}", ret);
+        }
+
+        if rotation == RotationMode::Rotate270 {
+            let scale_src = v_plane + v_size;
+            self.scale_i420(width, height, y_plane, u_plane, v_plane, scale_src)?;
+        }
+
+        ret = i420_to_nv12(
+            y_plane, width, u_plane, half_width, v_plane, half_width, src_y, width, src_vu, width,
+            width, height,
+        );
+        if ret < 0 {
+            bail!("Failed to transfer from i420 to nv: {}", ret);
+        }
+
+        Ok(())
+    }
+
+    fn rotate_yuy2(
+        &mut self,
+        src: u64,
+        width: i32,
+        height: i32,
+        rotation: RotationMode,
+    ) -> Result<()> {
+        self.check_rotate_frame(width, height)?;
+
+        let half_height = height >> 1;
+        let half_width = width >> 1;
+        let y_size = (width * height) as u64;
+        let u_size = (half_height * half_width) as u64;
+        let v_size = u_size;
+        let y_plane = self.camera_rotate.rotate_buffer.as_mut_ptr() as u64;
+        let u_plane = y_plane + y_size;
+        let v_plane = u_plane + u_size;
+
+        let mut ret = yuy2_to_i420(
+            src,
+            width << 1,
+            y_plane,
+            width,
+            u_plane,
+            half_width,
+            v_plane,
+            half_width,
+            width,
+            height,
+        );
+        if ret < 0 {
+            bail!("Failed to transfer from yuy2 to i420: {}", ret);
+        }
+
+        let rotated_y_plane = v_plane + v_size;
+        let rotated_u_plane = rotated_y_plane + y_size;
+        let rotated_v_plane = rotated_u_plane + u_size;
+
+        let (dst_stride_y, dst_stride_u, dst_stride_v) = match rotation {
+            RotationMode::Rotate90 | RotationMode::Rotate270 => (height, half_height, half_height),
+            _ => (width, half_width, half_width),
+        };
+
+        ret = i420_rotate(
+            y_plane,
+            width,
+            u_plane,
+            half_width,
+            v_plane,
+            half_width,
+            rotated_y_plane,
+            dst_stride_y,
+            rotated_u_plane,
+            dst_stride_u,
+            rotated_v_plane,
+            dst_stride_v,
+            width,
+            height,
+            rotation.into(),
+        );
+        if ret < 0 {
+            bail!("Failed to rotate to i420: {}", ret);
+        }
+
+        if rotation == RotationMode::Rotate270 {
+            let scale_src = y_plane;
+            self.scale_i420(
+                width,
+                height,
+                rotated_y_plane,
+                rotated_u_plane,
+                rotated_v_plane,
+                scale_src,
+            )?;
+        }
+
+        ret = i420_to_yuy2(
+            rotated_y_plane,
+            width,
+            rotated_u_plane,
+            half_width,
+            rotated_v_plane,
+            half_width,
+            src,
+            width << 1,
+            width,
+            height,
+        );
+        if ret < 0 {
+            bail!("Failed to transfer from i420 to yuy2: {}", ret);
+        }
+
+        Ok(())
+    }
+
+    fn scale_i420(
+        &mut self,
+        width: i32,
+        height: i32,
+        y_plane: u64,
+        u_plane: u64,
+        v_plane: u64,
+        scale_src: u64,
+    ) -> Result<()> {
+        if height > width {
+            bail!("Invalid width {} or height {}", width, height);
+        }
+
+        let half_height = height >> 1;
+        let half_width = width >> 1;
+
+        let scale_height = height;
+        let scale_width = height
+            .checked_mul(scale_height)
+            .with_context(|| format!("Invalid width {} or height {}", width, height))?
+            .checked_div(width)
+            .with_context(|| format!("Invalid width {} or height {}", width, height))?
+            & !1;
+        let half_scale_width = scale_width >> 1;
+        let half_scale_height = scale_height >> 1;
+        let scale_y_plane_size = (scale_height * scale_width) as u64;
+        let scale_u_plane_size = (half_scale_width * half_scale_height) as u64;
+
+        let scale_y_plane = scale_src;
+        let scale_u_plane = scale_y_plane + scale_y_plane_size;
+        let scale_v_plane = scale_u_plane + scale_u_plane_size;
+
+        // Scales a YUV 4:2:0 image from the src width and height to the dst width and height.
+        let mut ret = i420_scale(
+            y_plane,
+            height,
+            u_plane,
+            half_height,
+            v_plane,
+            half_height,
+            height,
+            width,
+            scale_y_plane,
+            scale_width,
+            scale_u_plane,
+            half_scale_width,
+            scale_v_plane,
+            half_scale_width,
+            scale_width,
+            scale_height,
+            FilterMode::FilterNone.into(),
+        );
+        if ret < 0 {
+            bail!("Failed to scale i420: {}", ret);
+        }
+
+        // Fill in the I420 data in black
+        ret = i420_rect(
+            y_plane, width, u_plane, half_width, v_plane, half_width, 0, 0, width, height, 0, 128,
+            128,
+        );
+        if ret < 0 {
+            bail!("Failed to fill in I420 data in black: {}", ret);
+        }
+
+        let offset = ((width - scale_width) >> 1) & !1;
+        let half_offset = offset >> 1;
+        // Filling the scaled-down I420 image centred in the source I420
+        ret = i420_copy(
+            scale_y_plane,
+            scale_width,
+            scale_u_plane,
+            half_scale_width,
+            scale_v_plane,
+            half_scale_width,
+            y_plane + (offset as u64),
+            width,
+            u_plane + (half_offset as u64),
+            half_width,
+            v_plane + (half_offset as u64),
+            half_width,
+            scale_width,
+            scale_height,
+        );
+        if ret < 0 {
+            bail!("Failed to copy I420 data: {}", ret);
+        }
+
+        Ok(())
     }
 }
 

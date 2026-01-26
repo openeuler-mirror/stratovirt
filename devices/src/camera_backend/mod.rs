@@ -181,7 +181,7 @@ pub trait CameraBackend: Send + Sync {
     fn get_frame_size(&self) -> usize;
 
     /// Copy frame data to iovecs.
-    fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize>;
+    fn get_frame(&mut self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize>;
 
     /// Get format/frame info including width/height/interval/fmt according to format/frame index.
     fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt>;
