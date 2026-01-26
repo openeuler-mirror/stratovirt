@@ -880,7 +880,7 @@ impl UsbDevice for UsbCamera {
                     self.device_id(),
                     e
                 );
-                // SAFETY: packet is push before, and no other thread modify the list.
+                // SAFETY: packet is push before and the list lock is still being held.
                 let p = locked_list.pop_back().unwrap();
                 let mut locked_p = p.lock().unwrap();
                 locked_p.status = UsbPacketStatus::Stall;
@@ -1030,7 +1030,7 @@ impl CameraIoHandler {
             if locked_list.is_empty() {
                 break;
             }
-            // SAFETY: packet list is not empty.
+            // SAFETY: we have checked if packet list is empty before.
             let p = locked_list.pop_front().unwrap();
             drop(locked_list);
             let mut locked_p = p.lock().unwrap();
