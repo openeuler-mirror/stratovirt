@@ -17,6 +17,7 @@ use std::sync::RwLock;
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
 use once_cell::sync::Lazy;
+use ui::console::{get_rotation, Rotation};
 
 use crate::camera_backend::{
     CamBasicFmt, CameraBackend, CameraBrokenCallback, CameraFormatList, CameraFrame,
@@ -138,6 +139,8 @@ pub struct OhCameraBackend {
     ))]
     async_scope: Box<OhCameraAsyncScope>,
     tokenid: u64,
+    fmt: Option<CamBasicFmt>,
+    check_rotate: bool,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type.
@@ -174,6 +177,8 @@ impl OhCameraBackend {
             }
         };
 
+        // only check rotation for the camera on board
+        let check_rotate = &cam_name == "device/0";
         Ok(OhCameraBackend {
             id,
             camid: cam_name,
@@ -190,6 +195,8 @@ impl OhCameraBackend {
             ))]
             async_scope: Box::<OhCameraAsyncScope>::default(),
             tokenid,
+            fmt: None,
+            check_rotate,
         })
     }
 }
@@ -213,6 +220,7 @@ impl CameraBackend for OhCameraBackend {
                 }
                 self.selected_profile = fmt.fmt_index - 1;
                 self.ctx.set_fmt(i32::from(self.selected_profile))?;
+                self.fmt = Some(*cam_fmt);
                 return Ok(());
             }
         }
@@ -380,6 +388,10 @@ impl CameraBackend for OhCameraBackend {
             bail!("Invalid frame src_len {}", src_len);
         }
 
+        if frame_offset == 0 && self.check_rotate {
+            self.rotate_frame(src.unwrap());
+        }
+
         trace::trace_scope_start!(ohcam_get_frame, args = (frame_offset, len));
 
         let mut copied = 0_usize;
@@ -438,6 +450,75 @@ impl CameraBackend for OhCameraBackend {
                 error!("ohcam resume: failed to resume stream {:?}", e);
             })
         }
+    }
+}
+
+impl OhCameraBackend {
+    fn rotate_frame(&self, src: u64) {
+        if self.fmt.is_none() {
+            return;
+        }
+
+        if let Some(Rotation::Rotation90) = get_rotation() {
+            self.flip_frame(src);
+        }
+    }
+
+    fn flip_frame(&self, src: u64) {
+        let fmt = self.fmt.as_ref().unwrap();
+        let width = fmt.width as u64;
+        let height = fmt.height as u64;
+
+        match fmt.fmttype {
+            FmtType::Yuy2 => rotate_yuy2_180(src, width, height),
+            FmtType::Nv12 | FmtType::Nv21 => rotate_nv_180(src, width, height),
+            FmtType::Mjpg => error!("rotation for mjpg not supported"),
+            FmtType::Rgb565 => error!("rotation for rgb565 not supported"),
+        }
+    }
+}
+
+fn rotate_nv_180(src: u64, width: u64, height: u64) {
+    let stride = width;
+    // rotate Y plane
+    rotate_plane_180(src, stride, height);
+    // rotate UV plane
+    let src = src + stride * height;
+    rotate_plane_180(src, stride, height >> 1);
+}
+
+fn rotate_yuy2_180(src: u64, width: u64, height: u64) {
+    let stride = width * 2;
+    rotate_plane_180(src, stride, height);
+}
+
+fn rotate_plane_180(src: u64, stride: u64, height: u64) {
+    let mut row_data = vec![0u8; stride as usize];
+    let half_height = (height + 1) >> 1;
+    let mut src_row = src;
+    let mut dst_row = src + (height - 1) * stride;
+
+    for _ in 0..half_height {
+        // SAFETY: the caller should guarantee address validation.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                src_row as *const u8,
+                row_data.as_mut_ptr(),
+                stride as usize,
+            );
+            std::ptr::copy_nonoverlapping(
+                dst_row as *const u8,
+                src_row as *mut u8,
+                stride as usize,
+            );
+            std::ptr::copy_nonoverlapping(
+                row_data.as_mut_ptr(),
+                dst_row as *mut u8,
+                stride as usize,
+            );
+        }
+        src_row += stride;
+        dst_row -= stride;
     }
 }
 
