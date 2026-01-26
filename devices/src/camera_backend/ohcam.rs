@@ -627,6 +627,12 @@ impl CameraBackend for OhCameraBackend {
         }
 
         if paused {
+            // If stream is off, we don't need to set self.paused.
+            // Because it's not required to re-open stream while
+            // vm is resuming.
+            if !self.stream_on {
+                return;
+            }
             self.paused = true;
             self.video_stream_off().unwrap_or_else(|e| {
                 error!("ohcam pause: failed to pause stream {:?}", e);
