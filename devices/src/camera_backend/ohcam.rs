@@ -510,9 +510,9 @@ impl CameraBackend for OhCameraBackend {
         for idx in 0..self.profile_cnt {
             match self.ctx.get_profile(i32::from(idx)) {
                 Ok((fmt, width, height, fps)) => {
-                    if !FRAME_FORMAT_WHITELIST.iter().any(|&x| x == fmt)
+                    if !FRAME_FORMAT_WHITELIST.contains(&fmt)
                         || width < MIN_WIDTH
-                        || !FPS_WHITELIST.iter().any(|&x| x == fps)
+                        || !FPS_WHITELIST.contains(&fps)
                     {
                         continue;
                     }
