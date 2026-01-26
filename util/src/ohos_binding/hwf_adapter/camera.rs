@@ -42,6 +42,8 @@ type OhcamCreateCtxFn = unsafe extern "C" fn() -> *mut OhCameraCtx;
 type OhcamCreateSessionFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamReleaseSessionFn = unsafe extern "C" fn(*mut OhCameraCtx);
 type OhcamInitCameraFn = unsafe extern "C" fn(*mut OhCameraCtx, *const c_char) -> c_int;
+type OhcamGetConnectionTypeFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
+type OhcamGetCameraOrientationFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamInitProfilesFn = unsafe extern "C" fn(*mut OhCameraCtx) -> c_int;
 type OhcamGetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int, *mut c_void) -> c_int;
 type OhcamSetProfileFn = unsafe extern "C" fn(*mut OhCameraCtx, c_int) -> c_int;
@@ -63,6 +65,8 @@ pub struct CamFuncTable {
     pub create_session: RawSymbol<OhcamCreateSessionFn>,
     pub release_session: RawSymbol<OhcamReleaseSessionFn>,
     pub init_camera: RawSymbol<OhcamInitCameraFn>,
+    pub get_connection_type: RawSymbol<OhcamGetConnectionTypeFn>,
+    pub get_orientation: RawSymbol<OhcamGetCameraOrientationFn>,
     pub init_profiles: RawSymbol<OhcamInitProfilesFn>,
     pub get_profile: RawSymbol<OhcamGetProfileFn>,
     pub set_profile: RawSymbol<OhcamSetProfileFn>,
@@ -81,6 +85,16 @@ impl CamFuncTable {
             create_session: get_libfn!(library, OhcamCreateSessionFn, OhcamCreateSession),
             release_session: get_libfn!(library, OhcamReleaseSessionFn, OhcamReleaseSession),
             init_camera: get_libfn!(library, OhcamInitCameraFn, OhcamInitCamera),
+            get_connection_type: get_libfn!(
+                library,
+                OhcamGetConnectionTypeFn,
+                OhcamGetConnectionType
+            ),
+            get_orientation: get_libfn!(
+                library,
+                OhcamGetCameraOrientationFn,
+                OhcamGetCameraOrientation
+            ),
             init_profiles: get_libfn!(library, OhcamInitProfilesFn, OhcamInitProfiles),
             get_profile: get_libfn!(library, OhcamGetProfileFn, OhcamGetProfile),
             set_profile: get_libfn!(library, OhcamSetProfileFn, OhcamSetProfile),

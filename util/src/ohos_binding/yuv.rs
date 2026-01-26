@@ -45,30 +45,6 @@ impl Into<i32> for FilterMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RotationMode {
-    /// No rotation.
-    Rotate0,
-    /// Rotate 90 degrees clockwise.
-    Rotate90,
-    /// Rotate 180 degrees.
-    Rotate180,
-    /// Rotate 270 degrees clockwise.
-    Rotate270,
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<i32> for RotationMode {
-    fn into(self) -> i32 {
-        match self {
-            RotationMode::Rotate0 => 0,
-            RotationMode::Rotate90 => 90,
-            RotationMode::Rotate180 => 180,
-            RotationMode::Rotate270 => 270,
-        }
-    }
-}
-
 type NV12ToI420RotateFn = unsafe extern "C" fn(
     src_y: *const c_uchar,
     src_stride_y: c_int,

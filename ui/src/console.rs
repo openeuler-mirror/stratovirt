@@ -13,6 +13,7 @@
 use std::{
     cmp,
     mem::size_of,
+    ops::Sub,
     ptr,
     sync::{Arc, Mutex, Weak},
     time::Duration,
@@ -242,7 +243,8 @@ impl DisplayConsole {
     }
 }
 
-#[derive(Clone)]
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rotation {
     Rotation0,
     Rotation90,
@@ -261,6 +263,27 @@ impl TryFrom<u32> for Rotation {
             3 => Ok(Rotation::Rotation270),
             _ => Err("invalid rotation value"),
         }
+    }
+}
+
+impl Sub for Rotation {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        let diff = (self as u8 + 4 - rhs as u8) % 4;
+        const ROTATIONS: [Rotation; 4] = [
+            Rotation::Rotation0,
+            Rotation::Rotation90,
+            Rotation::Rotation180,
+            Rotation::Rotation270,
+        ];
+        ROTATIONS[diff as usize]
+    }
+}
+
+impl Rotation {
+    pub fn to_degree(self) -> i32 {
+        (self as i32) * 90
     }
 }
 
@@ -387,7 +410,7 @@ pub fn set_rotation(rotation: Rotation) {
 
 /// get rotation
 pub fn get_rotation() -> Option<Rotation> {
-    DISPLAY_STATE.lock().unwrap().rotation.clone()
+    DISPLAY_STATE.lock().unwrap().rotation
 }
 
 /// Refresh display image.
