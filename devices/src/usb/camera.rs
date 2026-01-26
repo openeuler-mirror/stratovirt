@@ -121,6 +121,8 @@ pub struct UsbCamera {
     iothread: Option<String>,
     delete_evts: Vec<RawFd>,
     notifier_id: u64,
+    low_power: bool,
+    pause: bool,
 }
 
 #[derive(Debug)]
@@ -523,6 +525,8 @@ impl UsbCamera {
             iothread: config.iothread,
             delete_evts: Vec::new(),
             notifier_id: 0,
+            low_power: true,
+            pause: true,
         })
     }
 
@@ -650,9 +654,12 @@ impl UsbCamera {
                     if (device_req.index >> 8) as u8 & USB_3_SUSPEND_LOW_POWER
                         == USB_3_SUSPEND_LOW_POWER
                     {
+                        self.low_power = true;
                         return self
                             .deactivate()
                             .with_context(|| "Failed to deactivate device");
+                    } else {
+                        self.low_power = false;
                     }
                     return Ok(());
                 }
@@ -669,7 +676,8 @@ impl UsbCamera {
             }
             USB_ENDPOINT_OUT_REQUEST => {
                 if device_req.request == USB_REQUEST_CLEAR_FEATURE {
-                    return Ok(());
+                    self.pause = true;
+                    return self.camera_backend.lock().unwrap().video_stream_off();
                 }
             }
             _ => (),
@@ -742,6 +750,7 @@ impl UsbCamera {
                     self.update_vs_control(&fmt, &vs_control)?;
                     self.activate(&fmt)
                         .with_context(|| "Failed to activate device")?;
+                    self.pause = false;
                 }
                 _ => {
                     bail!("Invalid VS control selector {}", cs);
@@ -876,6 +885,16 @@ impl UsbDevice for UsbCamera {
                 locked_p.status = UsbPacketStatus::Stall;
                 // Async request failed, let controller report the error.
                 locked_p.is_async = false;
+            }
+            if !self.low_power && self.pause {
+                if let Err(e) = self.camera_backend.lock().unwrap().video_stream_on() {
+                    error!(
+                        "Failed to switch on video stream for {} {:?}",
+                        self.device_id(),
+                        e
+                    );
+                }
+                self.pause = false;
             }
         } else {
             error!("Invalid ep number {}", packet.lock().unwrap().ep_number);
