@@ -222,11 +222,14 @@ impl LinuxContainer {
             .set_tty(console_stream, process.init)
             .with_context(|| "Failed to set tty")?;
         process.set_apparmor()?;
-        if self.config.root.readonly {
-            LinuxContainer::mount_rootfs_readonly()?;
+
+        if process.init {
+            if self.config.root.readonly {
+                LinuxContainer::mount_rootfs_readonly()?;
+            }
+            self.set_readonly_paths()?;
+            self.set_masked_paths()?;
         }
-        self.set_readonly_paths()?;
-        self.set_masked_paths()?;
 
         let chdir_cwd_ret = process.chdir_cwd().is_err();
         process.set_additional_gids()?;
