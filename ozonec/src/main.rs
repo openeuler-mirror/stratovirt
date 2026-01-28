@@ -21,7 +21,7 @@ use std::{
     process::exit,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::{crate_description, Args, Parser, Subcommand};
 use commands::{Delete, Exec, Kill, Start, State};
 use log::info;
@@ -87,11 +87,10 @@ fn cmd_run(command: Command, root: &Path) -> Result<()> {
                 info!("Run command: {:?}", create);
 
                 let mut root_exist = false;
-                create.run(root, &mut root_exist).map_err(|e| {
+                create.run(root, &mut root_exist).inspect_err(|_| {
                     if !root_exist {
                         let _ = remove_dir_all(root);
                     }
-                    anyhow!(e)
                 })?
             }
             StandardCmd::Start(start) => {
