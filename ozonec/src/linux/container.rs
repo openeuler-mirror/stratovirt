@@ -21,7 +21,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use libc::{c_char, pid_t, setdomainname};
-use log::{debug, info};
+use log::info;
 use nix::{
     errno::Errno,
     mount::MsFlags,
@@ -128,7 +128,7 @@ impl LinuxContainer {
         fst_stage_channel: &Channel<Message>,
         notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
-        debug!("First stage process start");
+        info!("First stage process start");
 
         fst_stage_channel
             .receiver
@@ -152,7 +152,7 @@ impl LinuxContainer {
         // Send the final container pid to the parent process.
         parent_channel.send_init_pid(init_pid)?;
 
-        debug!("First stage process exit");
+        info!("First stage process exit");
         Ok(())
     }
 
@@ -162,7 +162,7 @@ impl LinuxContainer {
         parent_channel: &Channel<Message>,
         notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
-        debug!("Second stage process start");
+        info!("Second stage process start");
 
         unistd::setsid().with_context(|| "Failed to setsid")?;
         process
