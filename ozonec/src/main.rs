@@ -71,7 +71,7 @@ enum Command {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, author, about = crate_description!())]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " commit-id ", env!("OZONEC_GIT_COMMIT_ID")), author, about = crate_description!())]
 #[command(propagate_version = true)]
 struct Cli {
     #[command(flatten)]
