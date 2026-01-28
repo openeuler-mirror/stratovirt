@@ -275,6 +275,8 @@ impl LinuxContainer {
                 .close()
                 .with_context(|| "Failed to close notify socket")?;
         }
+
+        process.reset_sigpipe();
         process.exec_program();
     }
 
