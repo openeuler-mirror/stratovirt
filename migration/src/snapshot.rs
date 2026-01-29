@@ -106,10 +106,6 @@ impl MigrationManager {
     /// * `path` - snapshot dir path.
     /// * `mapped` - Whether to directly mmap the memory file as the backend.
     pub fn restore_snapshot(path: &str, mapped: bool) -> Result<()> {
-        // Set status to `Active`
-        MigrationManager::set_status(MigrationStatus::Active)?;
-        MigrationManager::notify_status(false, MigrationStatus::Active)?;
-
         let mut snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
             return Err(anyhow!(MigrationError::InvalidSnapshotPath));
@@ -141,10 +137,6 @@ impl MigrationManager {
         Self::restore_vmstate(snapshot_desc_db, &mut device_state_file)
             .with_context(|| "Failed to load snapshot device state")?;
         Self::resume()?;
-
-        // Set status to `Completed`
-        MigrationManager::set_status(MigrationStatus::Completed)?;
-        MigrationManager::notify_status(false, MigrationStatus::Completed)?;
 
         Ok(())
     }
