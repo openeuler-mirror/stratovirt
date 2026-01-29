@@ -770,6 +770,10 @@ impl MigrationHook for OhUiMigration {
         // mask Windows resolution adaptation.
         const NOTIFY_CHANGE_DELAY: u64 = 1500;
 
+        self.ohui_srv
+            .msg_handler
+            .set_migrating(status == migration::MigrationStatus::Active);
+
         if save {
             return Ok(());
         }
