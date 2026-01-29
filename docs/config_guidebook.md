@@ -833,9 +833,10 @@ Three properties can be set for USB controller.
 * bus: bus number of the device.
 * addr: including slot number and function number.
 * iothread: indicate which iothread will be used, if not specified the main thread will be used. (optional)
+* streams: enable/disable XHCI streams capability, if not specified defaults to false on OHOS and to true on other platforms. (optional)
 
 ```shell
--device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>[,iothread=<iothread1>]
+-device nec-usb-xhci,id=<xhci>,bus=<pcie.0>,addr=<0xa>[,iothread=<iothread1>][,streams={on|off}]
 ```
 
 Note: Only one USB controller can be configured, USB controller can only support USB keyboard and USB tablet.
