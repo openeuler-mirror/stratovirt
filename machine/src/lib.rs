@@ -2376,8 +2376,9 @@ pub trait MachineOps: MachineLifecycle {
         use VmState::*;
 
         let mut vm_state = self.get_vm_state().lock().unwrap();
-        if *vm_state != old_state {
-            bail!("Vm lifecycle error: state check failed.");
+        if MigrationManager::is_active() {
+            *vm_state = new_state;
+            return Ok(());
         }
 
         match (old_state, new_state) {
@@ -2393,6 +2394,7 @@ pub trait MachineOps: MachineLifecycle {
             (_, Shutdown) => self
                 .vm_destroy(&mut vm_state)
                 .with_context(|| "Failed to destroy vm.")?,
+            (Paused, Paused) => return Ok(()),
             (_, _) => {
                 bail!("Vm lifecycle error: this transform is illegal.");
             }
@@ -2484,6 +2486,9 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
     let path = migrate_info.uri;
     match migrate_info.mode {
         MigrateMode::File => {
+            // Set status to `Active`
+            MigrationManager::set_status(MigrationStatus::Active)?;
+            MigrationManager::notify_status(false, MigrationStatus::Active)?;
             let ret = MigrationManager::restore_snapshot(&path, migrate_info.mapped);
             if ret.is_err() {
                 let _ = MigrationManager::set_status(MigrationStatus::Failed);
@@ -2492,9 +2497,13 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
                 }
                 ret.with_context(|| "Failed to restore snapshot")?;
             }
-            vm.lock()
-                .unwrap()
-                .run(false)
+            let vm_locked = vm.lock().unwrap();
+            let pause = *vm_locked.get_vm_state().lock().unwrap() == VmState::Paused;
+            // Set status to `Completed`
+            MigrationManager::set_status(MigrationStatus::Completed)?;
+            MigrationManager::notify_status(false, MigrationStatus::Completed)?;
+            vm_locked
+                .run(pause)
                 .with_context(|| "Failed to start VM.")?;
         }
         MigrateMode::Unix => {
