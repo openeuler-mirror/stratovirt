@@ -184,10 +184,13 @@ impl StdMachine {
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
         let mut fdt_addr: u64 = 0;
+        let vm_state = *locked_vm.base.vm_state.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.pause()
-                .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
+            if vm_state != VmState::Paused {
+                cpu.pause()
+                    .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
+            }
 
             cpu.hypervisor_cpu.reset_vcpu(cpu.clone())?;
             if cpu_index == 0 {
@@ -220,9 +223,11 @@ impl StdMachine {
 
         locked_vm.base.irq_chip.as_ref().unwrap().reset()?;
 
-        for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.resume()
-                .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
+        if vm_state != VmState::Paused {
+            for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
+                cpu.resume()
+                    .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
+            }
         }
 
         Ok(())
