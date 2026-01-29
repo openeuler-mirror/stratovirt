@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 use crate::address_space::FlatView;
 use crate::{
@@ -1075,7 +1075,7 @@ impl Region {
         }
         match self.region_type() {
             RegionType::Container => {
-                println!(
+                info!(
                     "{}0x{:X} - 0x{:X}, (Prio {}, Container) : {}",
                     tab,
                     self.offset().raw_value(),
@@ -1088,7 +1088,7 @@ impl Region {
                 }
             }
             RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
-                println!(
+                info!(
                     "{}0x{:X} - 0x{:X}, (Prio {}, {}) : {}",
                     tab,
                     self.offset().raw_value(),
@@ -1099,7 +1099,7 @@ impl Region {
                 );
             }
             RegionType::Alias => {
-                println!(
+                info!(
                     "{}0x{:X} - 0x{:X}, (Prio {}, alias) : {} @alias name: {}",
                     tab,
                     self.alias_offset(),
