@@ -248,17 +248,20 @@ extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
     }
 
     let iso_transfer = get_iso_transfer_from_transfer(host_transfer);
-    let locketd_iso_transfer = iso_transfer.lock().unwrap();
+    let iso_queue = iso_transfer.lock().unwrap().iso_queue.clone();
 
-    if let Some(iso_queue) = locketd_iso_transfer.iso_queue.clone().upgrade() {
-        drop(locketd_iso_transfer);
+    if let Some(iso_queue) = iso_queue.upgrade() {
         let mut locked_iso_queue = iso_queue.lock().unwrap();
         let iso_transfer = locked_iso_queue.inflight.pop_front().unwrap();
         if locked_iso_queue.inflight.is_empty() {
             let queue = &locked_iso_queue;
-            trace::usb_host_iso_stop(queue.hostbus, queue.hostaddr, queue.ep_number);
+            trace::usb_host_iso_stop(queue.hostbus, queue.hostaddr, queue.ep.ep_number);
         }
-        locked_iso_queue.copy.push_back(iso_transfer);
+        if locked_iso_queue.ep.in_direction {
+            locked_iso_queue.copy.push_back(iso_transfer);
+        } else {
+            locked_iso_queue.unused.push_back(iso_transfer);
+        }
     }
 }
 
