@@ -30,9 +30,9 @@ pub mod usb;
 
 #[cfg(target_arch = "aarch64")]
 pub use interrupt_controller::{
-    GICDevice, GICVersion, GICv2, GICv2Access, GICv3, GICv3Access, GICv3ItsAccess, GICv3ItsState,
-    GICv3State, GicRedistRegion, ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController,
-    InterruptError as IntCtrlErrs, GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
+    GICDevice, GICVersion, GICv2, GICv2Access, GICv3, GICv3Access, GICv3ItsAccess, GicRedistRegion,
+    ICGICConfig, ICGICv2Config, ICGICv3Config, InterruptController, InterruptError as IntCtrlErrs,
+    GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
 };
 pub use interrupt_controller::{IrqManager, IrqState, LineIrqManager, MsiIrqManager, TriggerMode};
 pub use legacy::error::LegacyError as LegacyErrs;

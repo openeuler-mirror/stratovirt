@@ -49,6 +49,8 @@ use vmm_sys_util::{
     signal::{register_signal_handler, Killable},
 };
 
+#[cfg(target_arch = "aarch64")]
+use self::aarch64::gicv3::{GICv3ItsState, GICv3State};
 use self::listener::KvmMemoryListener;
 use super::HypervisorOps;
 #[cfg(target_arch = "x86_64")]
@@ -64,15 +66,12 @@ use cpu::{
 };
 use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
 #[cfg(target_arch = "aarch64")]
-use devices::{
-    GICVersion, GICv2, GICv3, GICv3ItsState, GICv3State, ICGICConfig, InterruptController,
-    GIC_IRQ_INTERNAL,
-};
+use devices::{GICVersion, GICv2, GICv3, ICGICConfig, InterruptController, GIC_IRQ_INTERNAL};
 use interrupt::IrqRouteTable;
 use machine_manager::machine::HypervisorType;
 #[cfg(target_arch = "aarch64")]
 use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
-use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
+use migration::{DeviceStateDesc, MigrateMemSlot, MigrateOps, MigrationManager};
 #[cfg(target_arch = "x86_64")]
 use x86_64::cpu_caps::X86CPUCaps as CPUCaps;
 
@@ -173,7 +172,11 @@ impl HypervisorOps for KvmHypervisor {
         gic_conf.check_sanity()?;
 
         let create_gicv3 = || {
-            let hypervisor_gic = KvmGICv3::new(self.vm_fd.clone().unwrap(), gic_conf.vcpu_count)?;
+            let hypervisor_gic = KvmGICv3::new(
+                self.vm_fd.clone().unwrap(),
+                gic_conf.vcpu_count,
+                gic_conf.max_irq,
+            )?;
             let its_handler = KvmGICv3Its::new(self.vm_fd.clone().unwrap())?;
             let gicv3 = Arc::new(GICv3::new(
                 Arc::new(hypervisor_gic),
@@ -575,6 +578,22 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_reset_vcpu(cpu)?;
 
         Ok(())
+    }
+
+    fn get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {
+        self.arch_get_state_vec(arch_cpu)
+    }
+
+    fn set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
+        self.arch_set_state(state, arch_cpu)
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&ArchCPU::descriptor().name).unwrap_or(!0)
+    }
+
+    fn get_device_desc(&self) -> DeviceStateDesc {
+        ArchCPU::descriptor()
     }
 
     fn vcpu_exec(
