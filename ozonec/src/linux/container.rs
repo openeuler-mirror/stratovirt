@@ -130,15 +130,19 @@ impl LinuxContainer {
     ) -> Result<()> {
         info!("First stage process start");
 
-        fst_stage_channel
-            .receiver
-            .close()
-            .with_context(|| "Failed to close receiver end of first stage channel")?;
+        fst_stage_channel.sender.close().with_context(|| {
+            "Failed to close sender end of fst_stage_channel in the first stage."
+        })?;
 
         process
             .set_rlimits()
             .with_context(|| "Failed to set rlimit")?;
         self.set_user_namespace(parent_channel, fst_stage_channel, process)?;
+
+        fst_stage_channel.receiver.close().with_context(|| {
+            "Failed to close receiver end of fst_stage_channel in the first stage."
+        })?;
+
         // New pid namespace goes intto effect in cloned child processes.
         self.set_pid_namespace()?;
 
@@ -149,8 +153,16 @@ impl LinuxContainer {
             Ok(0)
         })?;
 
+        parent_channel.receiver.close().with_context(|| {
+            "Failed to close receiver end of parent_channel in the first stage."
+        })?;
+
         // Send the final container pid to the parent process.
         parent_channel.send_init_pid(init_pid)?;
+        parent_channel
+            .sender
+            .close()
+            .with_context(|| "Failed to close sender end of parent_channel in the first stage.")?;
 
         info!("First stage process exit");
         Ok(())
@@ -163,6 +175,9 @@ impl LinuxContainer {
         notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
         info!("Second stage process start");
+        parent_channel.receiver.close().with_context(|| {
+            "Failed to close receiver end of parent_channel in the second stage."
+        })?;
 
         unistd::setsid().with_context(|| "Failed to setsid")?;
         process
@@ -553,10 +568,6 @@ impl LinuxContainer {
         fst_stage_channel
             .send_id_mappings_done()
             .with_context(|| "Failed to send id mapping done")?;
-        fst_stage_channel
-            .sender
-            .close()
-            .with_context(|| "Failed to close fst_stage_channel sender")?;
         Ok(())
     }
 
@@ -667,9 +678,6 @@ impl Container for LinuxContainer {
         let parent_channel = Channel::<Message>::new()
             .with_context(|| "Failed to create message channel for parent process")?;
         let fst_stage_channel = Channel::<Message>::new()?;
-        // Set receivers timeout: 50ms.
-        parent_channel.receiver.set_timeout(50000)?;
-        fst_stage_channel.receiver.set_timeout(50000)?;
 
         // Spawn a child process to perform Stage 1.
         let fst_stage_pid = clone_process("ozonec:[1:CHILD]", || {
@@ -683,14 +691,27 @@ impl Container for LinuxContainer {
             Ok(0)
         })?;
 
+        parent_channel
+            .sender
+            .close()
+            .with_context(|| "Failed to close sender end of parent_channel in main process.")?;
+        fst_stage_channel.receiver.close().with_context(|| {
+            "Failed to close the receiver end of fst_stage_channel in main process."
+        })?;
+
         if self.is_namespace_set(NamespaceType::User)? {
             self.set_id_mappings(&parent_channel, &fst_stage_channel, &fst_stage_pid)?;
         }
+        fst_stage_channel.sender.close().with_context(|| {
+            "Failed to close the sender end of fst_stage_channel in main process."
+        })?;
 
         let init_pid = parent_channel
             .recv_init_pid()
             .with_context(|| "Failed to receive init pid")?;
-        parent_channel.recv_container_created()?;
+        parent_channel
+            .recv_container_created()
+            .with_context(|| "Failed to receive container_created message")?;
         parent_channel
             .receiver
             .close()

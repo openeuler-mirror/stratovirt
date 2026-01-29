@@ -20,13 +20,10 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use log::{error, info};
 use nix::{
-    sys::{
-        socket::{
-            recvmsg, sendmsg, setsockopt, socketpair, sockopt, AddressFamily, MsgFlags, SockFlag,
-            SockType, UnixAddr,
-        },
-        time::TimeVal,
+    sys::socket::{
+        recvmsg, sendmsg, socketpair, AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr,
     },
     unistd::{self, Pid},
 };
@@ -84,21 +81,15 @@ where
         Ok(unistd::close(self.fd)?)
     }
 
-    pub fn set_timeout(&self, timeout: i64) -> Result<()> {
-        let timeval = TimeVal::new(0, timeout);
-        setsockopt(self.fd, sockopt::ReceiveTimeout, &timeval)
-            .with_context(|| "Failed to set receiver end timeout")?;
-        Ok(())
-    }
-
     fn max_len_iovec(&self) -> Result<u64> {
         let mut len: u64 = 0;
         // SAFETY: len and type "u64" are both valid.
         let mut iov = [IoSliceMut::new(unsafe {
             slice::from_raw_parts_mut((&mut len as *mut u64) as *mut u8, mem::size_of::<u64>())
         })];
-
-        recvmsg::<UnixAddr>(self.fd, &mut iov, None, MsgFlags::MSG_PEEK)?;
+        info!("Receiver starts to find the maximum length of IO vector.");
+        recvmsg::<UnixAddr>(self.fd, &mut iov, None, MsgFlags::MSG_PEEK)
+            .inspect_err(|e| error!("Failed to receive messages, error: {:?}", e))?;
         match len {
             0 => bail!("Failed to get maximum length"),
             _ => Ok(len),
@@ -106,7 +97,9 @@ where
     }
 
     pub fn recv(&self) -> Result<T> {
-        let msg_len = self.max_len_iovec()?;
+        let msg_len = self
+            .max_len_iovec()
+            .with_context(|| "Failed to get maximum length of receiver's IO vector")?;
         let mut received_len: u64 = 0;
         let mut buf = vec![0u8; msg_len as usize];
         let bytes = {
@@ -121,12 +114,15 @@ where
                 IoSliceMut::new(&mut buf),
             ];
             let mut cmsg = nix::cmsg_space!(T);
+            info!("Receiver starts to receive message");
             let msg = recvmsg::<UnixAddr>(
                 self.fd,
                 &mut iov,
                 Some(&mut cmsg),
                 MsgFlags::MSG_CMSG_CLOEXEC,
-            )?;
+            )
+            .inspect_err(|e| error!("Failed to receive messages, error: {:?}", e))
+            .with_context(|| "Receiver failed to receive messages")?;
             msg.bytes
         };
 
@@ -164,9 +160,15 @@ impl Channel<Message> {
     }
 
     pub fn recv_container_created(&self) -> Result<()> {
-        let msg = self.receiver.recv()?;
+        let msg = self
+            .receiver
+            .recv()
+            .with_context(|| "Failed to receive ContainerCreated message.")?;
         match msg {
-            Message::ContainerCreated => Ok(()),
+            Message::ContainerCreated => {
+                info!("Succeed to receive ContainerCreated message.");
+                Ok(())
+            }
             _ => bail!("Expect receiving ContainerCreated, but got {:?}", msg),
         }
     }
@@ -174,44 +176,70 @@ impl Channel<Message> {
     pub fn send_container_created(&self) -> Result<()> {
         self.sender
             .send(Message::ContainerCreated)
+            .inspect(|_| info!("Succeed to send container_created message."))
             .with_context(|| "Failed to send created message to parent process")
     }
 
     pub fn recv_id_mappings(&self) -> Result<()> {
-        let msg = self.receiver.recv()?;
+        let msg = self
+            .receiver
+            .recv()
+            .with_context(|| "Failed to receive IdMappingStart message.")?;
         match msg {
-            Message::IdMappingStart => Ok(()),
+            Message::IdMappingStart => {
+                info!("Succeed to receive IdMappingStart message.");
+                Ok(())
+            }
             _ => bail!("Expect receiving IdMappingStart, but got {:?}", msg),
         }
     }
 
     pub fn send_id_mappings(&self) -> Result<()> {
-        self.sender.send(Message::IdMappingStart)
+        self.sender
+            .send(Message::IdMappingStart)
+            .inspect(|_| info!("Succeed to send IdMappingStart message."))
+            .with_context(|| "Failed to send IdMappingStart message.")
     }
 
     pub fn recv_init_pid(&self) -> Result<Pid> {
-        let msg = self.receiver.recv()?;
+        let msg = self
+            .receiver
+            .recv()
+            .with_context(|| "Failed to receive InitReady message.")?;
         match msg {
-            Message::InitReady(pid) => Ok(Pid::from_raw(pid)),
+            Message::InitReady(pid) => {
+                info!("Succeed to receive InitReady message.");
+                Ok(Pid::from_raw(pid))
+            }
             _ => bail!("Expect receiving InitReady, but got {:?}", msg),
         }
     }
 
     pub fn recv_id_mappings_done(&self) -> Result<()> {
-        let msg = self.receiver.recv()?;
+        let msg = self
+            .receiver
+            .recv()
+            .with_context(|| "Failed to receive IdMappingDone message.")?;
         match msg {
-            Message::IdMappingDone => Ok(()),
+            Message::IdMappingDone => {
+                info!("Succeed to receive IdMappingDone message.");
+                Ok(())
+            }
             _ => bail!("Expect receiving IdMappingDone, but got {:?}", msg),
         }
     }
 
     pub fn send_id_mappings_done(&self) -> Result<()> {
-        self.sender.send(Message::IdMappingDone)
+        self.sender
+            .send(Message::IdMappingDone)
+            .inspect(|_| info!("Succeed to send IdMappingDone message."))
+            .with_context(|| "Failed to send IdMappingDone message.")
     }
 
     pub fn send_init_pid(&self, pid: Pid) -> Result<()> {
         self.sender
             .send(Message::InitReady(pid.as_raw()))
+            .inspect(|_| info!("Succeed to send InitReady message."))
             .with_context(|| "Failed to send container process pid")
     }
 }
