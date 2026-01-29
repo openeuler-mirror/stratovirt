@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -182,6 +183,7 @@ pub struct OhUiMsgHandler {
     input_state: Arc<Mutex<InputDeviceState>>,
     surface_size: RwLock<(u32, u32)>,
     ui_size: RwLock<(u32, u32)>,
+    migrating: AtomicBool,
 }
 
 impl OhUiMsgHandler {
@@ -196,6 +198,7 @@ impl OhUiMsgHandler {
             input_state: Arc::new(Mutex::new(InputDeviceState::default())),
             surface_size: RwLock::new((0, 0)),
             ui_size: RwLock::new((0, 0)),
+            migrating: AtomicBool::new(false),
         };
         handler.register_pause_notifier(handler.vm_pause.clone());
         handler.register_input_change_notifier();
@@ -308,6 +311,13 @@ impl OhUiMsgHandler {
     }
 
     fn filter_message(&self, et: &EventType) -> bool {
+        if self.migrating.load(Ordering::Relaxed) {
+            return matches!(et, EventType::Keyboard)
+                || matches!(et, EventType::Ledstate)
+                || matches!(et, EventType::MouseButton)
+                || matches!(et, EventType::MouseMotion);
+        }
+
         if !*self.vm_pause.read().unwrap() {
             return false;
         }
@@ -561,6 +571,10 @@ impl OhUiMsgHandler {
                 error!("notify_snapshot_state: failed to send message with error {e}");
             }
         }
+    }
+
+    pub fn set_migrating(&self, migrating: bool) {
+        self.migrating.store(migrating, Ordering::Relaxed);
     }
 
     pub fn reset(&self) {
