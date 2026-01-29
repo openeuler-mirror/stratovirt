@@ -799,6 +799,8 @@ dependencies = [
  "machine_manager",
  "migration",
  "migration_derive",
+ "serde",
+ "serde_json",
  "thiserror",
  "trace",
  "util",

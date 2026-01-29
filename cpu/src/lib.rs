@@ -76,6 +76,7 @@ use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActio
 use machine_manager::event;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
+use migration::DeviceStateDesc;
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
@@ -175,6 +176,14 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn put_register(&self, cpu: Arc<CPU>) -> Result<()>;
 
     fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()>;
+
+    fn get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>>;
+
+    fn set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()>;
+
+    fn get_device_alias(&self) -> u64;
+
+    fn get_device_desc(&self) -> DeviceStateDesc;
 
     fn vcpu_exec(
         &self,

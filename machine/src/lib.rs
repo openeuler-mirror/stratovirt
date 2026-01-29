@@ -530,7 +530,11 @@ pub trait MachineOps: MachineLifecycle {
             )?;
             cpus.push(cpu.clone());
 
-            MigrationManager::register_cpu_instance(cpu::ArchCPU::descriptor(), cpu, vcpu_id);
+            MigrationManager::register_cpu_instance(
+                cpu.hypervisor_cpu.get_device_desc(),
+                cpu,
+                vcpu_id,
+            );
         }
 
         for (cpu_index, cpu) in cpus.iter().enumerate() {

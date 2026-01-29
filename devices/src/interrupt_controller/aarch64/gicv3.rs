@@ -18,7 +18,6 @@ use log::{error, info};
 use super::{GICConfig, GICDevice};
 use crate::interrupt_controller::error::InterruptError;
 use machine_manager::machine::{MachineLifecycle, VmState};
-use migration::StateTransfer;
 use util::device_tree::{self, FdtBuilder};
 
 // See arch/arm64/include/uapi/asm/kvm.h file from the linux kernel.
@@ -39,59 +38,28 @@ pub struct GICv3Config {
 
 /// Access wrapper for GICv3.
 pub trait GICv3Access: Send + Sync {
-    fn init_gic(
-        &self,
-        _nr_irqs: u32,
-        _redist_regions: Vec<GicRedistRegion>,
-        _dist_base: u64,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn vcpu_gicr_attr(&self, _cpu: usize) -> u64 {
-        0
-    }
-
-    fn access_gic_distributor(
-        &self,
-        _offset: u64,
-        _gicd_value: &mut u32,
-        _write: bool,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn access_gic_redistributor(
-        &self,
-        _offset: u64,
-        _cpu: usize,
-        _gicr_value: &mut u32,
-        _write: bool,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn access_gic_cpu(
-        &self,
-        _offset: u64,
-        _cpu: usize,
-        _gicc_value: &mut u64,
-        _write: bool,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn access_gic_line_level(
-        &self,
-        _offset: u64,
-        _gicll_value: &mut u32,
-        _write: bool,
-    ) -> Result<()> {
+    fn init_gic(&self, _redist_regions: Vec<GicRedistRegion>, _dist_base: u64) -> Result<()> {
         Ok(())
     }
 
     fn pause(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn reset_gic_state(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn set_state(&self, _state: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        0
     }
 }
 
@@ -109,12 +77,8 @@ pub struct GicRedistRegion {
 pub struct GICv3 {
     /// The handler for the GICv3 device to access the corresponding device in hypervisor.
     pub hypervisor_gic: Arc<dyn GICv3Access>,
-    /// Number of vCPUs, determines the number of redistributor and CPU interface.
-    pub(crate) vcpu_count: u64,
     /// GICv3 ITS device.
     pub its_dev: Option<Arc<GICv3Its>>,
-    /// Maximum irq number.
-    pub(crate) nr_irqs: u32,
     /// GICv3 redistributor info, support multiple redistributor regions.
     pub redist_regions: Vec<GicRedistRegion>,
     /// Base address in the guest physical address space of the GICv3 distributor
@@ -166,8 +130,6 @@ impl GICv3 {
 
         let mut gicv3 = GICv3 {
             hypervisor_gic,
-            vcpu_count: config.vcpu_count,
-            nr_irqs: config.max_irq,
             its_dev: None,
             redist_regions,
             dist_base: v3config.dist_range.0,
@@ -188,54 +150,6 @@ impl GICv3 {
         }
 
         Ok(())
-    }
-
-    fn reset_gic_state(&self) -> Result<()> {
-        let reset_state = self.create_reset_state()?;
-        self.set_state(&reset_state, 0u32)
-            .with_context(|| "Failed to reset gic")
-    }
-
-    pub(crate) fn access_gic_distributor(
-        &self,
-        offset: u64,
-        gicd_value: &mut u32,
-        write: bool,
-    ) -> Result<()> {
-        self.hypervisor_gic
-            .access_gic_distributor(offset, gicd_value, write)
-    }
-
-    pub(crate) fn access_gic_redistributor(
-        &self,
-        offset: u64,
-        cpu: usize,
-        gicr_value: &mut u32,
-        write: bool,
-    ) -> Result<()> {
-        self.hypervisor_gic
-            .access_gic_redistributor(offset, cpu, gicr_value, write)
-    }
-
-    pub(crate) fn access_gic_cpu(
-        &self,
-        offset: u64,
-        cpu: usize,
-        gicc_value: &mut u64,
-        write: bool,
-    ) -> Result<()> {
-        self.hypervisor_gic
-            .access_gic_cpu(offset, cpu, gicc_value, write)
-    }
-
-    pub(crate) fn access_gic_line_level(
-        &self,
-        offset: u64,
-        gicll_value: &mut u32,
-        write: bool,
-    ) -> Result<()> {
-        self.hypervisor_gic
-            .access_gic_line_level(offset, gicll_value, write)
     }
 }
 
@@ -282,7 +196,7 @@ impl MachineLifecycle for GICv3 {
 impl GICDevice for GICv3 {
     fn realize(&self) -> Result<()> {
         self.hypervisor_gic
-            .init_gic(self.nr_irqs, self.redist_regions.clone(), self.dist_base)
+            .init_gic(self.redist_regions.clone(), self.dist_base)
             .with_context(|| "Failed to init GICv3")?;
 
         if let Some(its) = &self.its_dev {
@@ -355,16 +269,24 @@ pub trait GICv3ItsAccess: Send + Sync {
         Ok(())
     }
 
-    fn access_gic_its(&self, _attr: u32, _its_value: &mut u64, _write: bool) -> Result<()> {
-        Ok(())
-    }
-
     fn access_gic_its_tables(&self, _save: bool) -> Result<()> {
         Ok(())
     }
 
     fn reset(&self) -> Result<()> {
         Ok(())
+    }
+
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn set_state(&self, _state: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        0
     }
 }
 
@@ -390,17 +312,7 @@ impl GICv3Its {
     }
 
     fn realize(&self) -> Result<()> {
-        self.its_handler.init_gic_its(self.msi_base)?;
-
-        Ok(())
-    }
-
-    pub(crate) fn access_gic_its(&self, attr: u32, its_value: &mut u64, write: bool) -> Result<()> {
-        self.its_handler.access_gic_its(attr, its_value, write)
-    }
-
-    pub(crate) fn access_gic_its_tables(&self, save: bool) -> Result<()> {
-        self.its_handler.access_gic_its_tables(save)
+        self.its_handler.init_gic_its(self.msi_base)
     }
 
     pub(crate) fn reset(&self) -> Result<()> {
