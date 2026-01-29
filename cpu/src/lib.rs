@@ -197,6 +197,13 @@ pub trait CPUHypervisorOps: Send + Sync {
         pause_signal: Arc<AtomicBool>,
     ) -> Result<()>;
 
+    fn reset_vcpu_lifecycle_state(
+        &self,
+        _state: &(Mutex<CpuLifecycleState>, Condvar),
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn destroy(
         &self,
         task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
@@ -445,8 +452,8 @@ impl CPUInterface for CPU {
 
     fn guest_reset(&self) -> Result<()> {
         if let Some(vm) = self.vm.upgrade() {
-            let (cpu_state, _) = &*self.state;
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
+            self.hypervisor_cpu
+                .reset_vcpu_lifecycle_state(self.state())?;
             vm.lock().unwrap().reset();
         } else {
             return Err(anyhow!(CpuError::NoMachineInterface));
