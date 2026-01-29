@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use arc_swap::ArcSwap;
-use log::error;
+use log::{error, info};
 use once_cell::sync::OnceCell;
 
 use crate::{
@@ -245,9 +245,9 @@ impl AddressSpace {
     pub fn memspace_show(&self) {
         let view = self.flat_view.load();
 
-        println!("----- address-space flat: {} -----", self.name);
+        info!("----- address-space flat: {} -----", self.name);
         for fr in view.0.iter() {
-            println!(
+            info!(
                 "  0x{:X} - 0x{:X}, (pri {}, {:?}) Region {} @ offset 0x{:X}",
                 fr.addr_range.base.raw_value(),
                 fr.addr_range.base.raw_value() + fr.addr_range.size,
@@ -258,9 +258,9 @@ impl AddressSpace {
             );
         }
 
-        println!("------ regions show: {} --------------", self.root().name);
+        info!("------ regions show: {} --------------", self.root().name);
         self.root().mtree(0_u32);
-        println!("--------------------------------------");
+        info!("--------------------------------------");
     }
 
     /// Register the listener to the `AddressSpace`.
