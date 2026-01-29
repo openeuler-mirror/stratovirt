@@ -191,7 +191,7 @@ impl XhciTransfer {
         self.status = usb_packet_status_to_trb_code(self.packet.lock().unwrap().status)?;
         if self.status == TRBCCode::Success {
             trace::usb_xhci_xfer_success(&self.packet.lock().unwrap().actual_length);
-            self.submit_transfer()?;
+            self.report_transfer_success()?;
             let ring = self.ep_context.get_ring(self.streamid).with_context(|| {
                 format!(
                     "Failed to find Transfer Ring with Endpoint ID {}, Slot ID {}, Stream ID {}.",
@@ -215,8 +215,8 @@ impl XhciTransfer {
         Ok(())
     }
 
-    /// Submit the succeed transfer TRBs.
-    pub fn submit_transfer(&mut self) -> Result<()> {
+    /// Report the succeeded transfer TRBs.
+    pub fn report_transfer_success(&mut self) -> Result<()> {
         // Event Data Transfer Length Accumulator.
         let mut edtla: u32 = 0;
         let mut shortpkt = false;
@@ -313,9 +313,9 @@ impl XhciTransfer {
 }
 
 impl TransferOps for XhciTransfer {
-    fn submit_transfer(&mut self) {
+    fn transfer_complete_cb(&mut self) {
         if let Err(e) = self.complete_transfer() {
-            error!("Failed to submit transfer, error {:?}", e);
+            error!("Failed to complete transfer, error {:?}", e);
         }
     }
 }
@@ -337,6 +337,7 @@ pub struct XhciEpContext {
     max_pstreams: u32,
     lsa: bool,
     stream_array: Option<XhciStreamArray>,
+    kick_timer_id: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -371,6 +372,7 @@ impl XhciEpContext {
             max_pstreams: 0,
             lsa: false,
             stream_array: None,
+            kick_timer_id: None,
         }
     }
 
@@ -1142,7 +1144,7 @@ pub struct XhciDevice {
     pub enable_streams: bool,
     /// Runtime Register.
     mfindex_start: Duration,
-    timer_id: Option<u64>,
+    mfwrap_timer_id: Option<u64>,
     packet_count: u32,
     bme: Arc<AtomicBool>,
 }
@@ -1158,7 +1160,7 @@ pub struct XhciDevState {
     cmd_ring_state: XhciCommandRingState,
     mfindex_secs: u64,
     mfindex_nanos: u32,
-    timer_id: u64,
+    mfwrap_timer_id: u64,
     bme: u8,
 }
 
@@ -1217,7 +1219,7 @@ impl XhciDevice {
             mem_space: mem_space.clone(),
             enable_streams: streams,
             mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
-            timer_id: None,
+            mfwrap_timer_id: None,
             bme: bme.clone(),
         };
         let xhci = Arc::new(Mutex::new(xhci));
@@ -1278,12 +1280,14 @@ impl XhciDevice {
 
                 locked_xhci.mfwrap_update();
             });
-            self.timer_id = Some(EventLoop::get_ctx(None).unwrap().timer_add(
+            self.mfwrap_timer_id = Some(EventLoop::get_ctx(None).unwrap().timer_add(
                 xhci_mfwrap_timer,
                 Duration::from_nanos(left * ISO_BASE_TIME_INTERVAL),
             ));
-        } else {
-            self.timer_id = None;
+        } else if let Some(timer_id) = self.mfwrap_timer_id {
+            let ctx = EventLoop::get_ctx(None).unwrap();
+            ctx.timer_del(timer_id);
+            self.mfwrap_timer_id = None;
         }
     }
 
@@ -2364,7 +2368,7 @@ impl XhciDevice {
         let mut locked_xfer = xfer.lock().unwrap();
         if locked_xfer.timed_xfer {
             let mfindex = self.mfindex();
-            self.check_intr_iso_kick(&mut locked_xfer, mfindex);
+            self.check_iso_kick(&mut locked_xfer, mfindex);
             if locked_xfer.running_retry {
                 return Ok(false);
             }
@@ -2476,7 +2480,7 @@ impl XhciDevice {
         }
     }
 
-    fn check_intr_iso_kick(&mut self, xfer: &mut XhciTransfer, mfindex: u64) {
+    fn check_iso_kick(&mut self, xfer: &mut XhciTransfer, mfindex: u64) {
         let epctx = &mut self.slots[(xfer.slotid - 1) as usize].endpoints[(xfer.epid - 1) as usize];
         if xfer.mfindex_kick > mfindex {
             let weak_xhci = self.usb_ports[0].lock().unwrap().xhci.clone();
@@ -2501,21 +2505,19 @@ impl XhciDevice {
                 }
             });
             let ctx = EventLoop::get_ctx(None).unwrap();
-            if self.timer_id.is_some() {
-                ctx.timer_del(self.timer_id.unwrap());
+            if let Some(timer_id) = epctx.kick_timer_id {
+                ctx.timer_del(timer_id);
             }
-            self.timer_id = Some(ctx.timer_add(
+            epctx.kick_timer_id = Some(ctx.timer_add(
                 xhci_ep_kick_timer,
                 Duration::from_nanos((xfer.mfindex_kick - mfindex) * ISO_BASE_TIME_INTERVAL),
             ));
             xfer.running_retry = true;
         } else {
             epctx.mfindex_last = xfer.mfindex_kick;
-            if self.timer_id.is_some() {
-                EventLoop::get_ctx(None)
-                    .unwrap()
-                    .timer_del(self.timer_id.unwrap());
-                self.timer_id = None;
+            if let Some(timer_id) = epctx.kick_timer_id {
+                EventLoop::get_ctx(None).unwrap().timer_del(timer_id);
+                epctx.kick_timer_id = None;
             }
             xfer.running_retry = false;
         }
@@ -2541,7 +2543,7 @@ impl XhciDevice {
                 xfer.timed_xfer = true;
                 let mfindex = self.mfindex();
                 self.calc_iso_kick(xfer, mfindex);
-                self.check_intr_iso_kick(xfer, mfindex);
+                self.check_iso_kick(xfer, mfindex);
                 if xfer.running_retry {
                     return Ok(());
                 }
@@ -2650,7 +2652,7 @@ impl XhciDevice {
         Ok(dev.clone())
     }
 
-    /// Update packet status and then submit transfer.
+    /// Update packet status and then complete the transfer.
     fn complete_packet(&mut self, xfer: &mut XhciTransfer) -> Result<()> {
         if xfer.packet.lock().unwrap().is_async {
             trace::usb_xhci_xfer_async();
@@ -2706,18 +2708,18 @@ impl XhciDevice {
     ) -> Result<u32> {
         let mut killed = 0;
 
-        if xfer.running_async {
-            if report != TRBCCode::Invalid {
-                xfer.status = report;
-                xfer.submit_transfer()?;
-                let locked_packet = xfer.packet.lock().unwrap();
+        if report != TRBCCode::Invalid && (xfer.running_async || xfer.running_retry) {
+            xfer.status = report;
+            xfer.report_transfer_success()?;
+        }
 
-                if let Some(usb_dev) = locked_packet.target_dev.as_ref() {
-                    if let Some(usb_dev) = usb_dev.clone().upgrade() {
-                        drop(locked_packet);
-                        let mut locked_usb_dev = usb_dev.lock().unwrap();
-                        locked_usb_dev.cancel_packet(&xfer.packet);
-                    }
+        if xfer.running_async {
+            let locked_packet = xfer.packet.lock().unwrap();
+            if let Some(usb_dev) = locked_packet.target_dev.as_ref() {
+                if let Some(usb_dev) = usb_dev.clone().upgrade() {
+                    drop(locked_packet);
+                    let mut locked_usb_dev = usb_dev.lock().unwrap();
+                    locked_usb_dev.cancel_packet(&xfer.packet);
                 }
             }
             xfer.running_async = false;
@@ -2725,15 +2727,16 @@ impl XhciDevice {
         }
 
         if xfer.running_retry {
-            if report != TRBCCode::Invalid {
-                xfer.status = report;
-                xfer.submit_transfer()?;
-            }
             let epctx = &mut self.slots[(slotid - 1) as usize].endpoints[(ep_id - 1) as usize];
+            if let Some(timer_id) = epctx.kick_timer_id {
+                EventLoop::get_ctx(None).unwrap().timer_del(timer_id);
+                epctx.kick_timer_id = None;
+            }
             epctx.retry = None;
             xfer.running_retry = false;
             killed = 1;
         }
+
         xfer.td.clear();
         Ok(killed)
     }
@@ -2873,7 +2876,7 @@ impl XhciDevice {
             cmd_ring_state: self.cmd_ring.get_snapshot_state(),
             mfindex_secs: self.mfindex_start.as_secs(),
             mfindex_nanos: self.mfindex_start.subsec_nanos(),
-            timer_id: self.timer_id.unwrap_or(u64::MAX),
+            mfwrap_timer_id: self.mfwrap_timer_id.unwrap_or(u64::MAX),
             bme: self.bme.load(Ordering::SeqCst).into(),
         }
     }
@@ -2885,7 +2888,7 @@ impl XhciDevice {
         self.oper.set_snapshot_state(&state.oper_state);
         self.cmd_ring.set_snapshot_state(&state.cmd_ring_state);
         self.mfindex_start = Duration::new(state.mfindex_secs, state.mfindex_nanos);
-        if state.timer_id != u64::MAX {
+        if state.mfwrap_timer_id != u64::MAX {
             self.mfwrap_update();
         }
         self.bme.store(state.bme != 0, Ordering::SeqCst);
