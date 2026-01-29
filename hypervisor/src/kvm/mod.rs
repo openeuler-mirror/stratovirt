@@ -697,6 +697,14 @@ impl CPUHypervisorOps for KvmCpu {
         Ok(())
     }
 
+    fn reset_vcpu_lifecycle_state(
+        &self,
+        state: &(Mutex<CpuLifecycleState>, Condvar),
+    ) -> Result<()> {
+        *state.0.lock().unwrap() = CpuLifecycleState::Paused;
+        Ok(())
+    }
+
     fn destroy(
         &self,
         task: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
