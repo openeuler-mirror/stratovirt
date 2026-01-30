@@ -124,33 +124,48 @@ impl LinuxContainer {
     fn do_first_stage(
         &mut self,
         process: &mut Process,
-        parent_channel: &Channel<Message>,
         fst_stage_channel: &Channel<Message>,
+        sec_stage_channel: &Channel<Message>,
         notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
         info!("First stage process start");
 
-        fst_stage_channel
-            .receiver
-            .close()
-            .with_context(|| "Failed to close receiver end of first stage channel")?;
-
         process
             .set_rlimits()
             .with_context(|| "Failed to set rlimit")?;
-        self.set_user_namespace(parent_channel, fst_stage_channel, process)?;
+        self.set_user_namespace(fst_stage_channel, process)?;
+
+        fst_stage_channel.receiver.close().with_context(|| {
+            "Failed to close receiver end of fst_stage_channel in the first stage."
+        })?;
+
         // New pid namespace goes intto effect in cloned child processes.
         self.set_pid_namespace()?;
 
         // Spawn a child process to perform the second stage to initialize container.
         let init_pid = clone_process("ozonec:[2:INIT]", || {
-            self.do_second_stage(process, parent_channel, notify_listener)
-                .with_context(|| "Second stage process encounters errors")?;
+            self.do_second_stage(
+                process,
+                fst_stage_channel,
+                sec_stage_channel,
+                notify_listener,
+            )
+            .with_context(|| "Second stage process encounters errors")?;
             Ok(0)
         })?;
 
+        sec_stage_channel.sender.close().with_context(|| {
+            "Failed to close sender end of sec_stage_channel in the first stage."
+        })?;
+        sec_stage_channel.receiver.close().with_context(|| {
+            "Failed to close receiver end of sec_stage_channel in the first stage."
+        })?;
+
         // Send the final container pid to the parent process.
-        parent_channel.send_init_pid(init_pid)?;
+        fst_stage_channel.send_init_pid(init_pid)?;
+        fst_stage_channel.sender.close().with_context(|| {
+            "Failed to close sender end of fst_stage_channel in the first stage."
+        })?;
 
         info!("First stage process exit");
         Ok(())
@@ -159,10 +174,17 @@ impl LinuxContainer {
     fn do_second_stage(
         &mut self,
         process: &mut Process,
-        parent_channel: &Channel<Message>,
+        fst_stage_channel: &Channel<Message>,
+        sec_stage_channel: &Channel<Message>,
         notify_listener: &Option<NotifyListener>,
     ) -> Result<()> {
         info!("Second stage process start");
+        fst_stage_channel.sender.close().with_context(|| {
+            "Failed to close sender end of fst_stage_channel in the second stage."
+        })?;
+        sec_stage_channel.receiver.close().with_context(|| {
+            "Failed to close receiver end of sec_stage_channel in the second stage."
+        })?;
 
         unistd::setsid().with_context(|| "Failed to setsid")?;
         process
@@ -262,8 +284,8 @@ impl LinuxContainer {
         }
 
         // Tell the parent process that the init process has been cloned.
-        parent_channel.send_container_created()?;
-        parent_channel
+        sec_stage_channel.send_container_created()?;
+        sec_stage_channel
             .sender
             .close()
             .with_context(|| "Failed to close sender of parent channel")?;
@@ -349,7 +371,6 @@ impl LinuxContainer {
 
     fn set_user_namespace(
         &self,
-        parent_channel: &Channel<Message>,
         fst_stage_channel: &Channel<Message>,
         process: &Process,
     ) -> Result<()> {
@@ -365,7 +386,7 @@ impl LinuxContainer {
                 // allowed to write the uid/gid mappings.
                 prctl::set_dumpable(true)
                     .map_err(|e| anyhow!("Failed to set process dumpable: {e}"))?;
-                parent_channel
+                fst_stage_channel
                     .send_id_mappings()
                     .with_context(|| "Failed to send id mappings")?;
                 fst_stage_channel
@@ -531,11 +552,10 @@ impl LinuxContainer {
 
     fn set_id_mappings(
         &self,
-        parent_channel: &Channel<Message>,
         fst_stage_channel: &Channel<Message>,
         fst_stage_pid: &Pid,
     ) -> Result<()> {
-        parent_channel
+        fst_stage_channel
             .recv_id_mappings()
             .with_context(|| "Failed to receive id mappings")?;
         LinuxContainer::set_groups(fst_stage_pid, false)
@@ -553,10 +573,6 @@ impl LinuxContainer {
         fst_stage_channel
             .send_id_mappings_done()
             .with_context(|| "Failed to send id mapping done")?;
-        fst_stage_channel
-            .sender
-            .close()
-            .with_context(|| "Failed to close fst_stage_channel sender")?;
         Ok(())
     }
 
@@ -663,35 +679,44 @@ impl Container for LinuxContainer {
                 .map_err(|e| anyhow!("Failed to set process undumpable: errno {}", e))?;
         }
 
-        // Create channels to communicate with child processes.
-        let parent_channel = Channel::<Message>::new()
-            .with_context(|| "Failed to create message channel for parent process")?;
-        let fst_stage_channel = Channel::<Message>::new()?;
-        // Set receivers timeout: 50ms.
-        parent_channel.receiver.set_timeout(50000)?;
-        fst_stage_channel.receiver.set_timeout(50000)?;
+        // Communication channel between main process and first stage process.
+        let fst_stage_channel = Channel::<Message>::new()
+            .with_context(|| "Failed to create message channel for first stage.")?;
+        // Communication channel between main process and second stage process.
+        let sec_stage_channel = Channel::<Message>::new()
+            .with_context(|| "Failed to create message channel for second stage.")?;
 
         // Spawn a child process to perform Stage 1.
         let fst_stage_pid = clone_process("ozonec:[1:CHILD]", || {
             self.do_first_stage(
                 process,
-                &parent_channel,
                 &fst_stage_channel,
+                &sec_stage_channel,
                 &notify_listener,
             )
             .with_context(|| "First stage process encounters errors")?;
             Ok(0)
         })?;
 
-        if self.is_namespace_set(NamespaceType::User)? {
-            self.set_id_mappings(&parent_channel, &fst_stage_channel, &fst_stage_pid)?;
-        }
+        sec_stage_channel
+            .sender
+            .close()
+            .with_context(|| "Failed to close sender end of sec_stage_channel in main process.")?;
 
-        let init_pid = parent_channel
+        if self.is_namespace_set(NamespaceType::User)? {
+            self.set_id_mappings(&fst_stage_channel, &fst_stage_pid)?;
+        }
+        fst_stage_channel.sender.close().with_context(|| {
+            "Failed to close the sender end of fst_stage_channel in main process."
+        })?;
+
+        let init_pid = fst_stage_channel
             .recv_init_pid()
             .with_context(|| "Failed to receive init pid")?;
-        parent_channel.recv_container_created()?;
-        parent_channel
+        sec_stage_channel
+            .recv_container_created()
+            .with_context(|| "Failed to receive container_created message")?;
+        sec_stage_channel
             .receiver
             .close()
             .with_context(|| "Failed to close receiver end of parent channel")?;
@@ -1077,19 +1102,14 @@ pub mod tests {
         .unwrap();
 
         let fst_channel = Channel::<Message>::new().unwrap();
-        let sec_channel = Channel::<Message>::new().unwrap();
         let child = clone_process("test_set_id_mappings", || {
             let process = Process::new(&init_oci_process(), false);
-            assert!(container
-                .set_user_namespace(&fst_channel, &sec_channel, &process)
-                .is_ok());
+            assert!(container.set_user_namespace(&fst_channel, &process).is_ok());
             Ok(1)
         })
         .unwrap();
 
-        assert!(container
-            .set_id_mappings(&fst_channel, &sec_channel, &child)
-            .is_ok());
+        assert!(container.set_id_mappings(&fst_channel, &child).is_ok());
         let path = format!("/proc/{}/setgroups", child.as_raw().to_string());
         let setgroups = fs::read_to_string(path).unwrap();
         assert_eq!(setgroups.trim(), "deny");
