@@ -43,7 +43,7 @@ use crate::{
     },
     keycode::{DpyMod, KeyCode},
 };
-use machine_manager::notifier::register_vm_pause_notifier;
+use machine_manager::notifier::vm_paused;
 
 fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
     if x < 0.0 || y < 0.0 || x > w || y > h {
@@ -178,8 +178,6 @@ pub struct OhUiMsgHandler {
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<Option<MsgReader>>,
     writer: Arc<Mutex<Option<MsgWriter>>>,
-    vm_pause: Arc<RwLock<bool>>,
-    pause_notifier_id: Mutex<u64>,
     input_state: Arc<Mutex<InputDeviceState>>,
     surface_size: RwLock<(u32, u32)>,
     ui_size: RwLock<(u32, u32)>,
@@ -193,28 +191,14 @@ impl OhUiMsgHandler {
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
             reader: Mutex::new(None),
             writer: Arc::new(Mutex::new(None)),
-            vm_pause: Arc::new(RwLock::new(false)),
-            pause_notifier_id: Mutex::new(0),
             input_state: Arc::new(Mutex::new(InputDeviceState::default())),
             surface_size: RwLock::new((0, 0)),
             ui_size: RwLock::new((0, 0)),
             migrating: AtomicBool::new(false),
         };
-        handler.register_pause_notifier(handler.vm_pause.clone());
         handler.register_input_change_notifier();
 
         handler
-    }
-
-    fn register_pause_notifier(&self, vm_pause: Arc<RwLock<bool>>) {
-        let pause_notify = Arc::new(move |paused: bool| {
-            info!("Message Handler get vm pause state {:?}", paused);
-            *vm_pause.write().unwrap() = paused;
-            if !paused {
-                let _ = Self::release_input_keys();
-            }
-        });
-        *self.pause_notifier_id.lock().unwrap() = register_vm_pause_notifier(pause_notify);
     }
 
     fn register_input_change_notifier(&self) {
@@ -315,10 +299,14 @@ impl OhUiMsgHandler {
             return matches!(et, EventType::Keyboard)
                 || matches!(et, EventType::Ledstate)
                 || matches!(et, EventType::MouseButton)
-                || matches!(et, EventType::MouseMotion);
+                || matches!(et, EventType::MouseMotion)
+                || matches!(et, EventType::MultitouchScreen)
+                || matches!(et, EventType::TouchPadPinch)
+                || matches!(et, EventType::TouchPadScroll)
+                || matches!(et, EventType::TouchPadSwipe);
         }
 
-        if !*self.vm_pause.read().unwrap() {
+        if !vm_paused() {
             return false;
         }
 
