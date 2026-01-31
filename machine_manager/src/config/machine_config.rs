@@ -149,7 +149,7 @@ impl Default for MachineMemConfig {
     fn default() -> Self {
         MachineMemConfig {
             mem_size: DEFAULT_MEMSIZE * M,
-            max_size: MAX_MEMSIZE,
+            max_size: DEFAULT_MEMSIZE * M,
             current_size: DEFAULT_MEMSIZE * M,
             mem_path: None,
             dump_guest_core: true,
