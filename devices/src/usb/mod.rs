@@ -463,6 +463,11 @@ pub trait UsbDevice: Send + Sync {
     /// Reset the USB device.
     fn reset(&mut self);
 
+    /// Force to reset the USB device.
+    fn force_reset(&mut self) {
+        self.reset();
+    }
+
     /// Set the controller which the USB device attached.
     /// USB device need to kick controller in some cases.
     fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>);
