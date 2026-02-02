@@ -12,12 +12,12 @@
 
 use std::collections::{HashMap, LinkedList};
 use std::mem::size_of;
-use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use bytemuck::{Pod, Zeroable};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -892,18 +892,19 @@ impl XhciEvent {
 }
 
 /// Input Control Context. See the spec 6.2.5 Input Control Context.
-#[repr(C)]
-#[derive(Debug, Default, Clone, Copy)]
+#[repr(C, align(4))]
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
 pub struct XhciInputCtrlCtx {
     pub drop_flags: u32,
     pub add_flags: u32,
 }
 
 impl DwordOrder for XhciInputCtrlCtx {}
+static_assertions::assert_eq_align!(XhciInputCtrlCtx, u32);
 
 /// Slot Context. See the spec 6.2.2 Slot Context.
-#[repr(C)]
-#[derive(Debug, Default, Clone, Copy)]
+#[repr(C, align(4))]
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
 pub struct XhciSlotCtx {
     pub dev_info: u32,
     pub dev_info2: u32,
@@ -967,10 +968,11 @@ impl XhciSlotCtx {
 }
 
 impl DwordOrder for XhciSlotCtx {}
+static_assertions::assert_eq_align!(XhciSlotCtx, u32);
 
 /// Endpoint Context. See the spec 6.2.3 Endpoint Context.
-#[repr(C)]
-#[derive(Debug, Default, Clone, Copy)]
+#[repr(C, align(4))]
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
 pub struct XhciEpCtx {
     pub ep_info: u32,
     pub ep_info2: u32,
@@ -1016,16 +1018,21 @@ impl XhciEpCtx {
 }
 
 impl DwordOrder for XhciEpCtx {}
+static_assertions::assert_eq_align!(XhciEpCtx, u32);
 
 pub trait DwordOrder: Default + Copy + Send + Sync {
-    fn as_dwords(&self) -> &[u32] {
-        // SAFETY: Tt can be guaranteed that self has been initialized.
-        unsafe { from_raw_parts(self as *const Self as *const u32, size_of::<Self>() / 4) }
+    fn as_dwords(&self) -> &[u32]
+    where
+        Self: Pod,
+    {
+        bytemuck::cast_slice(bytemuck::bytes_of(self))
     }
 
-    fn as_mut_dwords(&mut self) -> &mut [u32] {
-        // SAFETY: Tt can be guaranteed that self has been initialized.
-        unsafe { from_raw_parts_mut(self as *mut Self as *mut u32, size_of::<Self>() / 4) }
+    fn as_mut_dwords(&mut self) -> &mut [u32]
+    where
+        Self: Pod,
+    {
+        bytemuck::cast_slice_mut(bytemuck::bytes_of_mut(self))
     }
 }
 
@@ -1148,7 +1155,7 @@ impl XhciStreamContext {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
 pub struct XhciStreamCtx {
     pub deq_lo: u32,
     pub deq_hi: u32,
@@ -2823,7 +2830,7 @@ impl XhciDevice {
 
         // GPAChecked: the event ring must locate in guest ram.
         let base_addr = GuestAddress(addr64_from_u32(seg.addr_lo, seg.addr_hi));
-        // SAFETY: seg size is a 16 bit register, will not overflow.
+        // Guaranteed no overflow: seg.size is 16-bit(from 16 to 4096), multiplication will fit in u32 range.
         let er_len = seg.size * TRB_SIZE;
         if !self
             .mem_space
