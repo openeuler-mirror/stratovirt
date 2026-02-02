@@ -1375,7 +1375,9 @@ impl XhciDevice {
         }
 
         let usb_dev = usb_dev.unwrap();
-        usb_dev.lock().unwrap().reset();
+        // During BIOS or Windows initialize XHCI at early stage, every port should be reset.
+        // Here we need to force reset for USB Host device no matter what state it is.
+        usb_dev.lock().unwrap().force_reset();
         let speed = usb_dev.lock().unwrap().speed();
         if speed == USB_SPEED_SUPER && warm_reset {
             locked_port.portsc |= PORTSC_WRC;

@@ -557,6 +557,8 @@ pub struct UsbHost {
     iso_urb_count: u32,
     #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
     oh_dev: OhUsbDev,
+    /// Indicate whether default state.
+    is_default_state: bool,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for util::link_list::List.
@@ -600,6 +602,7 @@ impl UsbHost {
             iso_urb_count,
             #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
             oh_dev,
+            is_default_state: false,
         })
     }
 
@@ -682,7 +685,7 @@ impl UsbHost {
             .unwrap_or_else(|| None)
     }
 
-    fn detach_kernel(&mut self) -> Result<()> {
+    fn detach_kernel(&mut self, reset: bool) -> Result<()> {
         let conf = self.libdev.as_ref().unwrap().active_config_descriptor()?;
 
         self.ifs_num = conf.num_interfaces();
@@ -709,6 +712,11 @@ impl UsbHost {
                 .detach_kernel_driver(i)
                 .unwrap_or_else(|e| error!("Failed to detach kernel driver: {:?}", e));
             self.ifs[i as usize].detached = true;
+        }
+
+        // set it to default state
+        if reset {
+            self.reset();
         }
 
         Ok(())
@@ -826,7 +834,7 @@ impl UsbHost {
         self.config.hostaddr = self.libdev.as_ref().unwrap().address();
         trace::usb_host_open_started(self.config.hostbus, self.config.hostaddr);
 
-        self.detach_kernel()?;
+        self.detach_kernel(true)?;
 
         self.ddesc = self.libdev.as_ref().unwrap().device_descriptor().ok();
 
@@ -875,7 +883,7 @@ impl UsbHost {
 
     fn claim_interfaces(&mut self) -> UsbPacketStatus {
         self.base.altsetting = [0; USB_MAX_INTERFACES as usize];
-        if let Err(e) = self.detach_kernel() {
+        if let Err(e) = self.detach_kernel(false) {
             error!("Failed to detach kernel for usbhost: {:?}.", e);
             return UsbPacketStatus::Stall;
         }
@@ -1274,6 +1282,29 @@ impl UsbHost {
         self.libdev = Some(self.handle.as_ref().unwrap().device());
         Ok(())
     }
+
+    fn do_reset(&mut self, force: bool) {
+        info!(
+            "Usb Host device {} reset force {} default_state {}",
+            self.device_id(),
+            force,
+            self.is_default_state
+        );
+        if self.handle.is_none() || (!force && self.is_default_state) {
+            return;
+        }
+
+        self.clear_iso_queues();
+
+        trace::usb_host_reset(self.config.hostbus, self.config.hostaddr);
+
+        self.handle
+            .as_mut()
+            .unwrap()
+            .reset()
+            .unwrap_or_else(|e| error!("Failed to reset the usb host device {:?}", e));
+        self.is_default_state = true;
+    }
 }
 
 impl Drop for UsbHost {
@@ -1426,20 +1457,11 @@ impl UsbDevice for UsbHost {
     }
 
     fn reset(&mut self) {
-        info!("Usb Host device {} reset", self.device_id());
-        if self.handle.is_none() {
-            return;
-        }
+        self.do_reset(false);
+    }
 
-        self.clear_iso_queues();
-
-        trace::usb_host_reset(self.config.hostbus, self.config.hostaddr);
-
-        self.handle
-            .as_mut()
-            .unwrap()
-            .reset()
-            .unwrap_or_else(|e| error!("Failed to reset the usb host device {:?}", e));
+    fn force_reset(&mut self) {
+        self.do_reset(true);
     }
 
     fn set_controller(&mut self, _cntlr: std::sync::Weak<Mutex<XhciDevice>>) {}
@@ -1476,6 +1498,7 @@ impl UsbDevice for UsbHost {
                         &*locked_packet as *const UsbPacket as u64,
                         &locked_packet.status,
                     );
+                    self.is_default_state = false;
                     return;
                 } else if device_req.request == USB_REQUEST_SET_CONFIGURATION {
                     self.set_config(device_req.value as u8, &mut locked_packet);
