@@ -149,6 +149,24 @@ pub trait MigrationHook: StateTransfer {
         Ok(())
     }
 
+    /// Save GPU state for local path of snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path for save GPU state.
+    fn save_gpu(&mut self, _path: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Restore GPU state for local path of snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path for restore GPU state.
+    fn restore_gpu(&mut self, _path: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Notify current migrate status to device. Allow the device do some special
     /// operation.
     ///
@@ -205,6 +223,8 @@ pub struct Vmm {
     #[cfg(target_arch = "x86_64")]
     /// Trait to represent kvm device.
     pub kvm: Option<Arc<dyn MigrationHook + Send + Sync>>,
+    /// Trait to represent GPU device.
+    pub gpus: HashMap<u64, Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
     /// The vector of the object implementing MigrateOps trait.
     pub mgt_object: Option<Arc<Mutex<dyn MigrateOps>>>,
 }
@@ -400,6 +420,20 @@ impl MigrationManager {
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
         locked_vmm.gic_group.insert(translate_id(id), gic);
+    }
+
+    /// Register GPU instance to vmm.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The gpu device instance with MigrationHook trait.
+    /// * `id` - The unique id for device.
+    pub fn register_gpu_instance<T>(gpu: Arc<Mutex<T>>, id: &str)
+    where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
+        locked_vmm.gpus.insert(translate_id(id), gpu);
     }
 
     /// Register migration instance to vmm.
