@@ -725,7 +725,7 @@ mod tests {
         }
 
         // set snapshot state
-        let ret = xhci.set_state_mut(dev_state.unwrap().as_mut());
+        let ret = xhci.set_state_mut(dev_state.unwrap().as_mut(), 0_u32);
         assert!(ret.is_ok());
 
         // test whether state equals to A
