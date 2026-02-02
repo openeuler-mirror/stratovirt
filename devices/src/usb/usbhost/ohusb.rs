@@ -12,7 +12,6 @@
 
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::ptr;
 
 use anyhow::{bail, Context as anyhowContext, Result};
 use libusb1_sys::constants::LIBUSB_OPTION_NO_DEVICE_DISCOVERY;
@@ -41,16 +40,12 @@ impl OhUsbDev {
         };
 
         let lib = OhUsb::new()?;
-        match lib.open_device(ptr::addr_of_mut!(ohusb_dev))? {
-            0 => {
-                if ohusb_dev.fd < 0 {
-                    bail!(
-                        "Failed to open usb device due to invalid fd {}",
-                        ohusb_dev.fd
-                    );
-                }
-            }
-            _ => bail!("Failed to open usb device"),
+        lib.open_device(&mut ohusb_dev)?;
+        if ohusb_dev.fd < 0 {
+            bail!(
+                "Failed to open usb device due to invalid fd {}",
+                ohusb_dev.fd
+            );
         }
         info!("OH USB: open_device: returned fd is {}", ohusb_dev.fd);
 
