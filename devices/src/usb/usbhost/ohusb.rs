@@ -16,7 +16,7 @@ use std::ptr;
 
 use anyhow::{bail, Context as anyhowContext, Result};
 use libusb1_sys::constants::LIBUSB_OPTION_NO_DEVICE_DISCOVERY;
-use log::info;
+use log::{info, warn};
 use rusb::{Context, DeviceHandle, UsbContext};
 
 use super::host_usblib::set_option;
@@ -53,6 +53,19 @@ impl OhUsbDev {
             _ => bail!("Failed to open usb device"),
         }
         info!("OH USB: open_device: returned fd is {}", ohusb_dev.fd);
+
+        // SAFETY: The fd is acquired from USB subsystem.
+        let ret = unsafe { libc::flock(ohusb_dev.fd, libc::LOCK_EX) };
+        if ret != 0 {
+            warn!(
+                "Failed to flock usb device, err is {:?}",
+                std::io::Error::last_os_error()
+            );
+            bail!(
+                "Failed to flock usb device, err is {:?}",
+                std::io::Error::last_os_error()
+            );
+        }
 
         Ok(Self {
             lib,
