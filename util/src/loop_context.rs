@@ -707,8 +707,7 @@ impl EventLoopContext {
                 &*event_ptr as &EventNotifier
             };
             let mut notifiers = Vec::new();
-            let status_locked = event.status.lock().unwrap();
-            if *status_locked == EventStatus::Alive {
+            if *event.status.lock().unwrap() == EventStatus::Alive {
                 for handler in event.handlers.iter() {
                     match handler(ready_events[i].event_set(), event.raw_fd) {
                         None => {}
@@ -718,7 +717,6 @@ impl EventLoopContext {
                     }
                 }
             }
-            drop(status_locked);
             if let Err(e) = self.update_events(notifiers) {
                 error!("update event failed: {}", e);
             }
