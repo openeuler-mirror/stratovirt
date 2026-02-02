@@ -89,3 +89,16 @@ impl OhUsbDev {
         Ok(handle)
     }
 }
+
+impl Drop for OhUsbDev {
+    fn drop(&mut self) {
+        // SAFETY: The fd is acquired from USB subsystem.
+        let ret = unsafe { libc::flock(self.dev_file.as_raw_fd(), libc::LOCK_UN) };
+        if ret != 0 {
+            warn!(
+                "Failed to release flock on usb device, err is {:?}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+}
