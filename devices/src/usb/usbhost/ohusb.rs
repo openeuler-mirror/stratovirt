@@ -55,14 +55,14 @@ impl OhUsbDev {
         info!("OH USB: open_device: returned fd is {}", ohusb_dev.fd);
 
         // SAFETY: The fd is acquired from USB subsystem.
-        let ret = unsafe { libc::flock(ohusb_dev.fd, libc::LOCK_EX) };
+        let ret = unsafe { libc::flock(ohusb_dev.fd, libc::LOCK_EX | libc::LOCK_NB) };
         if ret != 0 {
             warn!(
-                "Failed to flock usb device, err is {:?}",
+                "Failed to acquire flock on usb device, err is {:?}",
                 std::io::Error::last_os_error()
             );
             bail!(
-                "Failed to flock usb device, err is {:?}",
+                "Failed to acquire flock on usb device, err is {:?}",
                 std::io::Error::last_os_error()
             );
         }
