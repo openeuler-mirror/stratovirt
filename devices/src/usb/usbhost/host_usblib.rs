@@ -48,7 +48,7 @@ const CONTROL_TIMEOUT: u32 = 10000; // 10s
 const BULK_TIMEOUT: u32 = 0;
 const INTERRUPT_TIMEOUT: u32 = 0;
 
-fn from_libusb(err: i32) -> Error {
+pub fn from_libusb(err: i32) -> Error {
     match err {
         LIBUSB_ERROR_IO => Error::Io,
         LIBUSB_ERROR_INVALID_PARAM => Error::InvalidParam,
@@ -460,27 +460,6 @@ extern "system" {
         buffer: *mut c_uchar,
         length: size_t,
     ) -> c_int;
-}
-
-pub fn dev_mem_alloc(dev_handle: &mut DeviceHandle<Context>, length: size_t) -> Result<&mut [u8]> {
-    // SAFETY: dev_handle is valid.
-    unsafe {
-        let ptr = libusb_dev_mem_alloc(dev_handle.as_raw(), length);
-        if ptr.is_null() {
-            return Err(from_libusb(LIBUSB_ERROR_NO_MEM));
-        }
-        Ok(slice::from_raw_parts_mut(ptr, length))
-    }
-}
-
-pub fn dev_mem_free(dev_handle: &mut DeviceHandle<Context>, dev_mem: &mut [u8]) -> Result<()> {
-    // SAFETY: dev_handle is valid.
-    try_unsafe!(libusb_dev_mem_free(
-        dev_handle.as_raw(),
-        dev_mem.as_mut_ptr(),
-        dev_mem.len(),
-    ));
-    Ok(())
 }
 
 #[derive(Debug)]
