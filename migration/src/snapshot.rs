@@ -14,8 +14,12 @@ use std::collections::HashMap;
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
 
 use anyhow::{anyhow, bail, Context, Result};
+use log::error;
 
 use crate::general::{translate_id, Lifecycle};
 use crate::manager::{MigrationManager, MIGRATION_MANAGER};
@@ -63,7 +67,7 @@ impl MigrationManager {
             }
         }
 
-        // Save device state
+        // Save device state, exclude GPU.
         let mut vm_state_path = PathBuf::from(path);
         vm_state_path.push(DEVICE_PATH_SUFFIX);
         match File::create(vm_state_path) {
@@ -75,6 +79,19 @@ impl MigrationManager {
             }
         }
 
+        let ret = Arc::new(AtomicBool::new(true));
+        let gpu_ret = ret.clone();
+        let gpu_path = path.to_string();
+        let handle = thread::Builder::new()
+            .name("save-gpu".to_string())
+            .spawn(move || {
+                // Save GPU device state
+                Self::save_gpu(gpu_path.as_str()).unwrap_or_else(|e| {
+                    gpu_ret.store(false, Ordering::SeqCst);
+                    error!("Failed to save gpu state: {:?}", e);
+                });
+            })?;
+
         // Save memory data
         let mut vm_memory_path = PathBuf::from(path);
         vm_memory_path.push(MEMORY_PATH_SUFFIX);
@@ -85,6 +102,12 @@ impl MigrationManager {
             Err(e) => {
                 bail!("Failed to create snapshot memory file: {}", e);
             }
+        }
+        if handle.join().is_err() {
+            error!("Save gpu thread join failed");
+        }
+        if !ret.load(Ordering::Acquire) {
+            bail!("Failed to save gpu state");
         }
 
         // Set status to `Completed`
@@ -129,6 +152,19 @@ impl MigrationManager {
             bail!("Invalid device state snapshot file");
         }
 
+        let ret = Arc::new(AtomicBool::new(true));
+        let gpu_ret = ret.clone();
+        let gpu_path = path.to_string();
+        let handle = thread::Builder::new()
+            .name("restore-gpu".to_string())
+            .spawn(move || {
+                // Restore GPU device state
+                Self::restore_gpu(gpu_path.as_str()).unwrap_or_else(|e| {
+                    gpu_ret.store(false, Ordering::SeqCst);
+                    error!("Failed to restore gpu state: {:?}", e);
+                });
+            })?;
+
         Self::restore_memory(&mut memory_file, mapped)
             .with_context(|| "Failed to load snapshot memory")?;
         let snapshot_desc_db =
@@ -136,6 +172,14 @@ impl MigrationManager {
                 .with_context(|| "Failed to load device descriptor db")?;
         Self::restore_vmstate(snapshot_desc_db, &mut device_state_file)
             .with_context(|| "Failed to load snapshot device state")?;
+
+        if handle.join().is_err() {
+            error!("Restore gpu thread join failed");
+        }
+        if !ret.load(Ordering::Acquire) {
+            bail!("Failed to restore gpu state");
+        }
+
         Self::resume()?;
 
         Ok(())
@@ -319,6 +363,34 @@ impl MigrationManager {
                         .with_context(|| "Failed to restore gic state")?;
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    /// Save GPU state and data to the file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to save GPU data.
+    pub fn save_gpu(path: &str) -> Result<()> {
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        for gpu in locked_vmm.gpus.values() {
+            gpu.lock().unwrap().save_gpu(path)?;
+        }
+
+        Ok(())
+    }
+
+    /// Load and restore GPU from snapshot file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - snapshot GPU data file path.
+    pub fn restore_gpu(path: &str) -> Result<()> {
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        for gpu in locked_vmm.gpus.values() {
+            gpu.lock().unwrap().restore_gpu(path)?;
         }
 
         Ok(())
