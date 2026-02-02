@@ -40,7 +40,7 @@ use crate::usb::{UsbDevice, UsbDeviceRequest, UsbEndpoint, UsbError, UsbPacket, 
 use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use machine_manager::event_loop::EventLoop;
 
-const INVALID_SLOT_ID: u32 = 0;
+pub const INVALID_SLOT_ID: u32 = 0;
 pub const MAX_INTRS: u32 = 1;
 pub const MAX_SLOTS: u32 = 64;
 /// Endpoint state
