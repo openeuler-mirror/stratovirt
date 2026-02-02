@@ -383,4 +383,22 @@ mod tests {
         let _ = usb_adapter.do_key_event(0x0057, true);
         let _ = usb_adapter.do_key_event(0x0057, false);
     }
+
+    #[test]
+    fn test_usb_kbd_snapshot() {
+        let config = UsbKeyboardConfig {
+            classtype: "usb-keyboard".to_string(),
+            id: "test_usb_keyboard".to_string(),
+            bus: None,
+            port: None,
+        };
+
+        let mut kbd_device = UsbKeyboard::new(config);
+
+        let dev_state = kbd_device.get_state_vec();
+        assert!(dev_state.is_ok());
+
+        let ret = kbd_device.set_state_mut(dev_state.unwrap().as_ref());
+        assert!(ret.is_ok());
+    }
 }
