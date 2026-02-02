@@ -19,10 +19,9 @@ use std::{
     ffi::{c_char, CStr},
     os::unix::io::RawFd,
     rc::Rc,
-    slice,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Mutex, MutexGuard, Weak,
     },
     time::Duration,
 };
@@ -134,13 +133,15 @@ impl UsbHostRequest {
     pub fn setup_data_buffer(&mut self, dev_mem: &Option<Arc<UsbDevMem>>) {
         let mut locked_packet = self.packet.lock().unwrap();
         let size = locked_packet.get_iovecs_size();
+        let mut locked_buffer;
         let data_buffer;
 
         match dev_mem {
             Some(mem) if !mem.is_used() && mem.can_cover(size) => {
                 mem.mark_used();
                 self.dev_mem = Some(Arc::clone(mem));
-                data_buffer = mem.as_mut_slice(size).unwrap();
+                locked_buffer = mem.lock_buffer();
+                data_buffer = locked_buffer.as_mut();
             }
             _ => {
                 self.buffer = Some(vec![0; size as usize]);
@@ -451,10 +452,8 @@ pub struct UsbHostConfig {
     iso_urb_count: u32,
 }
 
-#[derive(Clone)]
 pub struct UsbDevMem {
-    mem: *mut u8,
-    size: usize,
+    mem: Mutex<Box<[u8]>>,
     handle: *mut libusb_device_handle,
     used: Arc<AtomicBool>,
 }
@@ -473,24 +472,18 @@ impl UsbDevMem {
         if mem.is_null() {
             return Err(from_libusb(LIBUSB_ERROR_NO_MEM).into());
         }
+        // SAFETY:
+        // - `mem` points to the previously allocated buffer with `length`
+        let buffer = unsafe { Vec::from_raw_parts(mem, length, length) };
         Ok(Arc::new(Self {
-            mem,
-            size: length,
+            mem: Mutex::new(buffer.into_boxed_slice()),
             handle: dev_handle.as_raw(),
             used: Arc::new(AtomicBool::new(false)),
         }))
     }
 
-    pub fn as_mut_slice(&self, size: u64) -> Option<&mut [u8]> {
-        if !self.can_cover(size) {
-            None
-        } else {
-            // SAFETY:
-            // - `self.mem` points to a buffer previously allocated by
-            //   `libusb_dev_mem_alloc` and has not been freed yet.
-            // - `size` is guaranteed to be a valid value through `self.can_cover`
-            Some(unsafe { slice::from_raw_parts_mut(self.mem, size as usize) })
-        }
+    pub fn lock_buffer(&self) -> MutexGuard<'_, Box<[u8]>> {
+        self.mem.lock().unwrap()
     }
 
     pub fn mark_used(&self) {
@@ -506,20 +499,23 @@ impl UsbDevMem {
     }
 
     pub fn can_cover(&self, size: u64) -> bool {
-        size as usize <= self.size
+        size as usize <= self.mem.lock().unwrap().len()
     }
 }
 
 impl Drop for UsbDevMem {
     fn drop(&mut self) {
+        let mut locked_mem = self.mem.lock().unwrap();
+        let ptr = locked_mem.as_mut_ptr();
+        let len = locked_mem.len();
         // SAFETY:
         // - `self.handle` is guaranteed to be a valid, open libusb device handle
         // - `self.mem` points to a buffer previously allocated by
         //   `libusb_dev_mem_alloc` and has not been freed yet.
-        // - `self.size` is exactly the size used when allocating `self.mem`.
+        // - `size` is exactly the size used when allocating `self.mem`.
         // - `Drop` is only called once for this `UsbDevMem`, ensuring no double free.
         unsafe {
-            libusb_dev_mem_free(self.handle, self.mem, self.size);
+            libusb_dev_mem_free(self.handle, ptr, len);
         }
     }
 }
