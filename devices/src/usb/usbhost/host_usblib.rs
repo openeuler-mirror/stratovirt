@@ -324,8 +324,8 @@ pub fn fill_transfer_by_type(
     let packet = unsafe { (*node).value.packet.clone() };
     // SAFETY: the reason is same as above.
     let buffer_ptr = unsafe {
-        if (*node).value.dev_mem.is_some() {
-            (*node).value.dev_mem.as_ref().unwrap().mem
+        if let Some(dev_mem) = (*node).value.dev_mem.as_ref() {
+            dev_mem.mem.lock().unwrap().as_mut_ptr()
         } else {
             (*node).value.buffer.as_mut().unwrap().as_mut_ptr()
         }
