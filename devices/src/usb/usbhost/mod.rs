@@ -90,13 +90,21 @@ pub struct UsbHostRequest {
     pub host_transfer: *mut libusb_transfer,
     /// Async data buffer.
     pub buffer: Option<Vec<u8>>,
-    pub dev_mem: Option<UsbDevMem>,
+    pub dev_mem: Option<Arc<UsbDevMem>>,
     pub is_control: bool,
 }
 
-// SAFETY: The UsbHostRequest is created in main thread and then be passed to the
-// libUSB thread. Once this data is processed, it is cleaned up. So there will be
-// no problem with data sharing or synchronization.
+// SAFETY: `UsbHostRequest` contains a raw pointer (`*mut libusb_transfer`)
+// which is not inherently thread-safe. We guarantee `Send`/`Sync` safety under
+// the following conditions:
+// - The `libusb_transfer` object is created and freed only through libusb APIs,
+//   which ensure proper memory management.
+// - Access to the underlying `libusb_transfer` is externally synchronized:
+//   concurrent reads/writes are protected by higher-level synchronization.
+//   Once this data is processed, it is cleaned up.
+// - Therefore, transferring `UsbHostRequest` across threads (`Send`) and
+//   sharing references between threads (`Sync`) does not introduce data races
+//   or dangling pointers.
 unsafe impl Sync for UsbHostRequest {}
 // SAFETY: The reason is same as above.
 unsafe impl Send for UsbHostRequest {}
@@ -193,14 +201,19 @@ impl UsbHostRequest {
     }
 
     pub fn ctrl_transfer_packet(&self, packet: &mut UsbPacket, actual_length: usize) {
-        let setup_buf = get_buffer_from_transfer(self.host_transfer, 8);
+        // SAFETY:
+        // - `host_transfer` is provided by libusb callback and guaranteed valid here.
+        // - `transfer.buffer` is allocated and has at least `len` bytes.
+        // - We will only use the slice within the scope.
+        let setup_buf = unsafe { get_buffer_from_transfer(self.host_transfer, 8) };
         let mut len = ((setup_buf[7] as usize) << 8) | setup_buf[6] as usize;
         if len > actual_length {
             len = actual_length;
         }
 
         if packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
-            let data = get_buffer_from_transfer(self.host_transfer, len + 8);
+            // SAFETY: same as above
+            let data = unsafe { get_buffer_from_transfer(self.host_transfer, len + 8) };
             packet.transfer_packet(&mut data[8..], len);
         }
     }
@@ -253,7 +266,12 @@ impl IsoTransfer {
     }
 
     pub fn reset(&mut self, max_packet_size: u32) {
-        // SAFETY: host_transfer is guaranteed to be valid once created.
+        // SAFETY:
+        // - `self.host_transfer` is a valid pointer to a `libusb_transfer`
+        //   allocated and managed by libusb.
+        // - The transfer object is alive for the duration of this call
+        //   and not freed concurrently.
+        // - No aliasing mutable references exist while this function runs.
         unsafe { libusb_set_iso_packet_lengths(self.host_transfer, max_packet_size) };
         self.packet = 0;
         self.copy_completed = false;
@@ -261,7 +279,12 @@ impl IsoTransfer {
 
     pub fn clear(&mut self, inflight: bool) {
         if inflight {
-            // SAFETY: host_transfer is guaranteed to be valid once created.
+            // SAFETY:
+            // - `self.host_transfer` is a valid pointer to a `libusb_transfer`
+            //   allocated and managed by libusb.
+            // - The transfer object is alive for the duration of this call
+            //   and not freed concurrently.
+            // - No aliasing mutable references exist while this function runs.
             unsafe {
                 (*self.host_transfer).user_data = std::ptr::null_mut();
             }
@@ -287,13 +310,22 @@ impl IsoTransfer {
             }
         }
         let buffer =
-            // SAFETY: host_transfer is guaranteed to be valid once created
-            // and packet is guaranteed to be not out of boundary.
+            // SAFETY:
+            // - `self.host_transfer` points to a valid `libusb_transfer`
+            //   allocated and managed by libusb, and has not been freed.
+            // - `self.packet` is less than the number of packets in this transfer,
+            //   ensured by the logic in `copy_data` which updates `self.packet`
+            //   and checks against `get_iso_packet_nums`.
             unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
 
         locked_packet.transfer_packet(
-            // SAFETY: buffer is already allocated and size will not be exceed
-            // the size of buffer.
+            // SAFETY:
+            // - `buffer` was obtained from `libusb_get_iso_packet_buffer_simple`,
+            //   which returns a pointer to valid, writable packet memory owned by libusb.
+            // - `size` is at most the packet length as computed above,
+            //   so the slice will not exceed the buffer boundary.
+            // - No other mutable reference to this packet buffer exists while
+            //   `transfer_packet` is operating.
             unsafe { std::slice::from_raw_parts_mut(buffer, size) },
             size,
         );
@@ -304,7 +336,13 @@ impl IsoTransfer {
     }
 }
 
-// SAFETY: The operation of libusb_transfer is protected by lock.
+// SAFETY:
+// `IsoTransfer` contains a raw pointer to a `libusb_transfer`.
+// - The transfer object is allocated and managed by libusb and remains
+//   valid for the lifetime of this `IsoTransfer`.
+// - The transfer is only accessed from one thread at a time, and is
+//   protected by lock therefore it is safe to move `IsoTransfer` between
+//   threads (`Send`).
 unsafe impl Sync for IsoTransfer {}
 // SAFETY: The reason is same as above.
 unsafe impl Send for IsoTransfer {}
@@ -1199,8 +1237,8 @@ impl EventNotifierHelper for UsbHost {
                 .unwrap_or_else(|e| error!("Failed to handle event: {:?}", e));
             None
         });
-        // SAFETY: The usbhost is guaranteed to be valid.
-        if let Ok(pollfds) = unsafe { PollFds::new(usbhost) } {
+
+        if let Ok(pollfds) = PollFds::new(usbhost) {
             set_pollfd_notifiers(pollfds, &mut notifiers, handler);
         }
 
