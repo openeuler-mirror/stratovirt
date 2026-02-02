@@ -398,7 +398,7 @@ mod tests {
         let dev_state = kbd_device.get_state_vec();
         assert!(dev_state.is_ok());
 
-        let ret = kbd_device.set_state_mut(dev_state.unwrap().as_ref());
+        let ret = kbd_device.set_state_mut(dev_state.unwrap().as_ref(), 0_u32);
         assert!(ret.is_ok());
     }
 }
