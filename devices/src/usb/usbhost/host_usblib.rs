@@ -68,7 +68,12 @@ fn from_libusb(err: i32) -> Error {
 
 macro_rules! try_unsafe {
     ($x:expr) => {
-        // SAFETY: expression is calling C library of libusb.
+        // SAFETY:
+        // - `$x` is a call to a libusb C API function that may involve raw pointers.
+        // - All pointers or handles passed to `$x` must be valid for the duration of the call,
+        //   and must not be freed or mutated concurrently.
+        // - The caller ensures that any thread-safety requirements of the libusb function are met.
+        // - This macro checks the return value and converts non-zero errors to Rust `Err`
         match unsafe { $x } {
             0 => (),
             err => return Err(from_libusb(err)),
@@ -76,36 +81,59 @@ macro_rules! try_unsafe {
     };
 }
 
-pub fn get_node_from_transfer(transfer: *mut libusb_transfer) -> Box<Node<UsbHostRequest>> {
-    // SAFETY: cast the raw pointer of transfer's user_data to the
-    // Box<Node<UsbHostRequest>>.
-    unsafe { Box::from_raw((*transfer).user_data.cast::<Node<UsbHostRequest>>()) }
+// SAFETY:
+// - `transfer` must be a valid, non-null pointer to a `libusb_transfer`
+//   allocated and managed by libusb.
+// - `(*transfer).user_data` must be a non-null pointer to a `Node<UsbHostRequest>`
+//   and has not already been converted.
+// - The caller must ensure this function is called **at most once** for a
+//   given `transfer.user_data`.
+// - After this call, ownership of the underlying `Node<UsbHostRequest>`
+//   is transferred back to Rust and will be automatically freed when the
+//   returned `Box` is dropped.
+pub unsafe fn get_node_from_transfer(transfer: *mut libusb_transfer) -> Box<Node<UsbHostRequest>> {
+    Box::from_raw((*transfer).user_data.cast::<Node<UsbHostRequest>>())
 }
 
-pub fn get_iso_transfer_from_transfer(transfer: *mut libusb_transfer) -> Arc<Mutex<IsoTransfer>> {
-    // SAFETY: cast the raw pointer of transfer's user_data to the
-    // Arc<Mutex<UsbHostRequest>>.
-    unsafe {
-        let ptr = (*transfer).user_data.cast::<Mutex<IsoTransfer>>();
-        Arc::increment_strong_count(ptr);
-        Arc::from_raw(ptr)
-    }
+// SAFETY:
+// - `transfer` must be a valid, non-null pointer to a `libusb_transfer`.
+// - `(*transfer).user_data` must be a non-null pointer obtained from
+//   `Arc::into_raw(Arc<Mutex<IsoTransfer>>)` and must still be alive.
+// - This function may be called multiple times, but each call will
+//   increment the strong count, so the caller must ensure that all
+//   returned `Arc`s are eventually dropped to avoid memory leaks.
+pub unsafe fn get_iso_transfer_from_transfer(
+    transfer: *mut libusb_transfer,
+) -> Arc<Mutex<IsoTransfer>> {
+    let ptr = (*transfer).user_data.cast::<Mutex<IsoTransfer>>();
+    Arc::increment_strong_count(ptr);
+    Arc::from_raw(ptr)
 }
 
-pub fn get_buffer_from_transfer(transfer: *mut libusb_transfer, len: usize) -> &'static mut [u8] {
-    // SAFETY: cast the raw pointer of transfer's buffer which is transformed
-    // from a slice with actual_length to a mutable slice.
-    unsafe { std::slice::from_raw_parts_mut((*transfer).buffer, len) }
+// SAFETY:
+// - `transfer` must be a valid, non-null pointer to a `libusb_transfer`.
+// - `(*transfer).buffer` must be non-null and point to a buffer of at least `len` bytes.
+// - The caller must ensure no other aliasing mutable references exist
+//   while using the returned slice (including libusb itself).
+// - The lifetime of the returned slice is only valid as long as the
+//   underlying `libusb_transfer` and its buffer are alive.
+pub unsafe fn get_buffer_from_transfer(
+    transfer: *mut libusb_transfer,
+    len: usize,
+) -> &'static mut [u8] {
+    std::slice::from_raw_parts_mut((*transfer).buffer, len)
 }
 
-pub fn get_length_from_transfer(transfer: *mut libusb_transfer) -> i32 {
-    // SAFETY: cast the raw pointer of transfer's actual_length to a integer.
-    unsafe { (*transfer).actual_length }
+// SAFETY:
+// - `transfer` must be a valid, non-null pointer to a `libusb_transfer`.
+pub unsafe fn get_length_from_transfer(transfer: *mut libusb_transfer) -> i32 {
+    (*transfer).actual_length
 }
 
-pub fn get_status_from_transfer(transfer: *mut libusb_transfer) -> i32 {
-    // SAFETY: cast the raw pointer of transfer's status which is to a integer.
-    unsafe { (*transfer).status }
+// SAFETY:
+// - `transfer` must be a valid, non-null pointer to a `libusb_transfer`.
+pub unsafe fn get_status_from_transfer(transfer: *mut libusb_transfer) -> i32 {
+    (*transfer).status
 }
 
 pub fn map_packet_status(status: i32) -> UsbPacketStatus {
@@ -188,10 +216,12 @@ pub fn alloc_host_transfer(iso_packets: c_int) -> *mut libusb_transfer {
 }
 
 extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
-    // SAFETY: transfer is still valid because libusb just completed it
-    // but we haven't told anyone yet. user_data remains valid because
-    // it is dropped only when the request is completed and removed here.
-    let mut node = get_node_from_transfer(host_transfer);
+    // SAFETY:
+    // - `transfer` comes from libusb's async callback and is guaranteed valid.
+    // - We previously stored a `<Node<UsbHostRequest>` in `transfer.user_data`
+    //   , and have not yet taken it back.
+    // - This is the only place where we reclaim the Box, so no double free occurs.
+    let mut node = unsafe { get_node_from_transfer(host_transfer) };
     let request = &mut node.value;
     let requests = match request.requests.upgrade() {
         Some(requests) => requests,
@@ -210,14 +240,21 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
         return;
     }
 
-    let actual_length = get_length_from_transfer(host_transfer) as usize;
-    let transfer_status = get_status_from_transfer(host_transfer);
+    // SAFETY: `host_transfer` is provided by libusb callback and guaranteed valid here.
+    let actual_length = unsafe { get_length_from_transfer(host_transfer) } as usize;
+    // SAFETY: same as above
+    let transfer_status = unsafe { get_status_from_transfer(host_transfer) };
     locked_packet.status = map_packet_status(transfer_status);
 
     if request.is_control {
         request.ctrl_transfer_packet(&mut locked_packet, actual_length);
     } else if locked_packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
-        let data = get_buffer_from_transfer(host_transfer, actual_length);
+        // SAFETY:
+        // - `host_transfer` is provided by libusb callback and guaranteed valid here.
+        // - `transfer.buffer` is allocated and has at least `len` bytes.
+        // - We will only use the slice within the scope of this callback,
+        //   ensuring no aliasing with libusb's own buffer access.
+        let data = unsafe { get_buffer_from_transfer(host_transfer, actual_length) };
         locked_packet.transfer_packet(data, actual_length);
     }
 
@@ -241,13 +278,23 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
 }
 
 extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
-    // SAFETY: the pointer has been verified.
+    // SAFETY:
+    // - `host_transfer` is either NULL or points to a valid `libusb_transfer`.
+    // - If not NULL, its `user_data` field is readable.
+    // - No other thread mutates or frees `host_transfer` concurrently.
+    // - The short-circuit `||` ensures that we never dereference a NULL pointer.
     if host_transfer.is_null() || unsafe { (*host_transfer).user_data.is_null() } {
         free_host_transfer(host_transfer);
         return;
     }
 
-    let iso_transfer = get_iso_transfer_from_transfer(host_transfer);
+    // SAFETY:
+    // - `host_transfer` is a valid libusb_transfer pointer from the libusb callback.
+    // - `host_transfer.user_data` was set earlier using `Arc::into_raw` with an
+    //   `Arc<Mutex<IsoTransfer>>`, and has not been freed.
+    // - We understand that calling this increases the strong count, and
+    //   dropping the returned Arc will eventually decrement it.
+    let iso_transfer = unsafe { get_iso_transfer_from_transfer(host_transfer) };
     let iso_queue = iso_transfer.lock().unwrap().iso_queue.clone();
 
     if let Some(iso_queue) = iso_queue.upgrade() {
@@ -466,8 +513,15 @@ pub struct PollFds {
 }
 
 impl PollFds {
-    pub unsafe fn new(usbhost: Arc<Mutex<UsbHost>>) -> Result<Self> {
-        let poll_fds = libusb_get_pollfds(usbhost.lock().unwrap().context.as_raw());
+    pub fn new(usbhost: Arc<Mutex<UsbHost>>) -> Result<Self> {
+        // SAFETY:
+        // - This calls into the C API `libusb_get_pollfds`, which may return a NULL
+        //   or a pointer to an array of `*mut libusb_pollfd` managed by libusb.
+        // - We immediately check for NULL and wrap the result in a `Result`,
+        //   so the caller of `PollFds::new` never observes an invalid pointer.
+        // - The returned pointer will eventually be released with
+        //   `libusb_free_pollfds` (handled by `PollFds`'s Drop impl).
+        let poll_fds = unsafe { libusb_get_pollfds(usbhost.lock().unwrap().context.as_raw()) };
         if poll_fds.is_null() {
             Err(Error::NotFound)
         } else {
@@ -509,7 +563,7 @@ impl Iterator for PollFdIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.fds.len() {
-            // SAFETY: self.fds is guaranteed to be valid.
+            // SAFETY: self.fds and self.index is guaranteed to be valid.
             let poll_fd = unsafe { PollFd::from_raw(self.fds[self.index]) };
             self.index += 1;
             Some(poll_fd)
