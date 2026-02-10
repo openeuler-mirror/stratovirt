@@ -2185,7 +2185,7 @@ pub trait MachineOps: MachineLifecycle {
                 #[cfg(feature = "vhostuser_block")]
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 #[cfg(feature = "vhostuser_gpu")]
-                ("vhost-user-gpu-pci",add_vhost_user_gpu_pci, vm_config, cfg_args),
+                ("vhost-user-gpu-pci", add_vhost_user_gpu_pci, vm_config, cfg_args),
                 #[cfg(feature = "vhost_vsock")]
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]

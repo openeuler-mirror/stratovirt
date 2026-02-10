@@ -1173,7 +1173,7 @@ impl VhostOps for VhostUserClient {
         client
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[raw_fd])
-            .with_context(|| "Failed to send msg for getting vring base")?;
+            .with_context(|| "Failed to send msg for set socket")?;
         Ok(())
     }
 }
