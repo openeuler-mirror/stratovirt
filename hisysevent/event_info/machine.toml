@@ -1,5 +1,5 @@
 [[events]]
 name = "STRATOVIRT_WINDOWS_EMU_EXIT"
 event_type = "Behavior"
-args = "exit_type: u32"
+args = "TYPE: u32"
 enabled = true
