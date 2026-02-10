@@ -198,7 +198,7 @@ fn do_fallocate(
 
         if ret != libc::EINTR {
             if discard {
-                hisysevent::STRATOVIRT_IO_DISCARD(fd.as_raw_fd(), offset, size, ret);
+                hisysevent::STRATOVIRT_IO_DISCARD(fd.as_raw_fd(), offset, size, ret as u32);
             }
             break;
         }
