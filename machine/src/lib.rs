@@ -2589,7 +2589,7 @@ fn check_windows_emu_pid(
         drop(vm_state);
         drop(locked_vm);
         // The vm exit type for hisysevent: 1-Os, 2-Bios(default).
-        let mut exit_type = 2_u8;
+        let mut exit_type = 2_u32;
         if get_run_stage() == VmRunningStage::Os {
             // Wait 30s for windows normal exit.
             check_delay = Duration::from_millis(WINDOWS_EMU_PID_POWERDOWN_INTERVAL);

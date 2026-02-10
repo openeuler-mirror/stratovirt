@@ -1,5 +1,5 @@
 [[events]]
 name = "STRATOVIRT_IO_DISCARD"
 event_type = "Fault"
-args = "fd: i32, offset: u64, size: u64, errno: i32"
+args = "fd: i32, offset: u64, size: u64, errno: u32"
 enabled = true
