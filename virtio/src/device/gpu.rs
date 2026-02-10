@@ -147,13 +147,14 @@ impl Default for GpuResource {
     }
 }
 
+#[allow(unused)]
 #[derive(Default, Clone, Copy)]
 pub struct VirtioGpuOutputState {
     pub con_id: usize,
     pub width: u32,
     pub height: u32,
-    pub x_coor: i32,
-    pub y_coor: i32,
+    x_coord: i32,
+    y_coord: i32,
 }
 
 trait CtrlHdr {
