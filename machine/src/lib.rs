@@ -2573,9 +2573,10 @@ fn check_windows_emu_pid(
     powerdown_req: Arc<EventFd>,
     shutdown_req: Arc<EventFd>,
     vm: Arc<Mutex<dyn MachineOps>>,
+    mut win_emu_exit: bool,
 ) {
     let mut check_delay = Duration::from_millis(WINDOWS_EMU_PID_DEFAULT_INTERVAL);
-    if !Path::new(&pid_path).exists() {
+    if win_emu_exit || !Path::new(&pid_path).exists() {
         info!("Detect emulator exited, let VM exits now");
         let locked_vm = vm.lock().unwrap();
         let mut vm_state = locked_vm.get_vm_state().deref().0.lock().unwrap();
@@ -2587,18 +2588,26 @@ fn check_windows_emu_pid(
         }
         drop(vm_state);
         drop(locked_vm);
+        // The vm exit type for hisysevent: 1-Os, 2-Bios(default).
+        let mut exit_type = 2_u8;
         if get_run_stage() == VmRunningStage::Os {
             // Wait 30s for windows normal exit.
             check_delay = Duration::from_millis(WINDOWS_EMU_PID_POWERDOWN_INTERVAL);
             if let Err(e) = powerdown_req.write(1) {
                 log::error!("Failed to send powerdown request after emu exits: {:?}", e);
             }
+            exit_type = 1;
         } else {
             // Wait 1s for windows shutdown.
             check_delay = Duration::from_millis(WINDOWS_EMU_PID_SHUTDOWN_INTERVAL);
             if let Err(e) = shutdown_req.write(1) {
                 log::error!("Failed to send shutdown request after emu exits: {:?}", e);
             }
+        }
+
+        if !win_emu_exit {
+            hisysevent::STRATOVIRT_WINDOWS_EMU_EXIT(exit_type);
+            win_emu_exit = true;
         }
     }
 
@@ -2608,6 +2617,7 @@ fn check_windows_emu_pid(
             powerdown_req.clone(),
             shutdown_req.clone(),
             vm.clone(),
+            win_emu_exit,
         );
     });
     EventLoop::get_ctx(None)
@@ -2636,6 +2646,7 @@ pub(crate) fn watch_windows_emu_pid(
             power_button.clone(),
             shutdown_req.clone(),
             vm.clone(),
+            false,
         );
     });
     EventLoop::get_ctx(None)
