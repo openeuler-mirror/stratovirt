@@ -184,6 +184,9 @@ pub(crate) fn write_to_hisysevent(
         )
     };
     if ret != 0 {
-        error!("Failed to write event {} to hisysevent.", event_name);
+        error!(
+            "Failed to write event {} to hisysevent, error is {}.",
+            event_name, ret
+        );
     }
 }
