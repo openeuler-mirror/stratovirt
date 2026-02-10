@@ -1541,7 +1541,9 @@ fn scsi_command_emulate_read_toc(
     match format {
         RT_FORMATTED_TOC => {
             SCSI_DEVICE!(dev, locked_dev, scsi_dev);
-            let nb_sectors = scsi_dev.disk_sectors as u32;
+            let mut nb_sectors = scsi_dev.disk_sectors as u32;
+            let block_size = scsi_dev.block_size;
+            nb_sectors /= block_size / DEFAULT_SECTOR_SIZE;
             let mut buf = cdrom_read_formatted_toc(nb_sectors, msf, track_number)?;
             outbuf.append(&mut buf);
         }
