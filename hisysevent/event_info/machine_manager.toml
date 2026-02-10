@@ -1,0 +1,5 @@
+[[events]]
+name = "STRATOVIRT_KILLED"
+event_type = "Behavior"
+args = "signo: i32"
+enabled = true

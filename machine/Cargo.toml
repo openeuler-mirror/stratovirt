@@ -30,6 +30,7 @@ ui = { path = "../ui" }
 trace = { path = "../trace" }
 clap = { version = "=4.1.4", default-features = false, features = ["std", "derive"] }
 serde = { version = "1.0", features = ["derive"] }
+hisysevent = { path = "../hisysevent" }
 
 [features]
 default = []
