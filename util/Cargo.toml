@@ -23,6 +23,7 @@ io-uring = "0.6.0"
 serde = { version = "1.0", features = ["derive"] }
 v4l2-sys-mit = { version = "0.3.0", optional = true }
 trace = {path = "../trace"}
+hisysevent = { path = "../hisysevent" }
 
 [features]
 default = []

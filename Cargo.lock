@@ -1860,6 +1860,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "byteorder",
+ "hisysevent",
  "io-uring",
  "kvm-bindings",
  "libc",
