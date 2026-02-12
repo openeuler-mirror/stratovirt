@@ -263,6 +263,12 @@ message = "state={}"
 enabled = true
 
 [[events]]
+name = "oh_event_flushframe"
+args = ""
+message = ""
+enabled = true
+
+[[events]]
 name = "oh_event_greet"
 args = "id: u64"
 message = "token_id={}"

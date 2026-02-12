@@ -14,6 +14,7 @@ use std::mem::size_of;
 
 use util::byte_code::ByteCode;
 
+pub const CLIENT_FOCUSIN_EVENT: u32 = 0x0;
 pub const CLIENT_FOCUSOUT_EVENT: u32 = 0x1;
 pub const CLIENT_PRESS_BTN: u32 = 0x1;
 pub const CLIENT_RELEASE_BTN: u32 = 0x0;
@@ -42,6 +43,7 @@ pub enum EventType {
     CursorDefine = 8,
     Focus = 9,
     VmCtrlInfo = 10,
+    FlushFrame = 11,
     WindowInfoV2 = 14,
     #[default]
     Max,
@@ -171,6 +173,14 @@ impl FrameBufferDirtyEvent {
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
+pub struct FlushFrameEvent {
+    pub reserved: u64,
+}
+
+impl ByteCode for FlushFrameEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct WindowInfoV2Event {
     pub width: u32,
     pub height: u32,
@@ -222,6 +232,7 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
         EventType::CursorDefine => size_of::<HWCursorEvent>(),
         EventType::Ledstate => size_of::<LedstateEvent>(),
         EventType::Greet => size_of::<GreetEvent>(),
+        EventType::FlushFrame => size_of::<FlushFrameEvent>(),
         EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
         _ => 0,
     }
