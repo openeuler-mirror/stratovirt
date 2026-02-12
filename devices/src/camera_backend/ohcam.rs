@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::CStr;
 use std::sync::RwLock;
 
@@ -339,6 +339,34 @@ impl OhPhysCamState {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct OhCameraFrame {
+    format: FmtType,
+    profile_idx: u8,
+    width: u32,
+    height: u32,
+    index: u8,
+    interval: u32,
+}
+
+impl From<&mut OhCameraFrame> for CameraFrame {
+    fn from(frame: &mut OhCameraFrame) -> Self {
+        Self {
+            width: frame.width,
+            height: frame.height,
+            index: frame.index,
+            interval: frame.interval,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct OhCameraFormatList {
+    format: FmtType,
+    fmt_index: u8,
+    frames: Vec<OhCameraFrame>,
+}
+
 #[derive(Clone)]
 pub struct OhCameraBackend {
     // ID for this OhCameraBackend.
@@ -347,8 +375,7 @@ pub struct OhCameraBackend {
     camid: String,
     profile_cnt: u8,
     ctx: OhCamera,
-    fmt_list: Vec<CameraFormatList>,
-    selected_profile: u8,
+    fmt_map: BTreeMap<FmtType, OhCameraFormatList>,
     stream_on: bool,
     paused: bool,
     #[cfg(any(
@@ -408,8 +435,7 @@ impl OhCameraBackend {
             camid: cam_name,
             profile_cnt: profile_cnt as u8,
             ctx,
-            fmt_list: vec![],
-            selected_profile: 0,
+            fmt_map: BTreeMap::new(),
             stream_on: false,
             paused: false,
             #[cfg(any(
@@ -423,15 +449,94 @@ impl OhCameraBackend {
             cam_state: OhPhysCamState::new(connection_type, position, orientation),
         })
     }
+
+    fn insert(&mut self, frm: OhCameraFrame) {
+        if let Some(entry) = self.fmt_map.get_mut(&frm.format) {
+            if !entry.frames.contains(&frm) {
+                entry.frames.push(frm);
+            }
+        } else {
+            self.fmt_map.insert(
+                frm.format,
+                OhCameraFormatList {
+                    format: frm.format,
+                    fmt_index: 0,
+                    frames: vec![frm],
+                },
+            );
+        }
+    }
+
+    fn filter_nv21(&mut self) {
+        let Some(mut nv21_list) = self.fmt_map.remove(&FmtType::Nv21) else {
+            return;
+        };
+
+        let mut nv12_list = match self.fmt_map.remove(&FmtType::Nv12) {
+            Some(list) => list,
+            None => OhCameraFormatList {
+                format: FmtType::Nv12,
+                fmt_index: 0,
+                frames: Vec::new(),
+            },
+        };
+        nv21_list.frames.retain_mut(|frm| {
+            for nv12_frm in &nv12_list.frames {
+                if nv12_frm.height == frm.height
+                    && nv12_frm.width == frm.width
+                    && nv12_frm.interval == frm.interval
+                {
+                    return false;
+                }
+            }
+            frm.format = FmtType::Nv12;
+            true
+        });
+
+        nv12_list.frames.append(&mut nv21_list.frames);
+        if !nv12_list.frames.is_empty() {
+            self.fmt_map.insert(FmtType::Nv12, nv12_list);
+        }
+    }
+
+    fn sort_cam_frm(&mut self) {
+        for ohcam_list in self.fmt_map.values_mut() {
+            ohcam_list.frames.sort_by(|a, b| {
+                a.width
+                    .cmp(&b.width)
+                    .then_with(|| a.height.cmp(&b.height))
+                    .then_with(|| b.interval.cmp(&a.interval))
+            });
+        }
+    }
+
+    fn get_cam_fmt_list(&mut self) -> Vec<CameraFormatList> {
+        self.filter_nv21();
+        self.sort_cam_frm();
+        let mut list: Vec<CameraFormatList> = Vec::new();
+        for (idx, (fmt, ohcam_list)) in self.fmt_map.iter_mut().enumerate() {
+            ohcam_list.fmt_index = (idx + 1) as u8;
+            list.push(CameraFormatList {
+                format: *fmt,
+                fmt_index: ohcam_list.fmt_index,
+                frame: Vec::new(),
+            });
+            for (frm_idx, frm) in ohcam_list.frames.iter_mut().enumerate() {
+                frm.index = (frm_idx + 1) as u8;
+                list[idx].frame.push(CameraFrame::from(frm));
+            }
+        }
+        list
+    }
 }
 
 impl CameraBackend for OhCameraBackend {
     fn set_fmt(&mut self, cam_fmt: &CamBasicFmt) -> Result<()> {
-        for fmt in &self.fmt_list {
-            if fmt.format != cam_fmt.fmttype {
+        for (fmt, fmt_list) in &self.fmt_map {
+            if *fmt != cam_fmt.fmttype {
                 continue;
             }
-            for frm in &fmt.frame {
+            for frm in &fmt_list.frames {
                 if frm.width != cam_fmt.width || frm.height != cam_fmt.height {
                     continue;
                 }
@@ -442,8 +547,7 @@ impl CameraBackend for OhCameraBackend {
                 if fps != cam_fmt.fps {
                     continue;
                 }
-                self.selected_profile = fmt.fmt_index - 1;
-                self.ctx.set_fmt(i32::from(self.selected_profile))?;
+                self.ctx.set_fmt(i32::from(frm.profile_idx))?;
                 info!(
                     "OHCAM {}: set format {:?}, width {}, height {}",
                     self.camid, cam_fmt.fmttype, cam_fmt.width, cam_fmt.height
@@ -505,8 +609,6 @@ impl CameraBackend for OhCameraBackend {
     }
 
     fn list_format(&mut self) -> Result<Vec<CameraFormatList>> {
-        let mut fmt_list: Vec<CameraFormatList> = Vec::new();
-
         for idx in 0..self.profile_cnt {
             match self.ctx.get_profile(i32::from(idx)) {
                 Ok((fmt, width, height, fps)) => {
@@ -517,32 +619,19 @@ impl CameraBackend for OhCameraBackend {
                         continue;
                     }
 
-                    let frame = CameraFrame {
+                    self.insert(OhCameraFrame {
+                        format: cam_fmt_from_oh(fmt)?,
+                        profile_idx: idx,
                         width: width as u32,
                         height: height as u32,
-                        index: 1,
+                        index: 0,
                         interval: FPS_INTERVAL_TRANS / fps as u32,
-                    };
-                    fmt_list.push(CameraFormatList {
-                        format: cam_fmt_from_oh(fmt)?,
-                        frame: vec![frame],
-                        fmt_index: idx.checked_add(1).unwrap_or_else(|| {
-                            error!("list_format: too much profile ID");
-                            u8::MAX
-                        }),
                     });
                 }
                 Err(e) => error!("{:?}", e),
             }
         }
-
-        fmt_list = remove_duplicate_nv21(fmt_list);
-        // Just for APP ToDesk, This stupid APP uses the format reported first
-        // to realize camera-related functions. It doesn't support NV12, so
-        // we put YUY2 forward.
-        fmt_list.sort_by(|a, b| a.format.partial_cmp(&b.format).unwrap());
-        self.fmt_list = fmt_list.clone();
-        Ok(fmt_list)
+        Ok(self.get_cam_fmt_list())
     }
 
     fn reset(&mut self) {
@@ -567,12 +656,12 @@ impl CameraBackend for OhCameraBackend {
 
     fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt> {
         let mut out = CamBasicFmt::default();
-        for fmt in &self.fmt_list {
-            if fmt.fmt_index != format_index {
+        for fmt_list in self.fmt_map.values() {
+            if fmt_list.fmt_index != format_index {
                 continue;
             }
-            out.fmttype = fmt.format;
-            for frm in &fmt.frame {
+            out.fmttype = fmt_list.format;
+            for frm in &fmt_list.frames {
                 if frm.index != frame_index {
                     continue;
                 }
@@ -1080,24 +1169,6 @@ impl OhCameraBackend {
 
         Ok(())
     }
-}
-
-fn remove_duplicate_nv21(mut list: Vec<CameraFormatList>) -> Vec<CameraFormatList> {
-    let list_clone = list.clone();
-    list.retain_mut(|f| {
-        if f.format != FmtType::Nv21 {
-            return true;
-        }
-        f.format = FmtType::Nv12;
-
-        for fmt in &list_clone {
-            if fmt.format == FmtType::Nv12 && fmt.frame[0] == f.frame[0] {
-                return false;
-            }
-        }
-        true
-    });
-    list
 }
 
 /// SAFETY:
