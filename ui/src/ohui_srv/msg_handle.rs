@@ -16,7 +16,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{error, info};
+use log::{error, info, warn};
 use util::byte_code::ByteCode;
 
 use super::{
@@ -198,13 +198,7 @@ impl OhUiMsgHandler {
             }
             EventType::Focus => {
                 let body = FocusEvent::from_bytes(&body_bytes[..]).unwrap();
-                trace::oh_event_focus(body.state);
-                if body.state == CLIENT_FOCUSOUT_EVENT {
-                    reader.clear();
-                    release_all_key()?;
-                    release_all_btn()?;
-                }
-                Ok(())
+                self.handle_focuschange(body)
             }
             EventType::Ledstate => Ok(()),
             EventType::Greet => {
@@ -220,6 +214,10 @@ impl OhUiMsgHandler {
                     cursor.size_per_pixel,
                 );
                 Ok(())
+            }
+            EventType::FlushFrame => {
+                let body = FlushFrameEvent::from_bytes(&body_bytes[..]).unwrap();
+                self.handle_flushframe(body)
             }
             EventType::WindowInfoV2 => {
                 let body = WindowInfoV2Event::from_bytes(&body_bytes[..]).unwrap();
@@ -327,12 +325,10 @@ impl OhUiMsgHandler {
         let cons = get_active_console();
 
         for con in cons {
-            let c = match con.upgrade() {
-                Some(c) => c,
-                None => continue,
-            };
-            if let Err(e) = graphic_hardware_ui_info(c, wi.width, wi.height) {
-                error!("handle_windowinfo failed with error {e}");
+            if let Some(c) = con.upgrade() {
+                if let Err(e) = graphic_hardware_ui_info(c.clone(), wi.width, wi.height) {
+                    error!("handle_windowinfo failed with error {e}");
+                }
             }
         }
         trace::oh_event_windowinfo(wi.width, wi.height);
@@ -345,6 +341,25 @@ impl OhUiMsgHandler {
         };
         self.handle_windowinfo(&wi);
         set_dpy_rotation(Rotation::try_from(wi_v2.rotation).map_err(|e| anyhow!("{:?}", e))?);
+    }
+
+    fn handle_focuschange(&self, fe: &FocusEvent) -> Result<()> {
+        trace::oh_event_focus(fe.state);
+        match fe.state {
+            CLIENT_FOCUSIN_EVENT => {
+                warn!("Windows on focus in.");
+            }
+            CLIENT_FOCUSOUT_EVENT => {
+                release_all_key()?;
+                release_all_btn()?;
+            }
+            _ => warn!("focus message type error."),
+        }
+        Ok(())
+    }
+
+    fn handle_flushframe(&self, _fe: &FlushFrameEvent) -> Result<()> {
+        trace::oh_event_flushframe();
         Ok(())
     }
 
