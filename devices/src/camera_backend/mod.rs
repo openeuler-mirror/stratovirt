@@ -54,7 +54,7 @@ impl CamBasicFmt {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Default)]
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd, Default)]
 pub enum FmtType {
     #[default]
     Yuy2 = 0,
