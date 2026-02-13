@@ -288,6 +288,11 @@ impl OhUiMsgHandler {
                 info!("WindowInfoV2: {:?}", body);
                 self.handle_windowinfo_v2(body)
             }
+            EventType::VmViewChange => {
+                let body = VmViewChangeEvent::from_bytes(&body_bytes[..]).unwrap();
+                info!("VmViewChange: {:?}", body);
+                self.handle_vm_view_change(body)
+            }
             _ => {
                 error!(
                     "unsupported type {:?} and body size {}",
@@ -414,6 +419,10 @@ impl OhUiMsgHandler {
         };
         self.handle_windowinfo(&wi);
         set_dpy_rotation(Rotation::try_from(wi_v2.rotation).map_err(|e| anyhow!("{:?}", e))?);
+    }
+
+    fn handle_vm_view_change(&self, _vc: &VmViewChangeEvent) -> Result<()> {
+        Ok(())
     }
 
     fn handle_focuschange(&self, fe: &FocusEvent) -> Result<()> {

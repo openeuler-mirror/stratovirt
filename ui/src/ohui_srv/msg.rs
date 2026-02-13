@@ -47,6 +47,7 @@ pub enum EventType {
     Multitouch = 12,
     InputDeviceChange = 13,
     WindowInfoV2 = 14,
+    VmViewChange = 15,
     #[default]
     Max,
 }
@@ -248,6 +249,20 @@ pub const FOLD_STATUS_HALF_FOLDED: u32 = 3;
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
+pub struct VmViewChangeEvent {
+    pub is_recreate: u32,
+}
+
+impl ByteCode for VmViewChangeEvent {}
+
+impl VmViewChangeEvent {
+    pub fn new(is_recreate: u32) -> Self {
+        VmViewChangeEvent { is_recreate }
+    }
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct EventMsgHdr {
     pub magic: u32,
     pub size: u32,
@@ -282,6 +297,7 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
         EventType::FlushFrame => size_of::<FlushFrameEvent>(),
         EventType::InputDeviceChange => size_of::<InputDeviceChange>(),
         EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
+        EventType::VmViewChange => size_of::<VmViewChangeEvent>(),
         _ => 0,
     }
 }
