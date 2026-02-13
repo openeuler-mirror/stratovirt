@@ -54,13 +54,14 @@ impl CamBasicFmt {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, PartialOrd, Default)]
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd, Default)]
 pub enum FmtType {
     #[default]
     Yuy2 = 0,
     Rgb565,
     Mjpg,
     Nv12,
+    Nv21,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +70,12 @@ pub struct CameraFrame {
     pub height: u32,
     pub index: u8,
     pub interval: u32,
+}
+
+impl PartialEq for CameraFrame {
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width && self.height == other.height && self.interval == other.interval
+    }
 }
 
 #[derive(Clone)]
@@ -148,6 +155,9 @@ pub type CameraNotifyCallback = Arc<dyn Fn() + Send + Sync>;
 /// Callback function which is called when backend is broken.
 pub type CameraBrokenCallback = Arc<dyn Fn() + Send + Sync>;
 
+/// Callback function which is called when status available or not.
+pub type CameraAvailCallback = Arc<dyn Fn() + Send + Sync>;
+
 pub trait CameraBackend: Send + Sync {
     /// Set a specific format.
     fn set_fmt(&mut self, fmt: &CamBasicFmt) -> Result<()>;
@@ -171,7 +181,7 @@ pub trait CameraBackend: Send + Sync {
     fn get_frame_size(&self) -> usize;
 
     /// Copy frame data to iovecs.
-    fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize>;
+    fn get_frame(&mut self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize>;
 
     /// Get format/frame info including width/height/interval/fmt according to format/frame index.
     fn get_format_by_index(&self, format_index: u8, frame_index: u8) -> Result<CamBasicFmt>;
@@ -184,6 +194,9 @@ pub trait CameraBackend: Send + Sync {
 
     /// Register broken callback which is called when backend is broken.
     fn register_broken_cb(&mut self, cb: CameraBrokenCallback);
+
+    /// Register avail callback which is called when status available or not.
+    fn register_avail_cb(&mut self, _cb: CameraAvailCallback) {}
 
     /// Pause/resume stream.
     fn pause(&mut self, _paused: bool) {}

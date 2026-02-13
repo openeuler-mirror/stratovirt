@@ -99,7 +99,7 @@ impl V4l2CameraBackend {
     }
 
     fn check_cap(&self) -> Result<()> {
-        // SAFETY: backend is inited in outside function.
+        // backend is inited in outside function.
         let cap = self.backend.as_ref().unwrap().query_cap()?;
         if cap.capabilities & V4L2_CAP_VIDEO_CAPTURE != V4L2_CAP_VIDEO_CAPTURE {
             bail!(
@@ -258,7 +258,7 @@ impl CameraBackend for V4l2CameraBackend {
         fmt.fmt.pix.height = cam_fmt.height;
         fmt.fmt.pix.pixelformat = cam_fmt_to_v4l2(&cam_fmt.fmttype);
         fmt.fmt.pix.field = 4;
-        // SAFETY: backend is inited before.
+        // backend is inited before.
         let backend = self.backend.as_ref().unwrap();
         backend.set_format(&fmt)?;
 
@@ -304,7 +304,6 @@ impl CameraBackend for V4l2CameraBackend {
         if let Some(backend) = self.backend.as_ref() {
             backend.stream_off(V4L2_CAP_VIDEO_CAPTURE as std::os::raw::c_int)?;
             backend.release_buffers()?;
-            self.backend = None;
         }
         self.running = false;
         Ok(())
@@ -409,7 +408,7 @@ impl CameraBackend for V4l2CameraBackend {
         Ok(())
     }
 
-    fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize> {
+    fn get_frame(&mut self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize> {
         let locked_sample = self.sample.lock().unwrap();
         if frame_offset + len > locked_sample.used_len as usize {
             bail!("Invalid frame offset {} or len {}", frame_offset, len);
@@ -421,7 +420,16 @@ impl CameraBackend for V4l2CameraBackend {
             }
             let cnt = std::cmp::min(iov.iov_len as usize, len - copied);
             let src_ptr = locked_sample.addr + frame_offset as u64 + copied as u64;
-            // SAFETY: the address is not out of range.
+            // SAFETY: The safety of this operation is guaranteed by the checks above.
+            // - `src_ptr` is valid for reads of `cnt` bytes:
+            //    - `src_addr` is a non-null address provided by `self.sample`.
+            //    - We have explicitly checked that `frame_offset + len <= used_len`, ensuring that
+            //      any read within the loop, where `copied` goes from `0` to `len`, remains
+            //      within the bounds of the source buffer .
+            // - `iov.iov_base` is valid for writes of `cnt` bytes:
+            //    - The usb packet from xhci provide `iovecs` where each `iov_base` points to a valid,
+            //      writable memory buffer of at least `iov_len` bytes.
+            // - The source and destination memory regions do not overlap
             unsafe {
                 std::ptr::copy(src_ptr as *const u8, iov.iov_base as *mut u8, cnt);
             }
@@ -445,6 +453,7 @@ fn cam_fmt_to_v4l2(t: &FmtType) -> u32 {
         FmtType::Rgb565 => PIXFMT_RGB565,
         FmtType::Mjpg => PIXFMT_MJPG,
         FmtType::Nv12 => PIXFMT_NV12,
+        FmtType::Nv21 => PIXFMT_NV12,
     }
 }
 

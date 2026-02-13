@@ -31,17 +31,18 @@ pub const EVENT_MSG_HDR_SIZE: u32 = size_of::<EventMsgHdr>() as u32;
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub enum EventType {
-    WindowInfo,
-    MouseButton,
-    MouseMotion,
-    Keyboard,
-    Scroll,
-    Ledstate,
-    FrameBufferDirty,
-    Greet,
-    CursorDefine,
-    Focus,
-    VmCtrlInfo,
+    WindowInfo = 0,
+    MouseButton = 1,
+    MouseMotion = 2,
+    Keyboard = 3,
+    Scroll = 4,
+    Ledstate = 5,
+    FrameBufferDirty = 6,
+    Greet = 7,
+    CursorDefine = 8,
+    Focus = 9,
+    VmCtrlInfo = 10,
+    WindowInfoV2 = 14,
     #[default]
     Max,
 }
@@ -170,6 +171,27 @@ impl FrameBufferDirtyEvent {
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
+pub struct WindowInfoV2Event {
+    pub width: u32,
+    pub height: u32,
+    pub rotation: u32,
+    pub fold_status: u32,
+}
+
+impl ByteCode for WindowInfoV2Event {}
+
+pub const WINDOW_ROTATION_0: u32 = 0;
+pub const WINDOW_ROTATION_90: u32 = 1;
+pub const WINDOW_ROTATION_180: u32 = 2;
+pub const WINDOW_ROTATION_270: u32 = 3;
+
+pub const FOLD_STATUS_UNKNOWN: u32 = 0;
+pub const FOLD_STATUS_EXPAND: u32 = 1;
+pub const FOLD_STATUS_FOLDED: u32 = 2;
+pub const FOLD_STATUS_HALF_FOLDED: u32 = 3;
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct EventMsgHdr {
     pub magic: u32,
     pub size: u32,
@@ -200,6 +222,7 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
         EventType::CursorDefine => size_of::<HWCursorEvent>(),
         EventType::Ledstate => size_of::<LedstateEvent>(),
         EventType::Greet => size_of::<GreetEvent>(),
+        EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
         _ => 0,
     }
 }
