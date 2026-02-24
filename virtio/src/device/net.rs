@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use std::{cmp, fs, mem};
 
 use anyhow::{bail, Context, Result};
@@ -31,19 +32,19 @@ use crate::{
     check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, mem_to_buf,
     read_config_default, report_virtio_error, virtio_has_feature, ElemIovec, Element, Queue,
     VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
-    CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_NEEDS_RESET, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
-    VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
-    VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST, VIRTIO_NET_CTRL_RX_NOMULTI,
-    VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC, VIRTIO_NET_CTRL_VLAN,
-    VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM,
-    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX, VIRTIO_NET_F_CTRL_RX_EXTRA,
-    VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO,
-    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
-    VIRTIO_NET_F_MQ, VIRTIO_NET_F_STATUS, VIRTIO_NET_OK, VIRTIO_NET_S_LINK_UP, VIRTIO_TYPE_NET,
+    CONFIG_STATUS_DRIVER_OK, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
+    VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET,
+    VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX,
+    VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
+    VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
+    VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
+    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
+    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_F_STATUS, VIRTIO_NET_OK, VIRTIO_NET_S_LINK_UP, VIRTIO_TYPE_NET,
 };
 use address_space::{AddressAttr, AddressSpace};
 use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
@@ -1348,8 +1349,10 @@ pub struct Net {
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// memory address space
     mem_space: Option<Arc<AddressSpace>>,
-    /// indicate if send message after activated
-    notify_activate: bool,
+    /// queue events
+    queue_evts: Option<Vec<Arc<EventFd>>>,
+    /// timer id
+    timer_id: Option<u64>,
 }
 
 impl Net {
@@ -1450,7 +1453,7 @@ impl Net {
         self.netdev_cfg.macnat.then_some(IpvtapMacnat)
     }
 
-    fn send_status_event(&self, msg: String) {
+    fn send_status_event(msg: String) {
         const VIRTIO_NET_DEV_STATUS_CODE: u32 = 1;
 
         let event = VmNotifyEvent {
@@ -1615,16 +1618,68 @@ impl Net {
         path: Option<String>,
         macnat: bool,
     ) -> Result<()> {
+        // The reason why delay 500ms then send the message of device status to SA is
+        // (1) We need to reply qmp result firstly.
+        // (2) SA explicitly processes qmp reply and events as timing sequence. And it
+        //     is waiting for our reply and then need time interval to process reply.
+        const NOTIFY_DELAY_MS: u64 = 500;
+
         self.netdev_cfg.ifname = ifname;
         self.netdev_cfg.path = path.unwrap_or_default();
         self.netdev_cfg.macnat = macnat;
 
-        self.enable_taps(false);
-        self.unregister_trans_evts()?;
-        self.set_device_status(self.device_status() | CONFIG_STATUS_NEEDS_RESET);
-        self.notify_config()?;
-        self.realize()?;
-        self.notify_activate = true;
+        if self.link_status.load(Ordering::SeqCst) {
+            self.set_link_status(false)?;
+        }
+
+        self.create_taps()?;
+
+        if self.base.device_activated.load(Ordering::SeqCst) {
+            let mem_space = self.mem_space.take().unwrap();
+            let interrupt_cb = self.interrupt_cb.take().unwrap();
+            let queue_evts = self.queue_evts.take().unwrap();
+            self.deactivate()?;
+            self.activate(mem_space, interrupt_cb, queue_evts)?;
+        }
+
+        if let Some(timer_id) = self.timer_id.take() {
+            EventLoop::get_ctx(None).unwrap().timer_del(timer_id);
+        }
+        self.timer_id = Some(EventLoop::get_ctx(None).unwrap().timer_add(
+            Box::new(|| Self::send_status_event("activated".to_string())),
+            Duration::from_millis(NOTIFY_DELAY_MS),
+        ));
+        Ok(())
+    }
+
+    fn create_taps(&mut self) -> Result<()> {
+        let queue_pairs = self.netdev_cfg.queues / 2;
+        if !self.netdev_cfg.ifname.is_empty() {
+            self.taps = create_tap(
+                None,
+                Some(&self.netdev_cfg.ifname),
+                self.netdev_cfg.get_path(),
+                queue_pairs,
+                self.netdev_cfg.macnat,
+            )
+            .with_context(|| "Failed to open tap with file path")?;
+        } else if let Some(fds) = self.netdev_cfg.tap_fds.as_mut() {
+            let mut created_fds = 0;
+            if let Some(taps) = &self.taps {
+                for (index, tap) in taps.iter().enumerate() {
+                    if fds.get(index).map_or(-1, |fd| *fd as RawFd) == tap.as_raw_fd() {
+                        created_fds += 1;
+                    }
+                }
+            }
+
+            if created_fds != fds.len() {
+                self.taps = create_tap(Some(fds), None, None, queue_pairs, self.netdev_cfg.macnat)
+                    .with_context(|| "Failed to open tap")?;
+            }
+        } else {
+            self.taps = None;
+        }
         Ok(())
     }
 }
@@ -1807,33 +1862,7 @@ impl VirtioDevice for Net {
             );
         }
 
-        let queue_pairs = self.netdev_cfg.queues / 2;
-        if !self.netdev_cfg.ifname.is_empty() {
-            self.taps = create_tap(
-                None,
-                Some(&self.netdev_cfg.ifname),
-                self.netdev_cfg.get_path(),
-                queue_pairs,
-                self.netdev_cfg.macnat,
-            )
-            .with_context(|| "Failed to open tap with file path")?;
-        } else if let Some(fds) = self.netdev_cfg.tap_fds.as_mut() {
-            let mut created_fds = 0;
-            if let Some(taps) = &self.taps {
-                for (index, tap) in taps.iter().enumerate() {
-                    if fds.get(index).map_or(-1, |fd| *fd as RawFd) == tap.as_raw_fd() {
-                        created_fds += 1;
-                    }
-                }
-            }
-
-            if created_fds != fds.len() {
-                self.taps = create_tap(Some(fds), None, None, queue_pairs, self.netdev_cfg.macnat)
-                    .with_context(|| "Failed to open tap")?;
-            }
-        } else {
-            self.taps = None;
-        }
+        self.create_taps()?;
 
         if let Some(ref taps) = self.taps {
             for (idx, tap) in taps.iter().enumerate() {
@@ -2024,11 +2053,7 @@ impl VirtioDevice for Net {
         self.base.broken.store(false, Ordering::SeqCst);
         self.interrupt_cb = Some(interrupt_cb);
         self.mem_space = Some(mem_space);
-
-        if self.notify_activate {
-            self.send_status_event("activated".to_string());
-            self.notify_activate = false;
-        }
+        self.queue_evts = Some(queue_evts);
 
         Ok(())
     }
@@ -2067,6 +2092,7 @@ impl VirtioDevice for Net {
         self.ctrl_info = None;
         self.interrupt_cb = None;
         self.mem_space = None;
+        self.queue_evts = None;
         Ok(())
     }
 
