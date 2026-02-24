@@ -2016,6 +2016,7 @@ impl VirtioDevice for Net {
         let features = self.driver_features(0_u32);
         let flags = get_tap_offload_flags(u64::from(features));
 
+        let mut notify_link_down = false;
         let mut senders = Vec::new();
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
@@ -2029,8 +2030,16 @@ impl VirtioDevice for Net {
 
             let tap = self.taps.as_ref().map(|t| t[index].clone());
             if let Some(tap) = tap.as_ref() {
-                tap.set_offload(flags)
-                    .with_context(|| "Failed to set tap offload")?;
+                match tap.set_offload(flags) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        error!(
+                            "Failed to set tap offload with flags {}, error {:?}",
+                            flags, e
+                        );
+                        notify_link_down = true;
+                    }
+                }
             }
 
             let net_queue = Arc::new(NetIoQueue {
@@ -2054,6 +2063,10 @@ impl VirtioDevice for Net {
         self.interrupt_cb = Some(interrupt_cb);
         self.mem_space = Some(mem_space);
         self.queue_evts = Some(queue_evts);
+
+        if notify_link_down {
+            self.set_link_status(false)?;
+        }
 
         Ok(())
     }
