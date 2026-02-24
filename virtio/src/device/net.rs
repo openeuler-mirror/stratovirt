@@ -14,16 +14,19 @@ use std::collections::HashMap;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread::yield_now;
 use std::time::Duration;
 use std::{cmp, fs, mem};
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{error, warn};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 use util::aio::Iovec;
 use util::macnat::{IpvtapMacnat, Macnat};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
@@ -54,14 +57,14 @@ use machine_manager::state_query::{
 };
 use machine_manager::{
     event,
+    notifier::register_vm_pause_notifier,
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
 };
 use migration::{
-    migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
-    StateTransfer,
+    migration::Migratable, DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer,
 };
-use migration_derive::{ByteCode, Desc};
+use migration_derive::DescSerde;
 use util::byte_code::ByteCode;
 use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
@@ -101,7 +104,7 @@ static USED_MAC_TABLE: Lazy<Arc<Mutex<[i8; MAX_MAC_ADDR_NUM]>>> =
 
 /// Configuration of virtio-net devices.
 #[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VirtioNetConfig {
     /// Mac Address.
     pub mac: [u8; MAC_ADDR_LEN],
@@ -121,6 +124,7 @@ pub struct VirtioNetConfig {
 impl ByteCode for VirtioNetConfig {}
 
 /// The control mode used for packet receive filtering.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 struct CtrlRxMode {
     /// If the device should receive all incoming packets.
     promisc: bool,
@@ -151,13 +155,13 @@ impl Default for CtrlRxMode {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct MacAddress {
     address: [u8; MAC_ADDR_LEN],
 }
 
 /// The Mac information used to filter incoming packet.
-#[derive(Default)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct CtrlMacInfo {
     /// Unicast mac address table.
     uni_mac_table: Vec<MacAddress>,
@@ -169,6 +173,7 @@ struct CtrlMacInfo {
     multi_mac_of: bool,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CtrlInfo {
     /// The control rx mode for packet receive filtering.
     rx_mode: CtrlRxMode,
@@ -177,6 +182,7 @@ pub struct CtrlInfo {
     /// The map of all the vlan ids.
     vlan_map: HashMap<u16, u32>,
     /// The net device status.
+    #[serde(skip)]
     config: Arc<Mutex<VirtioNetConfig>>,
 }
 
@@ -526,6 +532,11 @@ pub struct NetCtrlHandler {
     pub driver_features: u64,
     /// Device is broken or not.
     pub device_broken: Arc<AtomicBool>,
+    /// Indicate if vm is paused.
+    pub vm_paused: Option<Arc<AtomicBool>>,
+    /// Indicate if IO is inflight.
+    pub io_inflight: Option<Arc<IoRef>>,
+    /// Tap devices.
     pub taps: Option<Vec<Tap>>,
 }
 
@@ -653,9 +664,16 @@ impl EventNotifierHelper for NetCtrlHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
-            if locked_net_io.device_broken.load(Ordering::SeqCst) {
+            if locked_net_io.device_broken.load(Ordering::SeqCst)
+                || locked_net_io
+                    .vm_paused
+                    .as_ref()
+                    .is_some_and(|p| p.load(Ordering::SeqCst))
+            {
                 return None;
             }
+
+            let _inflight = locked_net_io.io_inflight.as_ref().map(|r| r.inc_ref());
             locked_net_io.handle_ctrl().unwrap_or_else(|e| {
                 error!("Failed to handle ctrl queue, error is {:?}.", e);
                 report_virtio_error(
@@ -703,6 +721,8 @@ struct NetIoQueue<T> {
     driver_features: u64,
     queue_size: u16,
     macnat: Option<T>,
+    vm_paused: Arc<AtomicBool>,
+    io_inflight: Arc<IoRef>,
 }
 
 impl<T: Macnat + 'static> NetIoQueue<T> {
@@ -1139,10 +1159,11 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || net_queue.vm_paused.load(Ordering::SeqCst) {
                 return None;
             }
 
+            let _inflight = net_queue.io_inflight.inc_ref();
             net_queue.listen_state.lock().unwrap().set_queue_avail(true);
             let mut locked_queue = net_queue.rx.queue.lock().unwrap();
 
@@ -1206,10 +1227,11 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || net_queue.vm_paused.load(Ordering::SeqCst) {
                 return None;
             }
 
+            let _inflight = net_queue.io_inflight.inc_ref();
             if let Err(ref e) = net_queue.handle_tx(&tap) {
                 error!("Failed to handle tx(tx event) for net, {:?}", e);
                 report_virtio_error(
@@ -1233,7 +1255,6 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
             if let Err(e) = EventLoop::update_event(notifiers, rx_iothread.as_ref()) {
                 error!("Update tap notifiers failed in handle tx: {:?}", e);
             }
-
             None
         });
         let tx_fd = self.net_queue.tx.queue_evt.as_raw_fd();
@@ -1256,10 +1277,11 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
             return vec![];
         }
         let handler: Rc<NotifierCallback> = Rc::new(move |events: EventSet, _| {
-            if device_broken.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || net_queue.vm_paused.load(Ordering::SeqCst) {
                 return None;
             }
 
+            let _inflight = net_queue.io_inflight.inc_ref();
             if events.contains(EventSet::OUT) {
                 net_queue.listen_state.lock().unwrap().set_tap_full(false);
                 net_queue
@@ -1307,8 +1329,8 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
 
 /// Status of net device.
 #[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct VirtioNetState {
     /// Bit mask of features supported by the backend.
     pub device_features: u64,
@@ -1318,6 +1340,11 @@ pub struct VirtioNetState {
     pub config_space: VirtioNetConfig,
     /// Device broken status.
     broken: bool,
+    /// The control rx mode for packet receive filtering.
+    ctrl_info: Option<CtrlInfo>,
+    /// The used default mac number.
+    #[serde(with = "BigArray")]
+    used_mac: [i8; MAX_MAC_ADDR_NUM],
 }
 
 /// Network device structure.
@@ -1353,6 +1380,10 @@ pub struct Net {
     queue_evts: Option<Vec<Arc<EventFd>>>,
     /// timer id
     timer_id: Option<u64>,
+    /// indicate if vm paused
+    vm_paused: Arc<AtomicBool>,
+    /// indicate if io is inflight
+    io_inflight: Arc<IoRef>,
 }
 
 impl Net {
@@ -1370,6 +1401,41 @@ impl Net {
             netdev_cfg,
             link_status: Arc::new(AtomicBool::new(true)),
             ..Default::default()
+        }
+    }
+
+    fn init_vm_pause_notifier(&self) {
+        let queue_evts = self.queue_evts.clone();
+        let vm_paused = self.vm_paused.clone();
+        let pause_notify = Arc::new(move |paused| {
+            info!("VM State is {}", if paused { "paused" } else { "running" });
+            vm_paused.store(paused, Ordering::SeqCst);
+
+            if let (false, Some(evts)) = (paused, queue_evts.as_ref()) {
+                for (id, evt) in evts.iter().enumerate() {
+                    if let Err(err) = evt.write(1) {
+                        error!("Failed to notify queue {} with error {:?}", id, err);
+                    }
+                }
+            }
+        });
+        register_vm_pause_notifier(pause_notify);
+    }
+
+    fn wait_io_done(&self) {
+        const IO_TIMEOUT: u64 = 3;
+
+        let cur = std::time::Instant::now();
+        while self.io_inflight.ref_cnt() != 0 {
+            if cur.elapsed() >= Duration::from_secs(IO_TIMEOUT) {
+                warn!(
+                    "Elapsed {}s but {} IOs are ongoing.",
+                    IO_TIMEOUT,
+                    self.io_inflight.ref_cnt()
+                );
+                break;
+            }
+            yield_now();
         }
     }
 
@@ -1881,6 +1947,8 @@ impl VirtioDevice for Net {
 
         self.init_config_features()?;
 
+        self.init_vm_pause_notifier();
+
         Ok(())
     }
 
@@ -2000,6 +2068,8 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 device_broken: self.base.broken.clone(),
+                vm_paused: Some(self.vm_paused.clone()),
+                io_inflight: Some(self.io_inflight.clone()),
                 taps: self.taps.clone(),
             };
 
@@ -2054,6 +2124,8 @@ impl VirtioDevice for Net {
                 link_status: self.link_status.clone(),
                 queue_size: self.queue_size_max(),
                 macnat: self.get_macnat_handler(),
+                vm_paused: self.vm_paused.clone(),
+                io_inflight: self.io_inflight.clone(),
             });
 
             self.register_notifiers(net_queue, tap, receiver)?;
@@ -2096,6 +2168,7 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        self.wait_io_done();
         unregister_event_helper(
             self.net_cfg.iothread.as_ref(),
             &mut self.base.deactivate_evts,
@@ -2123,26 +2196,39 @@ impl VirtioDevice for Net {
 
 impl StateTransfer for Net {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
+        self.wait_io_done();
+
+        let ctrl_info = self.ctrl_info.as_ref().map(|c| c.lock().unwrap().clone());
         let state = VirtioNetState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
             config_space: *self.config_space.lock().unwrap(),
             broken: self.base.broken.load(Ordering::SeqCst),
+            ctrl_info,
+            used_mac: *USED_MAC_TABLE.lock().unwrap(),
         };
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-        let s_len = std::mem::size_of::<VirtioNetState>();
-        if state.len() != s_len {
-            bail!("Invalid state length {}, expected {}", state.len(), s_len);
-        }
-        let state = VirtioNetState::from_bytes(state)
+        let state: VirtioNetState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("NET"))?;
+
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;
         self.base.broken.store(state.broken, Ordering::SeqCst);
+        self.link_status.store(
+            state.config_space.status & VIRTIO_NET_S_LINK_UP == VIRTIO_NET_S_LINK_UP,
+            Ordering::SeqCst,
+        );
         *self.config_space.lock().unwrap() = state.config_space;
+
+        self.ctrl_info = state
+            .ctrl_info
+            .as_ref()
+            .map(|c| Arc::new(Mutex::new(c.clone())));
+        *USED_MAC_TABLE.lock().unwrap() = state.used_mac;
+
         Ok(())
     }
 
@@ -2152,6 +2238,43 @@ impl StateTransfer for Net {
 }
 
 impl MigrationHook for Net {}
+
+#[derive(Default)]
+pub struct IoRef {
+    ref_cnt: Arc<AtomicU32>,
+}
+
+impl Drop for IoRef {
+    fn drop(&mut self) {
+        loop {
+            let ref_count = self.ref_cnt.load(Ordering::Relaxed);
+            let new_count = ref_count.saturating_sub(1);
+            if self.ref_cnt.compare_exchange(
+                ref_count,
+                new_count,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) == Ok(ref_count)
+            {
+                break;
+            }
+        }
+    }
+}
+
+impl IoRef {
+    pub fn inc_ref(&self) -> Self {
+        self.ref_cnt.fetch_add(1, Ordering::Relaxed);
+        Self {
+            ref_cnt: self.ref_cnt.clone(),
+        }
+    }
+
+    #[inline]
+    pub fn ref_cnt(&self) -> u32 {
+        self.ref_cnt.load(Ordering::Relaxed)
+    }
+}
 
 #[cfg(test)]
 mod tests {

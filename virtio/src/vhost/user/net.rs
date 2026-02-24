@@ -228,6 +228,8 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 device_broken: self.base.broken.clone(),
+                vm_paused: None,
+                io_inflight: None,
                 taps: None,
             };
 
