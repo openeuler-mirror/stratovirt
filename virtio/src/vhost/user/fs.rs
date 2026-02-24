@@ -17,6 +17,7 @@ const VIRTIO_FS_REQ_QUEUES_NUM: usize = 1;
 // The size of queue for virtio fs
 const VIRTIO_FS_QUEUE_SIZE: u16 = 128;
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -32,6 +33,9 @@ use machine_manager::config::{
     get_pci_df, parse_bool, valid_id, ChardevConfig, ConfigError, SocketType,
 };
 use machine_manager::event_loop::unregister_event_helper;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
+use serde::{Deserialize, Serialize};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 
@@ -234,6 +238,41 @@ impl VirtioDevice for Fs {
         self.realize()
     }
 }
+
+#[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct FsState {
+    device_features: u64,
+    driver_features: u64,
+    broken: bool,
+}
+
+impl StateTransfer for Fs {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = FsState {
+            device_features: self.virtio_base().device_features,
+            driver_features: self.virtio_base().driver_features,
+            broken: self.virtio_base().broken.load(Ordering::SeqCst),
+        };
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let fs_state: FsState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("FS"))?;
+        let virtio_base = self.virtio_base_mut();
+        virtio_base.device_features = fs_state.device_features;
+        virtio_base.driver_features = fs_state.driver_features;
+        virtio_base.broken.store(fs_state.broken, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&FsState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for Fs {}
 
 #[cfg(test)]
 mod tests {
