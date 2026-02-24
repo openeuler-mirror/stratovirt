@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
+use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::super::super::{VirtioDevice, VIRTIO_TYPE_FS};
@@ -33,6 +34,7 @@ use machine_manager::config::{
     get_pci_df, parse_bool, valid_id, ChardevConfig, ConfigError, SocketType,
 };
 use machine_manager::event_loop::unregister_event_helper;
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
 use serde::{Deserialize, Serialize};
@@ -98,6 +100,7 @@ pub struct Fs {
     client: Option<Arc<Mutex<VhostUserClient>>>,
     mem_space: Arc<AddressSpace>,
     enable_irqfd: bool,
+    pause_notifier_id: Option<u64>,
 }
 
 impl Fs {
@@ -120,6 +123,33 @@ impl Fs {
             client: None,
             mem_space,
             enable_irqfd: false,
+            pause_notifier_id: None,
+        }
+    }
+
+    fn init_vm_pause_notifier(&mut self) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let handler = Arc::new(move |paused| {
+            let mut locked_client = client.lock().unwrap();
+            if !locked_client.is_ready() {
+                return;
+            }
+            if paused {
+                if let Err(e) = locked_client.reset_queues() {
+                    error!("Failed to reset queue, err {:?}", e);
+                }
+            } else if let Err(e) = locked_client.resume_queues() {
+                error!("Failed to resume queue, err {:?}", e);
+            }
+        });
+        self.pause_notifier_id = Some(register_vm_pause_notifier(handler));
+    }
+
+    fn deinit_vm_pause_notifier(&mut self) {
+        if let Some(id) = self.pause_notifier_id.take() {
+            unregister_vm_pause_notifier(id);
         }
     }
 }
@@ -197,6 +227,9 @@ impl VirtioDevice for Fs {
         }
 
         client.activate_vhost_user()?;
+        drop(client);
+
+        self.init_vm_pause_notifier();
 
         Ok(())
     }
@@ -211,6 +244,7 @@ impl VirtioDevice for Fs {
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        self.deinit_vm_pause_notifier();
         if let Some(client) = &self.client {
             client.lock().unwrap().reset_vhost_user(true);
         }
