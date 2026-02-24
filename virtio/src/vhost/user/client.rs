@@ -586,17 +586,17 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
-                .with_context(|| {
-                    format!(
-                        "Failed to set vring kick for vhost-user, index: {}",
-                        queue_index,
-                    )
-                })?;
             self.set_vring_call(queue_index, self.call_events[queue_index].clone())
                 .with_context(|| {
                     format!(
                         "Failed to set vring call for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring kick for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
