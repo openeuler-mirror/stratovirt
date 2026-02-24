@@ -149,6 +149,21 @@ fn init_gpu_bar0(dev: &Arc<Mutex<dyn VirtioDevice>>, config: &mut PciConfig) -> 
         false,
     )?);
 
+    let ret =
+    // SAFETY: self.host_addr and self.size has already been verified during initialization.
+    unsafe {
+        libc::mlock(
+            host_mmap.host_address() as *const libc::c_void,
+            host_mmap.size() as libc::size_t,
+        )
+    };
+    if ret != 0 {
+        error!(
+            "Failed to lock virtio-gpu bar0, ret val as {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
     let region = Region::init_ram_region(host_mmap, "vgpu.vram");
     config.register_bar(
         0,

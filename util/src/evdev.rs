@@ -20,17 +20,59 @@ use vmm_sys_util::{ioctl::ioctl_with_mut_ref, ioctl_ioc_nr, ioctl_ior_nr, ioctl_
 
 use crate::byte_code::ByteCode;
 
+/// Key/Btn event.
+pub const EV_KEY: u8 = 0x01;
+/// ABS Event.
+pub const EV_ABS: u8 = 0x03;
+/// MSC Event.
+pub const EV_MSC: u8 = 0x04;
 /// Event Code type, used for autorepeating devices.
 pub const EV_REP: u8 = 0x14;
 /// Max event type.
 pub const EV_MAX: u8 = 0x1F;
+
+/// Absolute axis codes: X axis
+pub const ABS_X: u8 = 0x00;
+/// Absolute axis codes: Y axis
+pub const ABS_Y: u8 = 0x01;
+
+/// MT slot being modified
+pub const ABS_MT_SLOT: u8 = 0x2F;
+/// Major axis of touching ellipse
+pub const ABS_MT_TOUCH_MAJOR: u8 = 0x30;
+/// Minor axis (omit if circular)
+pub const ABS_MT_TOUCH_MINOR: u8 = 0x31;
+/// Center X touch position
+pub const ABS_MT_POSITION_X: u8 = 0x35;
+/// Center Y touch position
+pub const ABS_MT_POSITION_Y: u8 = 0x36;
+/// Unique ID of initiated contact
+pub const ABS_MT_TRACKING_ID: u8 = 0x39;
+/// Pressure on contact area
+pub const ABS_MT_PRESSURE: u8 = 0x3A;
 /// Max ABS_* event type.
 pub const ABS_MAX: u8 = 0x3F;
+
+pub const BTN_LEFT: u16 = 0x110;
+pub const BTN_TOUCH: u16 = 0x14A;
+
+pub const MSC_TIMESTAMP: u16 = 0x05;
 
 /// Sync event type.
 pub const EV_SYN: u16 = 0x00;
 /// Synchronization event.
 pub const SYN_REPORT: u16 = 0x00;
+/// Synchronization multitouch point.
+pub const SYN_MT_REPORT: u16 = 0x2;
+
+/// pointer input devices.
+pub const INPUT_PROP_POINTER: u16 = 0x00;
+/// direct input devices.
+pub const INPUT_PROP_DIRECT: u16 = 0x01;
+/// buttonpad input devices.
+pub const INPUT_PROP_BUTTONPAD: u16 = 0x02;
+
+pub const BUS_VIRTUAL: u16 = 0x06;
 
 /// The payload(union) size of the virtio_input_config.
 pub const VIRTIO_INPUT_CFG_PAYLOAD_SIZE: usize = 128;
@@ -56,6 +98,20 @@ impl EvdevBuf {
         let idx = bit / 8;
         let offset = bit % 8;
         self.buf[idx] & (1u8 << offset) != 0
+    }
+
+    pub fn set_bit(&mut self, bit: usize) -> &mut Self {
+        let ceiling_len = bit.div_ceil(8);
+        if ceiling_len > VIRTIO_INPUT_CFG_PAYLOAD_SIZE {
+            return self;
+        }
+        if ceiling_len > self.len {
+            self.len = ceiling_len;
+        }
+        let idx = bit / 8;
+        let offset = bit % 8;
+        self.buf[idx] |= 1u8 << offset;
+        self
     }
 
     pub fn to_vec(self) -> Vec<u8> {
@@ -97,6 +153,17 @@ pub struct InputAbsInfo {
     pub fuzz: u32,
     pub flat: u32,
     pub resolution: u32,
+}
+
+impl InputAbsInfo {
+    pub fn new(min: u32, max: u32, res: u32) -> Self {
+        Self {
+            minimum: min,
+            maximum: max,
+            resolution: res,
+            ..Default::default()
+        }
+    }
 }
 
 const EVDEV: u32 = 69; // 'E'
@@ -167,6 +234,28 @@ pub unsafe fn evdev_evt_supported(fd: &File) -> Result<BTreeMap<u8, EvdevBuf>> {
     Ok(evts)
 }
 
+#[derive(Default)]
+pub struct EvdevBufHelper {
+    evbufdb: BTreeMap<u8, EvdevBuf>,
+}
+
+impl EvdevBufHelper {
+    pub fn new() -> Self {
+        Self {
+            evbufdb: BTreeMap::new(),
+        }
+    }
+
+    pub fn push(&mut self, key: u8, evbuf: EvdevBuf) -> &mut Self {
+        self.evbufdb.insert(key, evbuf);
+        self
+    }
+
+    pub fn to_raw(&self) -> BTreeMap<u8, EvdevBuf> {
+        self.evbufdb.clone()
+    }
+}
+
 pub fn evdev_abs(fd: &File) -> Result<BTreeMap<u8, InputAbsInfo>> {
     let mut absinfo_db: BTreeMap<u8, InputAbsInfo> = BTreeMap::new();
     for abs in 0..ABS_MAX {
@@ -181,6 +270,28 @@ pub fn evdev_abs(fd: &File) -> Result<BTreeMap<u8, InputAbsInfo>> {
     Ok(absinfo_db)
 }
 
+#[derive(Default)]
+pub struct AbsinfoHelper {
+    absdb: BTreeMap<u8, InputAbsInfo>,
+}
+
+impl AbsinfoHelper {
+    pub fn new() -> Self {
+        Self {
+            absdb: BTreeMap::new(),
+        }
+    }
+
+    pub fn push(&mut self, abs: u8, absinfo: InputAbsInfo) -> &mut Self {
+        self.absdb.insert(abs, absinfo);
+        self
+    }
+
+    pub fn to_raw(&self) -> BTreeMap<u8, InputAbsInfo> {
+        self.absdb.clone()
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct InputEvent {
@@ -191,3 +302,23 @@ pub struct InputEvent {
 }
 
 impl ByteCode for InputEvent {}
+
+impl InputEvent {
+    pub fn new(ev_type: u16, code: u16, value: i32) -> Self {
+        Self {
+            timestamp: [0; 2],
+            ev_type,
+            code,
+            value,
+        }
+    }
+
+    pub fn new_u8(ev_type: u8, code: u8, value: i32) -> Self {
+        Self {
+            timestamp: [0; 2],
+            ev_type: ev_type as u16,
+            code: code as u16,
+            value,
+        }
+    }
+}

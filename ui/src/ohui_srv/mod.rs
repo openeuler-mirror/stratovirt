@@ -13,6 +13,7 @@
 pub mod channel;
 pub mod msg;
 pub mod msg_handle;
+pub mod touchpad;
 
 use std::os::unix::io::RawFd;
 use std::path::Path;
@@ -22,6 +23,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, RwLock,
 };
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
@@ -41,7 +43,7 @@ use address_space::FileBackend;
 use channel::*;
 use machine_manager::{
     config::{DisplayConfig, VIRTIO_GPU_ENABLE_BAR0_SIZE},
-    event_loop::register_event_helper,
+    event_loop::{register_event_helper, EventLoop},
     temp_cleaner::TempCleaner,
 };
 use migration::snapshot::OHUI_SNAPSHOT_ID;
@@ -154,6 +156,21 @@ impl OhUiServer {
             false,
         )?;
 
+        let ret =
+        // SAFETY: host_addr and size must be valid if called do_mmap successfully.
+        unsafe {
+            libc::mlock(
+                host_addr as *const libc::c_void,
+                VIRTIO_GPU_ENABLE_BAR0_SIZE as libc::size_t,
+            )
+        };
+        if ret != 0 {
+            error!(
+                "Failed to lock ohui-fb, ret val as {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
         Ok((Some(fb_backend), host_addr))
     }
 
@@ -179,6 +196,11 @@ impl OhUiServer {
             true,
             false,
         )?;
+
+        // SAFETY: cursorbuffer and CURSOR_SIZE must be valid if called do_mmap successfully.
+        unsafe {
+            ptr::write_bytes(cursorbuffer as *mut u8, 0, CURSOR_SIZE as usize);
+        }
 
         Ok((cursor_backend, cursorbuffer))
     }
@@ -243,7 +265,17 @@ impl OhUiServer {
         self.msg_handler.handle_msg(self.token_id.clone())
     }
 
-    // check dirty area data before call it.
+    /// # Safety
+    ///
+    /// This function is unsafe because it copies the data from the buffer pointed by
+    /// `surface_data` parameter to the framebuffer.
+    /// The caller must ensure that:
+    ///
+    /// - the source buffer is valid and the actual copied buffer can't exceed the source buffer.
+    /// - the size of source buffer is less or equal to the size of framebuffer.
+    /// - the source buffer should not be overlapped with the framebuffer.
+    ///
+    /// Failure to meet these conditions will lead to undefined behavior.
     unsafe fn raw_update_dirty_area(
         &self,
         surface_data: *mut u32,
@@ -267,14 +299,11 @@ impl OhUiServer {
         let mut dst_ptr = self.framebuffer + offset;
 
         for _ in 0..h {
-            // SAFETY: it can be ensure the raw pointer will not exceed the range.
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    src_ptr as *const u8,
-                    dst_ptr as *mut u8,
-                    w as usize * bytes_per_pixel(),
-                );
-            }
+            ptr::copy_nonoverlapping(
+                src_ptr as *const u8,
+                dst_ptr as *mut u8,
+                w as usize * bytes_per_pixel(),
+            );
             src_ptr += stride as u64;
             dst_ptr += stride as u64;
         }
@@ -291,6 +320,10 @@ impl OhUiServer {
             .send_windowinfo(locked_surface.width as u32, locked_surface.height as u32);
     }
 
+    fn send_input_device_state(&self) {
+        self.msg_handler.send_input_device_state();
+    }
+
     #[inline(always)]
     fn connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
@@ -302,8 +335,8 @@ impl OhUiServer {
         if conn {
             self.msg_handler.update_sock(self.channel.clone());
         } else {
-            self.channel.lock().unwrap().disconnect();
             self.msg_handler.reset();
+            self.channel.lock().unwrap().disconnect();
         }
     }
 
@@ -336,7 +369,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
         locked_surface.height = surface.height();
         drop(locked_surface);
         let locked_surface = self.surface.read().unwrap();
-        // SAFETY: Dirty area does not exceed surface buffer.
+        // SAFETY: we have checked the new surafce and it should not be larger than framebuffer.
         unsafe {
             self.raw_update_dirty_area(
                 get_image_data(locked_surface.guest_image),
@@ -379,7 +412,8 @@ impl DisplayChangeListenerOperations for OhUiServer {
             bail!("dpy_image_update: invalid dirty area");
         }
 
-        // SAFETY: We checked dirty area data before.
+        // SAFETY: we have checked the buffer indicated by (x,y,w,h) and it should not
+        // exceed the image buffer stored in the surface which has been checked in dpy_switch().
         unsafe {
             self.raw_update_dirty_area(
                 get_image_data(locked_surface.guest_image),
@@ -415,7 +449,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
             return Ok(());
         }
 
-        // SAFETY: len is checked before copying, it's safe to do this.
+        // SAFETY: len and dest buffer has been checked before copying, it's safe to do this.
         unsafe {
             ptr::copy_nonoverlapping(
                 cursor.data.as_ptr(),
@@ -481,6 +515,19 @@ impl OhUiTrans {
             .get_stream_raw_fd()
             .unwrap()
     }
+
+    fn delay_close_fd(&self, fd: RawFd) {
+        let func = Box::new(move || {
+            // SAFETY: the fd is duplicated from connected socket so it's valid.
+            let ret = unsafe { libc::close(fd) };
+            if ret != 0 {
+                error!("Failed to close fd, {:?}", std::io::Error::last_os_error());
+            }
+        });
+        EventLoop::get_ctx(self.server.iothread.get_or_init(|| None).as_ref())
+            .unwrap()
+            .timer_add(func, Duration::ZERO);
+    }
 }
 
 impl EventNotifierHelper for OhUiTrans {
@@ -489,7 +536,9 @@ impl EventNotifierHelper for OhUiTrans {
         let handler: Rc<NotifierCallback> = Rc::new(move |event: EventSet, fd: RawFd| {
             if event & EventSet::HANG_UP == EventSet::HANG_UP {
                 error!("OhUiTrans: disconnected.");
-                trans_ref.lock().unwrap().handle_disconnect();
+                let locked_trans = trans_ref.lock().unwrap();
+                locked_trans.handle_disconnect();
+                locked_trans.delay_close_fd(fd);
                 // Delete stream notifiers
                 return Some(gen_delete_notifiers(&[fd]));
             } else if event & EventSet::IN == EventSet::IN {
@@ -498,15 +547,19 @@ impl EventNotifierHelper for OhUiTrans {
                 if let Err(e) = locked_trans.handle_recv() {
                     error!("{}.", e);
                     locked_trans.handle_disconnect();
+                    locked_trans.delay_close_fd(fd);
                     return Some(gen_delete_notifiers(&[fd]));
                 }
             }
             None
         });
 
+        let fd = trans.lock().unwrap().get_fd();
+        let new_fd = dup_fd(fd);
+
         vec![EventNotifier::new(
             NotifierOperation::AddShared,
-            trans.lock().unwrap().get_fd(),
+            new_fd,
             None,
             EventSet::IN | EventSet::HANG_UP,
             vec![handler],
@@ -529,6 +582,8 @@ impl OhUiListener {
         self.server.set_connect(true);
         // Send window info to the client
         self.server.send_window_info();
+        // Send input device state
+        self.server.send_input_device_state();
         Ok(())
     }
 
@@ -591,6 +646,24 @@ fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
     ohui_register_event(OhUiListener::new(server.clone()), server)?;
     info!("Successfully start listener.");
     Ok(())
+}
+
+pub fn dup_fd(fd: RawFd) -> RawFd {
+    // SAFETY: It doesn't matter if fd is valid.
+    // Event though it's invalid, dup syscall can return err.
+    let new_fd = unsafe { libc::dup(fd) };
+    if new_fd == -1 {
+        error!(
+            "Failed to duplicate fd {}, err {:?}",
+            fd,
+            std::io::Error::last_os_error()
+        );
+        // Directly return the old fd. There would be badfd error
+        // occurred while handling disconnection,
+        // but it doesn't matter.
+        return fd;
+    }
+    new_fd
 }
 
 /// Migration

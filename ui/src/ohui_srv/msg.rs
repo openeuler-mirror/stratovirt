@@ -11,9 +11,14 @@
 // See the Mulan PSL v2 for more details.
 
 use std::mem::size_of;
+use std::sync::LazyLock;
 
+use anyhow::{bail, Result};
 use util::byte_code::ByteCode;
 
+use crate::input::MultiTouchEventKind;
+
+pub const CLIENT_FOCUSIN_EVENT: u32 = 0x0;
 pub const CLIENT_FOCUSOUT_EVENT: u32 = 0x1;
 pub const CLIENT_PRESS_BTN: u32 = 0x1;
 pub const CLIENT_RELEASE_BTN: u32 = 0x0;
@@ -29,7 +34,7 @@ pub const CLIENT_MOUSE_BUTTON_FORWARD: u32 = 0x4;
 pub const EVENT_MSG_HDR_SIZE: u32 = size_of::<EventMsgHdr>() as u32;
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialOrd, PartialEq)]
 pub enum EventType {
     WindowInfo = 0,
     MouseButton = 1,
@@ -42,7 +47,14 @@ pub enum EventType {
     CursorDefine = 8,
     Focus = 9,
     VmCtrlInfo = 10,
-    WindowInfoV2 = 14,
+    FlushFrame = 11,
+    MultitouchScreen = 12,
+    InputDeviceChange = 13,
+    WindowInfoExtension = 14,
+    VmViewChange = 15,
+    TouchPadScroll = 16,
+    TouchPadPinch = 17,
+    TouchPadSwipe = 18,
     #[default]
     Max,
 }
@@ -169,16 +181,79 @@ impl FrameBufferDirtyEvent {
     }
 }
 
+// Currently we only expose 3 fingers at most to the guest.
+// The touch with more than 3 fingers is interpreted by Harmony.
+pub const MULTITOUCH_SLOT_MAX: usize = 3;
+pub const MULTITOUCH_EVENT_DOWN: u32 = 0;
+pub const MULTITOUCH_EVENT_MOVE: u32 = 1;
+pub const MULTITOUCH_EVENT_UP: u32 = 2;
+pub const MULTITOUCH_EVENT_CANCEL: u32 = 3;
+
+pub fn try_into_mt_event(evt: u32) -> Result<MultiTouchEventKind> {
+    Ok(match evt {
+        MULTITOUCH_EVENT_DOWN => MultiTouchEventKind::BEGIN,
+        MULTITOUCH_EVENT_MOVE => MultiTouchEventKind::UPDATE,
+        MULTITOUCH_EVENT_UP => MultiTouchEventKind::END,
+        _ => bail!("unknown event {}", evt),
+    })
+}
+
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
-pub struct WindowInfoV2Event {
-    pub width: u32,
-    pub height: u32,
+pub struct MultiTouchScreenEvent {
+    // 0: start(finger starts to press)
+    // 1: update(finger moves)
+    // 2: end(finger leaves)
+    // 3: cancel(lift all fingers)
+    pub event_type: u32,
+    pub tracking_id: i32,
+    pub x: i32,
+    pub y: i32,
+    pub major: i32,
+    pub minor: i32,
+    pub pressure: u32,
+    pub blob_id: u32,
+}
+
+impl ByteCode for MultiTouchScreenEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct FlushFrameEvent {
+    pub reserved: u64,
+}
+
+impl ByteCode for FlushFrameEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct InputDeviceChange {
+    pub reason: u64,
+}
+
+impl ByteCode for InputDeviceChange {}
+
+impl InputDeviceChange {
+    pub fn new(reason: u64) -> Self {
+        Self { reason }
+    }
+}
+
+pub const INPUT_MULTITOUCH_SCREEN_ONLINE: u64 = 1;
+pub const INPUT_MULTITOUCH_SCREEN_OFFLINE: u64 = 2;
+pub const INPUT_MULTITOUCH_PAD_ONLINE: u64 = 3;
+pub const INPUT_MULTITOUCH_PAD_OFFLINE: u64 = 4;
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct WindowInfoExtensionEvent {
+    pub surface_width: u32,
+    pub surface_height: u32,
     pub rotation: u32,
     pub fold_status: u32,
 }
 
-impl ByteCode for WindowInfoV2Event {}
+impl ByteCode for WindowInfoExtensionEvent {}
 
 pub const WINDOW_ROTATION_0: u32 = 0;
 pub const WINDOW_ROTATION_90: u32 = 1;
@@ -189,6 +264,50 @@ pub const FOLD_STATUS_UNKNOWN: u32 = 0;
 pub const FOLD_STATUS_EXPAND: u32 = 1;
 pub const FOLD_STATUS_FOLDED: u32 = 2;
 pub const FOLD_STATUS_HALF_FOLDED: u32 = 3;
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct TouchPadSwipeEvent {
+    pub action: u32,
+    pub finger_count: u32,
+    pub avg_x: i32,
+    pub avg_y: i32,
+}
+
+impl ByteCode for TouchPadSwipeEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct TouchPadScrollEvent {
+    pub action: u32,
+    pub horizontal: f64,
+    pub vertical: f64,
+}
+
+impl ByteCode for TouchPadScrollEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct TouchPadPinchEvent {
+    pub action: u32,
+    pub pinch: f64,
+}
+
+impl ByteCode for TouchPadPinchEvent {}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct VmViewChangeEvent {
+    pub is_recreate: u32,
+}
+
+impl ByteCode for VmViewChangeEvent {}
+
+impl VmViewChangeEvent {
+    pub fn new(is_recreate: u32) -> Self {
+        VmViewChangeEvent { is_recreate }
+    }
+}
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -211,18 +330,52 @@ impl EventMsgHdr {
 }
 
 pub fn event_msg_data_len(event_type: EventType) -> usize {
-    match event_type {
-        EventType::WindowInfo => size_of::<WindowInfoEvent>(),
-        EventType::MouseButton => size_of::<MouseButtonEvent>(),
-        EventType::MouseMotion => size_of::<MouseMotionEvent>(),
-        EventType::Keyboard => size_of::<KeyboardEvent>(),
-        EventType::Scroll => size_of::<ScrollEvent>(),
-        EventType::Focus => size_of::<FocusEvent>(),
-        EventType::FrameBufferDirty => size_of::<FrameBufferDirtyEvent>(),
-        EventType::CursorDefine => size_of::<HWCursorEvent>(),
-        EventType::Ledstate => size_of::<LedstateEvent>(),
-        EventType::Greet => size_of::<GreetEvent>(),
-        EventType::WindowInfoV2 => size_of::<WindowInfoV2Event>(),
-        _ => 0,
+    static EVENT_LEN: LazyLock<Vec<usize>> = LazyLock::new(|| {
+        vec![
+            // WindowInfo
+            size_of::<WindowInfoEvent>(),
+            // MouseButton
+            size_of::<MouseButtonEvent>(),
+            // MouseMotion
+            size_of::<MouseMotionEvent>(),
+            // Keyboard
+            size_of::<KeyboardEvent>(),
+            // Scroll
+            size_of::<ScrollEvent>(),
+            // LedState
+            size_of::<LedstateEvent>(),
+            // FrameBufferDirty
+            size_of::<FrameBufferDirtyEvent>(),
+            // Greet
+            size_of::<GreetEvent>(),
+            // CursorDefine
+            size_of::<HWCursorEvent>(),
+            // Focus
+            size_of::<FocusEvent>(),
+            // VmCtrlInfo
+            0,
+            // FlushFrame
+            size_of::<FlushFrameEvent>(),
+            // MultitouchScreen
+            size_of::<MultiTouchScreenEvent>(),
+            // InputDeviceChange
+            size_of::<InputDeviceChange>(),
+            // WindowInfoV2
+            size_of::<WindowInfoExtensionEvent>(),
+            // VmViewChange
+            size_of::<VmViewChangeEvent>(),
+            // TouchPadScroll
+            size_of::<TouchPadScrollEvent>(),
+            // TouchPadPinch
+            size_of::<TouchPadPinchEvent>(),
+            // TouchPadSwipe
+            size_of::<TouchPadSwipeEvent>(),
+        ]
+    });
+
+    if event_type >= EventType::Max {
+        0
+    } else {
+        EVENT_LEN[event_type as usize]
     }
 }

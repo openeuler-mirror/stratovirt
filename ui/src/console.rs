@@ -314,6 +314,8 @@ struct DisplayState {
     refresh_num: i32,
     /// Rotation
     rotation: Option<Rotation>,
+    /// Display Standing
+    dpy_standing: bool,
 }
 
 // SAFETY: The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during
@@ -329,6 +331,7 @@ impl DisplayState {
             listeners: Vec::new(),
             refresh_num: 0,
             rotation: None,
+            dpy_standing: false,
         }
     }
 
@@ -424,6 +427,16 @@ pub fn set_dpy_rotation(rotation: Rotation) {
 /// get rotation
 pub fn get_dpy_rotation() -> Option<Rotation> {
     DISPLAY_STATE.lock().unwrap().rotation
+}
+
+/// set dpy standing
+pub fn set_dpy_standing(standing: bool) {
+    DISPLAY_STATE.lock().unwrap().dpy_standing = standing;
+}
+
+/// get dpy stnading
+pub fn get_dpy_standing() -> bool {
+    DISPLAY_STATE.lock().unwrap().dpy_standing
 }
 
 /// Refresh display image.
