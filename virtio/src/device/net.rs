@@ -31,25 +31,30 @@ use crate::{
     check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, mem_to_buf,
     read_config_default, report_virtio_error, virtio_has_feature, ElemIovec, Element, Queue,
     VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
-    CONFIG_STATUS_DRIVER_OK, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
-    VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET,
-    VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX,
-    VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
-    VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
-    VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
-    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
-    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
-    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
-    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
-    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
-    VIRTIO_NET_F_STATUS, VIRTIO_NET_OK, VIRTIO_NET_S_LINK_UP, VIRTIO_TYPE_NET,
+    CONFIG_STATUS_DRIVER_OK, CONFIG_STATUS_NEEDS_RESET, VIRTIO_F_RING_EVENT_IDX,
+    VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
+    VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
+    VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST, VIRTIO_NET_CTRL_RX_NOMULTI,
+    VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC, VIRTIO_NET_CTRL_VLAN,
+    VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM,
+    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX, VIRTIO_NET_F_CTRL_RX_EXTRA,
+    VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN,
+    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO,
+    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
+    VIRTIO_NET_F_MQ, VIRTIO_NET_F_STATUS, VIRTIO_NET_OK, VIRTIO_NET_S_LINK_UP, VIRTIO_TYPE_NET,
 };
 use address_space::{AddressAttr, AddressSpace};
 use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use machine_manager::state_query::{
     register_state_query_callback, unregister_state_query_callback,
+};
+use machine_manager::{
+    event,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
 };
 use migration::{
     migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
@@ -967,7 +972,7 @@ impl ListenState {
     fn tap_fd_handler(&mut self, tap: &Tap) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
 
-        if !tap.enabled {
+        if !tap.enabled.load(Ordering::SeqCst) {
             notifiers.push(EventNotifier::new(
                 NotifierOperation::Delete,
                 tap.as_raw_fd(),
@@ -1343,6 +1348,8 @@ pub struct Net {
     interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// memory address space
     mem_space: Option<Arc<AddressSpace>>,
+    /// indicate if send message after activated
+    notify_activate: bool,
 }
 
 impl Net {
@@ -1441,6 +1448,18 @@ impl Net {
 
     fn get_macnat_handler(&self) -> Option<IpvtapMacnat> {
         self.netdev_cfg.macnat.then_some(IpvtapMacnat)
+    }
+
+    fn send_status_event(&self, msg: String) {
+        const VIRTIO_NET_DEV_STATUS_CODE: u32 = 1;
+
+        let event = VmNotifyEvent {
+            klass: DEVICE_CLASS_ID,
+            type_t: VIRTIO_NET_TYPE,
+            code: VIRTIO_NET_DEV_STATUS_CODE,
+            message: Some(msg),
+        };
+        event!(VmNotifyEvent; event);
     }
 
     fn notify_config_update(&self) -> Result<()> {
@@ -1559,6 +1578,7 @@ impl Net {
 
     pub fn set_link_status(&mut self, up: bool) -> Result<()> {
         self.link_status.store(up, Ordering::SeqCst);
+        self.enable_taps(up);
         if self.update_config_status(up, VIRTIO_NET_S_LINK_UP) {
             self.notify_config()?;
         }
@@ -1568,6 +1588,44 @@ impl Net {
         } else {
             self.drop_tx_data()
         }
+    }
+
+    fn unregister_trans_evts(&mut self) -> Result<()> {
+        unregister_event_helper(
+            self.net_cfg.rx_iothread.as_ref(),
+            &mut self.rx_deactivate_evts,
+        )?;
+        unregister_event_helper(
+            self.net_cfg.tx_iothread.as_ref(),
+            &mut self.tx_deactivate_evts,
+        )
+    }
+
+    fn enable_taps(&mut self, enable: bool) {
+        if let Some(taps) = self.taps.as_mut() {
+            for tap in taps.iter_mut() {
+                tap.enabled.store(enable, Ordering::SeqCst);
+            }
+        }
+    }
+
+    pub fn update_netdev_cfg(
+        &mut self,
+        ifname: String,
+        path: Option<String>,
+        macnat: bool,
+    ) -> Result<()> {
+        self.netdev_cfg.ifname = ifname;
+        self.netdev_cfg.path = path.unwrap_or_default();
+        self.netdev_cfg.macnat = macnat;
+
+        self.enable_taps(false);
+        self.unregister_trans_evts()?;
+        self.set_device_status(self.device_status() | CONFIG_STATUS_NEEDS_RESET);
+        self.notify_config()?;
+        self.realize()?;
+        self.notify_activate = true;
+        Ok(())
     }
 }
 
@@ -1967,6 +2025,11 @@ impl VirtioDevice for Net {
         self.interrupt_cb = Some(interrupt_cb);
         self.mem_space = Some(mem_space);
 
+        if self.notify_activate {
+            self.send_status_event("activated".to_string());
+            self.notify_activate = false;
+        }
+
         Ok(())
     }
 
@@ -2007,14 +2070,7 @@ impl VirtioDevice for Net {
             self.net_cfg.iothread.as_ref(),
             &mut self.base.deactivate_evts,
         )?;
-        unregister_event_helper(
-            self.net_cfg.rx_iothread.as_ref(),
-            &mut self.rx_deactivate_evts,
-        )?;
-        unregister_event_helper(
-            self.net_cfg.tx_iothread.as_ref(),
-            &mut self.tx_deactivate_evts,
-        )?;
+        self.unregister_trans_evts()?;
         self.update_evts.clear();
         self.ctrl_info = None;
         self.interrupt_cb = None;

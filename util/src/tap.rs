@@ -17,7 +17,7 @@ use std::net::UdpSocket;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 
@@ -58,7 +58,7 @@ ioctl_iow_nr!(TUNSETQUEUE, 84, 217, ::std::os::raw::c_int);
 #[derive(Clone)]
 pub struct Tap {
     pub file: Arc<File>,
-    pub enabled: bool,
+    pub enabled: Arc<AtomicBool>,
     pub macnat: Arc<bool>,
     pub upload_stats: Arc<AtomicU64>,
     pub download_stats: Arc<AtomicU64>,
@@ -137,7 +137,7 @@ impl Tap {
 
         Ok(Tap {
             file: Arc::new(file),
-            enabled: true,
+            enabled: Arc::new(AtomicBool::new(true)),
             macnat: Arc::new(macnat),
             upload_stats: Arc::new(AtomicU64::new(0)),
             download_stats: Arc::new(AtomicU64::new(0)),
@@ -176,7 +176,7 @@ impl Tap {
     }
 
     pub fn set_queue(&mut self, enable: bool) -> i32 {
-        if enable == self.enabled {
+        if enable == self.enabled.load(Ordering::SeqCst) {
             return 0;
         }
         let ifr_flags = if enable {
@@ -190,7 +190,7 @@ impl Tap {
         // SAFETY: The parameter of file can be guaranteed to be legal, and other parameters are constant.
         let ret = unsafe { ioctl_with_mut_ref(self.file.as_ref(), TUNSETQUEUE(), &mut if_req) };
         if ret == 0 {
-            self.enabled = enable;
+            self.enabled.store(enable, Ordering::SeqCst);
         } else {
             error!(
                 "Failed to set queue, flags is {}, error is {}",

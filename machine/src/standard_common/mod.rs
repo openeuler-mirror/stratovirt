@@ -72,7 +72,7 @@ use machine_manager::machine::{
     MachineLifecycle, MachineTestInterface, MigrateInterface, VmState,
 };
 use machine_manager::qmp::qmp_schema::{
-    BlockDevAddArgument, NetLinkSetArgument, UpdateRegionArgument,
+    BlockDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, UpdateRegionArgument,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use machine_manager::state_query::query_workloads;
@@ -1537,6 +1537,36 @@ impl DeviceInterface for StdMachine {
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
             ),
+        }
+    }
+
+    fn netdev_replace(&mut self, args: NetDevReplaceArgument) -> Response {
+        let net_dev = self.base.net_devs.get(&args.id);
+        if net_dev.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!("no net dev {}", args.id)),
+                None,
+            );
+        }
+
+        let mut locked_dev = net_dev.unwrap().lock().unwrap();
+        let vio_net = locked_dev.as_any_mut().downcast_mut::<Net>();
+        if let Some(net) = vio_net {
+            match net.update_netdev_cfg(args.ifname, args.path, args.macnat) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            }
+        } else {
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "net dev {} not support tap replacement",
+                    args.id
+                )),
+                None,
+            )
         }
     }
 
