@@ -62,7 +62,6 @@ use migration::{
 };
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
-use util::gen_base_func;
 use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
@@ -72,6 +71,7 @@ use util::tap::{
     Tap, IFF_MULTI_QUEUE, MAC_ADDR_LEN, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN,
     TUN_F_UFO,
 };
+use util::{any_typecast_clone, gen_base_func};
 
 /// Number of virtqueues(rx/tx/ctrl).
 const QUEUE_NUM_NET: usize = 3;
@@ -2036,16 +2036,8 @@ impl VirtioDevice for Net {
     // configs[0]: NetDevcfg. configs[1]: NetworkInterfaceConfig.
     fn update_config(&mut self, dev_config: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
         if dev_config.len() == 2 {
-            self.netdev_cfg = dev_config[0]
-                .as_any()
-                .downcast_ref::<NetDevcfg>()
-                .unwrap()
-                .clone();
-            self.net_cfg = dev_config[1]
-                .as_any()
-                .downcast_ref::<NetworkInterfaceConfig>()
-                .unwrap()
-                .clone();
+            self.netdev_cfg = any_typecast_clone(dev_config[0].as_ref())?;
+            self.net_cfg = any_typecast_clone(dev_config[1].as_ref())?;
 
             // Set tap offload.
             // The features about offload is included in bits 0 to 31.

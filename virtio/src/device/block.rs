@@ -63,7 +63,7 @@ use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
-use util::{gen_base_func, offset_of};
+use util::{any_typecast_clone, gen_base_func, offset_of};
 
 /// Number of virtqueues.
 const QUEUE_NUM_BLK: usize = 1;
@@ -1359,16 +1359,8 @@ impl VirtioDevice for Block {
     fn update_config(&mut self, configs: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
         let mut is_plug = false;
         if configs.len() == 2 {
-            self.drive_cfg = configs[0]
-                .as_any()
-                .downcast_ref::<DriveConfig>()
-                .unwrap()
-                .clone();
-            self.blk_cfg = configs[1]
-                .as_any()
-                .downcast_ref::<VirtioBlkDevConfig>()
-                .unwrap()
-                .clone();
+            self.drive_cfg = any_typecast_clone(configs[0].as_ref())?;
+            self.blk_cfg = any_typecast_clone(configs[1].as_ref())?;
             // microvm type block device don't support multiple queue.
             self.blk_cfg.num_queues = Some(QUEUE_NUM_BLK as u16);
             is_plug = true;
