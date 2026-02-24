@@ -180,6 +180,8 @@ pub struct MachineBase {
     hypervisor: Arc<Mutex<dyn HypervisorOps>>,
     /// migrate hypervisor.
     migration_hypervisor: Arc<Mutex<dyn MigrateOps>>,
+    /// virtio-net-pci devices.
+    net_devs: HashMap<String, Arc<Mutex<dyn VirtioDevice>>>,
 }
 
 impl MachineBase {
@@ -253,6 +255,7 @@ impl MachineBase {
             machine_ram,
             hypervisor,
             migration_hypervisor,
+            net_devs: HashMap::new(),
         })
     }
 
@@ -1408,12 +1411,14 @@ pub trait MachineOps: MachineLifecycle {
         check_arg_exist!(("bus", net_cfg.bus), ("addr", net_cfg.addr));
         let bdf = PciBdf::new(net_cfg.bus.clone().unwrap(), net_cfg.addr.unwrap());
         let multi_func = net_cfg.multifunction.unwrap_or_default();
+        let id = net_cfg.id.clone();
+        let is_vhost = netdev_cfg.vhost_type().is_some();
 
         #[cfg(all(not(feature = "vhost_net"), not(feature = "vhostuser_net")))]
         let need_irqfd = false;
         #[cfg(any(feature = "vhost_net", feature = "vhostuser_net"))]
         let mut need_irqfd = false;
-        let device: Arc<Mutex<dyn VirtioDevice>> = if netdev_cfg.vhost_type().is_some() {
+        let device: Arc<Mutex<dyn VirtioDevice>> = if is_vhost {
             if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
                 #[cfg(not(feature = "vhost_net"))]
                 bail!("Unsupported Vhost_net");
@@ -1459,9 +1464,12 @@ pub trait MachineOps: MachineLifecycle {
             );
             device
         };
-        self.add_virtio_pci_device(&net_cfg.id, &bdf, device, multi_func, need_irqfd)?;
+        self.add_virtio_pci_device(&net_cfg.id, &bdf, device.clone(), multi_func, need_irqfd)?;
         if !hotplug {
             self.reset_bus(&net_cfg.id)?;
+        }
+        if !is_vhost {
+            self.machine_base_mut().net_devs.insert(id, device);
         }
         Ok(())
     }

@@ -88,6 +88,7 @@ define_qmp_command_enum!(
     chardev_remove("chardev-remove", chardev_remove),
     netdev_add("netdev_add", Box<netdev_add>),
     netdev_del("netdev_del", netdev_del),
+    netlink_set("netlink_set", NetLinkSetArgument),
     cameradev_add("cameradev_add", cameradev_add),
     cameradev_del("cameradev_del", cameradev_del),
     query_hotpluggable_cpus("query-hotpluggable-cpus", query_hotpluggable_cpus, default),
@@ -685,6 +686,33 @@ pub struct netdev_del {
     pub id: String,
 }
 generate_command_impl!(netdev_del, Empty);
+
+/// netlink_set
+///
+/// Set link status for virtio-net device.
+///
+/// # Arguments
+///
+/// * `id` - The name of virtio-net device.
+///
+/// # Errors
+///
+/// If `id` is not a valid virtio-net device, DeviceNotFound.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "netlink_set", "arguments": { "id": "nic0", "up": false } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct netlink_set {
+    pub id: String,
+    pub up: bool,
+}
+pub type NetLinkSetArgument = netlink_set;
+generate_command_impl!(netlink_set, Empty);
 
 /// cameradev_del
 ///

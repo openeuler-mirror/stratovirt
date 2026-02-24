@@ -536,7 +536,7 @@ fn qmp_command_exec(
         (blockdev_del, blockdev_del, node_name),
         (netdev_del, netdev_del, id),
         (chardev_remove, chardev_remove, id),
-        (cameradev_del, cameradev_del,id),
+        (cameradev_del, cameradev_del, id),
         (balloon, balloon, value),
         (migrate, migrate, uri);
         (device_add, device_add),
@@ -544,6 +544,7 @@ fn qmp_command_exec(
         (netdev_add, netdev_add),
         (chardev_add, chardev_add),
         (cameradev_add, cameradev_add),
+        (netlink_set, netlink_set),
         (set_viomem, set_viomem),
         (get_viomem, get_viomem),
         (update_region, update_region),
