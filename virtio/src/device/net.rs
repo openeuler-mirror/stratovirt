@@ -57,7 +57,7 @@ use machine_manager::state_query::{
 };
 use machine_manager::{
     event,
-    notifier::register_vm_pause_notifier,
+    notifier::{register_vm_pause_notifier, vm_paused},
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
 };
@@ -532,8 +532,6 @@ pub struct NetCtrlHandler {
     pub driver_features: u64,
     /// Device is broken or not.
     pub device_broken: Arc<AtomicBool>,
-    /// Indicate if vm is paused.
-    pub vm_paused: Option<Arc<AtomicBool>>,
     /// Indicate if IO is inflight.
     pub io_inflight: Option<Arc<IoRef>>,
     /// Tap devices.
@@ -664,12 +662,7 @@ impl EventNotifierHelper for NetCtrlHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
-            if locked_net_io.device_broken.load(Ordering::SeqCst)
-                || locked_net_io
-                    .vm_paused
-                    .as_ref()
-                    .is_some_and(|p| p.load(Ordering::SeqCst))
-            {
+            if locked_net_io.device_broken.load(Ordering::SeqCst) || vm_paused() {
                 return None;
             }
 
@@ -721,7 +714,6 @@ struct NetIoQueue<T> {
     driver_features: u64,
     queue_size: u16,
     macnat: Option<T>,
-    vm_paused: Arc<AtomicBool>,
     io_inflight: Arc<IoRef>,
 }
 
@@ -1159,7 +1151,7 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) || net_queue.vm_paused.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || vm_paused() {
                 return None;
             }
 
@@ -1227,7 +1219,7 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) || net_queue.vm_paused.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || vm_paused() {
                 return None;
             }
 
@@ -1277,7 +1269,7 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
             return vec![];
         }
         let handler: Rc<NotifierCallback> = Rc::new(move |events: EventSet, _| {
-            if device_broken.load(Ordering::SeqCst) || net_queue.vm_paused.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || vm_paused() {
                 return None;
             }
 
@@ -1380,8 +1372,6 @@ pub struct Net {
     queue_evts: Option<Vec<Arc<EventFd>>>,
     /// timer id
     timer_id: Option<u64>,
-    /// indicate if vm paused
-    vm_paused: Arc<AtomicBool>,
     /// indicate if io is inflight
     io_inflight: Arc<IoRef>,
 }
@@ -1406,10 +1396,8 @@ impl Net {
 
     fn init_vm_pause_notifier(&self) {
         let queue_evts = self.queue_evts.clone();
-        let vm_paused = self.vm_paused.clone();
         let pause_notify = Arc::new(move |paused| {
             info!("VM State is {}", if paused { "paused" } else { "running" });
-            vm_paused.store(paused, Ordering::SeqCst);
 
             if let (false, Some(evts)) = (paused, queue_evts.as_ref()) {
                 for (id, evt) in evts.iter().enumerate() {
@@ -2068,7 +2056,6 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 device_broken: self.base.broken.clone(),
-                vm_paused: Some(self.vm_paused.clone()),
                 io_inflight: Some(self.io_inflight.clone()),
                 taps: self.taps.clone(),
             };
@@ -2124,7 +2111,6 @@ impl VirtioDevice for Net {
                 link_status: self.link_status.clone(),
                 queue_size: self.queue_size_max(),
                 macnat: self.get_macnat_handler(),
-                vm_paused: self.vm_paused.clone(),
                 io_inflight: self.io_inflight.clone(),
             });
 
