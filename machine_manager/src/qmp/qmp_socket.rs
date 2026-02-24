@@ -15,7 +15,7 @@ use std::net::IpAddr;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -88,7 +88,7 @@ impl Display for QmpSocketPath {
 ///
 /// fn main() -> std::io::Result<()> {
 ///     let listener = SocketListener::bind_by_uds("/path/to/my/socket").unwrap();
-///     let socket = Socket::from_listener(listener, None);
+///     let mut socket = Socket::from_listener(listener, None);
 ///     assert!(!socket.is_connected());
 ///
 ///     let client_stream = UnixStream::connect("/path/to/my/socket")?;
@@ -101,7 +101,7 @@ pub struct Socket {
     /// Socket listener tuple
     listener: SocketListener,
     /// Socket stream with RwLock
-    stream: RwLock<Option<SocketStream>>,
+    stream: Option<SocketStream>,
     /// Perform socket command
     performer: Option<Arc<Mutex<dyn MachineExternalInterface>>>,
 }
@@ -125,7 +125,7 @@ impl Socket {
     ) -> Self {
         Socket {
             listener,
-            stream: RwLock::new(None),
+            stream: None,
             performer,
         }
     }
@@ -136,7 +136,7 @@ impl Socket {
     }
 
     /// Accept stream and bind to Socket.
-    pub fn accept(&self) {
+    pub fn accept(&mut self) {
         self.bind_stream(self.listener.accept().unwrap());
     }
 
@@ -145,25 +145,25 @@ impl Socket {
     /// # Arguments
     ///
     /// * `sock_stream` - The `SocketStream` bind to `Socket`.
-    pub fn bind_stream(&self, stream: SocketStream) {
-        *self.stream.write().unwrap() = Some(stream);
+    pub fn bind_stream(&mut self, stream: SocketStream) {
+        self.stream = Some(stream);
     }
 
     /// Unbind stream from `Socket`, reset the state.
     #[allow(unused)]
-    fn drop_stream(&self) {
-        *self.stream.write().unwrap() = None;
+    fn drop_stream(&mut self) {
+        self.stream = None;
     }
 
     /// Confirm whether socket stream bind to `Socket` or not.
     pub fn is_connected(&self) -> bool {
-        self.stream.read().unwrap().is_some()
+        self.stream.is_some()
     }
 
     /// Get socket fd from `Socket`, it a private function.
     fn get_stream_fd(&self) -> RawFd {
         if self.is_connected() {
-            self.stream.read().unwrap().as_ref().unwrap().as_raw_fd()
+            self.stream.as_ref().unwrap().as_raw_fd()
         } else {
             panic!("Failed to get socket fd!");
         }
@@ -678,7 +678,7 @@ mod tests {
     fn test_socket_lifecycle() {
         // Pre test. Environment Preparation
         let (listener, _, server) = prepare_unix_socket_environment("04");
-        let socket = Socket::from_listener(listener, None);
+        let mut socket = Socket::from_listener(listener, None);
 
         // life cycle test
         // 1.Unconnected
@@ -713,7 +713,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("06");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_listener(listener, None);
+        let mut socket = Socket::from_listener(listener, None);
         socket.bind_stream(server);
         QmpChannel::bind_writer(SocketRWHandler::new(socket.get_stream_fd()));
 
@@ -766,7 +766,7 @@ mod tests {
         let (listener, mut client, server) = prepare_unix_socket_environment("07");
 
         // Use event! macro to send event msg to client
-        let socket = Socket::from_listener(listener, None);
+        let mut socket = Socket::from_listener(listener, None);
         socket.bind_stream(server);
 
         // 1.send greeting response
