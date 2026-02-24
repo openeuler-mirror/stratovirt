@@ -2089,6 +2089,7 @@ impl VirtioDevice for Net {
         )?;
         self.unregister_trans_evts()?;
         self.update_evts.clear();
+        self.senders = None;
         self.ctrl_info = None;
         self.interrupt_cb = None;
         self.mem_space = None;
