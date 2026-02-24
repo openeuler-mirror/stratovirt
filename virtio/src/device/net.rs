@@ -14,10 +14,9 @@ use std::collections::HashMap;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::yield_now;
 use std::time::Duration;
 use std::{cmp, fs, mem};
 
@@ -27,7 +26,7 @@ use log::{error, warn};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
-use util::aio::Iovec;
+use util::aio::{wait_io_done, IoRef, Iovec, DEFAULT_IO_TIMEOUT};
 use util::macnat::{IpvtapMacnat, Macnat};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
@@ -532,7 +531,7 @@ pub struct NetCtrlHandler {
     /// Device is broken or not.
     pub device_broken: Arc<AtomicBool>,
     /// Indicate if IO is inflight.
-    pub io_inflight: Option<Arc<IoRef>>,
+    pub io_inflight: Option<IoRef>,
     /// Tap devices.
     pub taps: Option<Vec<Tap>>,
 }
@@ -713,7 +712,7 @@ struct NetIoQueue<T> {
     driver_features: u64,
     queue_size: u16,
     macnat: Option<T>,
-    io_inflight: Arc<IoRef>,
+    io_inflight: IoRef,
 }
 
 impl<T: Macnat + 'static> NetIoQueue<T> {
@@ -1372,7 +1371,7 @@ pub struct Net {
     /// timer id
     timer_id: Option<u64>,
     /// indicate if io is inflight
-    io_inflight: Arc<IoRef>,
+    io_inflight: IoRef,
 }
 
 impl Net {
@@ -2118,7 +2117,7 @@ impl VirtioDevice for Net {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        self.wait_io_done();
+        wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.net_cfg.id);
         unregister_event_helper(
             self.net_cfg.iothread.as_ref(),
             &mut self.base.deactivate_evts,
@@ -2146,7 +2145,7 @@ impl VirtioDevice for Net {
 
 impl StateTransfer for Net {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        self.wait_io_done();
+        wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.net_cfg.id);
 
         let ctrl_info = self.ctrl_info.as_ref().map(|c| c.lock().unwrap().clone());
         let state = VirtioNetState {
@@ -2188,43 +2187,6 @@ impl StateTransfer for Net {
 }
 
 impl MigrationHook for Net {}
-
-#[derive(Default)]
-pub struct IoRef {
-    ref_cnt: Arc<AtomicU32>,
-}
-
-impl Drop for IoRef {
-    fn drop(&mut self) {
-        loop {
-            let ref_count = self.ref_cnt.load(Ordering::Relaxed);
-            let new_count = ref_count.saturating_sub(1);
-            if self.ref_cnt.compare_exchange(
-                ref_count,
-                new_count,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) == Ok(ref_count)
-            {
-                break;
-            }
-        }
-    }
-}
-
-impl IoRef {
-    pub fn inc_ref(&self) -> Self {
-        self.ref_cnt.fetch_add(1, Ordering::Relaxed);
-        Self {
-            ref_cnt: self.ref_cnt.clone(),
-        }
-    }
-
-    #[inline]
-    pub fn ref_cnt(&self) -> u32 {
-        self.ref_cnt.load(Ordering::Relaxed)
-    }
-}
 
 #[cfg(test)]
 mod tests {
