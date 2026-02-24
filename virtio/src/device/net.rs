@@ -42,7 +42,7 @@ use crate::{
     VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN,
     VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO,
     VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
-    VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    VIRTIO_NET_F_MQ, VIRTIO_NET_F_STATUS, VIRTIO_NET_OK, VIRTIO_NET_S_LINK_UP, VIRTIO_TYPE_NET,
 };
 use address_space::{AddressAttr, AddressSpace};
 use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
@@ -1569,9 +1569,11 @@ impl VirtioDevice for Net {
             | (1 << VIRTIO_NET_F_CTRL_MAC_ADDR)
             | (1 << VIRTIO_NET_F_CTRL_VQ)
             | (1 << VIRTIO_F_RING_INDIRECT_DESC)
-            | (1 << VIRTIO_F_RING_EVENT_IDX);
+            | (1 << VIRTIO_F_RING_EVENT_IDX)
+            | (1 << VIRTIO_NET_F_STATUS);
 
         let mut locked_config = self.config_space.lock().unwrap();
+        locked_config.status = VIRTIO_NET_S_LINK_UP;
 
         let queue_pairs = self.netdev_cfg.queues / 2;
         if self.net_cfg.mq
