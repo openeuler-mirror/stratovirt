@@ -166,7 +166,7 @@ pub(crate) fn write_to_hisysevent(
     event_params: &[EventParam],
 ) {
     let func = CString::new(func_name).unwrap();
-    let domain = CString::new("VM_ENGINE").unwrap();
+    let domain = CString::new("VM_SERVICE").unwrap();
     let event = CString::new(event_name).unwrap();
 
     let params_wrapper = format_param_array(event_params);
@@ -184,6 +184,9 @@ pub(crate) fn write_to_hisysevent(
         )
     };
     if ret != 0 {
-        error!("Failed to write event {} to hisysevent.", event_name);
+        error!(
+            "Failed to write event {} to hisysevent, error is {}.",
+            event_name, ret
+        );
     }
 }

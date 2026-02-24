@@ -178,9 +178,13 @@ fn do_fallocate(
     size: u64,
 ) -> i32 {
     let mut ret: i32 = 0;
+    let mut discard = false;
     loop {
         let mode = match &fallocate_mode {
-            FallocateMode::PunchHole => FallocateMode::PunchHole,
+            FallocateMode::PunchHole => {
+                discard = true;
+                FallocateMode::PunchHole
+            }
             FallocateMode::ZeroRange => FallocateMode::ZeroRange,
         };
 
@@ -193,6 +197,9 @@ fn do_fallocate(
         }
 
         if ret != libc::EINTR {
+            if discard {
+                hisysevent::STRATOVIRT_IO_DISCARD(fd.as_raw_fd(), offset, size, ret as u32);
+            }
             break;
         }
     }
