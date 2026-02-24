@@ -11,83 +11,96 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::{AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
-use migration::{
-    error::MigrationError, DeviceStateDesc, FieldDesc, MemBlock, MigrationHook, StateTransfer,
-};
-use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use migration::{DeviceStateDesc, MemBlock, MigrationError, MigrationHook, StateTransfer};
+use migration_derive::DescSerde;
+use util::aio::ALIGNMENT_SIZE;
+use util::num_ops::round_up;
 use util::unix::host_page_size;
 
-const MIGRATION_HEADER_LENGTH: usize = 4096;
+// -------------------------------------------
+// |    MIGRATION HEADER (4096 align)        |
+// -------------------------------------------
+// |    Address Space Header (4096 align)    |
+// -------------------------------------------
+// |    Address Space Region Data            |
+// -------------------------------------------
+// |    RamList Region Header                |
+// -------------------------------------------
+// |    RamList Region Data                  |
+// -------------------------------------------
 
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
-pub struct AddressSpaceState {
-    nr_alias_region: u64,
-    ram_alias_state: [RamRegionState; 16],
-    nr_ram_region: u64,
-    ram_region_state: [RamRegionState; 16],
-}
-
-#[derive(Copy, Clone, ByteCode)]
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct RamRegionState {
-    alias_offset: u64,
-    size: u64,
-    // The offset of this memory region in file backend file.
-    offset: u64,
+    // Region name.
+    pub name: String,
+    // Offset has different meanings in different region.
+    // 1) Address space RAM region: representing the offset from the first address space RAM region.
+    // 2) Ramlist RAM region: representing the offset from the first ramlist ram region.
+    pub offset: u64,
+    // Region size.
+    pub size: u64,
 }
 
-// To get the offset to memory data in memory snapshot file.
-// It would be changed when pagesize changed.
-fn memory_offset() -> usize {
-    let page_size = host_page_size() as usize;
-    if page_size >= MIGRATION_HEADER_LENGTH + size_of::<AddressSpaceState>() {
-        page_size
-    } else {
-        page_size * 2
-    }
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct AliasRegionState {
+    // Region name.
+    pub name: String,
+    // Alias offset.
+    pub alias_offset: u64,
+    // Region offset.
+    pub offset: u64,
+    // Region size.
+    pub size: u64,
+}
+
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct AddressSpaceState {
+    // Total size of address space memory region.
+    total_region_size: u64,
+    ram_region_state: Vec<RamRegionState>,
+    alias_region_state: Vec<AliasRegionState>,
 }
 
 impl StateTransfer for AddressSpace {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = AddressSpaceState::default();
-        let mut offset = memory_offset() as u64;
-
-        if self.get_machine_ram().is_none() {
-            bail!("This address space does not support migration.");
-        }
-
-        let machine_ram = self.get_machine_ram().unwrap();
+        let mut offset = 0;
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
         for region in machine_ram.subregions().iter() {
-            state.ram_alias_state[state.nr_alias_region as usize] = RamRegionState {
-                alias_offset: 0,
-                size: region.size(),
+            state.ram_region_state.push(RamRegionState {
+                name: region.name.clone(),
                 offset,
-            };
+                size: region.size(),
+            });
             offset += region.size();
-            state.nr_alias_region += 1;
+            state.total_region_size += region.size();
         }
 
         for region in self.root().subregions().iter() {
             if region.alias_name().is_some() {
-                state.ram_region_state[state.nr_ram_region as usize] = RamRegionState {
+                state.alias_region_state.push(AliasRegionState {
+                    name: region.name.clone(),
                     alias_offset: region.alias_offset(),
-                    size: region.size(),
                     offset: region.offset().0,
-                };
-                state.nr_ram_region += 1;
+                    size: region.size(),
+                });
             }
         }
 
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn get_device_alias(&self) -> u64 {
@@ -96,12 +109,14 @@ impl StateTransfer for AddressSpace {
 }
 
 impl MigrationHook for AddressSpace {
-    fn save_memory(&self, fd: &mut dyn Write) -> Result<()> {
+    fn save_memory(&self, fd: &mut File) -> Result<()> {
+        // Save address space header.
         let ram_state = self.get_state_vec()?;
-        fd.write_all(&ram_state)?;
-        let padding_buffer =
-            [0].repeat(memory_offset() - MIGRATION_HEADER_LENGTH - size_of::<AddressSpaceState>());
-        fd.write_all(&padding_buffer)?;
+        let data_slice = get_state_slice(&ram_state)
+            .with_context(|| "Failed to get state slice while saving state")?;
+        fd.write_all(&data_slice)?;
+
+        // Save address space region.
         if let Some(machine_ram) = self.get_machine_ram() {
             for region in machine_ram.subregions().iter() {
                 if let Some(base_addr) = region.start_addr() {
@@ -114,53 +129,76 @@ impl MigrationHook for AddressSpace {
         Ok(())
     }
 
-    fn restore_memory(&self, memory: Option<&File>, state: &[u8]) -> Result<()> {
-        let address_space_state: &AddressSpaceState =
-            AddressSpaceState::from_bytes(&state[0..size_of::<AddressSpaceState>()])
-                .with_context(|| MigrationError::FromBytesError("MEMORY"))?;
-        let memfile_arc = Arc::new(memory.unwrap().try_clone().unwrap());
-        if let Some(machine_ram) = self.get_machine_ram() {
-            let mut offset = 0_u64;
-            for ram_state in address_space_state.ram_alias_state
-                [0..address_space_state.nr_alias_region as usize]
-                .iter()
-            {
-                let file_backend = FileBackend {
-                    file: memfile_arc.clone(),
-                    offset: ram_state.offset,
-                    page_size: host_page_size(),
-                };
-                let host_mmap = Arc::new(
-                    HostMemMapping::new(
-                        GuestAddress(0),
-                        None,
-                        ram_state.size,
-                        Some(file_backend),
-                        false,
-                        false,
-                        false,
-                    )
-                    .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?,
-                );
-                machine_ram
-                    .add_subregion_not_update(
-                        Region::init_ram_region(host_mmap.clone(), "HostMem"),
-                        offset,
-                    )
-                    .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
-                offset += ram_state.size;
+    fn restore_memory(&self, memory: &mut File, mapped: bool) -> Result<()> {
+        let data_slice = read_state_slice(memory)
+            .with_context(|| "Failed to read state slice while restoring state")?;
+        let address_space_state: AddressSpaceState = serde_json::from_slice(&data_slice)
+            .with_context(|| MigrationError::FromBytesError("MEMORY"))?;
+
+        if mapped {
+            // Get the start pos for saved ram region.
+            let first_region_offset = memory.stream_position()?;
+            let cloned_file = match memory.try_clone() {
+                Ok(file) => file,
+                Err(e) => bail!("Failed to clone memory file: {:?}", e),
+            };
+            let memfile_arc = Arc::new(cloned_file);
+
+            if let Some(machine_ram) = self.get_machine_ram() {
+                let mut offset = 0_u64;
+                for ram_state in address_space_state.ram_region_state.iter() {
+                    let file_backend = FileBackend {
+                        file: memfile_arc.clone(),
+                        offset: ram_state.offset + first_region_offset,
+                        page_size: host_page_size(),
+                    };
+                    let host_mmap = Arc::new(
+                        HostMemMapping::new(
+                            GuestAddress(0),
+                            None,
+                            ram_state.size,
+                            Some(file_backend),
+                            false,
+                            false,
+                            false,
+                        )
+                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?,
+                    );
+
+                    machine_ram
+                        .add_subregion_not_update(
+                            Region::init_ram_region(host_mmap.clone(), &ram_state.name),
+                            offset,
+                        )
+                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
+                    offset += ram_state.size;
+                }
+                for alias_state in address_space_state.alias_region_state.iter() {
+                    let ram = Region::init_alias_region(
+                        machine_ram.clone(),
+                        alias_state.alias_offset,
+                        alias_state.size,
+                        &alias_state.name,
+                    );
+                    self.root().add_subregion(ram, alias_state.offset)?;
+                }
             }
-            for ram_state in address_space_state.ram_region_state
-                [0..address_space_state.nr_ram_region as usize]
-                .iter()
-            {
-                let ram = Region::init_alias_region(
-                    machine_ram.clone(),
-                    ram_state.alias_offset,
-                    ram_state.size,
-                    "ram",
-                );
-                self.root().add_subregion(ram, ram_state.offset)?;
+            let region_data_end = first_region_offset
+                .checked_add(address_space_state.total_region_size)
+                .with_context(|| {
+                    format!(
+                        "Restore memory add overflow: {} + {}",
+                        first_region_offset, address_space_state.total_region_size
+                    )
+                })?;
+            memory.seek(SeekFrom::Start(region_data_end))?;
+        } else if let Some(machine_ram) = self.get_machine_ram() {
+            for region in machine_ram.subregions().iter() {
+                if let Some(base_addr) = region.start_addr() {
+                    region
+                        .write(memory, base_addr, 0, region.size())
+                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
+                }
             }
         }
 
@@ -180,4 +218,41 @@ impl MigrationHook for AddressSpace {
 
         Ok(())
     }
+}
+
+pub fn get_state_slice(state: &[u8]) -> Result<Vec<u8>> {
+    let state_len = state.len();
+    let le_bytes = (state_len as u64).to_le_bytes();
+    let le_len = le_bytes.len();
+    let total_len = le_len + state_len;
+
+    // Aligned up to ALIGNMENT_SIZE.
+    let aligned_len = round_up(total_len as u64, ALIGNMENT_SIZE)
+        .with_context(|| format!("Failed to round up, total state length {}", total_len))?;
+    let mut data_slice = vec![0u8; aligned_len as usize];
+    data_slice[0..le_len].copy_from_slice(&le_bytes);
+    data_slice[le_len..total_len].copy_from_slice(state);
+
+    Ok(data_slice)
+}
+
+pub fn read_state_slice(file: &mut File) -> Result<Vec<u8>> {
+    // Read state length.
+    let size = size_of::<u64>();
+    let mut le_bytes = vec![0u8; size];
+    if let Err(e) = file.read_exact(&mut le_bytes) {
+        bail!("Read state length error {:?}", e);
+    }
+    let state_len = u64::from_le_bytes(le_bytes.try_into().unwrap());
+    let total_len = size as u64 + state_len;
+    let aligned_len = round_up(total_len, ALIGNMENT_SIZE)
+        .with_context(|| format!("Failed to round up, total state len {}", total_len))?;
+
+    // Read state content.
+    let mut data_slice = vec![0u8; aligned_len as usize - size];
+    if let Err(e) = file.read_exact(&mut data_slice) {
+        bail!("Read state content error {:?}", e);
+    }
+
+    Ok(data_slice[..state_len as usize].to_vec())
 }

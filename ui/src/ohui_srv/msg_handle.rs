@@ -16,7 +16,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::error;
+use log::{error, info};
 use util::byte_code::ByteCode;
 
 use super::{
@@ -24,7 +24,7 @@ use super::{
     msg::*,
 };
 use crate::{
-    console::{get_active_console, graphic_hardware_ui_info},
+    console::{get_active_console, graphic_hardware_ui_info, set_dpy_rotation, Rotation},
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
         release_all_btn, release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED,
@@ -221,6 +221,11 @@ impl OhUiMsgHandler {
                 );
                 Ok(())
             }
+            EventType::WindowInfoV2 => {
+                let body = WindowInfoV2Event::from_bytes(&body_bytes[..]).unwrap();
+                info!("WindowInfoV2: {:?}", body);
+                self.handle_windowinfo_v2(body)
+            }
             _ => {
                 error!(
                     "unsupported type {:?} and body size {}",
@@ -331,6 +336,16 @@ impl OhUiMsgHandler {
             }
         }
         trace::oh_event_windowinfo(wi.width, wi.height);
+    }
+
+    fn handle_windowinfo_v2(&self, wi_v2: &WindowInfoV2Event) -> Result<()> {
+        let wi = WindowInfoEvent {
+            width: wi_v2.width,
+            height: wi_v2.height,
+        };
+        self.handle_windowinfo(&wi);
+        set_dpy_rotation(Rotation::try_from(wi_v2.rotation).map_err(|e| anyhow!("{:?}", e))?);
+        Ok(())
     }
 
     pub fn send_windowinfo(&self, w: u32, h: u32) {

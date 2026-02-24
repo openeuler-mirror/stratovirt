@@ -24,6 +24,8 @@ use crate::kvm::{KvmCpu, KvmHypervisor};
 use crate::HypervisorError;
 use address_space::Listener;
 use cpu::{ArchCPU, CPUBootConfig, RegsIndex, CPU};
+use migration::MigrationError;
+use util::byte_code::ByteCode;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/linux/kvm.h
 ioctl_iowr_nr!(KVM_GET_SUPPORTED_CPUID, KVMIO, 0x05, kvm_cpuid2);
@@ -84,7 +86,7 @@ impl KvmCpu {
     pub fn arch_set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
     ) -> Result<()> {
         let mut locked_arch_cpu = arch_cpu.lock().unwrap();
         let apic_id = locked_arch_cpu.apic_id;
@@ -93,12 +95,14 @@ impl KvmCpu {
             .get_lapic()
             .with_context(|| format!("Failed to get lapic for CPU {}/KVM", apic_id))?;
         locked_arch_cpu.setup_lapic(lapic)?;
-        locked_arch_cpu.setup_regs(boot_config);
         let sregs = self
             .fd
             .get_sregs()
             .with_context(|| format!("Failed to get sregs for CPU {}/KVM", apic_id))?;
-        locked_arch_cpu.setup_sregs(sregs, boot_config)?;
+        if let Some(cfg) = boot_config {
+            locked_arch_cpu.setup_regs(cfg);
+            locked_arch_cpu.setup_sregs(sregs, cfg)?;
+        }
         locked_arch_cpu.setup_fpu();
         locked_arch_cpu.setup_msrs();
 
@@ -337,5 +341,30 @@ impl KvmCpu {
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
         cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
         self.arch_put_register(cpu)
+    }
+
+    pub fn arch_get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::MpState)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::Regs)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::Sregs)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::Xsave)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::Fpu)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::Xcrs)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::DebugRegs)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::LapicState)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::MsrEntry)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)?;
+
+        Ok(arch_cpu.lock().unwrap().as_bytes().to_vec())
+    }
+
+    pub fn arch_set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
+        let cpu_state =
+            ArchCPU::from_bytes(state).with_context(|| MigrationError::FromBytesError("CPU"))?;
+
+        let mut cpu_state_locked = arch_cpu.lock().unwrap();
+        *cpu_state_locked = cpu_state.clone();
+        drop(cpu_state_locked);
+        Ok(())
     }
 }

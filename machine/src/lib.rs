@@ -31,13 +31,12 @@ pub use standard_common::StdMachine;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{remove_file, File};
 use std::net::TcpListener;
-use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
 #[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock, Weak};
+use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
 #[cfg(feature = "usb_host")]
 use std::thread;
 #[cfg(feature = "windows_emu_pid")]
@@ -52,7 +51,8 @@ use vmm_sys_util::eventfd::EventFd;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
 use address_space::{
-    create_backend_mem, create_default_mem, AddressAttr, AddressSpace, GuestAddress, Region,
+    create_backend_mem, create_default_mem, register_ram_list, AddressAttr, AddressSpace,
+    GuestAddress, Region,
 };
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
@@ -61,7 +61,7 @@ use devices::legacy::FwCfgOps;
 #[cfg(feature = "pvpanic")]
 use devices::misc::pvpanic::{PvPanicPci, PvpanicDevConfig};
 #[cfg(feature = "scream")]
-use devices::misc::scream::{Scream, ScreamConfig};
+use devices::misc::scream::{Scream, ScreamConfig, ScreamState};
 #[cfg(feature = "demo_device")]
 use devices::pci::demo_device::{DemoDev, DemoDevConfig};
 use devices::pci::{
@@ -100,7 +100,7 @@ use machine_manager::config::get_chardev_socket_path;
 use machine_manager::config::{
     complete_numa_node, get_class_type, get_pci_bdf, get_value_of_parameter, parse_numa_distance,
     parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig,
-    DriveFile, Incoming, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
+    DriveFile, IncomingConfig, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
     NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig,
     FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
@@ -108,7 +108,7 @@ use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
 use machine_manager::notifier::pause_notify;
 use machine_manager::{check_arg_exist, check_arg_nonexist};
-use migration::{MigrateOps, MigrationManager};
+use migration::{MigrateOps, MigrationManager, MigrationStatus};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::arg_parser;
@@ -162,7 +162,7 @@ pub struct MachineBase {
     /// System bus.
     sysbus: Arc<Mutex<SysBus>>,
     /// VM running state.
-    vm_state: Arc<(Mutex<VmState>, Condvar)>,
+    vm_state: Arc<Mutex<VmState>>,
     /// Vm boot_source config.
     boot_source: Arc<Mutex<BootSource>>,
     /// All configuration information of virtual machine.
@@ -243,7 +243,7 @@ impl MachineBase {
             #[cfg(target_arch = "x86_64")]
             sys_io,
             sysbus: Arc::new(Mutex::new(sysbus)),
-            vm_state: Arc::new((Mutex::new(VmState::Created), Condvar::new())),
+            vm_state: Arc::new(Mutex::new(VmState::Created)),
             boot_source: Arc::new(Mutex::new(vm_config.clone().boot_source)),
             vm_config: Arc::new(Mutex::new(vm_config.clone())),
             numa_nodes: None,
@@ -446,15 +446,13 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<()> {
         trace::trace_scope_start!(init_memory);
         let migrate_info = self.get_migrate_info();
-        if migrate_info.0 != MigrateMode::File {
+        if migrate_info.mode != MigrateMode::File || !migrate_info.mapped {
             self.create_machine_ram(mem_config, nr_cpus)?;
-        }
-
-        if migrate_info.0 != MigrateMode::File {
             self.init_machine_ram(sys_mem, mem_config.mem_size)?;
         }
 
         MigrationManager::register_memory_instance(sys_mem.clone());
+        register_ram_list();
 
         Ok(())
     }
@@ -532,7 +530,11 @@ pub trait MachineOps: MachineLifecycle {
             )?;
             cpus.push(cpu.clone());
 
-            MigrationManager::register_cpu_instance(cpu::ArchCPU::descriptor(), cpu, vcpu_id);
+            MigrationManager::register_cpu_instance(
+                cpu.hypervisor_cpu.get_device_desc(),
+                cpu,
+                vcpu_id,
+            );
         }
 
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -671,7 +673,7 @@ pub trait MachineOps: MachineLifecycle {
         self.machine_base().vm_config.clone()
     }
 
-    fn get_vm_state(&self) -> &Arc<(Mutex<VmState>, Condvar)> {
+    fn get_vm_state(&self) -> &Arc<Mutex<VmState>> {
         &self.machine_base().vm_state
     }
 
@@ -689,12 +691,13 @@ pub trait MachineOps: MachineLifecycle {
 
     /// Get migration mode and path from VM config. There are four modes in total:
     /// Tcp, Unix, File and Unknown.
-    fn get_migrate_info(&self) -> Incoming {
-        if let Some((mode, path)) = self.get_vm_config().lock().unwrap().incoming.as_ref() {
-            return (*mode, path.to_string());
-        }
-
-        (MigrateMode::Unknown, String::new())
+    fn get_migrate_info(&self) -> IncomingConfig {
+        self.get_vm_config()
+            .lock()
+            .unwrap()
+            .incoming
+            .clone()
+            .unwrap_or_default()
     }
 
     /// Add net device.
@@ -913,7 +916,7 @@ pub trait MachineOps: MachineLifecycle {
                 )
             })?;
 
-        let mut serial_port = SerialPort::new(serialport_cfg, chardev_cfg);
+        let mut serial_port = SerialPort::new(serialport_cfg, chardev_cfg)?;
         let port = Arc::new(Mutex::new(serial_port.clone()));
         serial_port.realize()?;
         if !is_console {
@@ -1198,7 +1201,8 @@ pub trait MachineOps: MachineLifecycle {
         let config = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let bdf = PciBdf::new(config.bus.clone(), config.addr);
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(&bdf)?;
-        let pcidev = PvPanicPci::new(&config, devfn, parent_bus);
+        let sys_mem = self.get_sys_mem();
+        let pcidev = PvPanicPci::new(&config, devfn, parent_bus, sys_mem.clone());
         pcidev
             .realize()
             .with_context(|| "Failed to realize pvpanic device")?;
@@ -1802,10 +1806,17 @@ pub trait MachineOps: MachineLifecycle {
             bail!("Object for share config is not on");
         }
 
+        let id = config.id.clone();
         let mut scream = Scream::new(mem_cfg.size, config, token_id)?;
         scream
             .realize(parent_bus)
-            .with_context(|| "Failed to realize scream device")
+            .with_context(|| "Failed to realize scream device")?;
+        MigrationManager::register_device_instance(
+            ScreamState::descriptor(),
+            Arc::new(Mutex::new(scream)),
+            &id,
+        );
+        Ok(())
     }
 
     /// Get the corresponding device from the PCI bus based on the device id and device type name.
@@ -2186,7 +2197,7 @@ pub trait MachineOps: MachineLifecycle {
 
         // Lock the added file if VM is running.
         let drive_file = drive_files.get_mut(path).unwrap();
-        let vm_state = self.get_vm_state().deref().0.lock().unwrap();
+        let vm_state = self.get_vm_state().lock().unwrap();
         if *vm_state == VmState::Running && !drive_file.locked {
             if let Err(e) = lock_file(&drive_file.file, path, read_only) {
                 VmConfig::remove_drive_file(&mut drive_files, path)?;
@@ -2238,32 +2249,28 @@ pub trait MachineOps: MachineLifecycle {
     where
         Self: Sized;
 
-    /// Run `LightMachine` with `paused` flag.
+    /// Run `Machine` with `paused` flag.
     ///
     /// # Arguments
     ///
     /// * `paused` - Flag for `paused` when `LightMachine` starts to run.
     fn run(&self, paused: bool) -> Result<()> {
-        self.vm_start(
-            paused,
-            &self.machine_base().cpus,
-            &mut self.machine_base().vm_state.0.lock().unwrap(),
-        )
+        self.vm_start(&mut self.get_vm_state().lock().unwrap(), paused)
     }
 
     /// Start machine as `Running` or `Paused` state.
     ///
     /// # Arguments
     ///
-    /// * `paused` - After started, paused all vcpu or not.
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_start(&self, paused: bool, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
+    /// * `paused` - After started, paused all vcpu or not.
+    fn vm_start(&self, vm_state: &mut VmState, paused: bool) -> Result<()> {
         if !paused {
             EventLoop::get_ctx(None).unwrap().enable_clock();
             self.active_drive_files()?;
         }
 
+        let cpus = &self.machine_base().cpus;
         let nr_vcpus = cpus.len();
         let cpus_thread_barrier = Arc::new(Barrier::new(nr_vcpus + 1));
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -2288,20 +2295,15 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_pause(
-        &self,
-        cpus: &[Arc<CPU>],
-        #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut VmState,
-    ) -> Result<()> {
+    fn vm_pause(&self, vm_state: &mut VmState) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().disable_clock();
 
         // Deactive files so that VM on the other end can active files.
         if MigrationManager::is_active() {
             self.deactive_drive_files()?;
         }
+        let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             if let Err(e) = cpu.pause() {
                 if MigrationManager::is_active() {
@@ -2312,8 +2314,11 @@ pub trait MachineOps: MachineLifecycle {
         }
 
         #[cfg(target_arch = "aarch64")]
-        // SAFETY: ARM architecture must have interrupt controllers in user mode.
-        irq_chip.as_ref().unwrap().stop();
+        {
+            let irq_chip = &self.machine_base().irq_chip;
+            // SAFETY: ARM architecture must have interrupt controllers in user mode.
+            irq_chip.as_ref().unwrap().stop();
+        }
 
         *vm_state = VmState::Paused;
 
@@ -2327,9 +2332,8 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_resume(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
+    fn vm_resume(&self, vm_state: &mut VmState) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().enable_clock();
 
         self.active_drive_files()?;
@@ -2337,6 +2341,7 @@ pub trait MachineOps: MachineLifecycle {
         // Notify VM resumed.
         pause_notify(false);
 
+        let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             if let Err(e) = cpu.resume() {
                 self.deactive_drive_files()?;
@@ -2353,9 +2358,9 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
     /// * `vm_state` - Vm state.
-    fn vm_destroy(&self, cpus: &[Arc<CPU>], vm_state: &mut VmState) -> Result<()> {
+    fn vm_destroy(&self, vm_state: &mut VmState) -> Result<()> {
+        let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             cpu.destroy()
                 .with_context(|| format!("Failed to destroy vcpu{}", cpu_index))?;
@@ -2370,42 +2375,31 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `cpus` - Cpus vector restore cpu structure.
-    /// * `vm_state` - Vm state.
     /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
-    fn vm_state_transfer(
-        &self,
-        cpus: &[Arc<CPU>],
-        #[cfg(target_arch = "aarch64")] irq_chip: &Option<Arc<InterruptController>>,
-        vm_state: &mut VmState,
-        old_state: VmState,
-        new_state: VmState,
-    ) -> Result<()> {
+    fn vm_state_transfer(&self, old_state: VmState, new_state: VmState) -> Result<()> {
         use VmState::*;
 
-        if *vm_state != old_state {
-            bail!("Vm lifecycle error: state check failed.");
+        let mut vm_state = self.get_vm_state().lock().unwrap();
+        if MigrationManager::is_active() {
+            *vm_state = new_state;
+            return Ok(());
         }
 
         match (old_state, new_state) {
             (Created, Running) => self
-                .vm_start(false, cpus, vm_state)
+                .vm_start(&mut vm_state, false)
                 .with_context(|| "Failed to start vm.")?,
             (Running, Paused) => self
-                .vm_pause(
-                    cpus,
-                    #[cfg(target_arch = "aarch64")]
-                    irq_chip,
-                    vm_state,
-                )
+                .vm_pause(&mut vm_state)
                 .with_context(|| "Failed to pause vm.")?,
             (Paused, Running) => self
-                .vm_resume(cpus, vm_state)
+                .vm_resume(&mut vm_state)
                 .with_context(|| "Failed to resume vm.")?,
             (_, Shutdown) => self
-                .vm_destroy(cpus, vm_state)
+                .vm_destroy(&mut vm_state)
                 .with_context(|| "Failed to destroy vm.")?,
+            (Paused, Paused) => return Ok(()),
             (_, _) => {
                 bail!("Vm lifecycle error: this transform is illegal.");
             }
@@ -2454,7 +2448,7 @@ fn register_shutdown_event(
 fn handle_destroy_request(vm: &Arc<Mutex<dyn MachineOps>>) -> bool {
     let locked_vm = vm.lock().unwrap();
     let vmstate: VmState = {
-        let state = locked_vm.machine_base().vm_state.deref().0.lock().unwrap();
+        let state = locked_vm.get_vm_state().lock().unwrap();
         *state
     };
 
@@ -2479,7 +2473,7 @@ pub fn vm_run(
     cmd_args: &arg_parser::ArgMatches,
 ) -> Result<()> {
     let migrate = vm.lock().unwrap().get_migrate_info();
-    if migrate.0 == MigrateMode::Unknown {
+    if migrate.mode == MigrateMode::Unknown {
         vm.lock()
             .unwrap()
             .run(cmd_args.is_present("freeze_cpu"))
@@ -2493,14 +2487,28 @@ pub fn vm_run(
 
 /// Start incoming migration from destination.
 fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Result<()> {
-    let (mode, path) = vm.lock().unwrap().get_migrate_info();
-    match mode {
+    let migrate_info = vm.lock().unwrap().get_migrate_info();
+    let path = migrate_info.uri;
+    match migrate_info.mode {
         MigrateMode::File => {
-            MigrationManager::restore_snapshot(&path)
-                .with_context(|| "Failed to restore snapshot")?;
-            vm.lock()
-                .unwrap()
-                .run(false)
+            // Set status to `Active`
+            MigrationManager::set_status(MigrationStatus::Active)?;
+            MigrationManager::notify_status(false, MigrationStatus::Active)?;
+            let ret = MigrationManager::restore_snapshot(&path, migrate_info.mapped);
+            if ret.is_err() {
+                let _ = MigrationManager::set_status(MigrationStatus::Failed);
+                if let Err(e) = MigrationManager::notify_status(false, MigrationStatus::Failed) {
+                    error!("Failed to notify status: {:?}", e);
+                }
+                ret.with_context(|| "Failed to restore snapshot")?;
+            }
+            let vm_locked = vm.lock().unwrap();
+            let pause = *vm_locked.get_vm_state().lock().unwrap() == VmState::Paused;
+            // Set status to `Completed`
+            MigrationManager::set_status(MigrationStatus::Completed)?;
+            MigrationManager::notify_status(false, MigrationStatus::Completed)?;
+            vm_locked
+                .run(pause)
                 .with_context(|| "Failed to start VM.")?;
         }
         MigrateMode::Unix => {
@@ -2539,8 +2547,8 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
     // End the migration and reset the mode.
     let locked_vm = vm.lock().unwrap();
     let vm_config = locked_vm.get_vm_config();
-    if let Some((mode, _)) = vm_config.lock().unwrap().incoming.as_mut() {
-        *mode = MigrateMode::Unknown;
+    if let Some(incoming) = vm_config.lock().unwrap().incoming.as_mut() {
+        incoming.mode = MigrateMode::Unknown;
     }
 
     Ok(())
@@ -2559,32 +2567,41 @@ fn check_windows_emu_pid(
     powerdown_req: Arc<EventFd>,
     shutdown_req: Arc<EventFd>,
     vm: Arc<Mutex<dyn MachineOps>>,
+    mut win_emu_exit: bool,
 ) {
     let mut check_delay = Duration::from_millis(WINDOWS_EMU_PID_DEFAULT_INTERVAL);
-    if !Path::new(&pid_path).exists() {
+    if win_emu_exit || !Path::new(&pid_path).exists() {
         info!("Detect emulator exited, let VM exits now");
         let locked_vm = vm.lock().unwrap();
-        let mut vm_state = locked_vm.get_vm_state().deref().0.lock().unwrap();
+        let mut vm_state = locked_vm.get_vm_state().lock().unwrap();
         if *vm_state == VmState::Paused {
             info!("VM state is paused, resume VM before exit");
-            if let Err(e) = locked_vm.vm_resume(&locked_vm.machine_base().cpus, &mut vm_state) {
+            if let Err(e) = locked_vm.vm_resume(&mut vm_state) {
                 log::error!("Failed to resume VM when check windows emu pid: {:?}", e);
             }
         }
         drop(vm_state);
         drop(locked_vm);
+        // The vm exit type for hisysevent: 1-Os, 2-Bios(default).
+        let mut exit_type = 2_u32;
         if get_run_stage() == VmRunningStage::Os {
             // Wait 30s for windows normal exit.
             check_delay = Duration::from_millis(WINDOWS_EMU_PID_POWERDOWN_INTERVAL);
             if let Err(e) = powerdown_req.write(1) {
                 log::error!("Failed to send powerdown request after emu exits: {:?}", e);
             }
+            exit_type = 1;
         } else {
             // Wait 1s for windows shutdown.
             check_delay = Duration::from_millis(WINDOWS_EMU_PID_SHUTDOWN_INTERVAL);
             if let Err(e) = shutdown_req.write(1) {
                 log::error!("Failed to send shutdown request after emu exits: {:?}", e);
             }
+        }
+
+        if !win_emu_exit {
+            hisysevent::STRATOVIRT_WINDOWS_EMU_EXIT(exit_type);
+            win_emu_exit = true;
         }
     }
 
@@ -2594,6 +2611,7 @@ fn check_windows_emu_pid(
             powerdown_req.clone(),
             shutdown_req.clone(),
             vm.clone(),
+            win_emu_exit,
         );
     });
     EventLoop::get_ctx(None)
@@ -2622,6 +2640,7 @@ pub(crate) fn watch_windows_emu_pid(
             power_button.clone(),
             shutdown_req.clone(),
             vm.clone(),
+            false,
         );
     });
     EventLoop::get_ctx(None)

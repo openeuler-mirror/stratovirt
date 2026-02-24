@@ -12,22 +12,26 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
-use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
+use super::hid::{Hid, HidDevState, HidType, QUEUE_LENGTH, QUEUE_MASK};
 use super::xhci::xhci_controller::{endpoint_number_to_id, XhciDevice};
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{
-    notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
+    notify_controller, UsbDevState, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket,
+    UsbPacketStatus,
 };
 use machine_manager::config::valid_id;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use ui::input::{register_keyboard, unregister_keyboard, KeyboardOpts};
 use util::gen_base_func;
 
@@ -141,6 +145,13 @@ pub struct UsbKeyboard {
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
 }
 
+#[derive(DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
+struct UsbKeyboardDevState {
+    usb_state: UsbDevState,
+    hid_state: HidDevState,
+}
+
 pub struct UsbKeyboardAdapter {
     usb_kbd: Arc<Mutex<UsbKeyboard>>,
 }
@@ -207,11 +218,23 @@ impl UsbDevice for UsbKeyboard {
         }));
         register_keyboard(&id, kbd_adapter);
 
+        MigrationManager::register_device_instance(
+            UsbKeyboardDevState::descriptor(),
+            kbd.clone(),
+            &id,
+        );
+
         Ok(kbd)
     }
 
     fn unrealize(&mut self) -> Result<()> {
         unregister_keyboard(self.device_id());
+
+        MigrationManager::unregister_device_instance(
+            UsbKeyboardDevState::descriptor(),
+            self.device_id(),
+        );
+
         Ok(())
     }
 
@@ -263,6 +286,32 @@ impl UsbDevice for UsbKeyboard {
     }
 }
 
+impl StateTransfer for UsbKeyboard {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = UsbKeyboardDevState {
+            usb_state: self.base.get_usb_state(),
+            hid_state: self.hid.get_state()?,
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let usb_kbd_state: UsbKeyboardDevState =
+            serde_json::from_slice(state).with_context(|| "Failed to get usb kbd state")?;
+
+        self.base.set_usb_state(&usb_kbd_state.usb_state);
+        self.hid.set_state(&usb_kbd_state.hid_state)?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&UsbKeyboardDevState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for UsbKeyboard {}
 #[cfg(test)]
 mod tests {
     use super::*;

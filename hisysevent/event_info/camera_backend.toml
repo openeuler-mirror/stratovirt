@@ -1,0 +1,17 @@
+[[events]]
+name = "STRATOVIRT_CAMERA_INIT_FAILED"
+event_type = "Fault"
+args = "ERRCODE: i32"
+enabled = true
+
+[[events]]
+name = "STRATOVIRT_CAMERA_START_FAILED"
+event_type = "Fault"
+args = "ERRCODE: i32"
+enabled = true
+
+[[events]]
+name = "STRATOVIRT_CAMERA_ON_BROKEN"
+event_type = "Fault"
+args = "camid: String"
+enabled = true

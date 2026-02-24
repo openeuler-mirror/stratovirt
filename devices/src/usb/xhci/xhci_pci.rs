@@ -16,28 +16,37 @@ use std::os::unix::prelude::RawFd;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use log::error;
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::xhci_controller::{XhciDevice, MAX_INTRS, MAX_SLOTS};
+use super::xhci_controller::{
+    dma_read_u32, DwordOrder, XhciDevState, XhciDevice, XhciEpCtx, EP_RUNNING, EP_STATE_MASK,
+    MAX_INTRS, MAX_SLOTS,
+};
 use super::xhci_regs::{
     build_cap_ops, build_doorbell_ops, build_oper_ops, build_port_ops, build_runtime_ops,
     XHCI_CAP_LENGTH, XHCI_OFF_DOORBELL, XHCI_OFF_RUNTIME,
 };
 use crate::pci::config::{
-    PciConfig, RegionType, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
+    RegionType, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCI_CONFIG_SPACE_SIZE,
     PCI_DEVICE_ID_REDHAT_XHCI, PCI_VENDOR_ID_REDHAT, REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
-use crate::pci::{init_intx, init_msix, le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::pci::{
+    init_intx, init_msix, le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState,
+};
 use crate::usb::UsbDevice;
 use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
-use machine_manager::config::{get_pci_df, valid_id};
-use machine_manager::event_loop::register_event_helper;
+use machine_manager::config::{get_pci_df, parse_bool, valid_id};
+use machine_manager::event_loop::{register_event_helper, EventLoop};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
@@ -87,6 +96,8 @@ pub struct XhciConfig {
     pub p3: Option<u8>,
     #[arg(long)]
     pub iothread: Option<String>,
+    #[arg(long, value_parser = parse_bool, action = ArgAction::Append)]
+    pub streams: Option<bool>,
 }
 
 /// Registers offset.
@@ -102,6 +113,14 @@ pub struct XhciPciDevice {
     doorbell_fd: Arc<EventFd>,
     delete_evts: Vec<RawFd>,
     iothread: Option<String>,
+}
+
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+struct XhciPciDevState {
+    pci_state: PciState,
+    dev_id: u16,
+    dev_state: XhciDevState,
 }
 
 impl XhciPciDevice {
@@ -341,14 +360,23 @@ impl Device for XhciPciDevice {
 
                 false
             }));
+        let device_name = self.name();
         let dev = Arc::new(Mutex::new(self));
         // Attach to the PCI bus.
         let bus = dev.lock().unwrap().parent_bus().unwrap().upgrade().unwrap();
         bus.lock().unwrap().attach_child(devfn, dev.clone())?;
+
+        MigrationManager::register_device_instance(
+            XhciPciDevState::descriptor(),
+            dev.clone(),
+            &device_name,
+        );
+
         Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        MigrationManager::unregister_device_instance(XhciPciDevState::descriptor(), &self.name());
         trace::usb_xhci_exit();
         Ok(())
     }
@@ -376,6 +404,112 @@ impl PciDevOps for XhciPciDevice {
         self.base
             .bme
             .store(self.base.config.bus_maser_enable(), Ordering::SeqCst);
+    }
+}
+
+impl StateTransfer for XhciPciDevice {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = XhciPciDevState {
+            pci_state: self.base.get_pci_state(),
+            dev_id: self.dev_id.load(Ordering::Acquire),
+            dev_state: self.xhci.lock().unwrap().get_snapshot_state(),
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let xhci_pci_state: XhciPciDevState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("XHCI"))?;
+
+        self.dev_id.store(xhci_pci_state.dev_id, Ordering::Release);
+        self.base.set_pci_state(&xhci_pci_state.pci_state);
+        self.xhci
+            .lock()
+            .unwrap()
+            .set_snapshot_state(&xhci_pci_state.dev_state);
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&XhciPciDevState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for XhciPciDevice {
+    fn resume(&mut self) -> Result<()> {
+        // re-register mmio region in kvm/hmv
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        if let Err(e) = self.base.config.update_bar_mapping(
+            #[cfg(target_arch = "x86_64")]
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
+        ) {
+            bail!("Failed to update bar, error is {:?}", e);
+        }
+
+        // rebuild relationship between slots and ports
+        let cloned_xhci_device = self.xhci.clone();
+        let mut locked_xhci_device = self.xhci.lock().unwrap();
+        let mem = locked_xhci_device.mem_space.clone();
+        for (slot_idx, slot) in locked_xhci_device.slots.iter_mut().enumerate() {
+            if !slot.addressed
+                || slot.usb_port.is_none()
+                || slot
+                    .usb_port
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .dev
+                    .is_none()
+            {
+                continue;
+            }
+
+            for (ep_idx, ep) in slot.endpoints.iter_mut().enumerate() {
+                // read the corresponding endpoint context from the guest RAM
+                let ep_id = ep_idx + 1;
+                let slot_ctx_addr = slot.slot_ctx_addr;
+                let ep_ctx_addr = match slot_ctx_addr.checked_add(32 * ep_id as u64) {
+                    Some(addr) => addr,
+                    None => bail!("Endpoint context address overflow"),
+                };
+                let mut ep_ctx = XhciEpCtx::default();
+                dma_read_u32(&mem, ep_ctx_addr, ep_ctx.as_mut_dwords())?;
+
+                // restore the endpoint state to the state that the front-end xhci driver believes it to be
+                ep.init_ctx(ep_ctx_addr.raw_value(), &ep_ctx)?;
+                ep.set_ep_state(ep_ctx.get_ep_state());
+
+                // re-kick endpoint based on its state
+                let state = ep.get_ep_state() & EP_STATE_MASK;
+                if state == EP_RUNNING {
+                    let cloned_kick_xhci = cloned_xhci_device.clone();
+                    let ep_kick = Box::new(move || {
+                        if let Err(e) = cloned_kick_xhci.lock().unwrap().kick_endpoint(
+                            slot_idx as u32 + 1,
+                            ep_id as u32,
+                            0,
+                        ) {
+                            error!(
+                                "Kick slot {} endpoint {} failed while resuming Xhci device, {}",
+                                slot_idx + 1,
+                                ep_id,
+                                e
+                            );
+                        }
+                    });
+                    EventLoop::get_ctx(None)
+                        .unwrap()
+                        .timer_add(ep_kick, Duration::from_secs(0));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

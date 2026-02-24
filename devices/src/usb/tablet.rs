@@ -13,22 +13,25 @@
 use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
-use super::hid::{Hid, HidType, QUEUE_LENGTH, QUEUE_MASK};
+use super::hid::{Hid, HidDevState, HidType, QUEUE_LENGTH, QUEUE_MASK};
 use super::xhci::xhci_controller::{endpoint_number_to_id, XhciDevice};
 use super::{
-    config::*, notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket,
-    UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
+    config::*, notify_controller, UsbDevState, UsbDevice, UsbDeviceBase, UsbDeviceRequest,
+    UsbPacket, UsbPacketStatus, USB_DEVICE_BUFFER_DEFAULT_LEN,
 };
 use machine_manager::config::valid_id;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use ui::input::{
     register_pointer, unregister_pointer, Axis, InputEvent, InputType, PointerOpts,
     INPUT_BUTTON_MASK, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT, INPUT_BUTTON_WHEEL_RIGHT,
@@ -133,6 +136,13 @@ pub struct UsbTablet {
     hid: Hid,
     /// USB controller used to notify controller to transfer data.
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
+}
+
+#[derive(DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
+struct UsbTabletDevState {
+    usb_state: UsbDevState,
+    hid_state: HidDevState,
 }
 
 impl UsbTablet {
@@ -251,11 +261,24 @@ impl UsbDevice for UsbTablet {
             tablet: tablet.clone(),
         }));
         register_pointer(&id, tablet_adapter);
+
+        MigrationManager::register_device_instance(
+            UsbTabletDevState::descriptor(),
+            tablet.clone(),
+            &id,
+        );
+
         Ok(tablet)
     }
 
     fn unrealize(&mut self) -> Result<()> {
         unregister_pointer(self.device_id());
+
+        MigrationManager::unregister_device_instance(
+            UsbTabletDevState::descriptor(),
+            self.device_id(),
+        );
+
         Ok(())
     }
 
@@ -303,6 +326,33 @@ impl UsbDevice for UsbTablet {
         self.cntlr.clone()
     }
 }
+
+impl StateTransfer for UsbTablet {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = UsbTabletDevState {
+            usb_state: self.base.get_usb_state(),
+            hid_state: self.hid.get_state()?,
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let usb_tablet_state: UsbTabletDevState =
+            serde_json::from_slice(state).with_context(|| "Failed to get usb tablet state")?;
+
+        self.base.set_usb_state(&usb_tablet_state.usb_state);
+        self.hid.set_state(&usb_tablet_state.hid_state)?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&UsbTabletDevState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for UsbTablet {}
 
 #[cfg(test)]
 mod tests {

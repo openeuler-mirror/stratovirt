@@ -17,8 +17,9 @@ pub mod camera;
 pub mod misc;
 #[cfg(feature = "usb_host")]
 pub mod usb;
-
 #[cfg(feature = "usb_camera_oh")]
+pub mod yuv;
+
 mod hwf_adapter;
 
 #[macro_export]

@@ -22,7 +22,6 @@ pub use gicv3::GICv3Access;
 pub use gicv3::GICv3Config;
 pub use gicv3::GICv3ItsAccess;
 pub use gicv3::GicRedistRegion;
-pub use state::{GICv3ItsState, GICv3State};
 
 use std::sync::Arc;
 

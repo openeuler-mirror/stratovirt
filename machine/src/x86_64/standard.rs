@@ -46,6 +46,7 @@ use machine_manager::config::{
     BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
 };
 use machine_manager::event;
+use machine_manager::machine::VmState;
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::{MigrationManager, MigrationStatus};
 #[cfg(feature = "gtk")]
@@ -153,10 +154,13 @@ impl StdMachine {
 
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
+        let vm_state = *locked_vm.base.vm_state.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.pause()
-                .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
+            if vm_state != VmState::Paused {
+                cpu.pause()
+                    .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
+            }
 
             cpu.hypervisor_cpu.reset_vcpu(cpu.clone())?;
         }
@@ -173,9 +177,11 @@ impl StdMachine {
             event!(Reset; reset_msg);
         }
 
-        for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.resume()
-                .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
+        if vm_state != VmState::Paused {
+            for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
+                cpu.resume()
+                    .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
+            }
         }
 
         Ok(())
@@ -510,7 +516,7 @@ impl MachineOps for StdMachine {
 
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
         let migrate = locked_vm.get_migrate_info();
-        let boot_config = if migrate.0 == MigrateMode::Unknown {
+        let boot_config = if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
             Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
         } else {
             None
@@ -530,7 +536,7 @@ impl MachineOps for StdMachine {
             &boot_config,
         )?);
 
-        if migrate.0 == MigrateMode::Unknown {
+        if migrate.mode == MigrateMode::Unknown {
             locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
         }
 
@@ -638,7 +644,7 @@ impl MachineOps for StdMachine {
                 sector_len,
                 4_u32,
                 1_u32,
-                config.readonly,
+                &config,
                 &self.base.sysbus,
                 region_base,
             )

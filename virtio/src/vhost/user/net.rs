@@ -215,7 +215,7 @@ impl VirtioDevice for Net {
         let mut call_fds_num = queue_num;
         let driver_features = self.base.driver_features;
         let has_control_queue =
-            (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (queue_num % 2 != 0);
+            (driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0) && (!queue_num.is_multiple_of(2));
         if has_control_queue {
             let ctrl_queue = queues[queue_num - 1].clone();
             let ctrl_queue_evt = queue_evts[queue_num - 1].clone();

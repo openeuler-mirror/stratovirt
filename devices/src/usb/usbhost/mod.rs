@@ -15,26 +15,34 @@ mod host_usblib;
 mod ohusb;
 
 use std::{
-    collections::LinkedList,
+    collections::{HashMap, LinkedList},
+    ffi::{c_char, CStr},
     os::unix::io::RawFd,
     rc::Rc,
-    sync::{Arc, Mutex, Weak},
+    slice,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, Weak,
+    },
     time::Duration,
 };
 
 #[cfg(not(all(target_arch = "aarch64", target_env = "ohos")))]
 use anyhow::Context as anyhowContext;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
-use libc::c_int;
+use libc::{c_int, c_void};
 use libusb1_sys::{
-    libusb_get_iso_packet_buffer_simple, libusb_set_iso_packet_lengths, libusb_transfer,
+    constants::LIBUSB_LOG_CB_GLOBAL, libusb_get_iso_packet_buffer_simple,
+    libusb_set_iso_packet_lengths, libusb_set_log_cb, libusb_transfer,
 };
 use log::{error, info, warn};
 use rusb::{
     constants::LIBUSB_CLASS_HUB, Context, Device, DeviceDescriptor, DeviceHandle, Direction, Error,
     TransferType, UsbContext,
 };
+
+use super::{USB_DT_ENDPOINT_COMPANION, USB_DT_SS_EP_COMP_SIZE};
 
 use crate::usb::{
     config::{
@@ -66,6 +74,7 @@ const NON_ISO_PACKETS_NUMS: c_int = 0;
 const HANDLE_TIMEOUT_MS: u64 = 2;
 const USB_HOST_BUFFER_LEN: usize = 12 * 1024;
 const USBHOST_ADDR_MAX: i64 = 127;
+const USBHOST_DEV_MEM_SIZE: usize = 1 << 20;
 
 #[derive(Default, Copy, Clone)]
 struct InterfaceStatus {
@@ -80,7 +89,8 @@ pub struct UsbHostRequest {
     pub packet: Arc<Mutex<UsbPacket>>,
     pub host_transfer: *mut libusb_transfer,
     /// Async data buffer.
-    pub buffer: Vec<u8>,
+    pub buffer: Option<Vec<u8>>,
+    pub dev_mem: Option<UsbDevMem>,
     pub is_control: bool,
 }
 
@@ -106,31 +116,52 @@ impl UsbHostRequest {
             requests,
             packet,
             host_transfer,
-            buffer: Vec::new(),
+            buffer: None,
+            dev_mem: None,
             is_control,
         }
     }
 
-    pub fn setup_data_buffer(&mut self) {
+    pub fn setup_data_buffer(&mut self, dev_mem: &Option<UsbDevMem>) {
         let mut locked_packet = self.packet.lock().unwrap();
         let size = locked_packet.get_iovecs_size();
-        self.buffer = vec![0; size as usize];
+        let data_buffer;
+
+        match dev_mem {
+            Some(mem) if !mem.used.load(Ordering::SeqCst) && mem.size as u64 >= size => {
+                mem.used.store(true, Ordering::SeqCst);
+                self.dev_mem.clone_from(dev_mem);
+                // SAFETY: The dev_mem's mem is obtained from libusb.
+                unsafe {
+                    data_buffer = slice::from_raw_parts_mut(mem.mem, size as usize);
+                }
+            }
+            _ => {
+                self.buffer = Some(vec![0; size as usize]);
+                data_buffer = self.buffer.as_mut().unwrap().as_mut();
+            }
+        }
+
         if locked_packet.pid as u8 == USB_TOKEN_OUT {
-            locked_packet.transfer_packet(self.buffer.as_mut(), size as usize);
+            locked_packet.transfer_packet(data_buffer, size as usize);
         }
     }
 
     pub fn setup_ctrl_buffer(&mut self, data_buf: &[u8], device_req: &UsbDeviceRequest) {
-        self.buffer = vec![0; (device_req.length + 8) as usize];
-        self.buffer[..8].copy_from_slice(device_req.as_bytes());
+        let mut buffer = vec![0; (device_req.length + 8) as usize];
+        buffer[..8].copy_from_slice(device_req.as_bytes());
         if self.packet.lock().unwrap().pid as u8 == USB_TOKEN_OUT {
-            self.buffer[8..].copy_from_slice(data_buf);
+            buffer[8..].copy_from_slice(data_buf);
         }
+        self.buffer = Some(buffer);
     }
 
     pub fn free(&mut self) {
         free_host_transfer(self.host_transfer);
-        self.buffer.clear();
+        self.buffer = None;
+        if let Some(dev_mem) = &self.dev_mem {
+            dev_mem.used.store(false, Ordering::SeqCst);
+        }
         self.host_transfer = std::ptr::null_mut();
     }
 
@@ -155,7 +186,7 @@ impl UsbHostRequest {
                         self.ctrl_transfer_packet(&mut locked_packet, 0);
                     }
                     drop(locked_packet);
-                    ops.lock().unwrap().submit_transfer();
+                    ops.lock().unwrap().transfer_complete_cb();
                 }
             }
         }
@@ -241,18 +272,18 @@ impl IsoTransfer {
     }
 
     pub fn copy_data(&mut self, packet: Arc<Mutex<UsbPacket>>, ep_max_packet_size: u32) -> bool {
-        let mut lockecd_packet = packet.lock().unwrap();
+        let mut locked_packet = packet.lock().unwrap();
         let mut size: usize;
-        if lockecd_packet.pid == u32::from(USB_TOKEN_OUT) {
-            size = lockecd_packet.get_iovecs_size() as usize;
+        if locked_packet.pid == u32::from(USB_TOKEN_OUT) {
+            size = locked_packet.get_iovecs_size() as usize;
             if size > ep_max_packet_size as usize {
                 size = ep_max_packet_size as usize;
             }
             set_iso_packet_length(self.host_transfer, self.packet, size as u32);
         } else {
             size = get_iso_packet_acl_length(self.host_transfer, self.packet) as usize;
-            if size > lockecd_packet.get_iovecs_size() as usize {
-                size = lockecd_packet.get_iovecs_size() as usize;
+            if size > locked_packet.get_iovecs_size() as usize {
+                size = locked_packet.get_iovecs_size() as usize;
             }
         }
         let buffer =
@@ -260,7 +291,7 @@ impl IsoTransfer {
             // and packet is guaranteed to be not out of boundary.
             unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
 
-        lockecd_packet.transfer_packet(
+        locked_packet.transfer_packet(
             // SAFETY: buffer is already allocated and size will not be exceed
             // the size of buffer.
             unsafe { std::slice::from_raw_parts_mut(buffer, size) },
@@ -281,18 +312,18 @@ unsafe impl Send for IsoTransfer {}
 pub struct IsoQueue {
     hostbus: u8,
     hostaddr: u8,
-    ep_number: u8,
+    ep: UsbEndpoint,
     unused: LinkedList<Arc<Mutex<IsoTransfer>>>,
     inflight: LinkedList<Arc<Mutex<IsoTransfer>>>,
     copy: LinkedList<Arc<Mutex<IsoTransfer>>>,
 }
 
 impl IsoQueue {
-    pub fn new(hostbus: u8, hostaddr: u8, ep_number: u8) -> Self {
+    pub fn new(hostbus: u8, hostaddr: u8, ep: UsbEndpoint) -> Self {
         Self {
             hostbus,
             hostaddr,
-            ep_number,
+            ep,
             unused: LinkedList::new(),
             inflight: LinkedList::new(),
             copy: LinkedList::new(),
@@ -384,6 +415,13 @@ pub struct UsbHostConfig {
     iso_urb_count: u32,
 }
 
+#[derive(Clone)]
+pub struct UsbDevMem {
+    mem: *mut u8,
+    size: usize,
+    used: Arc<AtomicBool>,
+}
+
 /// Abstract object of the host USB device.
 pub struct UsbHost {
     base: UsbDeviceBase,
@@ -394,6 +432,8 @@ pub struct UsbHost {
     libdev: Option<Device<Context>>,
     /// A handle to an open USB device.
     handle: Option<DeviceHandle<Context>>,
+    /// The direct DMA memory used for transfer.
+    devmem: Option<UsbDevMem>,
     /// Describes a device.
     ddesc: Option<DeviceDescriptor>,
     /// EventFd for libusb.
@@ -404,7 +444,7 @@ pub struct UsbHost {
     /// All pending asynchronous usb request.
     requests: Arc<Mutex<List<UsbHostRequest>>>,
     /// ISO queues corresponding to all endpoints.
-    iso_queues: Arc<Mutex<LinkedList<Arc<Mutex<IsoQueue>>>>>,
+    iso_queues: Arc<Mutex<HashMap<u8, Arc<Mutex<IsoQueue>>>>>,
     iso_urb_frames: u32,
     iso_urb_count: u32,
     #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
@@ -423,7 +463,15 @@ impl UsbHost {
         let oh_dev = OhUsbDev::new(config.hostbus, config.hostaddr)?;
 
         let mut context = Context::new()?;
-        context.set_log_level(rusb::LogLevel::None);
+        context.set_log_level(rusb::LogLevel::Error);
+        // SAFETY: all params for ffi have been checked.
+        unsafe {
+            libusb_set_log_cb(
+                context.as_raw(),
+                Some(libusb_log_callback),
+                LIBUSB_LOG_CB_GLOBAL,
+            );
+        }
         let iso_urb_frames = config.iso_urb_frames;
         let iso_urb_count = config.iso_urb_count;
         let id = config.id.clone();
@@ -432,13 +480,14 @@ impl UsbHost {
             context,
             libdev: None,
             handle: None,
+            devmem: None,
             ddesc: None,
             libevt: Vec::new(),
             ifs_num: 0,
             ifs: [InterfaceStatus::default(); USB_MAX_INTERFACES as usize],
             base: UsbDeviceBase::new(id, USB_HOST_BUFFER_LEN),
             requests: Arc::new(Mutex::new(List::new())),
-            iso_queues: Arc::new(Mutex::new(LinkedList::new())),
+            iso_queues: Arc::new(Mutex::new(HashMap::new())),
             iso_urb_frames,
             iso_urb_count,
             #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
@@ -611,12 +660,18 @@ impl UsbHost {
                 intf_desc.as_ref().unwrap().interface_number(),
                 intf_desc.as_ref().unwrap().setting_number(),
             );
+            // Avoid process crashes caused by non-standard device implementations.
+            // Skip calling endpoint_descriptors() on interface descriptors with an endpoint count of 0.
+            if intf_desc.as_ref().unwrap().num_endpoints() == 0 {
+                warn!("Encountered a weird device");
+                continue;
+            }
             for ep in intf_desc.as_ref().unwrap().endpoint_descriptors() {
                 let pid = match ep.direction() {
                     Direction::In => USB_TOKEN_IN,
                     Direction::Out => USB_TOKEN_OUT,
                 };
-                let ep_num = ep.number();
+                let ep_num = ep.address() & 0xf;
                 let ep_type = ep.transfer_type() as u8;
                 if ep_num == 0 {
                     trace::usb_host_parse_error(
@@ -648,6 +703,12 @@ impl UsbHost {
                 usb_ep.ep_type = ep_type;
                 usb_ep.ifnum = i as u8;
                 usb_ep.halted = false;
+
+                if let Some(extra) = ep.extra() {
+                    if extra[1] == USB_DT_ENDPOINT_COMPANION && extra[0] == USB_DT_SS_EP_COMP_SIZE {
+                        usb_ep.set_max_streams(extra[3]);
+                    }
+                }
             }
         }
     }
@@ -671,6 +732,22 @@ impl UsbHost {
             }
             speed => self.base.speed = speed - 1,
         };
+
+        match dev_mem_alloc(self.handle.as_mut().unwrap(), USBHOST_DEV_MEM_SIZE) {
+            Ok(mem) => {
+                self.devmem = Some(UsbDevMem {
+                    mem: mem.as_mut_ptr(),
+                    size: mem.len(),
+                    used: Arc::new(AtomicBool::new(false)),
+                });
+            }
+            Err(_) => {
+                warn!(
+                    "Failed to alloc dev mem for usbhost device {}",
+                    self.device_id()
+                );
+            }
+        }
 
         trace::usb_host_open_success(self.config.hostbus, self.config.hostaddr);
 
@@ -802,6 +879,20 @@ impl UsbHost {
 
         self.abort_host_transfers()
             .unwrap_or_else(|e| error!("Failed to abort all libusb transfers: {:?}", e));
+
+        if let Some(devmem) = &self.devmem {
+            // SAFETY: The dev_mem's mem is obtained from libusb.
+            let mem = unsafe { slice::from_raw_parts_mut(devmem.mem, devmem.size) };
+            if let Err(e) = dev_mem_free(self.handle.as_mut().unwrap(), mem) {
+                warn!(
+                    "Failed to free dev mem of usbhost device {}, {}",
+                    self.device_id(),
+                    e
+                );
+            }
+            self.devmem = None;
+        }
+
         self.release_interfaces();
         self.handle.as_mut().unwrap().reset().unwrap_or_else(|e| {
             error!(
@@ -815,11 +906,10 @@ impl UsbHost {
 
     fn clear_iso_queues(&mut self) {
         let mut locked_iso_queues = self.iso_queues.lock().unwrap();
-        for queue in locked_iso_queues.iter() {
-            (*queue).lock().unwrap().clear();
+        for queue in locked_iso_queues.values() {
+            queue.lock().unwrap().clear();
         }
         locked_iso_queues.clear();
-        drop(locked_iso_queues);
     }
 
     pub fn abort_host_transfers(&mut self) -> Result<()> {
@@ -843,58 +933,55 @@ impl UsbHost {
         }
     }
 
-    pub fn find_iso_queue(&self, ep_number: u8) -> Option<Arc<Mutex<IsoQueue>>> {
-        for queue in self.iso_queues.lock().unwrap().iter() {
-            if (*queue).lock().unwrap().ep_number == ep_number {
-                return Some(queue.clone());
-            }
-        }
-        None
+    fn find_iso_queue(&self, ep: &UsbEndpoint) -> Option<Arc<Mutex<IsoQueue>>> {
+        self.iso_queues.lock().unwrap().get(&ep.ep_number).cloned()
     }
 
-    pub fn handle_iso_data_in(&mut self, packet: Arc<Mutex<UsbPacket>>) {
+    fn create_iso_queue(&mut self, ep: &UsbEndpoint) -> Result<Arc<Mutex<IsoQueue>>> {
+        let iso_queue = Arc::new(Mutex::new(IsoQueue::new(
+            self.config.hostbus,
+            self.config.hostaddr,
+            *ep,
+        )));
+        let cloned_iso_queue = iso_queue.clone();
+        let id = self.device_id().to_string();
+        iso_queue.lock().unwrap().realize(
+            &id,
+            self.handle.as_mut().unwrap(),
+            self.iso_urb_count,
+            self.iso_urb_frames,
+            ep,
+            cloned_iso_queue,
+        )?;
+        self.iso_queues
+            .lock()
+            .unwrap()
+            .insert(ep.ep_number, iso_queue.clone());
+        Ok(iso_queue)
+    }
+
+    fn handle_iso_data_in(&mut self, packet: Arc<Mutex<UsbPacket>>) {
         let cloned_packet = packet.clone();
         let locked_packet = packet.lock().unwrap();
         let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
-        let iso_queue = if self.find_iso_queue(locked_packet.ep_number).is_some() {
-            self.find_iso_queue(locked_packet.ep_number).unwrap()
-        } else {
-            let iso_queue = Arc::new(Mutex::new(IsoQueue::new(
-                self.config.hostbus,
-                self.config.hostaddr,
-                locked_packet.ep_number,
-            )));
-            let cloned_iso_queue = iso_queue.clone();
-            let ep = self
-                .base
-                .get_endpoint(in_direction, locked_packet.ep_number);
-            let id = self.device_id().to_string();
-            match iso_queue.lock().unwrap().realize(
-                &id,
-                self.handle.as_mut().unwrap(),
-                self.iso_urb_count,
-                self.iso_urb_frames,
-                ep,
-                cloned_iso_queue,
-            ) {
-                Ok(()) => {
-                    self.iso_queues.lock().unwrap().push_back(iso_queue.clone());
-                }
-                Err(_e) => {
-                    return;
-                }
-            };
-            iso_queue
-        };
-
-        let mut locked_iso_queue = iso_queue.lock().unwrap();
-
-        let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
-        let ep = self
+        let ep = *self
             .base
             .get_endpoint(in_direction, locked_packet.ep_number);
         drop(locked_packet);
 
+        let iso_queue = if let Some(queue) = self.find_iso_queue(&ep) {
+            queue
+        } else {
+            match self.create_iso_queue(&ep) {
+                Ok(queue) => queue,
+                Err(e) => {
+                    warn!("Failed to create iso queue: {:?}", e);
+                    return;
+                }
+            }
+        };
+
+        let mut locked_iso_queue = iso_queue.lock().unwrap();
         let iso_transfer = locked_iso_queue.copy.front_mut();
         if iso_transfer.is_some()
             && iso_transfer
@@ -948,9 +1035,100 @@ impl UsbHost {
         }
     }
 
-    pub fn handle_iso_data_out(&mut self, _packet: Arc<Mutex<UsbPacket>>) {
-        // TODO
-        error!("USBHost device Unsupported Isochronous Transfer from guest to device.");
+    fn handle_iso_data_out(&mut self, packet: Arc<Mutex<UsbPacket>>) {
+        let cloned_packet = packet.clone();
+        let locked_packet = packet.lock().unwrap();
+        let in_direction = locked_packet.pid == u32::from(USB_TOKEN_IN);
+        let ep = *self
+            .base
+            .get_endpoint(in_direction, locked_packet.ep_number);
+        drop(locked_packet);
+
+        let iso_queue = if let Some(queue) = self.find_iso_queue(&ep) {
+            queue
+        } else {
+            match self.create_iso_queue(&ep) {
+                Ok(queue) => queue,
+                Err(e) => {
+                    warn!("Failed to create iso queue: {:?}", e);
+                    return;
+                }
+            }
+        };
+
+        let mut filled = 0;
+        let mut iso_transfer = None;
+        let mut locked_iso_queue = iso_queue.lock().unwrap();
+
+        for xfer in locked_iso_queue.copy.iter() {
+            if xfer.lock().unwrap().copy_completed {
+                filled += 1;
+            } else {
+                iso_transfer = Some(xfer.clone());
+                break;
+            }
+        }
+
+        if iso_transfer.is_none() {
+            match locked_iso_queue.unused.pop_front() {
+                Some(xfer) => {
+                    xfer.lock().unwrap().reset(ep.max_packet_size);
+                    iso_transfer = Some(xfer.clone());
+                    locked_iso_queue.copy.push_back(xfer);
+                }
+                None => return,
+            }
+        }
+
+        iso_transfer
+            .unwrap()
+            .lock()
+            .unwrap()
+            .copy_data(cloned_packet, ep.max_packet_size);
+
+        if locked_iso_queue.inflight.is_empty() && filled * 2 < self.iso_urb_count {
+            return;
+        }
+
+        loop {
+            if locked_iso_queue.copy.is_empty()
+                || !locked_iso_queue
+                    .copy
+                    .front()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .copy_completed
+            {
+                break;
+            }
+
+            let iso_transfer = locked_iso_queue.copy.pop_front().unwrap();
+            let host_transfer = iso_transfer.lock().unwrap().host_transfer;
+
+            match submit_host_transfer(host_transfer) {
+                Ok(()) => {
+                    if locked_iso_queue.inflight.is_empty() {
+                        trace::usb_host_iso_start(
+                            self.config.hostbus,
+                            self.config.hostaddr,
+                            ep.ep_number,
+                        );
+                    }
+                    locked_iso_queue.inflight.push_back(iso_transfer.clone());
+                }
+                Err(e) => {
+                    locked_iso_queue.unused.push_back(iso_transfer);
+                    if e == Error::NoDevice || e == Error::Io {
+                        // When the USB device reports the preceding error, XHCI notifies the guest
+                        // of the error through packet status. The guest initializes the device
+                        // again.
+                        packet.lock().unwrap().status = UsbPacketStatus::Stall;
+                    };
+                    break;
+                }
+            };
+        }
     }
 
     fn submit_host_transfer(
@@ -1041,8 +1219,77 @@ fn register_exit(usbhost: Arc<Mutex<UsbHost>>) {
     );
 }
 
+fn endpoints_to_numbers(endpoints: &[UsbEndpoint]) -> Vec<u8> {
+    let mut ep_numbers = Vec::new();
+
+    for ep in endpoints.iter() {
+        if ep.in_direction {
+            ep_numbers.push(ep.ep_number | USB_DIRECTION_DEVICE_TO_HOST);
+        } else {
+            ep_numbers.push(ep.ep_number);
+        }
+    }
+
+    ep_numbers
+}
+
 impl UsbDevice for UsbHost {
     gen_base_func!(usb_device_base, usb_device_base_mut, UsbDeviceBase, base);
+
+    fn alloc_streams(&mut self, endpoints: &[UsbEndpoint], streams_nr: u32) -> Result<()> {
+        if self.handle.is_none() {
+            bail!(
+                "USB Host {} device failed to allocate {} streams: device handle is empty.",
+                self.device_id(),
+                streams_nr,
+            );
+        }
+
+        let mut ep_nrs = endpoints_to_numbers(endpoints);
+
+        // SAFETY: Handle was checked to be Some and endpoints slice is guaranteed to outlive the
+        // libusb_alloc_streams function call.
+        let ret = unsafe {
+            libusb1_sys::libusb_alloc_streams(
+                self.handle.as_ref().unwrap().as_raw(),
+                streams_nr,
+                ep_nrs.as_mut_ptr(),
+                ep_nrs.len() as i32,
+            )
+        };
+
+        if ret != streams_nr as i32 {
+            bail!(
+                "USB Host {} device failed to allocate {} streams: libusb error.",
+                self.device_id(),
+                streams_nr
+            );
+        }
+
+        Ok(())
+    }
+
+    fn free_streams(&mut self, endpoints: &[UsbEndpoint]) {
+        if self.handle.is_none() {
+            error!(
+                "USB Host {} device failed to free streams: device handle is empty.",
+                self.device_id(),
+            );
+            return;
+        }
+
+        let mut ep_nrs = endpoints_to_numbers(endpoints);
+
+        // SAFETY: Handle was checked to be Some and endpoints slice is guaranteed to outlive the
+        // libusb_free_streams function call.
+        unsafe {
+            libusb1_sys::libusb_free_streams(
+                self.handle.as_ref().unwrap().as_raw(),
+                ep_nrs.as_mut_ptr(),
+                ep_nrs.len() as i32,
+            );
+        };
+    }
 
     fn realize(mut self) -> Result<Arc<Mutex<dyn UsbDevice>>> {
         info!("Open and init usbhost device: {:?}", self.config);
@@ -1065,7 +1312,23 @@ impl UsbDevice for UsbHost {
         Ok(())
     }
 
-    fn cancel_packet(&mut self, _packet: &Arc<Mutex<UsbPacket>>) {}
+    fn cancel_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>) {
+        let locked_requests = self.requests.lock().unwrap();
+        let req = locked_requests
+            .iter()
+            .find(|r| Arc::ptr_eq(&r.packet, packet));
+
+        if let Some(req) = req {
+            req.packet.lock().unwrap().is_async = false;
+            if let Err(e) = cancel_host_transfer(req.host_transfer) {
+                warn!(
+                    "Usb Host device {} failed to abort host transfers: {:?}",
+                    self.device_id(),
+                    e
+                );
+            }
+        }
+    }
 
     fn reset(&mut self) {
         info!("Usb Host device {} reset", self.device_id());
@@ -1176,6 +1439,7 @@ impl UsbDevice for UsbHost {
             host_transfer,
             self.handle.as_mut(),
             0,
+            0,
             &mut (*node) as *mut Node<UsbHostRequest>,
             TransferType::Control,
         );
@@ -1224,9 +1488,10 @@ impl UsbDevice for UsbHost {
             return;
         }
 
-        drop(locked_packet);
-        let mut ep_number = packet.lock().unwrap().ep_number;
+        let mut ep_number = locked_packet.ep_number;
+        let stream = locked_packet.stream;
         let host_transfer: *mut libusb_transfer;
+        drop(locked_packet);
 
         match self.base.get_endpoint(in_direction, ep_number).ep_type {
             USB_ENDPOINT_ATTR_BULK => {
@@ -1239,7 +1504,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     false,
                 )));
-                node.value.setup_data_buffer();
+                node.value.setup_data_buffer(&self.devmem);
 
                 if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
                     ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
@@ -1248,6 +1513,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     self.handle.as_mut(),
                     ep_number,
+                    stream,
                     &mut (*node) as *mut Node<UsbHostRequest>,
                     TransferType::Bulk,
                 );
@@ -1263,7 +1529,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     false,
                 )));
-                node.value.setup_data_buffer();
+                node.value.setup_data_buffer(&self.devmem);
 
                 if packet.lock().unwrap().pid as u8 != USB_TOKEN_OUT {
                     ep_number |= USB_DIRECTION_DEVICE_TO_HOST;
@@ -1272,6 +1538,7 @@ impl UsbDevice for UsbHost {
                     host_transfer,
                     self.handle.as_mut(),
                     ep_number,
+                    stream,
                     &mut (*node) as *mut Node<UsbHostRequest>,
                     TransferType::Interrupt,
                 );
@@ -1319,4 +1586,21 @@ pub fn check_device_valid(device: &Device<Context>) -> bool {
         return false;
     }
     true
+}
+
+extern "system" fn libusb_log_callback(
+    _ctx: *mut rusb::ffi::libusb_context,
+    _level: c_int,
+    str_ptr: *mut c_void,
+) {
+    if str_ptr.is_null() {
+        return;
+    }
+
+    // SAFETY: str_ptr is a valid ptr passed from libusb, and has been checked
+    let c_str = unsafe { CStr::from_ptr(str_ptr as *const c_char) };
+    let message = c_str.to_string_lossy();
+    let trimmed_message = message.trim();
+
+    error!("{trimmed_message}");
 }

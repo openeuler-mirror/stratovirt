@@ -120,7 +120,7 @@ impl Log for VmLogger {
         let pid = getpid().as_raw();
         let tid = gettid().as_raw();
         let formatmsg = format_args!(
-            "{:<5}: [{}][{}][{}: {}]:{}: {}\n",
+            "{:<5}: [{}][{}][{}:{}]:{}: {}\n",
             format_now(),
             pid,
             tid,

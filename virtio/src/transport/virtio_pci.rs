@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 #[cfg(feature = "virtio_gpu")]
@@ -40,19 +41,19 @@ use address_space::{
 };
 use devices::pci::config::{
     RegionType, BAR_SPACE_UNMAPPED, DEVICE_ID, MINIMUM_BAR_SIZE_FOR_MMIO, PCIE_CONFIG_SPACE_SIZE,
-    PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, STATUS,
-    STATUS_INTERRUPT, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+    PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT_QUMRANET, REG_SIZE, REVISION_ID, SUBSYSTEM_ID,
+    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use devices::pci::msix::MsixState;
 use devices::pci::{
     config::PciConfig, init_intx, init_msix, init_multifunction, le_write_u16, le_write_u32,
-    PciBus, PciDevBase, PciDevOps, PciError,
+    PciBus, PciDevBase, PciDevOps, PciError, PciState,
 };
 use devices::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 #[cfg(feature = "virtio_gpu")]
 use machine_manager::config::VIRTIO_GPU_ENABLE_BAR0_SIZE;
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::byte_code::ByteCode;
 use util::num_ops::{ranges_overlap, read_data_u32, write_data_u32};
 use util::{gen_base_func, offset_of};
@@ -282,18 +283,11 @@ impl VirtioPciNotifyCap {
 }
 
 /// The state of virtio-pci device.
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 struct VirtioPciState {
     dev_id: u16,
-    /// Max length of config_space is 4096.
-    config_space: [u8; 4096],
-    write_mask: [u8; 4096],
-    write_clear_mask: [u8; 4096],
-    last_cap_end: u16,
-    last_ext_cap_offset: u16,
-    last_ext_cap_end: u16,
+    pci_state: PciState,
     virtio_base: VirtioBaseState,
 }
 
@@ -478,7 +472,7 @@ impl VirtioPciDevice {
             let mut queue_num = locked_dev.queue_num();
             // No need to create call event for control queue.
             // It will be polled in StratoVirt when activating the device.
-            if locked_dev.has_control_queue() && queue_num % 2 != 0 {
+            if locked_dev.has_control_queue() && !queue_num.is_multiple_of(2) {
                 queue_num -= 1;
             }
             let call_evts = NotifyEventFds::new(queue_num);
@@ -985,7 +979,7 @@ impl VirtioPciDevice {
         for (queue_index, queue_mutex) in queues.iter().enumerate() {
             if locked_dev.has_control_queue()
                 && queue_index + 1 == queues.len()
-                && queues.len() % 2 != 0
+                && !queues.len().is_multiple_of(2)
             {
                 break;
             }
@@ -1276,44 +1270,28 @@ impl StateTransfer for VirtioPciDevice {
         };
 
         // Save virtio pci config state.
-        for idx in 0..self.base.config.config.len() {
-            // Clean interrupt status bit.
-            if (idx as u8) == STATUS {
-                state.config_space[idx] = self.base.config.config[idx] & (!STATUS_INTERRUPT);
-            } else {
-                state.config_space[idx] = self.base.config.config[idx];
-            }
-            state.write_mask[idx] = self.base.config.write_mask[idx];
-            state.write_clear_mask[idx] = self.base.config.write_clear_mask[idx];
-        }
-        state.last_cap_end = self.base.config.last_cap_end;
-        state.last_ext_cap_offset = self.base.config.last_ext_cap_offset;
-        state.last_ext_cap_end = self.base.config.last_ext_cap_end;
+        state.pci_state = self.base.get_pci_state();
 
         // Save virtio pci common config state.
         state.virtio_base = self.device.lock().unwrap().virtio_base().get_state();
 
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let pci_state = VirtioPciState::from_bytes(state)
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let virito_pci_state: VirtioPciState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("PCI_DEVICE"))?;
 
+        self.dev_id
+            .store(virito_pci_state.dev_id, Ordering::Release);
+
         // Set virtio pci config state.
-        self.dev_id.store(pci_state.dev_id, Ordering::Release);
-        let config_length = self.base.config.config.len();
-        self.base.config.config = pci_state.config_space[..config_length].to_vec();
-        self.base.config.write_mask = pci_state.write_mask[..config_length].to_vec();
-        self.base.config.write_clear_mask = pci_state.write_clear_mask[..config_length].to_vec();
-        self.base.config.last_cap_end = pci_state.last_cap_end;
-        self.base.config.last_ext_cap_end = pci_state.last_ext_cap_end;
-        self.base.config.last_ext_cap_offset = pci_state.last_ext_cap_offset;
+        self.base.set_pci_state(&virito_pci_state.pci_state);
 
         // Set virtio pci common config state.
         let mut locked_device = self.device.lock().unwrap();
         locked_device.virtio_base_mut().set_state(
-            &pci_state.virtio_base,
+            &virito_pci_state.virtio_base,
             self.sys_mem.clone(),
             self.interrupt_cb.clone().unwrap(),
         );

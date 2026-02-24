@@ -12,22 +12,40 @@
 
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
+use serde::{Deserialize, Serialize};
 
 use super::error::LegacyError;
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::AmlBuilder;
-use address_space::{AddressAttr, FileBackend, GuestAddress, HostMemMapping, Region};
+use address_space::{
+    register_ram_region, AddressAttr, FileBackend, GuestAddress, HostMemMapping, Region,
+};
+use machine_manager::config::DriveConfig;
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 use util::num_ops::{deposit_u32, extract_u32, read_data_u32, round_up, write_data_u32};
 use util::unix::host_page_size;
 
+#[derive(Copy, Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+struct PFlashState {
+    write_cycle: u32,
+    cmd: u8,
+    status: u8,
+    counter: u32,
+}
+
 pub struct PFlash {
     base: SysBusDevBase,
+    /// Use file name for id.
+    file_id: String,
     /// Has backend file or not.
     has_backend: bool,
     /// Length of block.
@@ -107,14 +125,14 @@ impl PFlash {
         block_len: u32,
         bank_width: u32,
         device_width: u32,
-        read_only: bool,
+        config: &DriveConfig,
         sysbus: &Arc<Mutex<SysBus>>,
         region_base: u64,
     ) -> Result<Self> {
         if block_len == 0 {
             bail!("PFlash: block-length is zero which is invalid.");
         }
-        let size = Self::flash_region_size(region_max_size, &backend, read_only)?;
+        let size = Self::flash_region_size(region_max_size, &backend, config.readonly)?;
         let blocks_per_device: u32 = size as u32 / block_len;
         if blocks_per_device == 0 {
             bail!("PFlash: num-blocks is zero which is invalid.");
@@ -192,7 +210,7 @@ impl PFlash {
         cfi_table[0x3f] = 0x01;
 
         let has_backend = backend.is_some();
-        let region_size = Self::flash_region_size(region_max_size, &backend, read_only)?;
+        let region_size = Self::flash_region_size(region_max_size, &backend, config.readonly)?;
         let host_mmap = Arc::new(HostMemMapping::new(
             GuestAddress(region_base),
             None,
@@ -200,11 +218,17 @@ impl PFlash {
             backend.map(FileBackend::new_common),
             false,
             true,
-            read_only,
+            config.readonly,
         )?);
 
+        let file_id = Path::new(config.path_on_host.as_str())
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pflash")
+            .to_string();
         let mut pflash = PFlash {
             base: SysBusDevBase::new(SysBusDevType::Flash),
+            file_id,
             has_backend,
             block_len,
             bank_width,
@@ -213,7 +237,7 @@ impl PFlash {
             device_width,
             max_device_width: device_width,
             write_cycle: 0,
-            read_only,
+            read_only: config.readonly,
             cmd: 0,
             status: 0x80,
             cfi_table,
@@ -714,9 +738,11 @@ impl Device for PFlash {
         MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let region_base = self.base.res.region_base;
         let host_mmap = self.host_mmap.clone();
+        let read_only = self.read_only;
+        let file_id = self.file_id.clone();
         let dev = Arc::new(Mutex::new(self));
         let region_ops = sysbus.build_region_ops(&dev);
-        let rom_region = Region::init_rom_device_region(host_mmap, region_ops, "PflashRom");
+        let rom_region = Region::init_rom_device_region(host_mmap.clone(), region_ops, "PflashRom");
         dev.lock().unwrap().rom = Some(rom_region.clone());
         sysbus
             .sys_mem
@@ -724,6 +750,15 @@ impl Device for PFlash {
             .add_subregion(rom_region, region_base)
             .with_context(|| "Failed to attach PFlash to system bus")?;
         sysbus.sysbus_attach_child(dev.clone())?;
+
+        if !read_only {
+            register_ram_region(file_id.clone(), host_mmap)?;
+        }
+        MigrationManager::register_device_instance(
+            PFlashState::descriptor(),
+            dev.clone(),
+            file_id.as_str(),
+        );
 
         Ok(dev)
     }
@@ -924,6 +959,36 @@ impl SysBusDevOps for PFlash {
     }
 }
 
+impl StateTransfer for PFlash {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = PFlashState {
+            write_cycle: self.write_cycle,
+            cmd: self.cmd,
+            status: self.status,
+            counter: self.counter,
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let pflash_state: PFlashState = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("PFlashState"))?;
+        self.write_cycle = pflash_state.write_cycle;
+        self.cmd = pflash_state.cmd;
+        self.status = pflash_state.status;
+        self.counter = pflash_state.counter;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&PFlashState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for PFlash {}
+
 impl AmlBuilder for PFlash {
     fn aml_bytes(&self) -> Vec<u8> {
         Vec::new()
@@ -937,11 +1002,11 @@ mod test {
 
     use super::*;
     use crate::sysbus::sysbus_init;
+    use address_space::unregister_ram_region;
 
     fn pflash_dev_init(file_name: &str) -> Arc<Mutex<PFlash>> {
         let sector_len: u32 = 0x40_000;
         let flash_size: u64 = 0x400_0000;
-        let read_only: bool = false;
         let flash_base: u64 = 0;
 
         let fd = File::create(file_name).unwrap();
@@ -956,8 +1021,11 @@ mod test {
                 .unwrap(),
         ));
         let sysbus = sysbus_init();
+        let mut config = DriveConfig::default();
+        config.path_on_host = file_name.to_string();
+        config.readonly = false;
         let pflash = PFlash::new(
-            flash_size, fd, sector_len, 4, 2, read_only, &sysbus, flash_base,
+            flash_size, fd, sector_len, 4, 2, &config, &sysbus, flash_base,
         )
         .unwrap();
         let dev = pflash.realize().unwrap();
@@ -992,6 +1060,7 @@ mod test {
         let cfi_data = vec![0x59, 0x00, 0x59, 0x00];
         assert_eq!(cfi_data, read_data);
 
+        unregister_ram_region(file_name.to_string());
         fs::remove_file(file_name).unwrap();
     }
 
@@ -1022,6 +1091,7 @@ mod test {
         let id_data = vec![0x00, 0x00, 0x00, 0x00];
         assert_eq!(read_data, id_data);
 
+        unregister_ram_region(file_name.to_string());
         fs::remove_file(file_name).unwrap();
     }
 
@@ -1043,6 +1113,7 @@ mod test {
         assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         assert_eq!(erase_data, read_data);
 
+        unregister_ram_region(file_name.to_string());
         fs::remove_file(file_name).unwrap();
     }
 
@@ -1074,6 +1145,7 @@ mod test {
         fd.read_exact(&mut file_buf).unwrap();
         assert_eq!(data, file_buf);
 
+        unregister_ram_region(file_name.to_string());
         fs::remove_file(file_name).unwrap();
     }
 
@@ -1096,6 +1168,32 @@ mod test {
         assert!(dev.lock().unwrap().read(&mut read_data, base, offset));
         assert_eq!(data, read_data);
 
+        unregister_ram_region(file_name.to_string());
+        fs::remove_file(file_name).unwrap();
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let file_name = "flash_vars_for_state_1.fd";
+        let dev = pflash_dev_init(file_name);
+        dev.lock().unwrap().write_cycle = 1;
+        dev.lock().unwrap().cmd = 2;
+        dev.lock().unwrap().status = 3;
+        dev.lock().unwrap().counter = 4;
+
+        let state = dev.lock().unwrap().get_state_vec().unwrap();
+        dev.lock().unwrap().write_cycle = 0;
+        dev.lock().unwrap().cmd = 0;
+        dev.lock().unwrap().status = 0;
+        dev.lock().unwrap().cmd = 0;
+
+        dev.lock().unwrap().set_state_mut(&state, 0u32).unwrap();
+        assert_eq!(dev.lock().unwrap().write_cycle, 1);
+        assert_eq!(dev.lock().unwrap().cmd, 2);
+        assert_eq!(dev.lock().unwrap().status, 3);
+        assert_eq!(dev.lock().unwrap().counter, 4);
+
+        unregister_ram_region(file_name.to_string());
         fs::remove_file(file_name).unwrap();
     }
 }

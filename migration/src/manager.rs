@@ -85,8 +85,9 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * `state` - The raw data which can be recovered to `DeviceState`.
-    fn restore_device(&self, state: &[u8]) -> Result<()> {
-        self.set_state(state)
+    /// * `version` - The restored device state `current_version` in vmstate file.
+    fn restore_device(&self, state: &[u8], version: u32) -> Result<()> {
+        self.set_state(state, version)
     }
 
     /// Restore device state from `[u8]` to mutable `Device`.
@@ -94,16 +95,17 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * `state` - The raw data which can be recovered to `DeviceState`.
-    fn restore_mut_device(&mut self, state: &[u8]) -> Result<()> {
-        self.set_state_mut(state)
+    /// * `version` - The restored device state `current_version` in vmstate file.
+    fn restore_mut_device(&mut self, state: &[u8], version: u32) -> Result<()> {
+        self.set_state_mut(state, version)
     }
 
-    /// Save memory state to `Write` trait.
+    /// Save memory state to file object.
     ///
     /// # Arguments
     ///
-    /// * _fd - The `Write` trait object to save memory data.
-    fn save_memory(&self, _fd: &mut dyn Write) -> Result<()> {
+    /// * _file - The file object object to save memory data.
+    fn save_memory(&self, _file: &mut File) -> Result<()> {
         Ok(())
     }
 
@@ -112,8 +114,8 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * _memory - The file of memory data, this parameter is optional.
-    /// * _state - device state from memory.
-    fn restore_memory(&self, _memory: Option<&File>, _state: &[u8]) -> Result<()> {
+    /// * _mapped - Whether to directly mmap the memory file as the backend.
+    fn restore_memory(&self, _memory: &mut File, _mapped: bool) -> Result<()> {
         Ok(())
     }
 
@@ -144,6 +146,35 @@ pub trait MigrationHook: StateTransfer {
     /// For some device, such as virtio-device or vhost-device, after restore
     /// device state, it need a step to wake up device to run.
     fn resume(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Save GPU state for local path of snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path for save GPU state.
+    fn save_gpu(&mut self, _path: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Restore GPU state for local path of snapshot.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path for restore GPU state.
+    fn restore_gpu(&mut self, _path: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Notify current migrate status to device. Allow the device do some special
+    /// operation.
+    ///
+    /// # Arguments
+    ///
+    /// * _save - current process doing save/restore operation.
+    /// * _status - current status in save/restore process.
+    fn notify_status(&self, _save: bool, _status: MigrationStatus) -> Result<()> {
         Ok(())
     }
 }
@@ -180,6 +211,8 @@ pub struct Vmm {
     pub cpus: HashMap<u64, Arc<dyn MigrationHook + Send + Sync>>,
     /// Trait to represent memory devices.
     pub memory: Option<Arc<dyn MigrationHook + Send + Sync>>,
+    /// Trait to represent ram/rom which are not managed in `vmm.memory`.
+    pub ram_list: Option<Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
     /// Trait to represent transports.
     pub transports: HashMap<u64, Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
     /// Trait to represent devices.
@@ -190,6 +223,8 @@ pub struct Vmm {
     #[cfg(target_arch = "x86_64")]
     /// Trait to represent kvm device.
     pub kvm: Option<Arc<dyn MigrationHook + Send + Sync>>,
+    /// Trait to represent GPU device.
+    pub gpus: HashMap<u64, Arc<Mutex<dyn MigrationHook + Send + Sync>>>,
     /// The vector of the object implementing MigrateOps trait.
     pub mgt_object: Option<Arc<Mutex<dyn MigrateOps>>>,
 }
@@ -298,6 +333,19 @@ impl MigrationManager {
         locked_vmm.memory = Some(memory);
     }
 
+    /// Register Ram Region instance to vmm.
+    ///
+    /// # Arguments
+    ///
+    /// * `memory` - The memory instance with MigrationHook trait.
+    pub fn register_ram_region_instance<T>(ram_list: Arc<Mutex<T>>)
+    where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
+        locked_vmm.ram_list = Some(ram_list);
+    }
+
     /// Register transport instance to vmm.
     ///
     /// # Arguments
@@ -372,6 +420,20 @@ impl MigrationManager {
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
         locked_vmm.gic_group.insert(translate_id(id), gic);
+    }
+
+    /// Register GPU instance to vmm.
+    ///
+    /// # Arguments
+    ///
+    /// * `gpu` - The gpu device instance with MigrationHook trait.
+    /// * `id` - The unique id for device.
+    pub fn register_gpu_instance<T>(gpu: Arc<Mutex<T>>, id: &str)
+    where
+        T: MigrationHook + Sync + Send + 'static,
+    {
+        let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
+        locked_vmm.gpus.insert(translate_id(id), gpu);
     }
 
     /// Register migration instance to vmm.

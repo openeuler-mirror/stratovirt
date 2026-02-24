@@ -10,6 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::os::unix::prelude::{AsRawFd, RawFd};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -34,12 +36,18 @@ use migration::{
 use migration_derive::{ByteCode, Desc};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
-use util::loop_context::{create_new_eventfd, EventNotifierHelper};
+use util::loop_context::{
+    create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
+    NotifierOperation,
+};
 use util::num_ops::read_data_u32;
+use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
-const PL011_FLAG_TXFE: u8 = 0x80;
-const PL011_FLAG_RXFF: u8 = 0x40;
-const PL011_FLAG_RXFE: u8 = 0x10;
+const PL011_FLAG_TXFE: u32 = 0x80;
+const PL011_FLAG_RXFF: u32 = 0x40;
+const PL011_FLAG_TXFF: u32 = 0x20;
+const PL011_FLAG_RXFE: u32 = 0x10;
 
 // Interrupt bits in UARTRIS, UARTMIS and UARTIMSC
 // Receive timeout interrupt bit
@@ -53,6 +61,7 @@ const INT_E: u32 = (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10);
 // nUARTRI/nUARTCTS/nUARTDCD/nUARTDSR modem interrupt bits, bits 0~3.
 const INT_MS: u32 = 1 | (1 << 1) | (1 << 2) | (1 << 3);
 
+// Keep in sync with PL011::id! Fifo size depends on revision and affects a lot of things.
 const PL011_FIFO_SIZE: usize = 16;
 
 /// Device state of PL011.
@@ -97,7 +106,7 @@ impl PL011State {
     fn new() -> Self {
         PL011State {
             rfifo: [0; PL011_FIFO_SIZE],
-            flags: u32::from(PL011_FLAG_TXFE | PL011_FLAG_RXFE),
+            flags: PL011_FLAG_TXFE | PL011_FLAG_RXFE,
             lcr: 0,
             rsr: 0,
             cr: 0x300,
@@ -125,6 +134,8 @@ pub struct PL011 {
     state: PL011State,
     /// Character device for redirection.
     chardev: Arc<Mutex<Chardev>>,
+    /// Event to register for tx-ready signal.
+    tx_ready_evt: Arc<EventFd>,
 }
 
 impl PL011 {
@@ -143,7 +154,8 @@ impl PL011 {
             },
             paused: false,
             state: PL011State::new(),
-            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev))),
+            chardev: Arc::new(Mutex::new(Chardev::new(cfg.chardev)?)),
+            tx_ready_evt: Arc::new(create_new_eventfd()?),
         };
         pl011
             .set_sys_resource(sysbus, region_base, region_size, "PL011")
@@ -163,6 +175,31 @@ impl PL011 {
         }
     }
 
+    fn register_tx_ready_handler(dev: Arc<Mutex<Self>>) {
+        let fd = dev.lock().unwrap().tx_ready_evt.as_raw_fd();
+
+        let tx_ready_handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
+
+            let mut locked_dev = dev.lock().unwrap();
+            // protect from spurious event
+            if !locked_dev.chardev.lock().unwrap().outbuf_is_full() {
+                locked_dev.state.int_level |= INT_TX;
+                locked_dev.interrupt();
+            }
+            None
+        });
+
+        let notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            fd,
+            None,
+            EventSet::IN,
+            vec![tx_ready_handler],
+        );
+        let _ = EventLoop::update_event(vec![notifier], None);
+    }
+
     fn unpause_rx(&mut self) {
         if self.paused {
             trace::pl011_unpause_rx();
@@ -174,7 +211,7 @@ impl PL011 {
 
 impl InputReceiver for PL011 {
     fn receive(&mut self, data: &[u8]) {
-        self.state.flags &= u32::from(!PL011_FLAG_RXFE);
+        self.state.flags &= !PL011_FLAG_RXFE;
         for val in data {
             let mut slot = (self.state.read_pos + self.state.read_count) as usize;
             if slot >= PL011_FIFO_SIZE {
@@ -187,7 +224,7 @@ impl InputReceiver for PL011 {
 
         // If in character-mode, or in FIFO-mode and FIFO is full, trigger the interrupt.
         if ((self.state.lcr & 0x10) == 0) || (self.state.read_count as usize == PL011_FIFO_SIZE) {
-            self.state.flags |= u32::from(PL011_FLAG_RXFF);
+            self.state.flags |= PL011_FLAG_RXFF;
             trace::pl011_receive_full();
         }
         if self.state.read_count >= self.state.read_trigger {
@@ -227,6 +264,9 @@ impl Device for PL011 {
             dev.clone(),
             PL011_SNAPSHOT_ID,
         );
+
+        Self::register_tx_ready_handler(dev.clone());
+
         let locked_dev = dev.lock().unwrap();
         locked_dev.chardev.lock().unwrap().set_receiver(&dev);
         EventLoop::update_event(
@@ -254,7 +294,7 @@ impl SysBusDevOps for PL011 {
                 // Data register.
                 self.unpause_rx();
 
-                self.state.flags &= !u32::from(PL011_FLAG_RXFF);
+                self.state.flags &= !PL011_FLAG_RXFF;
                 let c = self.state.rfifo[self.state.read_pos as usize];
 
                 if self.state.read_count > 0 {
@@ -265,7 +305,7 @@ impl SysBusDevOps for PL011 {
                     }
                 }
                 if self.state.read_count == 0 {
-                    self.state.flags |= u32::from(PL011_FLAG_RXFE);
+                    self.state.flags |= PL011_FLAG_RXFE;
                 }
                 if self.state.read_count == self.state.read_trigger - 1 {
                     self.state.int_level &= !INT_RX;
@@ -279,7 +319,15 @@ impl SysBusDevOps for PL011 {
                 ret = self.state.rsr;
             }
             6 => {
-                ret = self.state.flags;
+                let mut val = self.state.flags & !(PL011_FLAG_TXFE | PL011_FLAG_TXFF);
+
+                let free_space = self.chardev.lock().unwrap().outbuf_free_size();
+                if free_space >= PL011_FIFO_SIZE {
+                    val |= PL011_FLAG_TXFE;
+                } else if free_space == 0 {
+                    val |= PL011_FLAG_TXFF;
+                }
+                ret = val;
             }
             8 => {
                 ret = self.state.ilpr;
@@ -340,12 +388,22 @@ impl SysBusDevOps for PL011 {
         match offset >> 2 {
             0 => {
                 let ch = value as u8;
-                if let Err(e) = self.chardev.lock().unwrap().fill_outbuf(vec![ch], None) {
+                // We must not get here if outbuf is full.
+                // So, it is safe to drop the char in case of error.
+                let mut locked_chardev = self.chardev.lock().unwrap();
+                if let Err(e) = locked_chardev.fill_outbuf(vec![ch], None) {
                     error!("Failed to append pl011 data to outbuf of chardev, {:?}", e);
-                    return false;
+                    // Fallback to signal INT_TX always. Otherwise guest will stop using port forever.
                 }
-                self.state.int_level |= INT_TX;
-                self.interrupt();
+                // If outbuf is not full, signal INT_TX. Otherwise, enable listener callback.
+                if locked_chardev.outbuf_is_full() {
+                    self.state.int_level &= !INT_TX;
+                    locked_chardev.set_outbuf_listener(Some(self.tx_ready_evt.clone()));
+                } else {
+                    drop(locked_chardev);
+                    self.state.int_level |= INT_TX;
+                    self.interrupt();
+                }
             }
             1 => {
                 self.state.rsr = 0;
@@ -409,10 +467,11 @@ impl StateTransfer for PL011 {
         Ok(self.state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         self.state = *PL011State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL011"))?;
 
+        let _ = self.tx_ready_evt.write(1); // signal resume TX, if it was paused
         self.unpause_rx();
         Ok(())
     }
@@ -457,18 +516,24 @@ mod test {
     use crate::sysbus::sysbus_init;
     use machine_manager::config::{ChardevConfig, ChardevType};
 
-    #[test]
-    fn test_receive() {
+    fn create_serial() -> PL011 {
         let chardev_cfg = ChardevConfig {
             classtype: ChardevType::Stdio {
                 id: "chardev".to_string(),
             },
         };
+
         let config = SerialConfig {
             chardev: chardev_cfg,
         };
+
         let sysbus = sysbus_init();
-        let mut pl011_dev = PL011::new(config, &sysbus, 0x0900_0000, 0x0000_1000).unwrap();
+        PL011::new(config, &sysbus, 0x0900_0000, 0x0000_1000).unwrap()
+    }
+
+    #[test]
+    fn test_receive() {
+        let mut pl011_dev = create_serial();
         assert_eq!(pl011_dev.state.rfifo, [0; PL011_FIFO_SIZE]);
         assert_eq!(pl011_dev.state.flags, 0x90);
         assert_eq!(pl011_dev.state.lcr, 0);
@@ -491,6 +556,29 @@ mod test {
 
         let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
         pl011_dev.receive(&data);
+        assert_eq!(pl011_dev.state.read_count, data.len() as u32);
+        for i in 0..data.len() {
+            assert_eq!(pl011_dev.state.rfifo[i], u32::from(data[i]));
+        }
+        assert_eq!(pl011_dev.state.flags, 0xC0);
+        assert_eq!(pl011_dev.state.int_level, INT_RX);
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let mut pl011_dev = create_serial();
+        let data = vec![0x12, 0x34, 0x56, 0x78, 0x90];
+        pl011_dev.receive(&data);
+        let state = pl011_dev.get_state_vec().unwrap();
+
+        pl011_dev.state.read_count = 0;
+        for i in 0..data.len() {
+            pl011_dev.state.rfifo[i] = 0;
+        }
+        pl011_dev.state.flags = 0;
+        pl011_dev.state.int_level = 0;
+
+        pl011_dev.set_state_mut(&state, 0u32).unwrap();
         assert_eq!(pl011_dev.state.read_count, data.len() as u32);
         for i in 0..data.len() {
             assert_eq!(pl011_dev.state.rfifo[i], u32::from(data[i]));

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::pci::config::{CapId, RegionType, MINIMUM_BAR_SIZE_FOR_MMIO};
@@ -26,14 +27,9 @@ use crate::pci::{
 };
 use crate::{convert_bus_ref, MsiIrqManager, PCI_BUS};
 use address_space::{GuestAddress, Region, RegionOps};
-use migration::{
-    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
-};
-use migration_derive::{ByteCode, Desc};
-use util::{
-    byte_code::ByteCode,
-    num_ops::{ranges_overlap, round_up},
-};
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
+use util::num_ops::{ranges_overlap, round_up};
 
 pub const MSIX_TABLE_ENTRY_SIZE: u16 = 16;
 pub const MSIX_TABLE_SIZE_MAX: u16 = 0x7ff;
@@ -83,13 +79,11 @@ struct GsiMsiRoute {
 
 /// The state of msix device.
 #[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct MsixState {
-    /// MSI-X entries table. Max length of msix table is 2048(`MSIX_TABLE_SIZE_MAX`).
-    table: [u8; 2048],
-    /// MSI-X pba table. Max length of pba table is 256.
-    pba: [u8; 256],
+    table: Vec<u8>,
+    pba: Vec<u8>,
     func_masked: bool,
     enabled: bool,
     msix_cap_offset: u16,
@@ -477,30 +471,24 @@ impl Msix {
 
 impl StateTransfer for Msix {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let mut state = MsixState::default();
+        let state = MsixState {
+            table: self.table.clone(),
+            pba: self.pba.clone(),
+            func_masked: self.func_masked,
+            enabled: self.enabled,
+            msix_cap_offset: self.msix_cap_offset,
+            dev_id: self.dev_id.load(Ordering::Acquire),
+        };
 
-        for (idx, table_byte) in self.table.iter().enumerate() {
-            state.table[idx] = *table_byte;
-        }
-        for (idx, pba_byte) in self.pba.iter().enumerate() {
-            state.pba[idx] = *pba_byte;
-        }
-        state.func_masked = self.func_masked;
-        state.enabled = self.enabled;
-        state.msix_cap_offset = self.msix_cap_offset;
-        state.dev_id = self.dev_id.load(Ordering::Acquire);
-
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let msix_state = *MsixState::from_bytes(state)
-            .with_context(|| MigrationError::FromBytesError("MSIX_DEVICE"))?;
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let msix_state: MsixState = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("MsixState"))?;
 
-        let table_length = self.table.len();
-        let pba_length = self.pba.len();
-        self.table = msix_state.table[..table_length].to_vec();
-        self.pba = msix_state.pba[..pba_length].to_vec();
+        self.table = msix_state.table.clone();
+        self.pba = msix_state.pba.clone();
         self.func_masked = msix_state.func_masked;
         self.enabled = msix_state.enabled;
         self.msix_cap_offset = msix_state.msix_cap_offset;

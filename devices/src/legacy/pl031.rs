@@ -200,7 +200,7 @@ impl StateTransfer for PL031 {
         Ok(state.as_bytes().to_vec())
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         self.state = *PL031State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL031"))?;
 
@@ -263,5 +263,28 @@ mod test {
         let rtick = LittleEndian::read_u32(&data);
 
         assert!((rtick - wtick) <= WIGGLE);
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let sysbus = sysbus_init();
+        let mut rtc = PL031::new(&sysbus, 0x0901_0000, 0x0000_1000).unwrap();
+        // Set rtc time: 2025-11-13 02:04:56.
+        let wtick = mktime64(2025, 11, 13, 2, 4, 56) as u32;
+        let mut data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        let state = rtc.get_state_vec().unwrap();
+        // Set rtc time: 2013-11-13 02:04:56.
+        let wtick_tmp = mktime64(2013, 11, 13, 2, 4, 56) as u32;
+        data = [0; 4];
+        LittleEndian::write_u32(&mut data, wtick_tmp);
+        PL031::write(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+
+        rtc.set_state_mut(&state, 0u32).unwrap();
+        PL031::read(&mut rtc, &mut data, GuestAddress(0), RTC_LR);
+        let rtick = LittleEndian::read_u32(&data);
+        assert_eq!(wtick, rtick);
     }
 }

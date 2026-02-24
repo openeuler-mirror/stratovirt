@@ -41,7 +41,8 @@ use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, Trigger
 #[cfg(target_arch = "aarch64")]
 use devices::{GICVersion, GICv3, ICGICConfig, InterruptController, GIC_IRQ_INTERNAL};
 use machine_manager::machine::HypervisorType;
-use migration::{MigrateMemSlot, MigrateOps};
+use migration::{DeviceStateDesc, FieldDesc, MigrateMemSlot, MigrateOps};
+use migration_derive::{ByteCode, Desc};
 use util::test_helper::{add_msix_msg, IntxInfo, TEST_INTX_LIST};
 
 pub struct TestHypervisor {}
@@ -122,6 +123,9 @@ impl HypervisorOps for TestHypervisor {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Desc, ByteCode)]
+#[desc_version(compat_version = "0.1.0")]
 pub struct TestCpu {
     #[allow(unused)]
     id: u8,
@@ -150,13 +154,15 @@ impl CPUHypervisorOps for TestCpu {
     fn set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         #[cfg(target_arch = "aarch64")] _vcpu_config: &CPUFeatures,
     ) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
         {
             arch_cpu.lock().unwrap().mpidr = u64::from(self.id);
-            arch_cpu.lock().unwrap().set_core_reg(boot_config);
+            if let Some(cfg) = boot_config.as_ref() {
+                arch_cpu.lock().unwrap().set_core_reg(cfg);
+            }
         }
         Ok(())
     }
@@ -180,6 +186,22 @@ impl CPUHypervisorOps for TestCpu {
     fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
         cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
         Ok(())
+    }
+
+    fn get_state_vec(&self, _arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn set_state(&self, _state: &[u8], _arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        0
+    }
+
+    fn get_device_desc(&self) -> DeviceStateDesc {
+        TestCpu::descriptor()
     }
 
     fn vcpu_exec(
@@ -359,12 +381,6 @@ impl LineIrqManager for TestInterruptManager {
 impl MsiIrqManager for TestInterruptManager {
     fn irqfd_enable(&self) -> bool {
         false
-    }
-
-    fn allocate_irq(&self, _vector: MsiVector) -> Result<u32> {
-        Err(anyhow!(
-            "Failed to allocate irq, mst doesn't support irq routing feature."
-        ))
     }
 
     fn release_irq(&self, _irq: u32) -> Result<()> {

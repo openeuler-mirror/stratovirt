@@ -174,8 +174,11 @@ impl AudioInterface for AlsaStreamData {
         // Make sure audio read does not bypass chunk_idx read.
         fence(Ordering::Acquire);
 
-        // SAFETY: audio_base is the shared memory. It already verifies the validity
-        // of the address range during the header check.
+        // SAFETY:
+        // 1. `audio_base` points to a valid and properly aligned shared memory region.
+        // 2. `audio_size` was validated during header parsing and checking.
+        // 3. Acquire fence ensures that all previous writes to shared memory are visible.
+        // 4. No other thread mutably accesses this memory concurrently.
         let data = unsafe {
             std::slice::from_raw_parts(
                 recv_data.audio_base as *const u8,
@@ -224,8 +227,11 @@ impl AudioInterface for AlsaStreamData {
         // Make sure audio read does not bypass chunk_idx read.
         fence(Ordering::Acquire);
 
-        // SAFETY: audio_base is the shared memory. It already verifies the validity
-        // of the address range during the header check.
+        // SAFETY:
+        // 1. `audio_base` points to a valid and properly aligned shared memory region.
+        // 2. `audio_size` was validated during header parsing and checking.
+        // 3. Acquire fence ensures that all previous writes to shared memory are visible.
+        // 4. No other thread mutably accesses this memory concurrently.
         let data = unsafe {
             std::slice::from_raw_parts_mut(
                 recv_data.audio_base as *mut u8,

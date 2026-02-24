@@ -135,7 +135,7 @@ impl MachineOps for LightMachine {
         let mut locked_vm = vm.lock().unwrap();
 
         trace::sysbus(&locked_vm.base.sysbus.lock().unwrap());
-        trace::vm_state(&locked_vm.base.vm_state);
+        trace::vm_state(locked_vm.get_vm_state());
 
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
@@ -154,7 +154,7 @@ impl MachineOps for LightMachine {
         )?;
 
         let migrate_info = locked_vm.get_migrate_info();
-        let boot_config = if migrate_info.0 == MigrateMode::Unknown {
+        let boot_config = if migrate_info.mode == MigrateMode::Unknown {
             Some(locked_vm.load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?)
         } else {
             None

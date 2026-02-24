@@ -18,11 +18,13 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::yield_now;
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use clap::Parser;
-use log::{error, warn};
+use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
@@ -47,10 +49,10 @@ use machine_manager::config::{
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use migration::{
-    migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
+    migration::Migratable, DeviceStateDesc, MigrationHook, MigrationManager, MigrationStatus,
     StateTransfer,
 };
-use migration_derive::{ByteCode, Desc};
+use migration_derive::DescSerde;
 use util::aio::{
     iov_from_buf_direct, iov_to_buf_direct, raw_datasync, Aio, AioCb, AioEngine, AioReqResult,
     Iovec, OpCode, WriteZeroesState,
@@ -527,7 +529,7 @@ impl Request {
     fn io_range_valid(&self, disk_sectors: u64, devid: &str) -> bool {
         match self.out_header.request_type {
             VIRTIO_BLK_T_IN | VIRTIO_BLK_T_OUT => {
-                if self.data_len % SECTOR_SIZE != 0 {
+                if !self.data_len.is_multiple_of(SECTOR_SIZE) {
                     error!("Failed to process block request with size not aligned to 512B");
                     return false;
                 }
@@ -594,6 +596,10 @@ struct BlockIoHandler {
     discard: bool,
     /// The write-zeroes state.
     write_zeroes: WriteZeroesState,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
 }
 
 impl BlockIoHandler {
@@ -649,6 +655,10 @@ impl BlockIoHandler {
         let mut done = false;
 
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let mut queue = self.queue.lock().unwrap();
             let mut elem = queue
                 .vring
@@ -751,6 +761,10 @@ impl BlockIoHandler {
                 break;
             }
 
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             self.queue
                 .lock()
                 .unwrap()
@@ -779,6 +793,7 @@ impl BlockIoHandler {
 
     fn process_queue(&mut self) -> Result<bool> {
         trace::virtio_receive_request("Block".to_string(), "to IO".to_string());
+        self.processing_queue.store(true, Ordering::SeqCst);
         let result = self.process_queue_suppress_notify();
         if result.is_err() {
             report_virtio_error(
@@ -787,6 +802,7 @@ impl BlockIoHandler {
                 &self.device_broken,
             );
         }
+        self.processing_queue.store(false, Ordering::SeqCst);
         result
     }
 
@@ -901,7 +917,9 @@ impl EventNotifierHelper for BlockIoHandler {
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut h_lock = h_clone.lock().unwrap();
-            if h_lock.device_broken.load(Ordering::SeqCst) {
+            if h_lock.device_broken.load(Ordering::SeqCst)
+                || h_lock.migrating.load(Ordering::SeqCst)
+            {
                 return None;
             }
             if let Err(ref e) = h_lock.process_queue() {
@@ -912,7 +930,9 @@ impl EventNotifierHelper for BlockIoHandler {
         let h_clone = handler.clone();
         let handler_iopoll: Box<NotifierCallback> = Box::new(move |_, _fd: RawFd| {
             let mut h_lock = h_clone.lock().unwrap();
-            if h_lock.device_broken.load(Ordering::SeqCst) {
+            if h_lock.device_broken.load(Ordering::SeqCst)
+                || h_lock.migrating.load(Ordering::SeqCst)
+            {
                 return None;
             }
             match h_lock.process_queue() {
@@ -941,7 +961,9 @@ impl EventNotifierHelper for BlockIoHandler {
             let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
                 read_fd(fd);
                 let mut h_lock = h_clone.lock().unwrap();
-                if h_lock.device_broken.load(Ordering::SeqCst) {
+                if h_lock.device_broken.load(Ordering::SeqCst)
+                    || h_lock.migrating.load(Ordering::SeqCst)
+                {
                     return None;
                 }
                 if let Some(lb) = h_lock.leak_bucket.as_mut() {
@@ -960,7 +982,7 @@ impl EventNotifierHelper for BlockIoHandler {
 }
 
 #[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 struct VirtioBlkGeometry {
     cylinders: u16,
     heads: u8,
@@ -970,7 +992,7 @@ struct VirtioBlkGeometry {
 impl ByteCode for VirtioBlkGeometry {}
 
 #[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VirtioBlkConfig {
     /// The capacity in 512 byte sectors.
     capacity: u64,
@@ -1015,9 +1037,8 @@ pub struct VirtioBlkConfig {
 impl ByteCode for VirtioBlkConfig {}
 
 /// State of block device.
-#[repr(C)]
-#[derive(Clone, Copy, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct BlockState {
     /// Bitmask of features supported by the backend.
     pub device_features: u64,
@@ -1056,6 +1077,12 @@ pub struct Block {
     update_evts: Vec<Arc<EventFd>>,
     /// Drive backend files.
     drive_files: Arc<Mutex<HashMap<String, DriveFile>>>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
+    /// The queue notify events for handling IO.
+    queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
 }
 
 impl Block {
@@ -1073,6 +1100,9 @@ impl Block {
             req_align: 1,
             buf_align: 1,
             drive_files,
+            migrating: Arc::new(AtomicBool::new(false)),
+            processing_queue: Arc::new(AtomicBool::new(false)),
+            queue_evts: Arc::new(Mutex::new(Vec::new())),
             ..Default::default()
         }
     }
@@ -1208,8 +1238,9 @@ impl VirtioDevice for Block {
 
     fn unrealize(&mut self) -> Result<()> {
         MigrationManager::unregister_device_instance(BlockState::descriptor(), &self.blk_cfg.id);
-        let drive_files = self.drive_files.lock().unwrap();
-        let drive_id = VmConfig::get_drive_id(&drive_files, &self.drive_cfg.path_on_host)?;
+        let drive_files = self.drive_files.clone();
+        let drive_id =
+            VmConfig::get_drive_id(&drive_files.lock().unwrap(), &self.drive_cfg.path_on_host)?;
         remove_block_backend(&drive_id);
         Ok(())
     }
@@ -1244,6 +1275,12 @@ impl VirtioDevice for Block {
             if !queue.lock().unwrap().is_enabled() {
                 continue;
             }
+
+            self.queue_evts
+                .lock()
+                .unwrap()
+                .push(queue_evts[index].clone());
+
             let (sender, receiver) = channel();
             let update_evt = Arc::new(create_new_eventfd()?);
             let driver_features = self.base.driver_features;
@@ -1270,6 +1307,8 @@ impl VirtioDevice for Block {
                 },
                 discard: self.drive_cfg.discard,
                 write_zeroes: self.drive_cfg.write_zeroes,
+                migrating: self.migrating.clone(),
+                processing_queue: self.processing_queue.clone(),
             };
 
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -1414,11 +1453,11 @@ impl StateTransfer for Block {
             config_space: self.config_space,
             broken: self.base.broken.load(Ordering::SeqCst),
         };
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let state = BlockState::from_bytes(state)
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let state: BlockState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("BLOCK"))?;
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;
@@ -1432,7 +1471,42 @@ impl StateTransfer for Block {
     }
 }
 
-impl MigrationHook for Block {}
+impl MigrationHook for Block {
+    fn resume(&mut self) -> Result<()> {
+        let locked_evts = self.queue_evts.lock().unwrap();
+        for evt in locked_evts.iter() {
+            if let Err(e) = evt.write(1) {
+                error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
+            }
+        }
+        Ok(())
+    }
+
+    fn notify_status(&self, save: bool, status: MigrationStatus) -> Result<()> {
+        if save {
+            match status {
+                MigrationStatus::Active => {
+                    self.migrating.store(true, Ordering::SeqCst);
+                    if self.block_backend.is_none() {
+                        return Ok(());
+                    }
+                    let backend = self.block_backend.as_ref().unwrap();
+                    let incomplete = backend.lock().unwrap().get_inflight();
+                    let id = self.blk_cfg.id.clone();
+                    info!("Drain the inflight IO for block device {}", id);
+                    while incomplete.load(Ordering::SeqCst) != 0
+                        || self.processing_queue.load(Ordering::SeqCst)
+                    {
+                        yield_now();
+                    }
+                }
+                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1780,5 +1854,31 @@ mod tests {
             }
         }
         TempCleaner::clean();
+    }
+
+    // Test get/set device state.
+    #[test]
+    fn test_state_transfer() {
+        let mut block = init_default_block();
+        block.config_space.blk_size = 512;
+        block.realize().unwrap();
+
+        let device_features = block.base.device_features;
+        let driver_features = block.base.driver_features;
+        let broken = block.base.broken.load(Ordering::SeqCst);
+
+        // Get and modify the device state.
+        let init_state = block.get_state_vec().unwrap();
+        block.base.device_features = 0;
+        block.base.driver_features = 0;
+        block.base.broken.store(true, Ordering::SeqCst);
+
+        // Set and check the device state.
+        block.set_state_mut(&init_state, 0u32).unwrap();
+        assert_eq!(device_features, block.base.device_features);
+        assert_eq!(driver_features, block.base.driver_features);
+        assert_eq!(broken, block.base.broken.load(Ordering::SeqCst));
+        let blk_size = block.config_space.blk_size;
+        assert_eq!(blk_size, 512);
     }
 }

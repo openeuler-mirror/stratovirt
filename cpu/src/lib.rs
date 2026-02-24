@@ -76,6 +76,7 @@ use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActio
 use machine_manager::event;
 use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
+use migration::DeviceStateDesc;
 
 // SIGRTMIN = 34 (GNU, in MUSL is 35) and SIGRTMAX = 64  in linux, VCPU signal
 // number should be assigned to SIGRTMIN + n, (n = 0...30).
@@ -162,7 +163,7 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         #[cfg(target_arch = "aarch64")] vcpu_config: &CPUFeatures,
     ) -> Result<()>;
 
@@ -175,6 +176,14 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn put_register(&self, cpu: Arc<CPU>) -> Result<()>;
 
     fn reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()>;
+
+    fn get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>>;
+
+    fn set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()>;
+
+    fn get_device_alias(&self) -> u64;
+
+    fn get_device_desc(&self) -> DeviceStateDesc;
 
     fn vcpu_exec(
         &self,
@@ -196,6 +205,13 @@ pub trait CPUHypervisorOps: Send + Sync {
         state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
         pause_signal: Arc<AtomicBool>,
     ) -> Result<()>;
+
+    fn reset_vcpu_lifecycle_state(
+        &self,
+        _state: &(Mutex<CpuLifecycleState>, Condvar),
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn destroy(
         &self,
@@ -326,16 +342,14 @@ impl CPUInterface for CPU {
             ))));
         }
 
-        if let Some(boot) = boot {
-            self.hypervisor_cpu
-                .set_boot_config(
-                    self.arch_cpu.clone(),
-                    boot,
-                    #[cfg(target_arch = "aarch64")]
-                    config,
-                )
-                .with_context(|| "Failed to realize arch cpu")?;
-        }
+        self.hypervisor_cpu
+            .set_boot_config(
+                self.arch_cpu.clone(),
+                boot,
+                #[cfg(target_arch = "aarch64")]
+                config,
+            )
+            .with_context(|| "Failed to realize arch cpu")?;
 
         self.arch_cpu
             .lock()
@@ -447,8 +461,8 @@ impl CPUInterface for CPU {
 
     fn guest_reset(&self) -> Result<()> {
         if let Some(vm) = self.vm.upgrade() {
-            let (cpu_state, _) = &*self.state;
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
+            self.hypervisor_cpu
+                .reset_vcpu_lifecycle_state(self.state())?;
             vm.lock().unwrap().reset();
         } else {
             return Err(anyhow!(CpuError::NoMachineInterface));

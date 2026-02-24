@@ -72,7 +72,7 @@ impl StateTransfer for KvmDevice {
         .to_vec())
     }
 
-    fn set_state(&self, state: &[u8]) -> Result<()> {
+    fn set_state(&self, state: &[u8], _version: u32) -> Result<()> {
         let vm_fd = self.vm_fd.clone();
 
         let kvm_state = KvmDeviceState::from_bytes(state)

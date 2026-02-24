@@ -55,18 +55,18 @@ pub const OH_AUDIO_STREAM_ENCODING_TYPE_AUDIOSTREAM_ENCODING_TYPE_RAW: OhAudioSt
 /// @since 10
 pub type OhAudioStreamEncodingType = ::std::os::raw::c_uint;
 
+pub type OhAudioScene = ::std::os::raw::c_int;
+
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_UNKNOWN: OhAudioStreamUsage = 0;
-#[allow(unused)]
-pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_MEDIA: OhAudioStreamUsage = 1;
-#[allow(unused)]
+pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_MUSIC: OhAudioStreamUsage = 1;
 pub const OH_AUDIO_STREAM_USAGE_AUDIOSTREAM_USAGE_COMMUNICATION: OhAudioStreamUsage = 2;
 /// Define the audio stream usage.
 /// Audio stream usage is used to describe what work scenario
 /// the current stream is used for.
 ///
 /// @since 10
-pub type OhAudioStreamUsage = ::std::os::raw::c_uint;
+pub type OhAudioStreamUsage = ::std::os::raw::c_int;
 
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_CONTENT_AUDIOSTREAM_CONTENT_TYPE_UNKNOWN: OhAudioStreamContent = 0;
@@ -118,12 +118,10 @@ pub type OhAudioStreamState = ::std::os::raw::c_int;
 
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_INVALID: OHAudioStreamSourceType = -1;
-#[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_MIC: OHAudioStreamSourceType = 0;
 #[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_RECOGNITION:
     OHAudioStreamSourceType = 1;
-#[allow(unused)]
 pub const OH_AUDIO_STREAM_SOURCE_TYPE_AUDIOSTREAM_SOURCE_TYPE_VOICE_COMMUNICATION:
     OHAudioStreamSourceType = 7;
 /// Defines the audio source type.
@@ -167,6 +165,16 @@ pub struct OH_AudioStreamBuilderStruct {
 /// @since 10
 pub type OhAudioStreamBuilder = OH_AudioStreamBuilderStruct;
 
+/// Defines the audio effect mode.
+///
+/// @since 12
+pub type OhAudioStreamAudioEffectMode = ::std::os::raw::c_int;
+
+#[allow(unused)]
+pub const EFFECT_NONE: OhAudioStreamAudioEffectMode = 0;
+#[allow(unused)]
+pub const EFFECT_DEFAULT: OhAudioStreamAudioEffectMode = 1;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct OH_AudioRendererStruct {
@@ -191,6 +199,41 @@ pub type OhAudioCapturer = OH_AudioCapturerStruct;
 
 type PlaceHolderFn = std::option::Option<unsafe extern "C" fn() -> i32>;
 
+/// Define the result of the function execution.
+///
+/// @since 12
+pub type OHAudioCommonResult = ::std::os::raw::c_uint;
+
+/// Declare the audio session manager.
+/// The handle of audio session manager is used for audio session related functions.
+///
+/// @since 12
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct OH_AudioSessionManager {
+    _unused: [u8; 0],
+}
+pub type OHAudioSessionManager = OH_AudioSessionManager;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct OHAudioSessionStrategy {
+    pub mode: OHAudioSessionConcurrencyMode,
+}
+
+#[allow(unused)]
+pub const CONCURRENCY_DEFAULT: OHAudioSessionConcurrencyMode = 0;
+pub const CONCURRENCY_MIX_WITH_OTHERS: OHAudioSessionConcurrencyMode = 1;
+#[allow(unused)]
+pub const CONCURRENCY_DUCK_OTHERS: OHAudioSessionConcurrencyMode = 2;
+#[allow(unused)]
+pub const CONCURRENCY_PAUSE_OTHERS: OHAudioSessionConcurrencyMode = 3;
+
+/// Declare the audio concurrency modes.
+///
+/// @since 12
+pub type OHAudioSessionConcurrencyMode = ::std::os::raw::c_int;
+
 /// Declaring the callback struct for renderer stream.
 ///
 /// @since 10
@@ -202,7 +245,7 @@ pub struct OhAudioRendererCallbacks {
     pub oh_audio_renderer_on_write_data: ::std::option::Option<
         extern "C" fn(
             renderer: *mut OhAudioRenderer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             buffer: *mut ::std::os::raw::c_void,
             length: i32,
         ) -> i32,
@@ -211,7 +254,7 @@ pub struct OhAudioRendererCallbacks {
     pub oh_audio_renderer_on_interrupt_event: ::std::option::Option<
         extern "C" fn(
             renderer: *mut OhAudioRenderer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             source_type: OHAudioInterruptSourceType,
             hint: OHAudioInterruptHint,
         ) -> i32,
@@ -230,7 +273,7 @@ pub struct OhAudioCapturerCallbacks {
     pub oh_audio_capturer_on_read_data: ::std::option::Option<
         extern "C" fn(
             capturer: *mut OhAudioCapturer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             buffer: *mut ::std::os::raw::c_void,
             length: i32,
         ) -> i32,
@@ -239,7 +282,7 @@ pub struct OhAudioCapturerCallbacks {
     pub oh_audio_capturer_on_interrupt_event: ::std::option::Option<
         extern "C" fn(
             capturer: *mut OhAudioCapturer,
-            userData: *mut ::std::os::raw::c_void,
+            user_data: *mut ::std::os::raw::c_void,
             source_type: OHAudioInterruptSourceType,
             hint: OHAudioInterruptHint,
         ) -> i32,
@@ -263,6 +306,10 @@ extern "C" {
         renderer: *mut OhAudioRenderer,
         rate: *mut i32,
     ) -> OhAudioStreamResult;
+    pub fn OH_AudioRenderer_SetEffectMode(
+        renderer: *mut OhAudioRenderer,
+        effectMode: OhAudioStreamAudioEffectMode,
+    ) -> OhAudioStreamResult;
     pub fn OH_AudioRenderer_GetStreamId(
         renderer: *mut OhAudioRenderer,
         streamId: *mut u32,
@@ -282,7 +329,6 @@ extern "C" {
     pub fn OH_AudioRenderer_GetRendererInfo(
         renderer: *mut OhAudioRenderer,
         usage: *mut OhAudioStreamUsage,
-        content: *mut OhAudioStreamContent,
     ) -> OhAudioStreamResult;
     pub fn OH_AudioRenderer_GetEncodingType(
         renderer: *mut OhAudioRenderer,
@@ -338,7 +384,6 @@ extern "C" {
     pub fn OH_AudioStreamBuilder_SetRendererInfo(
         builder: *mut OhAudioStreamBuilder,
         usage: OhAudioStreamUsage,
-        content: OhAudioStreamContent,
     ) -> OhAudioStreamResult;
     pub fn OH_AudioStreamBuilder_SetCapturerInfo(
         builder: *mut OhAudioStreamBuilder,
@@ -347,7 +392,7 @@ extern "C" {
     pub fn OH_AudioStreamBuilder_SetRendererCallback(
         builder: *mut OhAudioStreamBuilder,
         callbacks: OhAudioRendererCallbacks,
-        userData: *mut ::std::os::raw::c_void,
+        user_data: *mut ::std::os::raw::c_void,
     ) -> OhAudioStreamResult;
     pub fn OH_AudioStreamBuilder_SetCapturerCallback(
         builder: *mut OhAudioStreamBuilder,
@@ -365,4 +410,14 @@ extern "C" {
     pub fn OH_AudioCapturer_Start(capturer: *mut OhAudioCapturer) -> OhAudioStreamResult;
     pub fn OH_AudioCapturer_Release(capturer: *mut OhAudioCapturer) -> OhAudioStreamResult;
     pub fn OH_AudioCapturer_Stop(capturer: *mut OhAudioCapturer) -> OhAudioStreamResult;
+    pub fn OH_AudioManager_GetAudioSessionManager(
+        audioSessionManager: *mut *mut OHAudioSessionManager,
+    ) -> OHAudioCommonResult;
+    pub fn OH_AudioSessionManager_ActivateAudioSession(
+        audioSessionManager: *mut OHAudioSessionManager,
+        strategy: *const OHAudioSessionStrategy,
+    ) -> OHAudioCommonResult;
+    pub fn OH_AudioSessionManager_DeactivateAudioSession(
+        audioSessionManager: *mut OHAudioSessionManager,
+    ) -> OHAudioCommonResult;
 }

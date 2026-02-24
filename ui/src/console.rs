@@ -13,6 +13,7 @@
 use std::{
     cmp,
     mem::size_of,
+    ops::{Add, Sub},
     ptr,
     sync::{Arc, Mutex, Weak},
     time::Duration,
@@ -242,6 +243,63 @@ impl DisplayConsole {
     }
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rotation {
+    Rotation0,
+    Rotation90,
+    Rotation180,
+    Rotation270,
+}
+
+impl Rotation {
+    /// Lookup table for all rotation states in 90-degree steps.
+    const ROTATIONS: [Rotation; 4] = [
+        Rotation::Rotation0,
+        Rotation::Rotation90,
+        Rotation::Rotation180,
+        Rotation::Rotation270,
+    ];
+}
+
+impl TryFrom<u32> for Rotation {
+    type Error = &'static str;
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Rotation::Rotation0),
+            1 => Ok(Rotation::Rotation90),
+            2 => Ok(Rotation::Rotation180),
+            3 => Ok(Rotation::Rotation270),
+            _ => Err("invalid rotation value"),
+        }
+    }
+}
+
+impl Sub for Rotation {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        let diff = (self as u8 + 4 - rhs as u8) % 4;
+        Rotation::ROTATIONS[diff as usize]
+    }
+}
+
+impl Add for Rotation {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let diff = (self as u8 + rhs as u8) % 4;
+        Rotation::ROTATIONS[diff as usize]
+    }
+}
+
+impl Rotation {
+    pub fn to_degree(self) -> i32 {
+        (self as i32) * 90
+    }
+}
+
 /// The state of console layer.
 struct DisplayState {
     /// Running stage.
@@ -254,6 +312,8 @@ struct DisplayState {
     listeners: Vec<Option<Arc<Mutex<DisplayChangeListener>>>>,
     /// Total number of refresh task.
     refresh_num: i32,
+    /// Rotation
+    rotation: Option<Rotation>,
 }
 
 // SAFETY: The Arc<dyn ...> in rust doesn't impl Send, it will be delivered only once during
@@ -268,6 +328,7 @@ impl DisplayState {
             is_refresh: false,
             listeners: Vec::new(),
             refresh_num: 0,
+            rotation: None,
         }
     }
 
@@ -353,6 +414,16 @@ pub fn set_run_stage(run_stage: VmRunningStage) {
 /// Get currently running stage.
 pub fn get_run_stage() -> VmRunningStage {
     DISPLAY_STATE.lock().unwrap().run_stage
+}
+
+/// set rotation
+pub fn set_dpy_rotation(rotation: Rotation) {
+    DISPLAY_STATE.lock().unwrap().rotation = Some(rotation);
+}
+
+/// get rotation
+pub fn get_dpy_rotation() -> Option<Rotation> {
+    DISPLAY_STATE.lock().unwrap().rotation
 }
 
 /// Refresh display image.

@@ -85,8 +85,11 @@ pub const MAX_STRING_LENGTH: usize = 255;
 pub const MAX_PATH_LENGTH: usize = 4096;
 // Maximum length of the socket path is restricted by linux.
 pub const MAX_SOCK_PATH_LENGTH: usize = 108;
-// FIXME: `queue_config` len in `VirtioPciState` struct needs to be modified together.
 pub const MAX_VIRTIO_QUEUE: usize = 32;
+// Currently, virito-serial support 64 queues:
+//   1) 31 ports, every port has 2 queues.
+//   2) 2 control queues.
+pub const MAX_SERIAL_VIRTIO_QUEUE: usize = 64;
 pub const FAST_UNPLUG_ON: &str = "1";
 pub const FAST_UNPLUG_OFF: &str = "0";
 pub const MAX_NODES: u32 = 128;
@@ -134,7 +137,7 @@ pub struct VmConfig {
     pub dev_name: HashMap<String, u8>,
     pub global_config: HashMap<String, String>,
     pub numa_nodes: Vec<(String, String)>,
-    pub incoming: Option<Incoming>,
+    pub incoming: Option<IncomingConfig>,
     pub hardware_signature: Option<u32>,
     #[cfg(feature = "vnc")]
     pub vnc: Option<VncConfig>,
@@ -298,7 +301,7 @@ impl VmConfig {
             }
         }
         let file = open_file(path, read_only, direct)?;
-        let (req_align, buf_align) = get_file_alignment(&file, direct);
+        let (req_align, buf_align) = get_file_alignment(&file, direct)?;
         if req_align == 0 || buf_align == 0 {
             bail!(
                 "Failed to detect alignment requirement of drive file {}.",

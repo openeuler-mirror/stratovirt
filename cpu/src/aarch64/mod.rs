@@ -17,18 +17,15 @@ pub use self::caps::CpregListEntry;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use kvm_bindings::{
     kvm_mp_state as MpState, kvm_regs as Regs, kvm_vcpu_events as VcpuEvents,
     KVM_MP_STATE_RUNNABLE as MP_STATE_RUNNABLE, KVM_MP_STATE_STOPPED as MP_STATE_STOPPED,
 };
 
 use crate::CPU;
-use migration::{
-    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
-};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
 
 // PSR (Processor State Register) bits.
 // See: https://elixir.bootlin.com/linux/v5.6/source/arch/arm64/include/uapi/asm/ptrace.h#L34
@@ -188,31 +185,15 @@ impl ArmCPUState {
 
 impl StateTransfer for CPU {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CoreRegs)?;
-        self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::MpState)?;
-        self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::CpregList)?;
-        self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), ArmRegsIndex::VcpuEvents)?;
-
-        Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
+        self.hypervisor_cpu.get_state_vec(self.arch_cpu.clone())
     }
 
-    fn set_state(&self, state: &[u8]) -> Result<()> {
-        let cpu_state = *ArmCPUState::from_bytes(state)
-            .with_context(|| MigrationError::FromBytesError("CPU"))?;
-
-        let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
-        *cpu_state_locked = cpu_state;
-        drop(cpu_state_locked);
-
-        Ok(())
+    fn set_state(&self, state: &[u8], _version: u32) -> Result<()> {
+        self.hypervisor_cpu.set_state(state, self.arch_cpu.clone())
     }
 
     fn get_device_alias(&self) -> u64 {
-        MigrationManager::get_desc_alias(&ArmCPUState::descriptor().name).unwrap_or(!0)
+        self.hypervisor_cpu.get_device_alias()
     }
 }
 

@@ -10,39 +10,58 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicU16, Ordering},
-    Arc, Mutex, Weak,
+use std::{
+    convert::TryInto,
+    fs::{metadata, read_dir, remove_file, File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU16, Ordering},
+        Arc, Mutex, Weak,
+    },
+    time::SystemTime,
 };
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::pci::config::{
-    PciConfig, RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER,
-    PCI_CONFIG_SPACE_SIZE, PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU,
-    PCI_VENDOR_ID_REDHAT, PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID,
-    SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE, VENDOR_ID,
+    RegionType, CLASS_PI, DEVICE_ID, HEADER_TYPE, PCI_CLASS_SYSTEM_OTHER, PCI_CONFIG_SPACE_SIZE,
+    PCI_DEVICE_ID_REDHAT_PVPANIC, PCI_SUBDEVICE_ID_QEMU, PCI_VENDOR_ID_REDHAT,
+    PCI_VENDOR_ID_REDHAT_QUMRANET, REVISION_ID, SUBSYSTEM_ID, SUBSYSTEM_VENDOR_ID, SUB_CLASS_CODE,
+    VENDOR_ID,
 };
-use crate::pci::{le_write_u16, PciBus, PciDevBase, PciDevOps};
+use crate::pci::{le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState};
 use crate::{convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MUT_PCI_BUS, PCI_BUS};
-use address_space::{GuestAddress, Region, RegionOps};
-use machine_manager::config::{get_pci_df, valid_id};
+use address_space::{AddressAttr, AddressSpace, GuestAddress, Region, RegionOps};
+use machine_manager::{
+    config::{get_pci_df, valid_id},
+    event,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, PVPANIC_TYPE},
+};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
+use util::time::{get_format_time, gettime};
 
 const PVPANIC_PCI_REVISION_ID: u8 = 1;
 const PVPANIC_PCI_VENDOR_ID: u16 = PCI_VENDOR_ID_REDHAT_QUMRANET;
 
-#[cfg(target_arch = "aarch64")]
-// param size in Region::init_io_region must greater than 4
-const PVPANIC_REG_BAR_SIZE: u64 = 0x4;
-#[cfg(target_arch = "x86_64")]
-const PVPANIC_REG_BAR_SIZE: u64 = 0x1;
+const PVPANIC_REG_BAR_SIZE: u64 = 0x20;
+const PVPANIC_EVENT_OFFSET: u64 = 0;
+const PVPANIC_DUMP_FILE_INIT_OFFSET: u64 = 8;
+const PVPANIC_BUFFER_ADDRESS_OFFSET: u64 = 16;
+const PVPANIC_BUFFER_SIZE_OFFSET: u64 = 24;
 
-pub const PVPANIC_PANICKED: u32 = 1 << 0;
-pub const PVPANIC_CRASHLOADED: u32 = 1 << 1;
+pub const PVPANIC_PANICKED: u64 = 1 << 0;
+pub const PVPANIC_CRASHLOADED: u64 = 1 << 1;
+pub const PVPANIC_BSOD: u64 = 1 << 2;
+
+const PVPANIC_MAX_DMP_FILES: usize = 10;
+const PVPANIC_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 
 #[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 #[command(no_binary_name(true))]
@@ -55,39 +74,147 @@ pub struct PvpanicDevConfig {
     pub bus: String,
     #[arg(long, value_parser = get_pci_df)]
     pub addr: (u8, u8),
-    #[arg(long, alias = "supported-features", default_value = "3", value_parser = valid_supported_features)]
-    pub supported_features: u32,
+    #[arg(
+        long,
+        alias = "supported-features",
+        default_value = "3",
+        value_parser = valid_supported_features
+    )]
+    pub supported_features: u64,
+    #[arg(long, alias = "dumpfile-path", default_value = "./", value_parser = valid_dumpfolder_path)]
+    pub dump_folder_path: String,
 }
 
-fn valid_supported_features(f: &str) -> Result<u32> {
-    let features = f.parse::<u32>()?;
-    let supported_features = match features & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED) {
-        0 => features,
-        _ => bail!("Unsupported pvpanic device features {}", features),
-    };
+fn valid_supported_features(f: &str) -> Result<u64> {
+    let features = f.parse::<u64>()?;
+    let supported_features =
+        match features & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD) {
+            0 => {
+                if (features & PVPANIC_BSOD) != 0 && (features & PVPANIC_CRASHLOADED) == 0 {
+                    bail!("pvpanic: BSOD cannot be enabled without enabling CRASHLOADED.");
+                }
+                features
+            }
+            _ => bail!("Unsupported pvpanic device features {}", features),
+        };
     Ok(supported_features)
 }
 
-#[derive(Copy, Clone)]
+fn valid_dumpfolder_path(f: &str) -> Result<String> {
+    let path = Path::new(f);
+    let dump_folder_path = match std::fs::metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                warn!("pvpanic: dump file path configuration error: not a directory.");
+            }
+            f.to_string()
+        }
+        Err(e) => {
+            warn!("pvpanic: dump file path configuration error: {}", e);
+            f.to_string()
+        }
+    };
+    Ok(dump_folder_path)
+}
+
 pub struct PvPanicState {
-    supported_features: u32,
+    pub(crate) supported_features: u64,
+    pub sys_mem: Arc<AddressSpace>,
+    pub guest_physical_address: GuestAddress,
+    pub dump_folder_path: String,
+    pub dump_file_path: Option<String>,
+    pub dump_file: Option<File>,
+    pub current_dump_file_size: u64,
+    pub file_size_limit_violation: bool,
+    pub sys_mem_read_error: bool,
 }
 
 impl PvPanicState {
-    fn new(supported_features: u32) -> Self {
-        Self { supported_features }
+    fn new(supported_features: u64, sys_mem: Arc<AddressSpace>, dump_folder_path: String) -> Self {
+        Self {
+            supported_features,
+            sys_mem,
+            guest_physical_address: GuestAddress(0),
+            dump_folder_path,
+            dump_file_path: None,
+            dump_file: None,
+            current_dump_file_size: 0_u64,
+            file_size_limit_violation: false,
+            sys_mem_read_error: false,
+        }
     }
 
-    fn handle_event(&self, event: u32) -> Result<()> {
+    fn clear_current_folder(&mut self) -> bool {
+        let mut file_count: usize = 0;
+        let mut unremovable_file_count: usize = 0;
+        if let Ok(entries) = read_dir(&self.dump_folder_path) {
+            let mut dmp_files: Vec<(SystemTime, PathBuf)> = entries
+                .filter_map(|entry| {
+                    entry.ok().and_then(|e| {
+                        let path = e.path();
+                        if path.extension().is_some_and(|ext| ext == "dmp") {
+                            metadata(&path)
+                                .and_then(|metadata| metadata.created().map(|time| (time, path)))
+                                .ok()
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+
+            dmp_files.sort_by_key(|(time, _)| *time);
+
+            while dmp_files.len() >= PVPANIC_MAX_DMP_FILES
+                || dmp_files.len() + unremovable_file_count >= PVPANIC_MAX_DMP_FILES
+            {
+                let (_, path) = dmp_files.remove(0);
+                if let Err(e) = remove_file(&path) {
+                    unremovable_file_count += 1;
+                    error!(
+                        "pvpanic: failed to remove old dump file {}: {:?}",
+                        path.display(),
+                        e
+                    );
+                }
+                if dmp_files.is_empty() {
+                    break;
+                }
+            }
+            file_count = dmp_files.len() + unremovable_file_count;
+        } else {
+            warn!(
+                "pvpanic: failed to read directory {}",
+                &self.dump_folder_path
+            );
+        }
+
+        file_count <= PVPANIC_MAX_DMP_FILES
+    }
+
+    fn handle_write_event(&mut self, data: &[u8]) -> Result<()> {
+        let event = u64::from(data[0]);
         if (event & !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED)) != 0 {
             error!("pvpanic: unknown event 0x{:X}", event);
-            bail!("pvpanic: unknown event 0x{:X}", event);
         }
 
         if (event & PVPANIC_PANICKED) == PVPANIC_PANICKED
             && (self.supported_features & PVPANIC_PANICKED) == PVPANIC_PANICKED
         {
             hisysevent::STRATOVIRT_PVPANIC("PANICKED".to_string());
+
+            if QmpChannel::is_connected() {
+                let panicked_msg = VmNotifyEvent {
+                    klass: DEVICE_CLASS_ID,
+                    type_t: PVPANIC_TYPE,
+                    code: PVPANIC_PANICKED as u32,
+                    message: None,
+                };
+                event!(VmNotifyEvent; panicked_msg);
+            } else {
+                debug!("Qmp channel is not connected while sending guest panicked message");
+            }
+
             info!("pvpanic: panicked event");
         }
 
@@ -95,21 +222,270 @@ impl PvPanicState {
             && (self.supported_features & PVPANIC_CRASHLOADED) == PVPANIC_CRASHLOADED
         {
             hisysevent::STRATOVIRT_PVPANIC("CRASHLOADED".to_string());
+
+            if QmpChannel::is_connected() {
+                let crashloaded_msg = VmNotifyEvent {
+                    klass: DEVICE_CLASS_ID,
+                    type_t: PVPANIC_TYPE,
+                    code: PVPANIC_CRASHLOADED as u32,
+                    message: None,
+                };
+                event!(VmNotifyEvent; crashloaded_msg);
+            } else {
+                debug!("Qmp channel is not connected while sending guest crashloaded message");
+            }
+
             info!("pvpanic: crashloaded event");
         }
 
         Ok(())
     }
+
+    fn handle_init_dump_file(&mut self, data: &[u8]) -> Result<()> {
+        if (self.supported_features & PVPANIC_BSOD) == 0 {
+            error!("pvpanic: try to init dump file without enabling BSOD feature");
+            return Ok(());
+        }
+
+        if !self.clear_current_folder() {
+            warn!("pvpanic: try to clear current folder failed");
+            self.dump_file = None;
+            self.current_dump_file_size = 0_u64;
+            self.file_size_limit_violation = false;
+            return Ok(());
+        }
+
+        let tag_data: [u8; 8] = match data.try_into() {
+            Ok(temp_data) => temp_data,
+            Err(_) => {
+                error!("pvpanic: tag slice sent by init_dump_file command is not 8 bytes long");
+                [0; 8]
+            }
+        };
+        let tag = u64::from_le_bytes(tag_data);
+
+        let (sec, _nsec) = gettime().unwrap_or_else(|e| {
+            error!("pvpanic: get system time secs error: {:?}", e);
+            (0, 0)
+        });
+        let format_time = get_format_time(sec);
+
+        let sys_time_now = format!(
+            "{:02}{:02}{:02}-{:02}{:02}{:02}",
+            format_time[0] % 100,
+            format_time[1],
+            format_time[2],
+            format_time[3],
+            format_time[4],
+            format_time[5]
+        );
+
+        let mut dump_path = PathBuf::from(&self.dump_folder_path);
+        dump_path.push(sys_time_now.as_str());
+        if tag != 0 {
+            dump_path.push(format!("_{}", tag));
+        }
+        dump_path.set_extension("dmp");
+
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dump_path.clone())
+        {
+            Ok(file) => {
+                self.dump_file_path = Some(String::from(dump_path.to_str().unwrap()));
+                self.dump_file = Some(file);
+            }
+            Err(e) => {
+                error!(
+                    "pvpanic: Failed to append open potential dump file {} : {:?}",
+                    dump_path.display(),
+                    e
+                );
+                self.dump_file = None;
+            }
+        }
+
+        self.current_dump_file_size = 0_u64;
+        self.file_size_limit_violation = false;
+
+        Ok(())
+    }
+
+    fn handle_write_buffer_address(&mut self, data: &[u8]) -> Result<()> {
+        if (self.supported_features & PVPANIC_BSOD) == 0 {
+            error!("pvpanic: try to write buffer address without enabling BSOD feature");
+            return Ok(());
+        }
+
+        if self.dump_file.is_none() {
+            error!("pvpanic: try to write buffer address without init dump file first");
+            return Ok(());
+        }
+
+        let addr_data: [u8; 8] = match data.try_into() {
+            Ok(temp_data) => temp_data,
+            Err(_) => {
+                error!("pvpanic: Slice is not 8 bytes long");
+                return Ok(());
+            }
+        };
+        let addr = u64::from_le_bytes(addr_data);
+        self.guest_physical_address = GuestAddress(addr);
+        debug!("pvpanic: buffer GPA is 0x{:X}", addr);
+
+        Ok(())
+    }
+
+    fn handle_write_buffer_size(&mut self, data: &[u8]) -> Result<()> {
+        if (self.supported_features & PVPANIC_BSOD) == 0 {
+            error!("pvpanic: try to write buffer size without enabling BSOD feature");
+            return Ok(());
+        }
+
+        if (self.supported_features & PVPANIC_CRASHLOADED) == PVPANIC_CRASHLOADED
+            && self.dump_file.is_some()
+        {
+            let buffer_length_data: [u8; 8] = match data.try_into() {
+                Ok(temp_data) => temp_data,
+                Err(_) => {
+                    error!("pvpanic: Slice is not 8 bytes long");
+                    return Ok(());
+                }
+            };
+            let buffer_length = u64::from_le_bytes(buffer_length_data);
+
+            let mut_file = self.dump_file.as_mut().unwrap();
+
+            if self.current_dump_file_size + buffer_length > PVPANIC_MAX_FILE_SIZE {
+                if !self.file_size_limit_violation {
+                    error!(
+                        "pvpanic: current dump file size {}, buffer length {}, exceeds the maximum allowed size {}",
+                        self.current_dump_file_size,
+                        buffer_length,
+                        PVPANIC_MAX_FILE_SIZE
+                    );
+                    self.file_size_limit_violation = true;
+                }
+                return Ok(());
+            }
+
+            match self.sys_mem.read(
+                mut_file,
+                self.guest_physical_address,
+                buffer_length,
+                AddressAttr::Ram,
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    if !self.sys_mem_read_error {
+                        error!("pvpanic: Failed to write data to file: {:?}", e);
+                        self.sys_mem_read_error = true;
+                    }
+                    return Ok(());
+                }
+            }
+
+            match mut_file.flush() {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("pvpanic: Failed to flush data to file: {:?}", e);
+                }
+            }
+
+            self.current_dump_file_size += buffer_length;
+        }
+
+        Ok(())
+    }
+
+    fn close_file(&mut self) -> Result<()> {
+        if self.dump_file.is_some() {
+            self.dump_file_path = None;
+            self.dump_file = None;
+        }
+
+        Ok(())
+    }
+
+    pub fn get_state(&self) -> PvPanicDevState {
+        let pvpanic_state = PvPanicDevState {
+            supported_features: self.supported_features,
+            guest_physical_address: self.guest_physical_address.0,
+            dump_folder_path: self.dump_folder_path.clone(),
+            dump_file_path: self
+                .dump_file_path
+                .is_some()
+                .then(|| self.dump_file_path.as_ref().unwrap().clone()),
+            current_dump_file_size: self.current_dump_file_size,
+            file_size_limit_violation: self.file_size_limit_violation.into(),
+            sys_mem_read_error: self.sys_mem_read_error.into(),
+        };
+
+        pvpanic_state
+    }
+
+    pub fn set_state(&mut self, pvpanic_dev_state: &PvPanicDevState) {
+        self.supported_features = pvpanic_dev_state.supported_features;
+        self.guest_physical_address = GuestAddress(pvpanic_dev_state.guest_physical_address);
+
+        // set dump folder path
+        self.dump_folder_path = pvpanic_dev_state.dump_folder_path.clone();
+
+        // set dump file path, and open the file if config says so
+        match &pvpanic_dev_state.dump_file_path {
+            Some(path) => {
+                self.dump_file_path = Some(path.clone());
+                self.dump_file = File::open(path)
+                    .inspect_err(|e| {
+                        error!("Failed to open file {}: {:?}", path, e);
+                    })
+                    .ok();
+            }
+            None => {
+                self.dump_file_path = None;
+                self.dump_file = None;
+            }
+        }
+
+        self.current_dump_file_size = pvpanic_dev_state.current_dump_file_size;
+        self.file_size_limit_violation = matches!(pvpanic_dev_state.file_size_limit_violation, 1);
+        self.sys_mem_read_error = matches!(pvpanic_dev_state.sys_mem_read_error, 1);
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, DescSerde)]
+#[desc_version(current_version = "0.1.0")]
+struct PvPanicPciDevState {
+    pci_state: PciState,
+    dev_id: u16,
+    dev_state: PvPanicDevState,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PvPanicDevState {
+    supported_features: u64,
+    pub guest_physical_address: u64,
+    pub dump_folder_path: String,
+    pub dump_file_path: Option<String>,
+    pub current_dump_file_size: u64,
+    pub file_size_limit_violation: u8,
+    pub sys_mem_read_error: u8,
 }
 
 pub struct PvPanicPci {
     base: PciDevBase,
     dev_id: AtomicU16,
-    pvpanic: Arc<PvPanicState>,
+    pub pvpanic: Arc<Mutex<PvPanicState>>,
 }
 
 impl PvPanicPci {
-    pub fn new(config: &PvpanicDevConfig, devfn: u8, parent_bus: Weak<Mutex<dyn Bus>>) -> Self {
+    pub fn new(
+        config: &PvpanicDevConfig,
+        devfn: u8,
+        parent_bus: Weak<Mutex<dyn Bus>>,
+        sys_mem: Arc<AddressSpace>,
+    ) -> Self {
         Self {
             base: PciDevBase {
                 base: DeviceBase::new(config.id.clone(), false, Some(parent_bus)),
@@ -118,33 +494,77 @@ impl PvPanicPci {
                 bme: Arc::new(AtomicBool::new(false)),
             },
             dev_id: AtomicU16::new(0),
-            pvpanic: Arc::new(PvPanicState::new(config.supported_features)),
+            pvpanic: Arc::new(Mutex::new(PvPanicState::new(
+                config.supported_features,
+                sys_mem,
+                config.dump_folder_path.clone(),
+            ))),
         }
     }
 
     fn register_bar(&mut self) -> Result<()> {
         let cloned_pvpanic_read = self.pvpanic.clone();
-        let bar0_read = Arc::new(move |data: &mut [u8], _: GuestAddress, _: u64| -> bool {
-            debug!(
-                "pvpanic: read bar0 called event {}",
-                cloned_pvpanic_read.supported_features
-            );
-
-            data[0] = cloned_pvpanic_read.supported_features as u8;
-            true
-        });
-
-        let cloned_pvpanic_write = self.pvpanic.clone();
-        let bar0_write = Arc::new(move |data: &[u8], _: GuestAddress, _: u64| -> bool {
-            debug!("pvpanic: write bar0 called event {:?}", data);
-            let val = u8::from_le_bytes(match data.try_into() {
-                Ok(value) => value,
-                Err(_) => {
+        let bar0_read = Arc::new(
+            move |data: &mut [u8], _: GuestAddress, offset: u64| -> bool {
+                debug!(
+                    "pvpanic: read bar0 called event {} with offset {}",
+                    cloned_pvpanic_read.lock().unwrap().supported_features,
+                    offset
+                );
+                if offset != PVPANIC_EVENT_OFFSET {
+                    error!("pvpanic: wrong offset {} with bar0 read request", offset);
                     return false;
                 }
-            });
+                data[0] = cloned_pvpanic_read.lock().unwrap().supported_features as u8;
+                true
+            },
+        );
 
-            matches!(cloned_pvpanic_write.handle_event(u32::from(val)), Ok(()))
+        let cloned_pvpanic_write = self.pvpanic.clone();
+
+        let bar0_write = Arc::new(move |data: &[u8], _: GuestAddress, offset: u64| -> bool {
+            match offset {
+                PVPANIC_EVENT_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_write_event(data),
+                        Ok(())
+                    )
+                }
+                PVPANIC_DUMP_FILE_INIT_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_init_dump_file(data),
+                        Ok(())
+                    )
+                }
+                PVPANIC_BUFFER_ADDRESS_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_write_buffer_address(data),
+                        Ok(())
+                    )
+                }
+                PVPANIC_BUFFER_SIZE_OFFSET => {
+                    matches!(
+                        cloned_pvpanic_write
+                            .lock()
+                            .unwrap()
+                            .handle_write_buffer_size(data),
+                        Ok(())
+                    )
+                }
+                _ => {
+                    error!("pvpanic: wrong offset from front end driver");
+                    false
+                }
+            }
         });
 
         let bar0_region_ops = RegionOps {
@@ -154,7 +574,7 @@ impl PvPanicPci {
 
         let mut bar_region =
             Region::init_io_region(PVPANIC_REG_BAR_SIZE, bar0_region_ops, "PvPanic");
-        bar_region.set_access_size(1);
+        bar_region.set_access_size(8);
 
         self.base.config.register_bar(
             0,
@@ -168,6 +588,12 @@ impl PvPanicPci {
 
 impl Device for PvPanicPci {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
+
+    fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
+        let mut locked_pvpanic = self.pvpanic.lock().unwrap();
+        locked_pvpanic.sys_mem_read_error = false;
+        locked_pvpanic.close_file()
+    }
 
     fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
         self.init_write_mask(false)?;
@@ -211,6 +637,8 @@ impl Device for PvPanicPci {
         self.register_bar()
             .with_context(|| "pvpanic: device register bar failed")?;
 
+        let device_name = self.name();
+
         // Attach to the PCI bus.
         let devfn = self.base.devfn;
         let dev = Arc::new(Mutex::new(self));
@@ -223,11 +651,23 @@ impl Device for PvPanicPci {
             .store(device_id, Ordering::Release);
         locked_bus.attach_child(u64::from(devfn), dev.clone())?;
 
+        MigrationManager::register_device_instance(
+            PvPanicPciDevState::descriptor(),
+            dev.clone(),
+            &device_name,
+        );
+
         Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        Ok(())
+        MigrationManager::unregister_device_instance(
+            PvPanicPciDevState::descriptor(),
+            &self.name(),
+        );
+
+        let mut locked_pvpanic = self.pvpanic.lock().unwrap();
+        locked_pvpanic.close_file()
     }
 }
 
@@ -249,12 +689,71 @@ impl PciDevOps for PvPanicPci {
     }
 }
 
+impl StateTransfer for PvPanicPci {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = PvPanicPciDevState {
+            pci_state: self.base.get_pci_state(),
+            dev_id: self.dev_id.load(Ordering::Acquire),
+            dev_state: self.pvpanic.lock().unwrap().get_state(),
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let pvpanic_pci_state: PvPanicPciDevState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("PVPANIC"))?;
+
+        self.dev_id
+            .store(pvpanic_pci_state.dev_id, Ordering::Release);
+        self.base.set_pci_state(&pvpanic_pci_state.pci_state);
+        self.pvpanic
+            .lock()
+            .unwrap()
+            .set_state(&pvpanic_pci_state.dev_state);
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&PvPanicPciDevState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for PvPanicPci {
+    fn resume(&mut self) -> Result<()> {
+        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        PCI_BUS!(parent_bus, locked_bus, pci_bus);
+        if let Err(e) = self.base.config.update_bar_mapping(
+            #[cfg(target_arch = "x86_64")]
+            Some(&pci_bus.io_region),
+            Some(&pci_bus.mem_region),
+        ) {
+            bail!("Failed to update bar, error is {:?}", e);
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
-    use crate::pci::{host::tests::create_pci_host, le_read_u16, PciHost};
+    use crate::pci::{le_read_u16, PciHost};
     use crate::{convert_bus_ref, convert_device_mut, PCI_BUS};
+    use address_space::HostMemMapping;
     use machine_manager::config::str_slip_to_clap;
+    use regex::Regex;
+
+    const PVPANIC_U64: u64 = 8;
+    const TEMP_BUFFER_ADDRESS: u64 = 0x0123;
+    const TMP_WRITE_ADDRESS_DUMP_PATH: &str = "/tmp/pvpanic-address-ut.dmp";
+    const TMP_WRITE_SIZE_DUMP_PATH: &str = "/tmp/pvpanic-size-ut.dmp";
+    const TMP_PATH: &str = "/tmp/";
+    const TMP_RAM_SIZE: u64 = 1000;
+    const TMP_RAM_ADDRESS: u64 = 777;
 
     /// Convert from Arc<Mutex<dyn Device>> to &mut PvPanicPci.
     #[macro_export]
@@ -264,19 +763,44 @@ mod tests {
         };
     }
 
-    fn init_pvpanic_dev(devfn: u8, supported_features: u32, dev_id: &str) -> Arc<Mutex<PciHost>> {
-        let pci_host = create_pci_host();
+    fn init_pvpanic_dev(devfn: u8, supported_features: u64, dev_id: &str) -> Arc<Mutex<PciHost>> {
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(
+            Region::init_container_region(1 << 16, "sysio"),
+            "sysio",
+            None,
+        )
+        .unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+            None,
+        )
+        .unwrap();
+        let pci_host = Arc::new(Mutex::new(PciHost::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            (0xB000_0000, 0x1000_0000),
+            (0xC000_0000, 0x3000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (0xF000_0000, 0x1000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (512 << 30, 512 << 30),
+            16,
+        )));
         let locked_pci_host = pci_host.lock().unwrap();
         let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
 
         let config = PvpanicDevConfig {
             id: dev_id.to_string(),
             supported_features,
+            dump_folder_path: TMP_PATH.to_string(),
             classtype: "".to_string(),
             bus: "pcie.0".to_string(),
             addr: (3, 0),
         };
-        let pvpanic_dev = PvPanicPci::new(&config, devfn, root_bus);
+        let pvpanic_dev = PvPanicPci::new(&config, devfn, root_bus, sys_mem);
         assert_eq!(pvpanic_dev.base.base.id, "pvpanic_test".to_string());
 
         pvpanic_dev.realize().unwrap();
@@ -285,22 +809,46 @@ mod tests {
         pci_host
     }
 
+    fn get_pvpanic_dev(devfn: u8, supported_features: u64, dev_id: &str) -> Arc<Mutex<dyn Device>> {
+        let pci_host = init_pvpanic_dev(devfn, supported_features, dev_id);
+        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
+        PCI_BUS!(root_bus, locked_bus, pci_bus);
+        pci_bus.get_device(0, devfn).unwrap()
+    }
+
     #[test]
     fn test_pvpanic_cmdline_parser() {
-        // Test1: Right.
+        // Test1: supported-features Right.
         let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=0";
         let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
         assert_eq!(result.unwrap().supported_features, 0);
 
-        // Test2: Default value.
+        // Test2: supported-features Default value.
         let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7";
         let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
         assert_eq!(result.unwrap().supported_features, 3);
 
-        // Test3: Illegal value.
-        let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=4";
+        // Test3: supported-features Illegal value.
+        let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=8";
         let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
         assert!(result.is_err());
+
+        // Test4: dumpfile-path Right.
+        let cmdline =
+            "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=0,dumpfile-path=/tmp/";
+        let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
+        assert_eq!(result.unwrap().dump_folder_path, "/tmp/".to_string());
+
+        // Test5: dumpfile-path Default value.
+        let cmdline = "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=0";
+        let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
+        assert_eq!(result.unwrap().dump_folder_path, "./".to_string());
+
+        // Test6: dumpfile-path Illegal value.
+        let cmdline =
+            "pvpanic,id=pvpanic0,bus=pcie.0,addr=0x7,supported-features=0,dumpfile-path=/tmp/tmp/";
+        let result = PvpanicDevConfig::try_parse_from(str_slip_to_clap(cmdline, true, false));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -325,41 +873,32 @@ mod tests {
 
     #[test]
     fn test_pvpanic_config() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+        let pvpanic_dev =
+            get_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
-        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, VENDOR_ID as usize)
-            .unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_VENDOR_ID_REDHAT);
 
-        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, DEVICE_ID as usize)
-            .unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_DEVICE_ID_REDHAT_PVPANIC);
+        let read_config_params: [(u8, u16); 5] = [
+            (VENDOR_ID, PCI_VENDOR_ID_REDHAT),
+            (DEVICE_ID, PCI_DEVICE_ID_REDHAT_PVPANIC),
+            (SUB_CLASS_CODE, PCI_CLASS_SYSTEM_OTHER),
+            (SUBSYSTEM_VENDOR_ID as u8, PVPANIC_PCI_VENDOR_ID),
+            (SUBSYSTEM_ID as u8, PCI_SUBDEVICE_ID_QEMU),
+        ];
 
-        let info = le_read_u16(
-            &pvpanic.pci_base_mut().config.config,
-            SUB_CLASS_CODE as usize,
-        )
-        .unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_CLASS_SYSTEM_OTHER);
-
-        let info = le_read_u16(&pvpanic.pci_base_mut().config.config, SUBSYSTEM_VENDOR_ID)
-            .unwrap_or_else(|_| 0);
-        assert_eq!(info, PVPANIC_PCI_VENDOR_ID);
-
-        let info =
-            le_read_u16(&pvpanic.pci_base_mut().config.config, SUBSYSTEM_ID).unwrap_or_else(|_| 0);
-        assert_eq!(info, PCI_SUBDEVICE_ID_QEMU);
+        for &(offset, expected_content) in read_config_params.iter() {
+            let info = le_read_u16(&pvpanic.pci_base_mut().config.config, offset as usize)
+                .unwrap_or_else(|_| 0);
+            assert_eq!(info, expected_content);
+        }
     }
 
     #[test]
     fn test_pvpanic_read_features() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+        let pvpanic_dev = get_pvpanic_dev(
+            7,
+            PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD,
+            "pvpanic_test",
+        );
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
         // test read supported_features
@@ -372,65 +911,267 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             data_read.to_vec(),
-            vec![PVPANIC_PANICKED as u8 | PVPANIC_CRASHLOADED as u8]
+            vec![PVPANIC_PANICKED as u8 | PVPANIC_CRASHLOADED as u8 | PVPANIC_BSOD as u8]
         );
     }
 
     #[test]
-    fn test_pvpanic_write_panicked() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+    fn test_pvpanic_write_events() {
+        let pvpanic_dev =
+            get_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
-        // test write panicked event
-        let data_write = [PVPANIC_PANICKED as u8; 1];
-        let count = data_write.len() as u64;
-        let result = &pvpanic.pci_base_mut().config.bars[0]
-            .region
-            .as_ref()
-            .unwrap()
-            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
-        assert!(result.is_ok());
+        // init QMP_CHANNEL const with disconnected inner state
+        QmpChannel::object_init();
+
+        // test write events
+        let write_event_params: [u64; 3] = [
+            PVPANIC_PANICKED,
+            PVPANIC_CRASHLOADED,
+            (!(PVPANIC_PANICKED | PVPANIC_CRASHLOADED)),
+        ];
+
+        for &param in write_event_params.iter() {
+            let data_write = param.to_le_bytes();
+            let count = data_write.len() as u64;
+            let result = &pvpanic.pci_base_mut().config.bars[0]
+                .region
+                .as_ref()
+                .unwrap()
+                .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
+            assert!(result.is_ok());
+        }
     }
 
     #[test]
-    fn test_pvpanic_write_crashload() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+    fn test_pvpanic_init_dump_file() {
+        let pvpanic_dev = get_pvpanic_dev(
+            7,
+            PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD,
+            "pvpanic_test",
+        );
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
-        // test write crashload event
-        let data_write = [PVPANIC_CRASHLOADED as u8; 1];
+        // test dump file init
+        let data_write = 0u64.to_le_bytes(); // in this case, data content does not really matter
         let count = data_write.len() as u64;
         let result = &pvpanic.pci_base_mut().config.bars[0]
             .region
             .as_ref()
             .unwrap()
-            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
+            .write(
+                &mut data_write.as_ref(),
+                GuestAddress(0),
+                PVPANIC_U64,
+                count,
+            );
         assert!(result.is_ok());
+        assert!(pvpanic.pvpanic.lock().unwrap().dump_file.is_some());
+
+        let dmp_regex = Regex::new(r"^.+\.dmp$").unwrap();
+        let path = Path::new(TMP_PATH);
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_file() {
+                    let file_name = path.file_name().unwrap().to_str().unwrap();
+                    if dmp_regex.is_match(file_name) {
+                        match std::fs::remove_file(path) {
+                            Ok(_) => {}
+                            Err(e) => assert!(false, "{}", e),
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
-    fn test_pvpanic_write_unknown() {
-        let pci_host = init_pvpanic_dev(7, PVPANIC_PANICKED | PVPANIC_CRASHLOADED, "pvpanic_test");
-        let locked_pci_host = pci_host.lock().unwrap();
-        let root_bus = locked_pci_host.child_bus().unwrap();
-        PCI_BUS!(root_bus, locked_bus, pci_bus);
-        let pvpanic_dev = pci_bus.get_device(0, 7).unwrap();
+    fn test_pvpanic_write_buffer_address() {
+        let pvpanic_dev = get_pvpanic_dev(
+            7,
+            PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD,
+            "pvpanic_test",
+        );
         MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
 
-        // test write unknown event
-        let data_write = [100u8; 1];
+        if Path::new(TMP_WRITE_ADDRESS_DUMP_PATH).exists() {
+            std::fs::remove_file(TMP_WRITE_ADDRESS_DUMP_PATH).unwrap();
+        }
+        let tmp_dump_path = String::from(TMP_WRITE_ADDRESS_DUMP_PATH);
+
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(tmp_dump_path.clone())
+        {
+            Ok(file) => {
+                // init dump file
+                pvpanic.pvpanic.lock().unwrap().dump_file = Some(file);
+            }
+            Err(e) => {
+                println!("pvpanic: Failed to open potential dump file: {:?}", e);
+                assert!(false);
+            }
+        }
+
+        // test write buffer address
+        let data_write = TEMP_BUFFER_ADDRESS.to_le_bytes();
         let count = data_write.len() as u64;
         let result = &pvpanic.pci_base_mut().config.bars[0]
             .region
             .as_ref()
             .unwrap()
-            .write(&mut data_write.as_ref(), GuestAddress(0), 0, count);
-        assert!(result.is_err());
+            .write(
+                &mut data_write.as_ref(),
+                GuestAddress(0),
+                2 * PVPANIC_U64,
+                count,
+            );
+        assert!(result.is_ok());
+
+        let address_from_device = pvpanic.pvpanic.lock().unwrap().guest_physical_address;
+        assert_eq!(address_from_device.raw_value(), TEMP_BUFFER_ADDRESS);
+
+        match std::fs::remove_file(TMP_WRITE_ADDRESS_DUMP_PATH) {
+            Ok(_) => {}
+            Err(e) => assert!(false, "{}", e),
+        }
+    }
+
+    #[test]
+    fn test_pvpanic_write_buffer_size() {
+        let pvpanic_dev = get_pvpanic_dev(
+            7,
+            PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD,
+            "pvpanic_test",
+        );
+
+        if Path::new(TMP_WRITE_SIZE_DUMP_PATH).exists() {
+            std::fs::remove_file(TMP_WRITE_SIZE_DUMP_PATH).unwrap();
+        }
+        let tmp_dump_path = String::from(TMP_WRITE_SIZE_DUMP_PATH);
+        let buffer_content: [u8; 31] = *b"PvPanic test write buffer size\n";
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(tmp_dump_path.clone())
+        {
+            Ok(file) => {
+                MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
+                // init dump file
+                pvpanic.pvpanic.lock().unwrap().dump_file = Some(file);
+                let temp_ram = Arc::new(
+                    HostMemMapping::new(
+                        GuestAddress(0),
+                        None,
+                        TMP_RAM_SIZE,
+                        None,
+                        false,
+                        false,
+                        false,
+                    )
+                    .unwrap(),
+                );
+                let temp_region = Region::init_ram_region(temp_ram.clone(), "temp_region");
+                pvpanic
+                    .pvpanic
+                    .lock()
+                    .unwrap()
+                    .sys_mem
+                    .root()
+                    .add_subregion(temp_region, temp_ram.start_address().raw_value())
+                    .unwrap();
+
+                if let Err(e) = pvpanic.pvpanic.lock().unwrap().sys_mem.write(
+                    &mut buffer_content.as_ref(),
+                    GuestAddress(TMP_RAM_ADDRESS),
+                    buffer_content.len() as u64,
+                    address_space::AddressAttr::Ram,
+                ) {
+                    println!(
+                        "pvpanic: Failed to write test data to guest memory: {:?}",
+                        e
+                    );
+                    assert!(false);
+                }
+                // prepare buffer, init buffer address
+                pvpanic.pvpanic.lock().unwrap().guest_physical_address =
+                    GuestAddress(TMP_RAM_ADDRESS);
+            }
+            Err(e) => {
+                println!(
+                    "pvpanic: Failed to append open potential dump file: {:?}",
+                    e
+                );
+                assert!(false);
+            }
+        }
+
+        // test write buffer size
+        let data_write = buffer_content.len().to_le_bytes();
+        let count = data_write.len() as u64;
+        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
+        let result = &pvpanic.pci_base_mut().config.bars[0]
+            .region
+            .as_ref()
+            .unwrap()
+            .write(
+                &mut data_write.as_ref(),
+                GuestAddress(0),
+                3 * PVPANIC_U64,
+                count,
+            );
+        assert!(result.is_ok());
+
+        let buffer_read = std::fs::read_to_string(&tmp_dump_path).unwrap();
+        assert_eq!(std::str::from_utf8(&buffer_content).unwrap(), buffer_read);
+
+        match std::fs::remove_file(TMP_WRITE_SIZE_DUMP_PATH) {
+            Ok(_) => {}
+            Err(e) => assert!(false, "{}", e),
+        }
+    }
+
+    #[test]
+    fn test_pvpanic_snapshot() {
+        let pvpanic_dev = get_pvpanic_dev(
+            7,
+            PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD,
+            "pvpanic_test",
+        );
+        MUT_PVPANIC_PCI!(pvpanic_dev, locked_dev, pvpanic);
+
+        // test get state
+        let dev_state = pvpanic.get_state_vec();
+        assert!(dev_state.is_ok());
+
+        // modify some fields
+        pvpanic.dev_id.store(u16::MAX, Ordering::SeqCst);
+        {
+            let mut locked_pvpanic_state = pvpanic.pvpanic.lock().unwrap();
+            locked_pvpanic_state.supported_features =
+                !(PVPANIC_PANICKED | PVPANIC_CRASHLOADED | PVPANIC_BSOD);
+            locked_pvpanic_state.guest_physical_address = GuestAddress(u64::MAX);
+            locked_pvpanic_state.dump_folder_path = "".to_string();
+            locked_pvpanic_state.dump_file_path = Some("".to_string());
+            locked_pvpanic_state.current_dump_file_size = u64::MAX;
+            locked_pvpanic_state.file_size_limit_violation = true;
+            locked_pvpanic_state.sys_mem_read_error = true;
+        }
+
+        // test set state
+        let ret = pvpanic.set_state_mut(dev_state.unwrap().as_mut(), 0_u32);
+        assert!(ret.is_ok());
+        {
+            let locked_pvpanic_state = pvpanic.pvpanic.lock().unwrap();
+            assert_eq!(locked_pvpanic_state.guest_physical_address, GuestAddress(0));
+            assert_eq!(locked_pvpanic_state.dump_folder_path, TMP_PATH.to_string());
+            assert_eq!(locked_pvpanic_state.dump_file_path, None);
+            assert_eq!(locked_pvpanic_state.current_dump_file_size, 0);
+            assert_eq!(locked_pvpanic_state.file_size_limit_violation, false);
+            assert_eq!(locked_pvpanic_state.sys_mem_read_error, false);
+        }
     }
 }

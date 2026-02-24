@@ -17,6 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use log::{error, info};
 use once_cell::sync::OnceCell;
+use serde::{Deserialize, Serialize};
 
 use super::config::{
     PciConfig, PcieDevType, CLASS_CODE_PCI_BRIDGE, COMMAND, COMMAND_IO_SPACE, COMMAND_MEMORY_SPACE,
@@ -36,7 +37,8 @@ use crate::pci::intx::init_intx;
 use crate::pci::msix::init_msix;
 use crate::pci::{
     init_multifunction, le_read_u16, le_write_clear_value_u16, le_write_set_value_u16,
-    le_write_u16, to_pcidevops, PciDevBase, PciDevOps, PciError, PciIntxState, INTERRUPT_PIN,
+    le_write_u16, to_pcidevops, PciDevBase, PciDevOps, PciError, PciIntxState, PciState,
+    INTERRUPT_PIN,
 };
 use crate::{
     convert_bus_mut, convert_bus_ref, Bus, Device, DeviceBase, MsiIrqManager, MUT_PCI_BUS, PCI_BUS,
@@ -45,11 +47,8 @@ use crate::{
 use address_space::Region;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::qmp::qmp_channel::send_device_deleted_msg;
-use migration::{
-    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
-};
-use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 use util::num_ops::{ranges_overlap, str_to_num};
 
@@ -79,16 +78,10 @@ pub struct RootPortConfig {
 
 /// Device state root port.
 #[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 struct RootPortState {
-    /// Max length of config_space is 4096.
-    config_space: [u8; 4096],
-    write_mask: [u8; 4096],
-    write_clear_mask: [u8; 4096],
-    last_cap_end: u16,
-    last_ext_cap_offset: u16,
-    last_ext_cap_end: u16,
+    pci_state: PciState,
 }
 
 pub struct RootPort {
@@ -665,31 +658,18 @@ impl HotplugOps for RootPort {
 
 impl StateTransfer for RootPort {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let mut state = RootPortState::default();
+        let state = RootPortState {
+            pci_state: self.base.get_pci_state(),
+        };
 
-        for idx in 0..self.base.config.config.len() {
-            state.config_space[idx] = self.base.config.config[idx];
-            state.write_mask[idx] = self.base.config.write_mask[idx];
-            state.write_clear_mask[idx] = self.base.config.write_clear_mask[idx];
-        }
-        state.last_cap_end = self.base.config.last_cap_end;
-        state.last_ext_cap_end = self.base.config.last_ext_cap_end;
-        state.last_ext_cap_offset = self.base.config.last_ext_cap_offset;
-
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let root_port_state = *RootPortState::from_bytes(state)
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let root_port_state: RootPortState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("ROOT_PORT"))?;
 
-        let length = self.base.config.config.len();
-        self.base.config.config = root_port_state.config_space[..length].to_vec();
-        self.base.config.write_mask = root_port_state.write_mask[..length].to_vec();
-        self.base.config.write_clear_mask = root_port_state.write_clear_mask[..length].to_vec();
-        self.base.config.last_cap_end = root_port_state.last_cap_end;
-        self.base.config.last_ext_cap_end = root_port_state.last_ext_cap_end;
-        self.base.config.last_ext_cap_offset = root_port_state.last_ext_cap_offset;
+        self.base.set_pci_state(&root_port_state.pci_state);
 
         Ok(())
     }

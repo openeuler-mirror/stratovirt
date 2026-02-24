@@ -16,10 +16,13 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::thread::yield_now;
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
+
 use machine_manager::config::ChardevConfig;
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -36,8 +39,8 @@ use machine_manager::{
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
-use migration::{DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager, StateTransfer};
-use migration_derive::{ByteCode, Desc};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, MigrationStatus, StateTransfer};
+use migration_derive::DescSerde;
 use util::aio::iov_from_buf_direct;
 use util::byte_code::ByteCode;
 use util::gen_base_func;
@@ -87,7 +90,7 @@ struct VirtioConsoleControl {
 impl ByteCode for VirtioConsoleControl {}
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 struct VirtioConsoleConfig {
     // The size of the console is supplied if VIRTIO_CONSOLE_F_SIZE feature is set.
     cols: u16,
@@ -114,10 +117,19 @@ impl VirtioConsoleConfig {
     }
 }
 
+#[derive(Copy, Clone, Default, Serialize, Deserialize)]
+struct PortState {
+    /// Number id.
+    nr: u32,
+    /// Whether the guest open the serial port.
+    guest_connected: bool,
+    /// Whether the host open the serial socket.
+    host_connected: bool,
+}
+
 /// Status of serial device.
-#[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct VirtioSerialState {
     /// Bit mask of features supported by the backend.
     device_features: u64,
@@ -125,6 +137,10 @@ pub struct VirtioSerialState {
     driver_features: u64,
     /// Virtio serial config space.
     config_space: VirtioConsoleConfig,
+    /// State of serial port.
+    port_state: Vec<PortState>,
+    /// Device broken status.
+    broken: bool,
 }
 
 /// Virtio serial device structure.
@@ -138,6 +154,12 @@ pub struct Serial {
     pub max_nr_ports: u32,
     /// Serial port vector for serialport.
     pub ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
+    /// The queue notify events for handling IO.
+    queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
 }
 
 impl Serial {
@@ -156,6 +178,9 @@ impl Serial {
             base: VirtioBase::new(VIRTIO_TYPE_CONSOLE, queue_num, queue_size),
             config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
+            migrating: Arc::new(AtomicBool::new(false)),
+            processing_queue: Arc::new(AtomicBool::new(false)),
+            queue_evts: Arc::new(Mutex::new(Vec::new())),
             ..Default::default()
         }
     }
@@ -179,7 +204,13 @@ impl Serial {
             driver_features: self.base.driver_features,
             device_broken,
             ports: self.ports.clone(),
+            migrating: self.migrating.clone(),
+            processing_queue: self.processing_queue.clone(),
         };
+        self.queue_evts
+            .lock()
+            .unwrap()
+            .push(handler.output_queue_evt.clone());
 
         let handler_h = Arc::new(Mutex::new(handler));
         for port in self.ports.lock().unwrap().iter_mut() {
@@ -272,7 +303,15 @@ impl VirtioDevice for Serial {
                 device_broken: self.base.broken.clone(),
                 port: port.clone(),
                 nr,
+                migrating: self.migrating.clone(),
+                processing_queue: self.processing_queue.clone(),
             };
+            if port.is_some() {
+                self.queue_evts.lock().unwrap().append(&mut vec![
+                    handler.input_queue_evt.clone(),
+                    handler.output_queue_evt.clone(),
+                ]);
+            }
             let handler_h = Arc::new(Mutex::new(handler));
             let notifiers = EventNotifierHelper::internal_notifiers(handler_h.clone());
             register_event_helper(notifiers, None, &mut self.base.deactivate_evts)?;
@@ -298,6 +337,7 @@ impl VirtioDevice for Serial {
             port.lock().unwrap().deactivate();
         }
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
+        self.queue_evts.lock().unwrap().clear();
 
         Ok(())
     }
@@ -305,20 +345,50 @@ impl VirtioDevice for Serial {
 
 impl StateTransfer for Serial {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let state = VirtioSerialState {
+        let mut state = VirtioSerialState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
             config_space: self.config_space,
+            broken: self.base.broken.load(Ordering::SeqCst),
+            ..Default::default()
         };
-        Ok(state.as_bytes().to_vec())
+
+        for port in self.ports.lock().unwrap().iter() {
+            let locked_port = port.lock().unwrap();
+            state.port_state.push(PortState {
+                nr: locked_port.nr,
+                guest_connected: locked_port.guest_connected,
+                host_connected: locked_port.host_connected,
+            });
+        }
+
+        Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
-        let state = VirtioSerialState::from_bytes(state)
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let state: VirtioSerialState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("SERIAL"))?;
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;
+        self.base.broken.store(state.broken, Ordering::SeqCst);
         self.config_space = state.config_space;
+
+        for port_state in state.port_state.iter() {
+            let port = find_port_by_nr(&self.ports, port_state.nr)
+                .with_context(|| format!("Don't find port {}", port_state.nr))?;
+            let mut locked_port = port.lock().unwrap();
+            // There is no risk in directly assigning the `host_connected` status from the source to the destination.
+            // This is mainly to maintain consistency with the state of the drivers within the virtual machine.
+            // 1) If the source end is `host_connected = false`, the destination will open the port when it receives
+            //    a new chardev link.
+            // 2) If the source end is `host_connected = true`, the destination does not need to open the port again
+            //    when receiving a new socket connection.
+            // 3) If the source end is `host_connected = true` and the destination end keeps not opening the port.
+            //    The data issued within the virtual machine will be discarded in `output_handle`. See function `fill_outbuf`.
+            locked_port.host_connected = port_state.host_connected;
+            locked_port.guest_connected = port_state.guest_connected;
+        }
+
         Ok(())
     }
 
@@ -327,7 +397,34 @@ impl StateTransfer for Serial {
     }
 }
 
-impl MigrationHook for Serial {}
+impl MigrationHook for Serial {
+    fn resume(&mut self) -> Result<()> {
+        let locked_evts = self.queue_evts.lock().unwrap();
+        for evt in locked_evts.iter() {
+            if let Err(e) = evt.write(1) {
+                error!("Failed to trigger queue event {}, {:?}", evt.as_raw_fd(), e);
+            }
+        }
+        Ok(())
+    }
+
+    fn notify_status(&self, save: bool, status: MigrationStatus) -> Result<()> {
+        if save {
+            match status {
+                MigrationStatus::Active => {
+                    self.migrating.store(true, Ordering::SeqCst);
+                    while self.processing_queue.load(Ordering::SeqCst) {
+                        yield_now();
+                    }
+                    info!("No queue in processing for serial device");
+                }
+                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
 
 /// Virtio serial port structure.
 #[derive(Clone)]
@@ -350,7 +447,7 @@ pub struct SerialPort {
 }
 
 impl SerialPort {
-    pub fn new(port_cfg: VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Self {
+    pub fn new(port_cfg: VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Result<Self> {
         // Console is default host connected. And pty chardev has opened by default in realize()
         // function.
         let is_console = matches!(port_cfg.classtype.as_str(), "virtconsole");
@@ -359,16 +456,16 @@ impl SerialPort {
             host_connected = true;
         }
 
-        SerialPort {
+        Ok(SerialPort {
             name: Some(port_cfg.id),
             paused: false,
-            chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg))),
+            chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg)?)),
             nr: port_cfg.nr.unwrap(),
             is_console,
             guest_connected: false,
             host_connected,
             ctrl_handler: None,
-        }
+        })
     }
 
     pub fn realize(&mut self) -> Result<()> {
@@ -414,6 +511,10 @@ struct SerialPortHandler {
     device_broken: Arc<AtomicBool>,
     port: Option<Arc<Mutex<SerialPort>>>,
     nr: u32,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
 }
 
 /// Handler for queues which are used for control.
@@ -427,6 +528,10 @@ struct SerialControlHandler {
     /// Virtio serial device is broken or not.
     device_broken: Arc<AtomicBool>,
     ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
+    /// If there is a queue in processing.
+    processing_queue: Arc<AtomicBool>,
 }
 
 impl SerialPortHandler {
@@ -459,8 +564,21 @@ impl SerialPortHandler {
                 let locked_port = port.lock().unwrap();
                 let locked_cdev = locked_port.chardev.lock().unwrap();
                 if locked_cdev.outbuf_is_full() {
+                    // disable further notifications until space appears
+                    queue_lock
+                        .vring
+                        .suppress_queue_notify(self.driver_features, true)
+                        .with_context(|| "Failed to disable tx queue notify")?;
                     break;
+                } else {
+                    queue_lock
+                        .vring
+                        .suppress_queue_notify(self.driver_features, false)
+                        .with_context(|| "Failed to enable tx queue notify")?;
                 }
+            }
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
             }
 
             let elem = queue_lock
@@ -569,6 +687,10 @@ impl SerialPortHandler {
 
         let mut written_count = 0_usize;
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = queue_lock
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -646,7 +768,9 @@ impl EventNotifierHelper for SerialPortHandler {
             if h_lock.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+            h_lock.processing_queue.store(true, Ordering::SeqCst);
             h_lock.output_handle();
+            h_lock.processing_queue.store(false, Ordering::SeqCst);
             None
         });
 
@@ -683,6 +807,7 @@ impl EventNotifierHelper for SerialPortHandler {
 
 impl InputReceiver for SerialPortHandler {
     fn receive(&mut self, buffer: &[u8]) {
+        self.processing_queue.store(true, Ordering::SeqCst);
         self.input_handle_internal(buffer).unwrap_or_else(|e| {
             error!("Port {} handle input error: {:?}", self.nr, e);
             report_virtio_error(
@@ -691,6 +816,7 @@ impl InputReceiver for SerialPortHandler {
                 &self.device_broken,
             );
         });
+        self.processing_queue.store(false, Ordering::SeqCst);
     }
 
     fn remain_size(&mut self) -> usize {
@@ -729,6 +855,10 @@ impl SerialControlHandler {
         let mut queue_lock = output_queue.lock().unwrap();
 
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = queue_lock
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -865,6 +995,10 @@ impl SerialControlHandler {
         value: u16,
         extra: &[u8],
     ) -> Result<()> {
+        if self.migrating.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
         let mut queue_lock = self.input_queue.lock().unwrap();
         let elem = queue_lock
             .vring
@@ -940,7 +1074,9 @@ impl EventNotifierHelper for SerialControlHandler {
             if h_lock.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+            h_lock.processing_queue.store(true, Ordering::SeqCst);
             h_lock.output_control();
+            h_lock.processing_queue.store(false, Ordering::SeqCst);
             None
         });
         notifiers.push(EventNotifier::new(
@@ -1079,5 +1215,36 @@ mod tests {
         let expect_data: Vec<u8> = vec![0, 0, 0, 0, max_ports, 0, 0, 0, 0, 0, 0, 0];
         assert!(serial.read_config(offset, &mut read_data).is_ok());
         assert_eq!(read_data, expect_data);
+    }
+
+    // Test get/set device state.
+    #[test]
+    fn test_state_transfer() {
+        let max_ports: u8 = 31;
+        let mut serial = Serial::new(VirtioSerialInfo {
+            classtype: "virtio-serial-pci".to_string(),
+            id: "serial".to_string(),
+            multifunction: Some(false),
+            max_ports: u32::from(max_ports),
+            bus: Some("pcie.0".to_string()),
+            addr: Some((0, 0)),
+        });
+        serial.realize().unwrap();
+
+        let device_features = serial.base.device_features;
+        let driver_features = serial.base.driver_features;
+        let broken = serial.base.broken.load(Ordering::SeqCst);
+
+        // Get and modify the device state.
+        let init_state = serial.get_state_vec().unwrap();
+        serial.base.device_features = 0;
+        serial.base.driver_features = 0;
+        serial.base.broken.store(true, Ordering::SeqCst);
+
+        // Set and check the device state.
+        serial.set_state_mut(&init_state, 0u32).unwrap();
+        assert_eq!(device_features, serial.base.device_features);
+        assert_eq!(driver_features, serial.base.driver_features);
+        assert_eq!(broken, serial.base.broken.load(Ordering::SeqCst));
     }
 }

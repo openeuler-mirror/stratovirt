@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -35,6 +36,9 @@ use address_space::GuestAddress;
 use machine_manager::event;
 use machine_manager::event_loop::EventLoop;
 use machine_manager::qmp::qmp_channel::QmpChannel;
+use migration::snapshot::GED_SNAPSHOT_ID;
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use util::gen_base_func;
 use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, NotifierCallback, NotifierOperation,
@@ -187,6 +191,12 @@ impl Device for Ged {
         #[cfg(target_arch = "x86_64")]
         ged.register_acpi_cpu_resize_event(ged_event.cpu_resize)
             .with_context(|| "Failed to register ACPI cpu resize event.")?;
+
+        MigrationManager::register_device_instance(
+            GedState::descriptor(),
+            dev.clone(),
+            GED_SNAPSHOT_ID,
+        );
         Ok(dev.clone())
     }
 }
@@ -209,6 +219,36 @@ impl SysBusDevOps for Ged {
         true
     }
 }
+
+#[derive(Clone, Copy, DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
+struct GedState {
+    notification_type: u32,
+}
+
+impl StateTransfer for Ged {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let ged_state = GedState {
+            notification_type: self.notification_type.load(Ordering::Acquire),
+        };
+        Ok(serde_json::to_vec(&ged_state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let ged_state: GedState = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("GedState"))?;
+        self.notification_type
+            .store(ged_state.notification_type, Ordering::Release);
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&GedState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for Ged {}
 
 impl AmlBuilder for Ged {
     fn aml_bytes(&self) -> Vec<u8> {
@@ -308,4 +348,46 @@ pub fn acpi_dsdt_add_power_button() -> AmlDevice {
     acpi_dev.append_child(AmlNameDecl::new("_UID", AmlInteger(1)));
 
     acpi_dev
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use super::{AcpiEvent, Ged, GedEvent};
+    use crate::sysbus::sysbus_init;
+    use migration::StateTransfer;
+    use util::loop_context::create_new_eventfd;
+
+    #[test]
+    fn test_state_transfer() {
+        let sysbus = sysbus_init();
+        let power_button = Arc::new(create_new_eventfd().unwrap());
+        #[cfg(target_arch = "x86_64")]
+        let cpu_resize = Arc::new(create_new_eventfd().unwrap());
+        let mut ged = Ged::new(
+            false,
+            &sysbus,
+            0x0908_0000,
+            0x0000_0004,
+            GedEvent::new(
+                power_button,
+                #[cfg(target_arch = "x86_64")]
+                cpu_resize,
+            ),
+        )
+        .unwrap();
+        ged.notification_type
+            .store(AcpiEvent::PowerDown as u32, Ordering::SeqCst);
+        let state = ged.get_state_vec().unwrap();
+        ged.notification_type
+            .store(AcpiEvent::Nothing as u32, Ordering::SeqCst);
+
+        ged.set_state_mut(&state, 0u32).unwrap();
+        assert_eq!(
+            ged.notification_type.load(Ordering::Acquire) as u32,
+            AcpiEvent::PowerDown as u32
+        );
+    }
 }

@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs::{remove_file, File, OpenOptions};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
@@ -19,7 +19,6 @@ use anyhow::{bail, Context, Ok, Result};
 use nix::fcntl::{fcntl, FcntlArg};
 use nix::unistd::getpid;
 
-const MIN_FILE_ALIGN: u32 = 512;
 pub const MAX_FILE_ALIGN: u32 = 4096;
 /// Permission to read
 const FILE_LOCK_READ: u64 = 0x01;
@@ -49,65 +48,20 @@ pub fn open_file(path: &str, read_only: bool, direct: bool) -> Result<File> {
     Ok(file)
 }
 
-fn is_io_aligned(file: &File, buf: u64, size: usize) -> bool {
-    // SAFETY: file and buf is valid.
-    let ret = unsafe {
-        libc::pread(
-            file.as_raw_fd() as libc::c_int,
-            buf as *mut libc::c_void,
-            size as libc::size_t,
-            0,
-        )
-    };
-    ret >= 0 || nix::errno::errno() != libc::EINVAL
-}
-
-pub fn get_file_alignment(file: &File, direct: bool) -> (u32, u32) {
+pub fn get_file_alignment(file: &File, direct: bool) -> Result<(u32, u32)> {
     if !direct {
-        return (1, 1);
+        return Ok((1, 1));
     }
 
-    let mut req_align: u32 = 0;
-    let mut buf_align: u32 = 0;
-    // SAFETY: we allocate aligned memory and free it later.
-    let aligned_buffer = unsafe {
-        libc::memalign(
-            MAX_FILE_ALIGN as libc::size_t,
-            (MAX_FILE_ALIGN * 2) as libc::size_t,
-        )
-    };
-    if aligned_buffer.is_null() {
-        log::warn!("OOM occurs when get file alignment, assume max alignment");
-        return (MAX_FILE_ALIGN, MAX_FILE_ALIGN);
-    }
+    // DirectIO may degrade into bufferIO when not aligned, and IO will not report errors at this time.
+    // Detecting alignment by judging the return value of IO is unreliable.
+    // Directly obtain the alignment values presented by the Filesystem.
+    let metadata = file
+        .metadata()
+        .with_context(|| "Failed to get file metadata.")?;
+    let blk_size = metadata.blksize() as u32;
 
-    // Guess alignment requirement of request.
-    let mut align = MIN_FILE_ALIGN;
-    while align <= MAX_FILE_ALIGN {
-        if is_io_aligned(file, aligned_buffer as u64, align as usize) {
-            req_align = align;
-            break;
-        }
-        align <<= 1;
-    }
-
-    // Guess alignment requirement of buffer.
-    let mut align = MIN_FILE_ALIGN;
-    while align <= MAX_FILE_ALIGN {
-        if is_io_aligned(
-            file,
-            aligned_buffer as u64 + u64::from(align),
-            MAX_FILE_ALIGN as usize,
-        ) {
-            buf_align = align;
-            break;
-        }
-        align <<= 1;
-    }
-
-    // SAFETY: the memory is allocated by us and will not be used anymore.
-    unsafe { libc::free(aligned_buffer) };
-    (req_align, buf_align)
+    Ok((blk_size, blk_size))
 }
 
 fn do_fcntl_lock(

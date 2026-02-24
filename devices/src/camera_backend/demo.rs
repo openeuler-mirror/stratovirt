@@ -243,6 +243,7 @@ impl ImageFrame {
             FmtType::Yuy2 => convert_to_yuy2(&data, width, height),
             FmtType::Rgb565 => data,
             FmtType::Nv12 => convert_to_nv12(&data, width, height),
+            FmtType::Nv21 => convert_to_nv12(&data, width, height),
         };
         self.frame_idx += 1;
         if self.frame_idx > FRAME_IDX_LIMIT {
@@ -453,7 +454,7 @@ impl CameraBackend for DemoCameraBackend {
         Ok(())
     }
 
-    fn get_frame(&self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize> {
+    fn get_frame(&mut self, iovecs: &[Iovec], frame_offset: usize, len: usize) -> Result<usize> {
         let locked_frame = self.frame_image.lock().unwrap();
         if frame_offset + len > locked_frame.used_len as usize {
             bail!("Invalid frame offset {} or len {}", frame_offset, len);

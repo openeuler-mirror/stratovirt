@@ -33,11 +33,12 @@ pub use root_port::{RootPort, RootPortConfig};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::mem::size_of;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use anyhow::{bail, Result};
 use byteorder::{ByteOrder, LittleEndian};
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "scream")]
 use crate::misc::ivshmem::Ivshmem;
@@ -50,6 +51,8 @@ use crate::{
 };
 #[cfg(feature = "demo_device")]
 use demo_device::DemoDev;
+use migration::DeviceStateDesc;
+use migration_derive::DescSerde;
 
 const BDF_FUNC_SHIFT: u8 = 3;
 pub const PCI_SLOT_MAX: u8 = 32;
@@ -137,6 +140,18 @@ pub fn pci_ext_cap_next(header: u32) -> usize {
     ((header >> 20) & 0xffc) as usize
 }
 
+#[derive(Clone, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct PciState {
+    config: Vec<u8>,
+    write_mask: Vec<u8>,
+    write_clear_mask: Vec<u8>,
+    last_cap_end: u16,
+    last_ext_cap_offset: u16,
+    last_ext_cap_end: u16,
+    bme: bool,
+}
+
 #[derive(Clone)]
 pub struct PciDevBase {
     pub base: DeviceBase,
@@ -146,6 +161,30 @@ pub struct PciDevBase {
     pub devfn: u8,
     /// Bus master enable.
     pub bme: Arc<AtomicBool>,
+}
+
+impl PciDevBase {
+    pub fn get_pci_state(&self) -> PciState {
+        PciState {
+            config: self.config.config.clone(),
+            write_mask: self.config.write_mask.clone(),
+            write_clear_mask: self.config.write_clear_mask.clone(),
+            last_cap_end: self.config.last_cap_end,
+            last_ext_cap_offset: self.config.last_ext_cap_offset,
+            last_ext_cap_end: self.config.last_ext_cap_end,
+            bme: self.bme.load(Ordering::Acquire),
+        }
+    }
+
+    pub fn set_pci_state(&mut self, pci_state: &PciState) {
+        self.config.config = pci_state.config.clone();
+        self.config.write_mask = pci_state.write_mask.clone();
+        self.config.write_clear_mask = pci_state.write_clear_mask.clone();
+        self.config.last_cap_end = pci_state.last_cap_end;
+        self.config.last_ext_cap_offset = pci_state.last_ext_cap_end;
+        self.config.last_ext_cap_end = pci_state.last_ext_cap_end;
+        self.bme.store(pci_state.bme, Ordering::Release);
+    }
 }
 
 pub trait PciDevOps: Device + Send {

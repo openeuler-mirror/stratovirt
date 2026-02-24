@@ -974,7 +974,7 @@ impl PciConfig {
         self.config[CAP_LIST as usize] = offset as u8;
         self.config[STATUS as usize] |= STATUS_CAP_LIST as u8;
 
-        let regs_num = if size % REG_SIZE == 0 {
+        let regs_num = if size.is_multiple_of(REG_SIZE) {
             size / REG_SIZE
         } else {
             size / REG_SIZE + 1
@@ -1000,7 +1000,7 @@ impl PciConfig {
             return Err(anyhow!(PciError::AddPcieExtCap(id, size)));
         }
 
-        let regs_num = if size % REG_SIZE == 0 {
+        let regs_num = if size.is_multiple_of(REG_SIZE) {
             size / REG_SIZE
         } else {
             size / REG_SIZE + 1

@@ -86,6 +86,7 @@ pub fn handle_signal() {
 }
 
 extern "C" fn receive_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
+    hisysevent::STRATOVIRT_KILLED(num as u32);
     set_signal(num);
     write!(
         &mut std::io::stderr(),
@@ -96,6 +97,7 @@ extern "C" fn receive_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void)
 }
 
 extern "C" fn receive_signal_sys(num: c_int, info: *mut siginfo_t, _: *mut c_void) {
+    hisysevent::STRATOVIRT_KILLED(num as u32);
     set_signal(num);
     // SAFETY: The safety of this function is guaranteed by caller.
     if let Some(sig_info) = unsafe { info.as_ref() } {

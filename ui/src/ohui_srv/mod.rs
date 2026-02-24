@@ -26,6 +26,7 @@ use std::sync::{
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info};
 use once_cell::sync::OnceCell;
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::epoll::EventSet;
 
 use crate::{
@@ -43,6 +44,9 @@ use machine_manager::{
     event_loop::register_event_helper,
     temp_cleaner::TempCleaner,
 };
+use migration::snapshot::OHUI_SNAPSHOT_ID;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use msg_handle::*;
 use util::{
     loop_context::{
@@ -85,6 +89,15 @@ impl GuestSurface {
 
 const CURSOR_SIZE: u64 = 16 * 1024;
 
+struct CursorInfo {
+    buffer: u64,
+    width: u32,
+    height: u32,
+    hot_x: u32,
+    hot_y: u32,
+    _file: FileBackend,
+}
+
 pub struct OhUiServer {
     // framebuffer passthru to the guest
     passthru: OnceCell<bool>,
@@ -98,14 +111,14 @@ pub struct OhUiServer {
     connected: AtomicBool,
     // iothread processing unix socket
     iothread: OnceCell<Option<String>>,
-    // address of cursor buffer
-    cursorbuffer: u64,
     //address of framebuffer
     framebuffer: u64,
     // framebuffer file backend
     fb_file: Option<FileBackend>,
     // tokenID of OHUI client
     pub token_id: Arc<RwLock<u64>>,
+    // Cursor
+    cursor: Arc<Mutex<CursorInfo>>,
 }
 
 impl OhUiServer {
@@ -144,7 +157,7 @@ impl OhUiServer {
         Ok((Some(fb_backend), host_addr))
     }
 
-    fn init_cursor_file(path: &String) -> Result<u64> {
+    fn init_cursor_file(path: &String) -> Result<(FileBackend, u64)> {
         let file_path = Path::new(path.as_str()).join("ohui-cursor");
         let cursor_file = file_path
             .to_str()
@@ -167,26 +180,44 @@ impl OhUiServer {
             false,
         )?;
 
-        Ok(cursorbuffer)
+        Ok((cursor_backend, cursorbuffer))
     }
 
-    pub fn new(ui_path: String, sock_path: String) -> Result<Self> {
+    pub fn new(ui_path: String, sock_path: String) -> Result<Arc<Self>> {
         let channel = Self::init_channel(&sock_path)?;
         let (fb_file, framebuffer) = Self::init_fb_file(&ui_path)?;
-        let cursorbuffer = Self::init_cursor_file(&ui_path)?;
-
-        Ok(OhUiServer {
+        let (cursor_file, cursorbuffer) = Self::init_cursor_file(&ui_path)?;
+        let cursor = Arc::new(Mutex::new(CursorInfo {
+            buffer: cursorbuffer,
+            width: 0,
+            height: 0,
+            hot_x: 0,
+            hot_y: 0,
+            _file: cursor_file,
+        }));
+        let ohui_srv = Arc::new(OhUiServer {
             passthru: OnceCell::new(),
             surface: RwLock::new(GuestSurface::new()),
             channel,
             msg_handler: OhUiMsgHandler::new(),
             connected: AtomicBool::new(false),
             iothread: OnceCell::new(),
-            cursorbuffer,
             framebuffer,
             fb_file,
             token_id: Arc::new(RwLock::new(0)),
-        })
+            cursor: cursor.clone(),
+        });
+
+        MigrationManager::register_device_instance(
+            OhUiMigrationState::descriptor(),
+            Arc::new(Mutex::new(OhUiMigration {
+                cursor,
+                ohui_srv: ohui_srv.clone(),
+            })),
+            OHUI_SNAPSHOT_ID,
+        );
+
+        Ok(ohui_srv)
     }
 
     pub fn set_passthru(&self, passthru: bool) {
@@ -365,7 +396,8 @@ impl DisplayChangeListenerOperations for OhUiServer {
     }
 
     fn dpy_cursor_update(&self, cursor: &DisplayMouse) -> Result<()> {
-        if self.cursorbuffer == 0 {
+        let mut locked_cursor = self.cursor.lock().unwrap();
+        if locked_cursor.buffer == 0 {
             error!("Hwcursor not set.");
             // No need to return Err for this situation is not fatal
             return Ok(());
@@ -387,10 +419,14 @@ impl DisplayChangeListenerOperations for OhUiServer {
         unsafe {
             ptr::copy_nonoverlapping(
                 cursor.data.as_ptr(),
-                self.cursorbuffer as *mut u8,
+                locked_cursor.buffer as *mut u8,
                 len as usize,
             );
         }
+        locked_cursor.width = cursor.width;
+        locked_cursor.height = cursor.height;
+        locked_cursor.hot_x = cursor.hot_x;
+        locked_cursor.hot_y = cursor.hot_y;
 
         self.msg_handler.handle_cursor_define(
             cursor.width,
@@ -555,4 +591,79 @@ fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
     ohui_register_event(OhUiListener::new(server.clone()), server)?;
     info!("Successfully start listener.");
     Ok(())
+}
+
+/// Migration
+#[derive(Clone, Debug, Default, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+struct OhUiMigrationState {
+    cursor_img: Vec<u8>,
+    width: u32,
+    height: u32,
+    hot_x: u32,
+    hot_y: u32,
+}
+
+struct OhUiMigration {
+    cursor: Arc<Mutex<CursorInfo>>,
+    ohui_srv: Arc<OhUiServer>,
+}
+
+impl StateTransfer for OhUiMigration {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let mut state = OhUiMigrationState::default();
+        state.cursor_img.resize(CURSOR_SIZE as usize, 0);
+
+        let cursor = self.cursor.lock().unwrap();
+        // SAFETY: the buffer is initialized and being kept for the whole VM lifecycle.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                cursor.buffer as *const u8,
+                state.cursor_img.as_mut_ptr(),
+                CURSOR_SIZE as usize,
+            );
+        }
+        state.width = cursor.width;
+        state.height = cursor.height;
+        state.hot_x = cursor.hot_x;
+        state.hot_y = cursor.hot_y;
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let mgt_state: OhUiMigrationState = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("OHUI"))?;
+        let mut cursor = self.cursor.lock().unwrap();
+        // SAFETY: the buffer is initialized and being kept for the whole VM lifecycle.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                mgt_state.cursor_img.as_ptr(),
+                cursor.buffer as *mut u8,
+                CURSOR_SIZE as usize,
+            );
+        }
+        cursor.width = mgt_state.width;
+        cursor.height = mgt_state.height;
+        cursor.hot_x = mgt_state.hot_x;
+        cursor.hot_y = mgt_state.hot_y;
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&OhUiMigrationState::descriptor().name).unwrap_or(0)
+    }
+}
+
+impl MigrationHook for OhUiMigration {
+    fn resume(&mut self) -> Result<()> {
+        let cursor = self.cursor.lock().unwrap();
+        self.ohui_srv.msg_handler.handle_cursor_define(
+            cursor.width,
+            cursor.height,
+            cursor.hot_x,
+            cursor.hot_y,
+            bytes_per_pixel() as u32,
+        );
+        Ok(())
+    }
 }

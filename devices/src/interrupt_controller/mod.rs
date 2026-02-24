@@ -33,7 +33,7 @@ mod error;
 pub use aarch64::{
     GICConfig as ICGICConfig, GICDevice, GICVersion, GICv2, GICv2Access,
     GICv2Config as ICGICv2Config, GICv3, GICv3Access, GICv3Config as ICGICv3Config, GICv3ItsAccess,
-    GICv3ItsState, GICv3State, GicRedistRegion, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
+    GicRedistRegion, InterruptController, GIC_IRQ_INTERNAL, GIC_IRQ_MAX,
 };
 pub use error::InterruptError;
 

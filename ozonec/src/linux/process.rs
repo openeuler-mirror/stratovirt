@@ -286,6 +286,24 @@ impl Process {
         env::vars().for_each(|(key, _value)| env::remove_var(key));
     }
 
+    // The Rust standard library had suppressed the default SIGPIPE behavior,
+    // see https://github.com/rust-lang/rust/pull/13158.
+    // Since the parent's signal handler would be inherited by it's child process,
+    // thus we should re-enable the standard SIGPIPE behavior as a workaround to
+    // avoid errors caused by SIGPIPE not sent.
+    // (eg: Error "seq: write error: Broken pipe" reported when executing "seq 100000 | head -n 1")
+    //
+    // Other Rust runtimes(eg: Kata containers) have similar issues. See:
+    // https://github.com/kata-containers/kata-containers/issues/1887.
+    // https://github.com/kata-containers/kata-containers/pull/1939
+    pub fn reset_sigpipe(&self) {
+        // SAFETY: libc call used to adjust the default SIGPIPE semaphore processing method of
+        // Rust from `ignore` to `default`. Risk-free.
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+    }
+
     pub fn exec_program(&self) -> ! {
         // It has been make sure that args is not None in validate_config().
         let args = &self.oci.args.as_ref().unwrap();

@@ -630,6 +630,8 @@ struct QmpConfig {
     server: bool,
     #[arg(long, action = ArgAction::SetTrue, required = true)]
     nowait: bool,
+    #[arg(long)]
+    iothread: Option<String>,
 }
 
 #[derive(Parser)]
@@ -655,13 +657,21 @@ struct MonConfig {
 pub fn check_api_channel(
     args: &ArgMatches,
     vm_config: &mut VmConfig,
-) -> Result<Vec<SocketListener>> {
-    let mut sock_paths = Vec::new();
+) -> Result<Vec<(SocketListener, Option<String>)>> {
+    let mut listeners = Vec::new();
     if let Some(qmp_args) = args.value_of("qmp") {
         let qmp_cfg = QmpConfig::try_parse_from(str_slip_to_clap(&qmp_args, true, false))?;
         let sock_path =
             QmpSocketPath::new(qmp_cfg.uri).with_context(|| "Failed to parse qmp socket path")?;
-        sock_paths.push(sock_path);
+        listeners.push((
+            bind_socket(&sock_path).with_context(|| {
+                format!(
+                    "Failed to bind socket for path: {:?}",
+                    sock_path.to_string()
+                )
+            })?,
+            qmp_cfg.iothread,
+        ));
     }
     if let Some(mon_args) = args.value_of("mon") {
         let mon_cfg = MonConfig::try_parse_from(str_slip_to_clap(&mon_args, false, false))?;
@@ -681,26 +691,24 @@ pub fn check_api_channel(
                 );
             }
         }
-        if let SocketType::Tcp { host, port } = socket {
-            sock_paths.push(QmpSocketPath::Tcp { host, port });
-        } else if let SocketType::Unix { path } = socket {
-            sock_paths.push(QmpSocketPath::Unix { path });
-        }
+        let sock_path = match socket {
+            SocketType::Tcp { host, port } => QmpSocketPath::Tcp { host, port },
+            SocketType::Unix { path } => QmpSocketPath::Unix { path },
+        };
+        listeners.push((
+            bind_socket(&sock_path).with_context(|| {
+                format!(
+                    "Failed to bind socket for path: {:?}",
+                    sock_path.to_string()
+                )
+            })?,
+            None,
+        ));
     }
 
-    if sock_paths.is_empty() {
+    if listeners.is_empty() {
         bail!("Please use \'-qmp\' or \'-mon\' to give a qmp path for Unix socket");
     }
-    let mut listeners = Vec::new();
-    for sock_path in sock_paths {
-        listeners.push(bind_socket(&sock_path).with_context(|| {
-            format!(
-                "Failed to bind socket for path: {:?}",
-                sock_path.to_string()
-            )
-        })?)
-    }
-
     Ok(listeners)
 }
 

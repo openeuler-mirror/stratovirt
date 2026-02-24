@@ -48,6 +48,7 @@ use devices::legacy::{
 };
 #[cfg(feature = "ramfb")]
 use devices::legacy::{Ramfb, RamfbConfig};
+use devices::pci::intx::PciIntxCountState;
 use devices::pci::{PciBus, PciHost, PciIntxState};
 use devices::sysbus::{to_sysbusdevops, SysBusDevType};
 use devices::{
@@ -183,10 +184,13 @@ impl StdMachine {
     pub fn handle_reset_request(vm: &Arc<Mutex<Self>>) -> Result<()> {
         let mut locked_vm = vm.lock().unwrap();
         let mut fdt_addr: u64 = 0;
+        let vm_state = *locked_vm.base.vm_state.lock().unwrap();
 
         for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.pause()
-                .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
+            if vm_state != VmState::Paused {
+                cpu.pause()
+                    .with_context(|| format!("Failed to pause vcpu{}", cpu_index))?;
+            }
 
             cpu.hypervisor_cpu.reset_vcpu(cpu.clone())?;
             if cpu_index == 0 {
@@ -219,9 +223,11 @@ impl StdMachine {
 
         locked_vm.base.irq_chip.as_ref().unwrap().reset()?;
 
-        for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
-            cpu.resume()
-                .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
+        if vm_state != VmState::Paused {
+            for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
+                cpu.resume()
+                    .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;
+            }
         }
 
         Ok(())
@@ -311,10 +317,7 @@ impl StdMachine {
             if dpy.display_type != "ohui" {
                 return Ok(());
             }
-            self.ohui_server = Some(Arc::new(OhUiServer::new(
-                dpy.get_ui_path(),
-                dpy.get_sock_path(),
-            )?));
+            self.ohui_server = Some(OhUiServer::new(dpy.get_ui_path(), dpy.get_sock_path())?);
         }
         Ok(())
     }
@@ -443,11 +446,16 @@ impl MachineOps for StdMachine {
         root_pci_bus.msi_irq_manager = irq_manager.msi_irq_manager;
         let line_irq_manager = irq_manager.line_irq_manager;
         if let Some(line_irq_manager) = line_irq_manager.clone() {
-            let irq_state = Some(Arc::new(Mutex::new(PciIntxState::new(
+            let irq_state = Arc::new(Mutex::new(PciIntxState::new(
                 IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32,
                 line_irq_manager.clone(),
-            ))));
-            root_pci_bus.intx_state = irq_state;
+            )));
+            root_pci_bus.intx_state = Some(irq_state.clone());
+            MigrationManager::register_device_instance(
+                PciIntxCountState::descriptor(),
+                irq_state,
+                "pci_intx_state",
+            );
         } else {
             return Err(anyhow!(
                 "Failed to create intx state: legacy irq manager is none."
@@ -555,7 +563,7 @@ impl MachineOps for StdMachine {
 
         let migrate = locked_vm.get_migrate_info();
         let boot_config =
-            if migrate.0 == MigrateMode::Unknown {
+            if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
                 Some(locked_vm.load_boot_source(
                     fwcfg.as_ref(),
                     MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
@@ -651,13 +659,12 @@ impl MachineOps for StdMachine {
         let mut flash_base: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].0;
         let flash_size: u64 = MEM_LAYOUT[LayoutEntryType::Flash as usize].1 / 2;
         for i in 0..=1 {
-            let (fd, read_only) = if i < configs_vec.len() {
+            let (fd, config) = if i < configs_vec.len() {
                 let path = &configs_vec[i].path_on_host;
-                let read_only = configs_vec[i].readonly;
                 let fd = self.fetch_drive_file(path)?;
-                (Some(fd), read_only)
+                (Some(fd), configs_vec[i].clone())
             } else {
-                (None, false)
+                (None, DriveConfig::default())
             };
 
             let pflash = PFlash::new(
@@ -666,7 +673,7 @@ impl MachineOps for StdMachine {
                 sector_len,
                 4,
                 2,
-                read_only,
+                &config,
                 &self.base.sysbus,
                 flash_base,
             )
@@ -721,9 +728,13 @@ impl MachineOps for StdMachine {
             .get_fwcfg_dev()
             .with_context(|| "Ramfb device must be used UEFI to boot, please add pflash devices")?;
         let sys_mem = self.get_sys_mem();
-        let mut ramfb = Ramfb::new(sys_mem.clone(), &self.base.sysbus, config.install);
+        let ramfb = Ramfb::new(
+            sys_mem.clone(),
+            &self.base.sysbus,
+            config.install,
+            &fwcfg_dev,
+        )?;
 
-        ramfb.ramfb_state.setup(&fwcfg_dev)?;
         ramfb.realize()?;
         Ok(())
     }

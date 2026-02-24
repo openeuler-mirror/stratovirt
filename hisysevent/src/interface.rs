@@ -166,12 +166,12 @@ pub(crate) fn write_to_hisysevent(
     event_params: &[EventParam],
 ) {
     let func = CString::new(func_name).unwrap();
-    let domain = CString::new("VM_ENGINE").unwrap();
+    let domain = CString::new("VM_SERVICE").unwrap();
     let event = CString::new(event_name).unwrap();
 
     let params_wrapper = format_param_array(event_params);
 
-    // SAFETY: Call hisysevent function, all parameters are just read.
+    // SAFETY: All parameters are valid and return val is checked.
     let ret = unsafe {
         (HISYSEVENT_FUNC_TABLE.hisysevent_write)(
             func.as_ptr() as *const c_char,
@@ -184,6 +184,9 @@ pub(crate) fn write_to_hisysevent(
         )
     };
     if ret != 0 {
-        error!("Failed to write event {} to hisysevent.", event_name);
+        error!(
+            "Failed to write event {} to hisysevent, error is {}.",
+            event_name, ret
+        );
     }
 }

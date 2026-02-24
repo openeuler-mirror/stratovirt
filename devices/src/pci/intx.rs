@@ -12,15 +12,24 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use log::error;
+use serde::{Deserialize, Serialize};
 
 use super::{PciDevOps, RootPort};
 use crate::interrupt_controller::LineIrqManager;
 use crate::pci::{swizzle_map_irq, PciBus, PciConfig, INTERRUPT_PIN, PCI_PIN_NUM};
 use crate::{convert_bus_ref, convert_device_ref, Bus, PCI_BUS, ROOT_PORT};
+use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 
 pub type InterruptHandler = Box<dyn Fn(u32, bool) -> Result<()> + Send + Sync>;
+
+#[derive(Clone, Copy, DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct PciIntxCountState {
+    irq_count: [i8; PCI_PIN_NUM as usize],
+}
 
 /// PCI INTx information.
 pub struct PciIntxState {
@@ -41,6 +50,30 @@ impl PciIntxState {
         }
     }
 }
+
+impl StateTransfer for PciIntxState {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let pci_intx_state = PciIntxCountState {
+            irq_count: self.irq_count,
+        };
+
+        Ok(serde_json::to_vec(&pci_intx_state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let pci_intx_state: PciIntxCountState = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("PciIntxCountState"))?;
+        self.irq_count = pci_intx_state.irq_count;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&PciIntxCountState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for PciIntxState {}
 
 /// INTx structure.
 pub struct Intx {
@@ -160,8 +193,48 @@ pub fn init_intx(
         (u32::MAX, None)
     };
 
-    let intx = Arc::new(Mutex::new(Intx::new(name, irq, intx_state)));
+    let intx = Arc::new(Mutex::new(Intx::new(name.clone(), irq, intx_state)));
+
+    let intx_name = format!("{}_intx", name);
+    MigrationManager::register_device_instance(IntxState::descriptor(), intx.clone(), &intx_name);
 
     config.intx = Some(intx);
     Ok(())
 }
+
+#[derive(Clone, Copy, DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
+struct IntxState {
+    level: u8,
+    enabled: u8,
+}
+
+impl StateTransfer for Intx {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = IntxState {
+            level: self.level,
+            enabled: u8::from(self.enabled),
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let intx_state: IntxState = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("IntxState"))?;
+        self.level = intx_state.level;
+
+        if intx_state.enabled != 0 && intx_state.enabled != 1 {
+            bail!("intx state enabled is error: {}", intx_state.enabled);
+        }
+        self.enabled = intx_state.enabled == 1;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&IntxState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for Intx {}

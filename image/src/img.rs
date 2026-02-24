@@ -2548,4 +2548,79 @@ mod test {
         drop(dst_driver);
         assert!(remove_file(dst_path).is_ok());
     }
+
+    /// Test image convert from raw to qcow2.
+    ///
+    /// TestStep:
+    /// 1. Create a raw image with size of 10G.
+    /// 2. Write data to this image in different position.
+    /// 3. Convert this raw to qcow2.
+    /// 4. Read data in the same position.
+    #[test]
+    fn test_image_convert_from_raw_to_qcow2() {
+        let src_path = "/tmp/test_image_convert_src.raw";
+        let dst_path = "/tmp/test_image_convert_dst.qcow2";
+        let _ = remove_file(src_path);
+        let _ = remove_file(dst_path);
+
+        let mut test_image = TestRawImage::create(src_path.to_string(), "10G".to_string());
+        let mut src_driver = test_image.create_driver();
+
+        // Write 1M data(number 1) in offset 0.
+        let buf1 = vec![1_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 0, &buf1).is_ok());
+        // Write 1M data(number 2) in offset 5G.
+        let buf2 = vec![2_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 5 * G as usize, &buf2).is_ok());
+        // Write 1M data(number 3) in last 1M.
+        let buf3 = vec![3_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 10 * G as usize - 1 * M as usize, &buf3).is_ok());
+        // Write 1M data(number 0) in random offset (eg: 300M offset).
+        let buf4 = vec![0_u8; 1 * M as usize];
+        assert!(image_write(&mut src_driver, 300 * M as usize, &buf4).is_ok());
+
+        drop(src_driver);
+
+        assert!(image_convert(vec![
+            "-f".to_string(),
+            "raw".to_string(),
+            "-O".to_string(),
+            "qcow2".to_string(),
+            src_path.to_string(),
+            dst_path.to_string()
+        ])
+        .is_ok());
+
+        // Open the converted qcow2 image.
+        let conf = BlockProperty {
+            format: DiskFormat::Qcow2,
+            ..Default::default()
+        };
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None).unwrap();
+        let file = open_file(dst_path, true, false).unwrap();
+        let mut dst_driver = Qcow2Driver::new(Arc::new(file), aio, conf.clone()).unwrap();
+        dst_driver.load_metadata(conf).unwrap();
+
+        // Read 1M data in offset 0.
+        let buf = vec![0; 1 * M as usize];
+        assert!(image_read(&mut dst_driver, 0, &buf).is_ok());
+        assert_eq!(buf, buf1);
+        // Read 1M data in offset 5G.
+        assert!(image_read(&mut dst_driver, 5 * G as usize, &buf).is_ok());
+        assert_eq!(buf, buf2);
+        // Read 1M data in last 1M.
+        assert!(image_read(&mut dst_driver, 10 * G as usize - 1 * M as usize, &buf).is_ok());
+        assert_eq!(buf, buf3);
+
+        let mut img_info = ImageInfo::default();
+        assert!(dst_driver.query_image(&mut img_info).is_ok());
+        assert_eq!(img_info.virtual_size, 10 * G);
+        // 1M data(number 0) in offset 300M will not consume space.
+        // QCOW2 has metadata clusters, so it will not be 3M in size.
+        assert!(img_info.actual_size > 3 * M);
+        assert!(img_info.actual_size < 4 * M);
+
+        // Clean.
+        assert!(remove_file(dst_path).is_ok());
+    }
 }

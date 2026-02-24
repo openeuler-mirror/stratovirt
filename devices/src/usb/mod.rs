@@ -36,7 +36,8 @@ use std::cmp::min;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{bail, Context, Result};
-use log::{debug, error};
+use log::{debug, error, info};
+use serde::{Deserialize, Serialize};
 
 use self::descriptor::USB_MAX_INTERFACES;
 use crate::DeviceBase;
@@ -147,6 +148,7 @@ pub struct UsbEndpoint {
     pub ifnum: u8,
     pub halted: bool,
     pub max_packet_size: u32,
+    pub max_streams: u32,
 }
 
 impl UsbEndpoint {
@@ -169,6 +171,16 @@ impl UsbEndpoint {
 
         self.max_packet_size = u32::from(size) * micro_frames;
     }
+
+    pub fn set_max_streams(&mut self, raw: u8) {
+        let max_streams = raw & 0x1f;
+
+        if max_streams != 0 {
+            self.max_streams = 1 << max_streams;
+        } else {
+            self.max_streams = 0;
+        }
+    }
 }
 
 /// USB device common structure.
@@ -188,6 +200,13 @@ pub struct UsbDeviceBase {
     pub unplugged: bool,
     /// The index of the interfaces.
     pub altsetting: [u32; USB_MAX_INTERFACES as usize],
+}
+
+#[derive(Copy, Clone, Deserialize, Serialize)]
+pub struct UsbDevState {
+    addr: u8,
+    remote_wakeup: u32,
+    unplugged: u8,
 }
 
 impl UsbDeviceBase {
@@ -382,6 +401,20 @@ impl UsbDeviceBase {
         }
         Ok(true)
     }
+
+    pub fn get_usb_state(&self) -> UsbDevState {
+        UsbDevState {
+            addr: self.addr,
+            remote_wakeup: self.remote_wakeup,
+            unplugged: self.unplugged.into(),
+        }
+    }
+
+    pub fn set_usb_state(&mut self, usb_state: &UsbDevState) {
+        self.addr = usb_state.addr;
+        self.remote_wakeup = usb_state.remote_wakeup;
+        self.unplugged = usb_state.unplugged != 0;
+    }
 }
 
 impl Drop for UsbDeviceBase {
@@ -408,6 +441,14 @@ pub trait UsbDevice: Send + Sync {
     fn unrealize(&mut self) -> Result<()> {
         Ok(())
     }
+
+    /// Allocate streams on this device.
+    fn alloc_streams(&mut self, _endpoints: &[UsbEndpoint], _streams_nr: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// Free streams on this device.
+    fn free_streams(&mut self, _endpoints: &[UsbEndpoint]) {}
 
     /// Cancel specified USB packet.
     fn cancel_packet(&mut self, packet: &Arc<Mutex<UsbPacket>>);
@@ -528,7 +569,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>, ep_id: u8) -> Result<(
         let port_status = locked_port.get_port_link_state();
         if port_status == PLS_U3 {
             locked_port.set_port_link_state(PLS_RESUME);
-            debug!(
+            info!(
                 "Update portsc when notify controller, port {} status {}",
                 locked_port.portsc, port_status
             );
@@ -544,7 +585,7 @@ pub fn notify_controller(dev: &Arc<Mutex<dyn UsbDevice>>, ep_id: u8) -> Result<(
 
 /// Transfer ops for submit callback.
 pub trait TransferOps: Send + Sync {
-    fn submit_transfer(&mut self);
+    fn transfer_complete_cb(&mut self);
 }
 
 /// Usb packet used for device transfer data.

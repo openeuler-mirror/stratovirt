@@ -12,22 +12,26 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 
 use super::descriptor::{
     UsbConfigDescriptor, UsbDescConfig, UsbDescDevice, UsbDescEndpoint, UsbDescIface, UsbDescOther,
     UsbDescriptorOps, UsbDeviceDescriptor, UsbEndpointDescriptor, UsbInterfaceDescriptor,
 };
-use super::hid::{Hid, HidType, CONSUMER_REPORT_DESCRIPTOR, QUEUE_LENGTH, QUEUE_MASK};
+use super::hid::{Hid, HidDevState, HidType, CONSUMER_REPORT_DESCRIPTOR, QUEUE_LENGTH, QUEUE_MASK};
 use super::xhci::xhci_controller::{endpoint_number_to_id, XhciDevice};
 use super::{config::*, USB_DEVICE_BUFFER_DEFAULT_LEN};
 use super::{
-    notify_controller, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket, UsbPacketStatus,
+    notify_controller, UsbDevState, UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbPacket,
+    UsbPacketStatus,
 };
 use machine_manager::config::valid_id;
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
 use ui::input::{register_consumer, unregister_consumer, ConsumerOpts, CONSUMER_UP};
 use util::gen_base_func;
 
@@ -145,6 +149,13 @@ pub struct UsbConsumer {
     cntlr: Option<Weak<Mutex<XhciDevice>>>,
 }
 
+#[derive(DescSerde, Deserialize, Serialize)]
+#[desc_version(current_version = "0.1.0")]
+struct UsbConsumerDevState {
+    usb_state: UsbDevState,
+    hid_state: HidDevState,
+}
+
 pub struct UsbConsumerAdapter {
     usb_consumer: Arc<Mutex<UsbConsumer>>,
 }
@@ -201,11 +212,23 @@ impl UsbDevice for UsbConsumer {
         }));
         register_consumer(&id, consumer_adapter);
 
+        MigrationManager::register_device_instance(
+            UsbConsumerDevState::descriptor(),
+            consumer.clone(),
+            &id,
+        );
+
         Ok(consumer)
     }
 
     fn unrealize(&mut self) -> Result<()> {
         unregister_consumer(self.device_id());
+
+        MigrationManager::unregister_device_instance(
+            UsbConsumerDevState::descriptor(),
+            self.device_id(),
+        );
+
         Ok(())
     }
 
@@ -256,6 +279,33 @@ impl UsbDevice for UsbConsumer {
         self.cntlr.clone()
     }
 }
+
+impl StateTransfer for UsbConsumer {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = UsbConsumerDevState {
+            usb_state: self.base.get_usb_state(),
+            hid_state: self.hid.get_state()?,
+        };
+
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let usb_consumer_state: UsbConsumerDevState =
+            serde_json::from_slice(state).with_context(|| "Failed to get usb consumer state")?;
+
+        self.base.set_usb_state(&usb_consumer_state.usb_state);
+        self.hid.set_state(&usb_consumer_state.hid_state)?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&UsbConsumerDevState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for UsbConsumer {}
 
 #[cfg(test)]
 mod tests {

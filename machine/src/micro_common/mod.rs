@@ -32,7 +32,6 @@ pub mod syscall;
 
 use std::fmt;
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::vec::Vec;
@@ -47,6 +46,7 @@ use crate::aarch64::micro::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use crate::x86_64::micro::{LayoutEntryType, MEM_LAYOUT};
 use crate::{MachineBase, MachineError, MachineOps};
+use block_backend::qcow2::QCOW2_LIST;
 use cpu::CpuLifecycleState;
 #[cfg(target_arch = "x86_64")]
 use devices::sysbus::SysBusDevOps;
@@ -574,14 +574,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(
-            &self.base.cpus,
-            #[cfg(target_arch = "aarch64")]
-            &self.base.irq_chip,
-            &mut self.base.vm_state.0.lock().unwrap(),
-            old,
-            new,
-        ) {
+        if let Err(e) = self.vm_state_transfer(old, new) {
             error!("VM state transfer failed: {:?}", e);
             return false;
         }
@@ -618,7 +611,7 @@ impl MachineAddressInterface for LightMachine {
 
 impl DeviceInterface for LightMachine {
     fn query_status(&self) -> Response {
-        let vmstate = self.get_vm_state().deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().lock().unwrap();
         let qmp_state = match *vmstate {
             VmState::Running => qmp_schema::StatusInfo {
                 singlestep: false,
@@ -807,6 +800,65 @@ impl DeviceInterface for LightMachine {
                     None,
                 )
             }
+        }
+    }
+
+    fn human_monitor_command(&self, args: qmp_schema::HumanMonitorCmdArgument) -> Response {
+        let cmd_args: Vec<&str> = args.command_line.split(' ').collect();
+        match cmd_args[0] {
+            "info" => {
+                // Only support to query snapshots information by:
+                // "info snapshots"
+                if cmd_args.len() != 2 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                if cmd_args[1] != "snapshots" {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(format!(
+                            "Unsupported command: {} {}",
+                            cmd_args[0], cmd_args[1]
+                        )),
+                        None,
+                    );
+                }
+
+                let qcow2_list = QCOW2_LIST.lock().unwrap();
+                if qcow2_list.is_empty() {
+                    return Response::create_response(
+                        serde_json::to_value("There is no snapshot available.\r\n").unwrap(),
+                        None,
+                    );
+                }
+
+                let mut info_str = "List of snapshots present on all disks:\r\n".to_string();
+                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we
+                // don't support.
+                let vmstate_str = "None\r\n".to_string();
+                info_str += &vmstate_str;
+
+                for (drive_name, qcow2driver) in qcow2_list.iter() {
+                    let dev_str = format!(
+                        "\r\nList of partial (non-loadable) snapshots on \'{}\':\r\n",
+                        drive_name
+                    );
+                    let snap_infos = qcow2driver.lock().unwrap().list_snapshots();
+                    info_str += &(dev_str + &snap_infos);
+                }
+
+                Response::create_response(serde_json::to_value(info_str).unwrap(), None)
+            }
+            _ => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "Unsupported command: {}",
+                    cmd_args[0]
+                )),
+                None,
+            ),
         }
     }
 
@@ -1029,15 +1081,22 @@ impl DeviceInterface for LightMachine {
 impl MigrateInterface for LightMachine {
     fn migrate(&self, uri: String) -> Response {
         match parse_incoming_uri(&uri) {
-            Ok((MigrateMode::File, path)) => migration::snapshot(path),
-            Ok((MigrateMode::Unix, _)) | Ok((MigrateMode::Tcp, _)) => {
-                Response::create_error_response(
+            Ok(incoming) => match incoming.mode {
+                MigrateMode::File => migration::snapshot(incoming.uri),
+                MigrateMode::Unix | MigrateMode::Tcp => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(
                         "MicroVM does not support migration".to_string(),
                     ),
                     None,
-                )
-            }
+                ),
+                _ => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(format!(
+                        "Unknown mode: invalid uri {}",
+                        uri
+                    )),
+                    None,
+                ),
+            },
             _ => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(format!("Invalid uri: {}", uri)),
                 None,
@@ -1055,7 +1114,7 @@ impl MachineExternalInterface for LightMachine {}
 
 impl EventLoopManager for LightMachine {
     fn loop_should_exit(&self) -> bool {
-        let vmstate = self.base.vm_state.deref().0.lock().unwrap();
+        let vmstate = self.get_vm_state().lock().unwrap();
         *vmstate == VmState::Shutdown
     }
 

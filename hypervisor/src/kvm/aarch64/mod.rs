@@ -32,6 +32,8 @@ use crate::kvm::{KvmCpu, KvmHypervisor};
 use cpu::{
     ArchCPU, CPUBootConfig, CPUFeatures, CpregListEntry, RegsIndex, CPU, PMU_INTR, PPI_BASE,
 };
+use migration::MigrationError;
+use util::byte_code::ByteCode;
 
 pub const KVM_MAX_CPREG_ENTRIES: usize = 500;
 const KVM_NR_REGS: u64 = 31;
@@ -135,7 +137,7 @@ impl KvmCpu {
     pub fn arch_set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         vcpu_config: &CPUFeatures,
     ) -> Result<()> {
         let mut kvi = self.kvi.lock().unwrap();
@@ -169,7 +171,9 @@ impl KvmCpu {
         }
         drop(kvi);
 
-        arch_cpu.lock().unwrap().set_core_reg(boot_config);
+        if let Some(cfg) = boot_config {
+            arch_cpu.lock().unwrap().set_core_reg(cfg);
+        }
 
         self.arch_vcpu_init()?;
 
@@ -462,5 +466,24 @@ impl KvmCpu {
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
         cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
         self.arch_vcpu_init()
+    }
+
+    pub fn arch_get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::CoreRegs)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::MpState)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)?;
+
+        Ok(arch_cpu.lock().unwrap().as_bytes().to_vec())
+    }
+
+    pub fn arch_set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
+        let cpu_state =
+            *ArchCPU::from_bytes(state).with_context(|| MigrationError::FromBytesError("CPU"))?;
+
+        let mut cpu_state_locked = arch_cpu.lock().unwrap();
+        *cpu_state_locked = cpu_state;
+        drop(cpu_state_locked);
+        Ok(())
     }
 }

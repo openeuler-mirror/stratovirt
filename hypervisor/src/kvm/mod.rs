@@ -49,6 +49,8 @@ use vmm_sys_util::{
     signal::{register_signal_handler, Killable},
 };
 
+#[cfg(target_arch = "aarch64")]
+use self::aarch64::gicv3::{GICv3ItsState, GICv3State};
 use self::listener::KvmMemoryListener;
 use super::HypervisorOps;
 #[cfg(target_arch = "x86_64")]
@@ -64,15 +66,12 @@ use cpu::{
 };
 use devices::{pci::MsiVector, IrqManager, LineIrqManager, MsiIrqManager, TriggerMode};
 #[cfg(target_arch = "aarch64")]
-use devices::{
-    GICVersion, GICv2, GICv3, GICv3ItsState, GICv3State, ICGICConfig, InterruptController,
-    GIC_IRQ_INTERNAL,
-};
+use devices::{GICVersion, GICv2, GICv3, ICGICConfig, InterruptController, GIC_IRQ_INTERNAL};
 use interrupt::IrqRouteTable;
 use machine_manager::machine::HypervisorType;
 #[cfg(target_arch = "aarch64")]
 use migration::snapshot::{GICV3_ITS_SNAPSHOT_ID, GICV3_SNAPSHOT_ID};
-use migration::{MigrateMemSlot, MigrateOps, MigrationManager};
+use migration::{DeviceStateDesc, MigrateMemSlot, MigrateOps, MigrationManager};
 #[cfg(target_arch = "x86_64")]
 use x86_64::cpu_caps::X86CPUCaps as CPUCaps;
 
@@ -173,7 +172,11 @@ impl HypervisorOps for KvmHypervisor {
         gic_conf.check_sanity()?;
 
         let create_gicv3 = || {
-            let hypervisor_gic = KvmGICv3::new(self.vm_fd.clone().unwrap(), gic_conf.vcpu_count)?;
+            let hypervisor_gic = KvmGICv3::new(
+                self.vm_fd.clone().unwrap(),
+                gic_conf.vcpu_count,
+                gic_conf.max_irq,
+            )?;
             let its_handler = KvmGICv3Its::new(self.vm_fd.clone().unwrap())?;
             let gicv3 = Arc::new(GICv3::new(
                 Arc::new(hypervisor_gic),
@@ -543,7 +546,7 @@ impl CPUHypervisorOps for KvmCpu {
     fn set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,
-        boot_config: &CPUBootConfig,
+        boot_config: &Option<CPUBootConfig>,
         #[cfg(target_arch = "aarch64")] vcpu_config: &CPUFeatures,
     ) -> Result<()> {
         #[cfg(target_arch = "aarch64")]
@@ -575,6 +578,22 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_reset_vcpu(cpu)?;
 
         Ok(())
+    }
+
+    fn get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {
+        self.arch_get_state_vec(arch_cpu)
+    }
+
+    fn set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
+        self.arch_set_state(state, arch_cpu)
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&ArchCPU::descriptor().name).unwrap_or(!0)
+    }
+
+    fn get_device_desc(&self) -> DeviceStateDesc {
+        ArchCPU::descriptor()
     }
 
     fn vcpu_exec(
@@ -694,6 +713,14 @@ impl CPUHypervisorOps for KvmCpu {
         pause_signal.store(false, Ordering::SeqCst);
         drop(cpu_state);
         cvar.notify_one();
+        Ok(())
+    }
+
+    fn reset_vcpu_lifecycle_state(
+        &self,
+        state: &(Mutex<CpuLifecycleState>, Condvar),
+    ) -> Result<()> {
+        *state.0.lock().unwrap() = CpuLifecycleState::Paused;
         Ok(())
     }
 
@@ -878,9 +905,9 @@ impl MsiIrqManager for KVMInterruptManager {
     }
 
     fn trigger(&self, irq_fd: Option<Arc<EventFd>>, vector: MsiVector, dev_id: u32) -> Result<()> {
-        if irq_fd.is_some() {
-            trace::kvm_trigger_irqfd(irq_fd.as_ref().unwrap());
-            irq_fd.unwrap().write(1)?;
+        if let Some(fd) = irq_fd.as_ref() {
+            trace::kvm_trigger_irqfd(fd);
+            fd.write(1)?;
         } else {
             #[cfg(target_arch = "aarch64")]
             let flags: u32 = kvm_bindings::KVM_MSI_VALID_DEVID;
@@ -1067,7 +1094,7 @@ mod test {
         let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm);
         // test `set_boot_config` function
         assert!(hypervisor_cpu
-            .set_boot_config(cpu.arch().clone(), &cpu_config)
+            .set_boot_config(cpu.arch().clone(), &Some(cpu_config))
             .is_ok());
 
         // test setup special registers

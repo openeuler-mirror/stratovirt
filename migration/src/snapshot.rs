@@ -14,14 +14,17 @@ use std::collections::HashMap;
 use std::fs::{create_dir, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
 
 use anyhow::{anyhow, bail, Context, Result};
+use log::error;
 
 use crate::general::{translate_id, Lifecycle};
 use crate::manager::{MigrationManager, MIGRATION_MANAGER};
-use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus, HEADER_LENGTH};
+use crate::protocol::{DeviceStateDesc, FileFormat, MigrationStatus};
 use crate::MigrationError;
-use util::unix::host_page_size;
 
 pub const SERIAL_SNAPSHOT_ID: &str = "serial";
 pub const KVM_SNAPSHOT_ID: &str = "kvm";
@@ -29,6 +32,11 @@ pub const GICV3_SNAPSHOT_ID: &str = "gicv3";
 pub const GICV3_ITS_SNAPSHOT_ID: &str = "gicv3_its";
 pub const PL011_SNAPSHOT_ID: &str = "pl011";
 pub const PL031_SNAPSHOT_ID: &str = "pl031";
+pub const RAMFB_SNAPSHOT_ID: &str = "ramfb";
+pub const FWCFG_SNAPSHOT_ID: &str = "fwcfg";
+pub const GED_SNAPSHOT_ID: &str = "ged";
+pub const OHUI_SNAPSHOT_ID: &str = "ohui";
+pub const POWER_SNAPSHOT_ID: &str = "power";
 
 /// The suffix used for snapshot memory storage.
 const MEMORY_PATH_SUFFIX: &str = "memory";
@@ -50,6 +58,7 @@ impl MigrationManager {
     pub fn save_snapshot(path: &str) -> Result<()> {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
+        MigrationManager::notify_status(true, MigrationStatus::Active)?;
 
         // Create snapshot dir.
         if let Err(e) = create_dir(path) {
@@ -58,7 +67,7 @@ impl MigrationManager {
             }
         }
 
-        // Save device state
+        // Save device state, exclude GPU.
         let mut vm_state_path = PathBuf::from(path);
         vm_state_path.push(DEVICE_PATH_SUFFIX);
         match File::create(vm_state_path) {
@@ -70,20 +79,40 @@ impl MigrationManager {
             }
         }
 
+        let ret = Arc::new(AtomicBool::new(true));
+        let gpu_ret = ret.clone();
+        let gpu_path = path.to_string();
+        let handle = thread::Builder::new()
+            .name("save-gpu".to_string())
+            .spawn(move || {
+                // Save GPU device state
+                Self::save_gpu(gpu_path.as_str()).unwrap_or_else(|e| {
+                    gpu_ret.store(false, Ordering::SeqCst);
+                    error!("Failed to save gpu state: {:?}", e);
+                });
+            })?;
+
         // Save memory data
         let mut vm_memory_path = PathBuf::from(path);
         vm_memory_path.push(MEMORY_PATH_SUFFIX);
         match File::create(vm_memory_path) {
             Ok(mut memory_file) => {
-                Self::save_memory(Some(FileFormat::MemoryFull), &mut memory_file)?;
+                Self::save_memory(&mut memory_file)?;
             }
             Err(e) => {
                 bail!("Failed to create snapshot memory file: {}", e);
             }
         }
+        if handle.join().is_err() {
+            error!("Save gpu thread join failed");
+        }
+        if !ret.load(Ordering::Acquire) {
+            bail!("Failed to save gpu state");
+        }
 
         // Set status to `Completed`
         MigrationManager::set_status(MigrationStatus::Completed)?;
+        MigrationManager::notify_status(true, MigrationStatus::Completed)?;
 
         Ok(())
     }
@@ -98,10 +127,8 @@ impl MigrationManager {
     /// # Argument
     ///
     /// * `path` - snapshot dir path.
-    pub fn restore_snapshot(path: &str) -> Result<()> {
-        // Set status to `Active`
-        MigrationManager::set_status(MigrationStatus::Active)?;
-
+    /// * `mapped` - Whether to directly mmap the memory file as the backend.
+    pub fn restore_snapshot(path: &str, mapped: bool) -> Result<()> {
         let mut snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
             return Err(anyhow!(MigrationError::InvalidSnapshotPath));
@@ -125,30 +152,57 @@ impl MigrationManager {
             bail!("Invalid device state snapshot file");
         }
 
-        Self::restore_memory(&mut memory_file).with_context(|| "Failed to load snapshot memory")?;
+        let ret = Arc::new(AtomicBool::new(true));
+        let gpu_ret = ret.clone();
+        let gpu_path = path.to_string();
+        let handle = thread::Builder::new()
+            .name("restore-gpu".to_string())
+            .spawn(move || {
+                // Restore GPU device state
+                Self::restore_gpu(gpu_path.as_str()).unwrap_or_else(|e| {
+                    gpu_ret.store(false, Ordering::SeqCst);
+                    error!("Failed to restore gpu state: {:?}", e);
+                });
+            })?;
+
+        Self::restore_memory(&mut memory_file, mapped)
+            .with_context(|| "Failed to load snapshot memory")?;
         let snapshot_desc_db =
             Self::restore_desc_db(&mut device_state_file, device_state_header.desc_len)
                 .with_context(|| "Failed to load device descriptor db")?;
         Self::restore_vmstate(snapshot_desc_db, &mut device_state_file)
             .with_context(|| "Failed to load snapshot device state")?;
-        Self::resume()?;
 
-        // Set status to `Completed`
-        MigrationManager::set_status(MigrationStatus::Completed)?;
+        if handle.join().is_err() {
+            error!("Restore gpu thread join failed");
+        }
+        if !ret.load(Ordering::Acquire) {
+            bail!("Failed to restore gpu state");
+        }
+
+        Self::resume()?;
 
         Ok(())
     }
 
-    /// Save memory state and data to `Write` trait object.
+    /// Save memory state and data to the memory file.
     ///
     /// # Arguments
     ///
-    /// * `fd` - The `Write` trait object to save memory data.
-    fn save_memory(file_format: Option<FileFormat>, fd: &mut dyn Write) -> Result<()> {
-        Self::save_header(file_format, fd)?;
+    /// * `file` - The memory file to save memory data.
+    fn save_memory(file: &mut File) -> Result<()> {
+        Self::save_header(Some(FileFormat::MemoryFull), file)?;
 
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
-        locked_vmm.memory.as_ref().unwrap().save_memory(fd)?;
+        locked_vmm.memory.as_ref().unwrap().save_memory(file)?;
+
+        locked_vmm
+            .ram_list
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .save_memory(file)?;
 
         Ok(())
     }
@@ -158,15 +212,24 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `file` - snapshot memory file.
-    fn restore_memory(file: &mut File) -> Result<()> {
-        let mut state_bytes = [0_u8].repeat((host_page_size() as usize) * 2 - HEADER_LENGTH);
-        file.read_exact(&mut state_bytes)?;
+    /// * `mapped` - Whether to directly mmap the memory file as the backend.
+    fn restore_memory(file: &mut File, mapped: bool) -> Result<()> {
+        // Restore memory managed by address space.
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
         locked_vmm
             .memory
             .as_ref()
             .unwrap()
-            .restore_memory(Some(file), &state_bytes)?;
+            .restore_memory(file, mapped)?;
+
+        // Restore memory managed by ram list.
+        locked_vmm
+            .ram_list
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .restore_memory(file, false)?;
 
         Ok(())
     }
@@ -249,33 +312,33 @@ impl MigrationManager {
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
         // Restore transports state.
         for _ in 0..locked_vmm.transports.len() {
-            let (transport_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (transport_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(transport) = locked_vmm.transports.get(&id) {
                 transport
                     .lock()
                     .unwrap()
-                    .restore_mut_device(&transport_data)
+                    .restore_mut_device(&transport_data, old_version)
                     .with_context(|| "Failed to restore transport state")?;
             }
         }
 
         // Restore devices state.
         for _ in 0..locked_vmm.devices.len() {
-            let (device_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (device_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(device) = locked_vmm.devices.get(&id) {
                 device
                     .lock()
                     .unwrap()
-                    .restore_mut_device(&device_data)
+                    .restore_mut_device(&device_data, old_version)
                     .with_context(|| "Failed to restore device state")?;
             }
         }
 
         // Restore CPUs state.
         for _ in 0..locked_vmm.cpus.len() {
-            let (cpu_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+            let (cpu_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
             if let Some(cpu) = locked_vmm.cpus.get(&id) {
-                cpu.restore_device(&cpu_data)
+                cpu.restore_device(&cpu_data, old_version)
                     .with_context(|| "Failed to restore cpu state")?;
             }
         }
@@ -284,8 +347,8 @@ impl MigrationManager {
         {
             // Restore kvm device state.
             if let Some(kvm) = &locked_vmm.kvm {
-                let (kvm_data, _) = Self::check_vm_state(fd, &snap_desc_db)?;
-                kvm.restore_device(&kvm_data)
+                let (kvm_data, _, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
+                kvm.restore_device(&kvm_data, old_version)
                     .with_context(|| "Failed to restore kvm state")?;
             }
         }
@@ -294,11 +357,97 @@ impl MigrationManager {
         {
             // Restore GIC group state.
             for _ in 0..locked_vmm.gic_group.len() {
-                let (gic_data, id) = Self::check_vm_state(fd, &snap_desc_db)?;
+                let (gic_data, id, old_version) = Self::check_vm_state(fd, &snap_desc_db)?;
                 if let Some(gic) = locked_vmm.gic_group.get(&id) {
-                    gic.restore_device(&gic_data)
+                    gic.restore_device(&gic_data, old_version)
                         .with_context(|| "Failed to restore gic state")?;
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Save GPU state and data to the file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to save GPU data.
+    pub fn save_gpu(path: &str) -> Result<()> {
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        for gpu in locked_vmm.gpus.values() {
+            gpu.lock().unwrap().save_gpu(path)?;
+        }
+
+        Ok(())
+    }
+
+    /// Load and restore GPU from snapshot file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - snapshot GPU data file path.
+    pub fn restore_gpu(path: &str) -> Result<()> {
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        for gpu in locked_vmm.gpus.values() {
+            gpu.lock().unwrap().restore_gpu(path)?;
+        }
+
+        Ok(())
+    }
+
+    /// Notify current migrate status to device. Allow the device do some special
+    /// operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `save` - current process doing save/restore operation.
+    /// * `status - current status in save/restore process.
+    pub fn notify_status(save: bool, status: MigrationStatus) -> Result<()> {
+        let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
+        for (_, transport) in locked_vmm.transports.iter() {
+            transport
+                .lock()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to transport")?;
+        }
+
+        for (_, device) in locked_vmm.devices.iter() {
+            device
+                .lock()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to device")?;
+        }
+
+        for (_, cpu) in locked_vmm.cpus.iter() {
+            cpu.notify_status(save, status)
+                .with_context(|| "Failed to notify status to cpu")?;
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            locked_vmm
+                .kvm
+                .as_ref()
+                .unwrap()
+                .notify_status(save, status)
+                .with_context(|| "Failed to notify status to kvm")?;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            let gic_id = translate_id(GICV3_SNAPSHOT_ID);
+            if let Some(gic) = locked_vmm.gic_group.get(&gic_id) {
+                gic.notify_status(save, status)
+                    .with_context(|| "Failed to notify status to gic")?;
+            }
+
+            let its_id = translate_id(GICV3_ITS_SNAPSHOT_ID);
+            if let Some(its) = locked_vmm.gic_group.get(&its_id) {
+                its.notify_status(save, status)
+                    .with_context(|| "Failed to notify status to gic its")?;
             }
         }
 

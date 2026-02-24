@@ -14,7 +14,7 @@ mod cpuid;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use kvm_bindings::{
     kvm_cpuid_entry2 as CpuidEntry2, kvm_debugregs as DebugRegs, kvm_fpu as Fpu,
     kvm_lapic_state as LapicState, kvm_mp_state as MpState, kvm_msr_entry as MsrEntry,
@@ -27,11 +27,8 @@ use kvm_bindings::{
 
 use self::cpuid::host_cpuid;
 use crate::CPU;
-use migration::{
-    DeviceStateDesc, FieldDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer,
-};
+use migration::{DeviceStateDesc, FieldDesc, MigrationHook, StateTransfer};
 use migration_derive::{ByteCode, Desc};
-use util::byte_code::ByteCode;
 
 const ECX_EPB_SHIFT: u32 = 3;
 const X86_FEATURE_HYPERVISOR: u32 = 31;
@@ -539,34 +536,15 @@ impl X86CPUState {
 
 impl StateTransfer for CPU {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
-        let hypervisor_cpu = self.hypervisor_cpu();
-
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MpState)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Regs)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Sregs)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xsave)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Fpu)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::Xcrs)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::DebugRegs)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::LapicState)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::MsrEntry)?;
-        hypervisor_cpu.get_regs(self.arch_cpu.clone(), X86RegsIndex::VcpuEvents)?;
-
-        Ok(self.arch_cpu.lock().unwrap().as_bytes().to_vec())
+        self.hypervisor_cpu.get_state_vec(self.arch_cpu.clone())
     }
 
-    fn set_state(&self, state: &[u8]) -> Result<()> {
-        let cpu_state = X86CPUState::from_bytes(state)
-            .with_context(|| MigrationError::FromBytesError("CPU"))?;
-
-        let mut cpu_state_locked = self.arch_cpu.lock().unwrap();
-        *cpu_state_locked = cpu_state.clone();
-
-        Ok(())
+    fn set_state(&self, state: &[u8], _version: u32) -> Result<()> {
+        self.hypervisor_cpu.set_state(state, self.arch_cpu.clone())
     }
 
     fn get_device_alias(&self) -> u64 {
-        MigrationManager::get_desc_alias(&X86CPUState::descriptor().name).unwrap_or(!0)
+        self.hypervisor_cpu.get_device_alias()
     }
 }
 
