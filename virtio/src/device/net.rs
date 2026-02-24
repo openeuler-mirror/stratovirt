@@ -57,7 +57,7 @@ use machine_manager::state_query::{
 };
 use machine_manager::{
     event,
-    notifier::{register_vm_pause_notifier, vm_paused},
+    notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier, vm_paused},
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
 };
@@ -1374,6 +1374,8 @@ pub struct Net {
     timer_id: Option<u64>,
     /// indicate if io is inflight
     io_inflight: Arc<IoRef>,
+    /// VM pause notifier id
+    pause_notifier_id: u64,
 }
 
 impl Net {
@@ -1391,39 +1393,6 @@ impl Net {
             netdev_cfg,
             link_status: Arc::new(AtomicBool::new(true)),
             ..Default::default()
-        }
-    }
-
-    fn init_vm_pause_notifier(&self) {
-        let queue_evts = self.queue_evts.clone();
-        let pause_notify = Arc::new(move |paused| {
-            info!("VM State is {}", if paused { "paused" } else { "running" });
-
-            if let (false, Some(evts)) = (paused, queue_evts.as_ref()) {
-                for (id, evt) in evts.iter().enumerate() {
-                    if let Err(err) = evt.write(1) {
-                        error!("Failed to notify queue {} with error {:?}", id, err);
-                    }
-                }
-            }
-        });
-        register_vm_pause_notifier(pause_notify);
-    }
-
-    fn wait_io_done(&self) {
-        const IO_TIMEOUT: u64 = 3;
-
-        let cur = std::time::Instant::now();
-        while self.io_inflight.ref_cnt() != 0 {
-            if cur.elapsed() >= Duration::from_secs(IO_TIMEOUT) {
-                warn!(
-                    "Elapsed {}s but {} IOs are ongoing.",
-                    IO_TIMEOUT,
-                    self.io_inflight.ref_cnt()
-                );
-                break;
-            }
-            yield_now();
         }
     }
 
@@ -2266,6 +2235,7 @@ impl IoRef {
 mod tests {
     use super::*;
     use crate::tests::eventloop_init;
+    use machine_manager::notifier::pause_notify;
 
     #[test]
     fn test_net_init() {
@@ -2444,5 +2414,42 @@ mod tests {
         } else {
             assert!(false);
         }
+    }
+
+    #[test]
+    fn test_pause_notifier() {
+        let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
+        net.realize().unwrap();
+
+        assert_ne!(net.pause_notifier_id, 0);
+
+        pause_notify(true);
+        assert_eq!(vm_paused(), true);
+        pause_notify(false);
+        assert_eq!(vm_paused(), false);
+
+        let id = net.pause_notifier_id;
+        net.init_vm_pause_notifier();
+        assert_ne!(id, net.pause_notifier_id);
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
+        net.realize().unwrap();
+
+        let device_features = net.base.device_features;
+        let driver_features = net.base.driver_features;
+        let broken = net.base.broken.load(Ordering::SeqCst);
+
+        let init_state = net.get_state_vec().unwrap();
+        net.base.device_features = 0;
+        net.base.driver_features = 0;
+        net.base.broken.store(true, Ordering::SeqCst);
+
+        net.set_state_mut(&init_state, 0u32).unwrap();
+        assert_eq!(device_features, net.base.device_features);
+        assert_eq!(driver_features, net.base.driver_features);
+        assert_eq!(broken, net.base.broken.load(Ordering::SeqCst));
     }
 }
