@@ -125,6 +125,7 @@ use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
 use virtio::VhostKern;
 #[cfg(any(feature = "vhostuser_block", feature = "vhostuser_net"))]
 use virtio::VhostUser;
+use virtio::VhostUser::FsState;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
@@ -1068,7 +1069,7 @@ pub trait MachineOps: MachineLifecycle {
                     ("addr", dev_cfg.addr),
                     ("multifunction", dev_cfg.multifunction)
                 );
-                self.add_virtio_mmio_device(dev_cfg.id.clone(), device)
+                self.add_virtio_mmio_device(dev_cfg.id.clone(), device.clone())
                     .with_context(|| "Failed to add vhost user fs device")?;
             }
             _ => {
@@ -1080,10 +1081,18 @@ pub trait MachineOps: MachineLifecycle {
                 let msi_irq_manager = root_pci_bus.msi_irq_manager.clone();
                 drop(locked_bus);
                 let need_irqfd = msi_irq_manager.as_ref().unwrap().irqfd_enable();
-                self.add_virtio_pci_device(&dev_cfg.id, &bdf, device, multi_func, need_irqfd)
-                    .with_context(|| "Failed to add pci fs device")?;
+                self.add_virtio_pci_device(
+                    &dev_cfg.id,
+                    &bdf,
+                    device.clone(),
+                    multi_func,
+                    need_irqfd,
+                )
+                .with_context(|| "Failed to add pci fs device")?;
             }
         }
+
+        MigrationManager::register_device_instance(FsState::descriptor(), device, &dev_cfg.id);
 
         Ok(())
     }
