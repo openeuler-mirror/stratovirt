@@ -24,6 +24,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
 use once_cell::sync::Lazy;
 use util::aio::Iovec;
+use util::macnat::{IpvtapMacnat, Macnat};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
@@ -62,13 +63,12 @@ use util::loop_context::{
 };
 use util::num_ops::str_to_num;
 use util::tap::{
-    Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
+    Tap, IFF_MULTI_QUEUE, MAC_ADDR_LEN, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN,
+    TUN_F_UFO,
 };
 
 /// Number of virtqueues(rx/tx/ctrl).
 const QUEUE_NUM_NET: usize = 3;
-/// The Mac Address length.
-pub const MAC_ADDR_LEN: usize = 6;
 /// The length of ethernet header.
 const ETHERNET_HDR_LENGTH: usize = 14;
 /// The max "multicast + unicast" mac address table length.
@@ -684,18 +684,68 @@ impl RTxVirtio {
 type RxVirtio = RTxVirtio;
 type TxVirtio = RTxVirtio;
 
-struct NetIoQueue {
+struct NetIoQueue<T> {
     rx: RxVirtio,
     tx: TxVirtio,
     ctrl_info: Arc<Mutex<CtrlInfo>>,
+    config: Arc<Mutex<VirtioNetConfig>>,
     mem_space: Arc<AddressSpace>,
     interrupt_cb: Arc<VirtioInterrupt>,
     listen_state: Arc<Mutex<ListenState>>,
     driver_features: u64,
     queue_size: u16,
+    macnat: Option<T>,
 }
 
-impl NetIoQueue {
+impl<T: Macnat + 'static> NetIoQueue<T> {
+    fn rx_min_bytes(&self) -> usize {
+        const MIN_LEN: usize = NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH;
+
+        if let Some(macnat) = self.macnat.as_ref() {
+            cmp::max(NET_HDR_LENGTH + macnat.rx_min_len(), MIN_LEN)
+        } else {
+            MIN_LEN
+        }
+    }
+
+    // return true if ignore the packet, otherwise return false.
+    // iovecs bytes must be larger than `len`.
+    fn process_rx_packet(
+        &self,
+        iovecs: &[Iovec],
+        len: usize,
+        tap_mac: Option<&[u8; MAC_ADDR_LEN]>,
+    ) -> Result<bool> {
+        let buf = if let Some(macnat) = self.macnat.as_ref() {
+            // SAFETY: `tap_mac` must be valid if macnat is enabled.
+            macnat.handle_rx_packet(
+                iovecs,
+                NET_HDR_LENGTH,
+                &self.config.lock().unwrap().mac,
+                tap_mac.unwrap(),
+            )?
+        } else {
+            let mut buf = vec![0u8; len];
+            get_net_header(iovecs, &mut buf).and_then(|size| {
+                if size != buf.len() {
+                    bail!(
+                        "Invalid header length {}, expected length {}",
+                        size,
+                        buf.len()
+                    );
+                }
+                Ok(())
+            })?;
+            buf
+        };
+
+        Ok(self
+            .ctrl_info
+            .lock()
+            .unwrap()
+            .filter_packets(&buf[NET_HDR_LENGTH..]))
+    }
+
     fn handle_rx(&self, tap: &Arc<RwLock<Option<Tap>>>) -> Result<()> {
         trace::virtio_receive_request("Net".to_string(), "to rx".to_string());
         if tap.read().unwrap().is_none() {
@@ -737,29 +787,16 @@ impl NetIoQueue {
             } else {
                 -1
             };
+            let tap_mac = locked_tap.as_ref().unwrap().get_mac();
             drop(locked_tap);
-            if size < (NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH) as isize {
+
+            let len = self.rx_min_bytes();
+            if size < len as isize {
                 queue.vring.push_back();
                 break;
             }
 
-            let mut buf = vec![0_u8; NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH];
-            get_net_header(&iovecs, &mut buf).and_then(|size| {
-                if size != buf.len() {
-                    bail!(
-                        "Invalid header length {}, expected length {}",
-                        size,
-                        buf.len()
-                    );
-                }
-                Ok(())
-            })?;
-            if self
-                .ctrl_info
-                .lock()
-                .unwrap()
-                .filter_packets(&buf[NET_HDR_LENGTH..])
-            {
+            if self.process_rx_packet(&iovecs, len, tap_mac.as_ref())? {
                 queue.vring.push_back();
                 continue;
             }
@@ -813,8 +850,9 @@ impl NetIoQueue {
 
             let (_, iovecs) =
                 gpa_hva_iovec_map(&elem.out_iovec, &self.mem_space, queue.vring.get_cache())?;
+
             let locked_tap = tap.read().unwrap();
-            if locked_tap.is_none() || locked_tap.as_ref().unwrap().send_packets(&iovecs) == -1 {
+            if locked_tap.is_none() {
                 queue.vring.push_back();
                 queue
                     .vring
@@ -823,6 +861,26 @@ impl NetIoQueue {
                 self.listen_state.lock().unwrap().set_tap_full(true);
                 break;
             }
+
+            if let Some(macnat) = self.macnat.as_ref() {
+                let tap_mac = locked_tap
+                    .as_ref()
+                    .unwrap()
+                    .get_mac()
+                    .with_context(|| "No host mac address for macnat")?;
+                macnat.handle_tx_packet(&iovecs, NET_HDR_LENGTH, &tap_mac)?;
+            }
+
+            if locked_tap.as_ref().unwrap().send_packets(&iovecs) == -1 {
+                queue.vring.push_back();
+                queue
+                    .vring
+                    .suppress_queue_notify(self.driver_features, true)
+                    .with_context(|| "Failed to suppress tx queue notify")?;
+                self.listen_state.lock().unwrap().set_tap_full(true);
+                break;
+            }
+
             drop(locked_tap);
 
             queue
@@ -963,13 +1021,13 @@ fn build_event_notifier(
     EventNotifier::new(op, fd, None, event, handlers)
 }
 
-struct NetIoHandler {
+struct NetIoHandler<T> {
     /// The context name of iothread for tap and rx virtio queue.
     /// Since we placed the handlers of RxVirtio, TxVirtio and tap_fd in different threads,
     /// thread name is needed to change the monitoring status of tap_fd.
     rx_iothread: Option<String>,
     /// Virtio queue used for net io.
-    net_queue: Arc<NetIoQueue>,
+    net_queue: Arc<NetIoQueue<T>>,
     /// The context of tap device.
     tap: Arc<RwLock<Option<Tap>>>,
     /// Device is broken or not.
@@ -980,7 +1038,7 @@ struct NetIoHandler {
     update_evt: Arc<EventFd>,
 }
 
-impl NetIoHandler {
+impl<T: Macnat + 'static> NetIoHandler<T> {
     fn update_evt_handler(&mut self) -> Result<()> {
         let mut locked_tap = self.tap.write().unwrap();
         let old_tap_fd = if locked_tap.is_some() {
@@ -1008,7 +1066,7 @@ impl NetIoHandler {
     }
 
     /// Register event notifier for update_evt.
-    fn update_evt_notifier(&self, net_io: Arc<Mutex<NetIoHandler>>) -> Vec<EventNotifier> {
+    fn update_evt_notifier(&self, net_io: Arc<Mutex<NetIoHandler<T>>>) -> Vec<EventNotifier> {
         let device_broken = self.device_broken.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
@@ -1263,6 +1321,10 @@ impl Net {
             ..Default::default()
         }
     }
+
+    fn get_macnat_handler(&self) -> Option<IpvtapMacnat> {
+        self.netdev_cfg.macnat.then_some(IpvtapMacnat)
+    }
 }
 
 /// Set Mac address configured into the virtio configuration, and return features mask with
@@ -1355,12 +1417,16 @@ fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
 /// # Arguments
 ///
 /// * `net_fd` - Fd of tap device opened.
-/// * `host_dev_name` - Path of tap device on host.
+/// * `host_dev_name` - Name of tap device on host.
+/// * `host_dev_path` - Path of tap device on host.
 /// * `queue_pairs` - The number of virtio queue pairs.
+/// * `macnat` - Indicate if enable macnat feature.
 pub fn create_tap(
     net_fds: Option<&Vec<i32>>,
     host_dev_name: Option<&str>,
+    host_dev_path: Option<&str>,
     queue_pairs: u16,
+    macnat: bool,
 ) -> Result<Option<Vec<Tap>>> {
     if net_fds.is_none() && host_dev_name.is_none() {
         return Ok(None);
@@ -1375,18 +1441,20 @@ pub fn create_tap(
             let fd = fds
                 .get(index as usize)
                 .with_context(|| format!("Failed to get fd from index {}", index))?;
-            Tap::new(None, Some(*fd), queue_pairs)
+            Tap::new(None, None, Some(*fd), queue_pairs, macnat)
                 .with_context(|| format!("Failed to create tap, index is {}", index))?
         } else {
             // `unwrap()` won't fail because the arguments have been checked
             let dev_name = host_dev_name.unwrap();
             check_mq(dev_name, queue_pairs)?;
-            Tap::new(Some(dev_name), None, queue_pairs).with_context(|| {
-                format!(
-                    "Failed to create tap with name {}, index is {}",
-                    dev_name, index
-                )
-            })?
+            Tap::new(Some(dev_name), host_dev_path, None, queue_pairs, macnat).with_context(
+                || {
+                    format!(
+                        "Failed to create tap with name {}, index is {}",
+                        dev_name, index
+                    )
+                },
+            )?
         };
 
         tap.set_hdr_size(NET_HDR_LENGTH as u32)
@@ -1439,8 +1507,14 @@ impl VirtioDevice for Net {
 
         let queue_pairs = self.netdev_cfg.queues / 2;
         if !self.netdev_cfg.ifname.is_empty() {
-            self.taps = create_tap(None, Some(&self.netdev_cfg.ifname), queue_pairs)
-                .with_context(|| "Failed to open tap with file path")?;
+            self.taps = create_tap(
+                None,
+                Some(&self.netdev_cfg.ifname),
+                self.netdev_cfg.get_path(),
+                queue_pairs,
+                self.netdev_cfg.macnat,
+            )
+            .with_context(|| "Failed to open tap with file path")?;
         } else if let Some(fds) = self.netdev_cfg.tap_fds.as_mut() {
             let mut created_fds = 0;
             if let Some(taps) = &self.taps {
@@ -1452,7 +1526,7 @@ impl VirtioDevice for Net {
             }
 
             if created_fds != fds.len() {
-                self.taps = create_tap(Some(fds), None, queue_pairs)
+                self.taps = create_tap(Some(fds), None, None, queue_pairs, self.netdev_cfg.macnat)
                     .with_context(|| "Failed to open tap")?;
             }
         } else {
@@ -1622,17 +1696,19 @@ impl VirtioDevice for Net {
             }
 
             let update_evt = Arc::new(create_new_eventfd()?);
+            let tap = Arc::new(RwLock::new(self.taps.as_ref().map(|t| t[index].clone())));
             let net_queue = Arc::new(NetIoQueue {
                 rx: RxVirtio::new(rx_queue, rx_queue_evt),
                 tx: TxVirtio::new(tx_queue, tx_queue_evt),
                 ctrl_info: ctrl_info.clone(),
+                config: ctrl_info.lock().unwrap().config.clone(),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 listen_state: Arc::new(Mutex::new(ListenState::new())),
                 queue_size: self.queue_size_max(),
+                macnat: self.get_macnat_handler(),
             });
-            let tap = Arc::new(RwLock::new(self.taps.as_ref().map(|t| t[index].clone())));
             let net_io = Arc::new(Mutex::new(NetIoHandler {
                 rx_iothread: self.net_cfg.rx_iothread.as_ref().cloned(),
                 net_queue,
@@ -1864,12 +1940,12 @@ mod tests {
     #[test]
     fn test_net_create_tap() {
         // Test None net_fds and host_dev_name.
-        assert!(create_tap(None, None, 16).unwrap().is_none());
+        assert!(create_tap(None, None, None, 16, false).unwrap().is_none());
 
         // Test create tap with net_fds and host_dev_name.
         let net_fds = vec![32, 33];
         let tap_name = "tap0";
-        if let Err(err) = create_tap(Some(&net_fds), Some(tap_name), 1) {
+        if let Err(err) = create_tap(Some(&net_fds), Some(tap_name), None, 1, false) {
             let err_msg = "Failed to create tap, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
@@ -1877,7 +1953,7 @@ mod tests {
         }
 
         // Test create tap with empty net_fds.
-        if let Err(err) = create_tap(Some(&vec![]), None, 1) {
+        if let Err(err) = create_tap(Some(&vec![]), None, None, 1, false) {
             let err_msg = "Failed to get fd from index 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
@@ -1885,7 +1961,7 @@ mod tests {
         }
 
         // Test create tap with tap_name which is not exist.
-        if let Err(err) = create_tap(None, Some("the_tap_is_not_exist"), 1) {
+        if let Err(err) = create_tap(None, Some("the_tap_is_not_exist"), None, 1, false) {
             let err_msg =
                 "Failed to create tap with name the_tap_is_not_exist, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);

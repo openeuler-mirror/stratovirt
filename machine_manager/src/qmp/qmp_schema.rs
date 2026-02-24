@@ -485,6 +485,7 @@ pub struct netdev_add {
     pub script: Option<String>,
     pub queues: Option<u16>,
     pub chardev: Option<String>,
+    pub macnat: Option<bool>,
 }
 
 pub type NetDevAddArgument = netdev_add;

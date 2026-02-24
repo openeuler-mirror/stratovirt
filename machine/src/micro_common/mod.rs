@@ -953,7 +953,7 @@ impl DeviceInterface for LightMachine {
             }
         } else if let Some(if_name) = args.if_name {
             netdev_cfg.ifname = if_name.clone();
-            if create_tap(None, Some(&if_name), 1).is_err() {
+            if create_tap(None, Some(&if_name), None, 1, netdev_cfg.macnat).is_err() {
                 return Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(
                         "Tap device already in use".to_string(),
