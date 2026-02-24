@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use log::{error, warn};
 use serde_json::json;
-use util::set_termi_canon_mode;
+use util::{any_typecast_mut, set_termi_canon_mode};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -1550,24 +1550,22 @@ impl DeviceInterface for StdMachine {
         }
 
         let mut locked_dev = net_dev.unwrap().lock().unwrap();
-        let vio_net = locked_dev.as_any_mut().downcast_mut::<Net>();
-        if let Some(net) = vio_net {
-            match net.update_netdev_cfg(args.ifname, args.path, args.macnat) {
+        any_typecast_mut(&mut *locked_dev).map_or(
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "net device {} not support tap replacement",
+                    args.id
+                )),
+                None,
+            ),
+            |net: &mut Net| match net.update_netdev_cfg(args.ifname, args.path, args.macnat) {
                 Ok(()) => Response::create_empty_response(),
                 Err(e) => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
                 ),
-            }
-        } else {
-            Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(format!(
-                    "net dev {} not support tap replacement",
-                    args.id
-                )),
-                None,
-            )
-        }
+            },
+        )
     }
 
     fn netlink_set(&self, args: NetLinkSetArgument) -> Response {
@@ -1580,24 +1578,22 @@ impl DeviceInterface for StdMachine {
         }
 
         let mut locked_dev = net_dev.unwrap().lock().unwrap();
-        let net_link = locked_dev.as_any_mut().downcast_mut::<Net>();
-        if let Some(link) = net_link {
-            match link.set_link_status(args.up) {
+        any_typecast_mut(&mut *locked_dev).map_or(
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "net device {} not support link status set",
+                    args.id
+                )),
+                None,
+            ),
+            |net: &mut Net| match net.set_link_status(args.up) {
                 Ok(()) => Response::create_empty_response(),
                 Err(e) => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,
                 ),
-            }
-        } else {
-            Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError(format!(
-                    "net dev {} not support link status set",
-                    args.id
-                )),
-                None,
-            )
-        }
+            },
+        )
     }
 
     #[cfg(feature = "usb_camera")]
