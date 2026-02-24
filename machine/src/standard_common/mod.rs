@@ -71,7 +71,9 @@ use machine_manager::machine::{
     DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface, VmState,
 };
-use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
+use machine_manager::qmp::qmp_schema::{
+    BlockDevAddArgument, NetLinkSetArgument, UpdateRegionArgument,
+};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use machine_manager::state_query::query_workloads;
 #[cfg(feature = "gtk")]
@@ -87,7 +89,7 @@ use util::loop_context::{
     create_new_eventfd, read_fd, EventLoopManager, EventNotifier, NotifierCallback,
     NotifierOperation,
 };
-use virtio::{qmp_balloon, qmp_query_balloon};
+use virtio::{qmp_balloon, qmp_query_balloon, Net};
 
 const MAX_REGION_SIZE: u64 = 65536;
 
@@ -1535,6 +1537,36 @@ impl DeviceInterface for StdMachine {
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
             ),
+        }
+    }
+
+    fn netlink_set(&self, args: NetLinkSetArgument) -> Response {
+        let net_dev = self.base.net_devs.get(&args.id);
+        if net_dev.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!("no net dev {}", args.id)),
+                None,
+            );
+        }
+
+        let mut locked_dev = net_dev.unwrap().lock().unwrap();
+        let net_link = locked_dev.as_any_mut().downcast_mut::<Net>();
+        if let Some(link) = net_link {
+            match link.set_link_status(args.up) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            }
+        } else {
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "net dev {} not support link status set",
+                    args.id
+                )),
+                None,
+            )
         }
     }
 

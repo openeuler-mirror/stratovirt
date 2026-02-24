@@ -632,6 +632,13 @@ pub trait VirtioDevice: Send + AsAny {
             .store(val, Ordering::SeqCst);
     }
 
+    /// Increase config generation.
+    fn increase_config_generation(&mut self) {
+        self.virtio_base_mut()
+            .config_generation
+            .fetch_add(1, Ordering::SeqCst);
+    }
+
     /// Get msix vector of config change interrupt.
     fn config_vector(&self) -> u16 {
         self.virtio_base().config_vector.load(Ordering::Acquire)
