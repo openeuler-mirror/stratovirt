@@ -267,6 +267,24 @@ impl EventNotifierHelper for Socket {
     fn internal_notifiers(shared_socket: Arc<Mutex<Self>>) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
 
+        let evtfd_handler: Rc<NotifierCallback> = Rc::new(|_, fd| {
+            read_fd(fd);
+            QmpChannel::send_event();
+            if QmpChannel::is_connected() {
+                None
+            } else {
+                Some(gen_delete_notifiers(&[fd]))
+            }
+        });
+        let evtfd_notifier = EventNotifier::new(
+            NotifierOperation::AddShared,
+            QmpChannel::get_event_fd(),
+            None,
+            EventSet::IN,
+            vec![evtfd_handler],
+        );
+        notifiers.push(evtfd_notifier);
+
         let socket = shared_socket.clone();
         let handler: Rc<NotifierCallback> =
             Rc::new(move |_, _| Some(socket.lock().unwrap().create_event_notifier(socket.clone())));
@@ -701,6 +719,8 @@ mod tests {
 
         // 1.send no-content event
         event!(Stop);
+        while read_fd(QmpChannel::get_event_fd()) != 1 {}
+        QmpChannel::send_event();
         let length = client.read(&mut buffer).unwrap();
         let qmp_event: qmp_schema::QmpEvent =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
@@ -720,6 +740,8 @@ mod tests {
             reason: "guest-shutdown".to_string(),
         };
         event!(Shutdown; shutdown_event);
+        while read_fd(QmpChannel::get_event_fd()) != 1 {}
+        QmpChannel::send_event();
         let length = client.read(&mut buffer).unwrap();
         let qmp_event: qmp_schema::QmpEvent =
             serde_json::from_str(&(String::from_utf8_lossy(&buffer[..length]))).unwrap();
