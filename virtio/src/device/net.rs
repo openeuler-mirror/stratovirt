@@ -23,7 +23,7 @@ use std::{cmp, fs, mem};
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
-use log::{error, info, warn};
+use log::{error, warn};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
@@ -57,7 +57,6 @@ use machine_manager::state_query::{
 };
 use machine_manager::{
     event,
-    notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier, vm_paused},
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
 };
@@ -662,7 +661,7 @@ impl EventNotifierHelper for NetCtrlHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
-            if locked_net_io.device_broken.load(Ordering::SeqCst) || vm_paused() {
+            if locked_net_io.device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
 
@@ -1151,7 +1150,7 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) || vm_paused() {
+            if device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
 
@@ -1219,7 +1218,7 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) || vm_paused() {
+            if device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
 
@@ -1269,7 +1268,7 @@ impl<T: Macnat + 'static> NetIoHandler<T> {
             return vec![];
         }
         let handler: Rc<NotifierCallback> = Rc::new(move |events: EventSet, _| {
-            if device_broken.load(Ordering::SeqCst) || vm_paused() {
+            if device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
 
@@ -1374,8 +1373,6 @@ pub struct Net {
     timer_id: Option<u64>,
     /// indicate if io is inflight
     io_inflight: Arc<IoRef>,
-    /// VM pause notifier id
-    pause_notifier_id: u64,
 }
 
 impl Net {
@@ -1904,8 +1901,6 @@ impl VirtioDevice for Net {
 
         self.init_config_features()?;
 
-        self.init_vm_pause_notifier();
-
         Ok(())
     }
 
@@ -2235,7 +2230,6 @@ impl IoRef {
 mod tests {
     use super::*;
     use crate::tests::eventloop_init;
-    use machine_manager::notifier::pause_notify;
 
     #[test]
     fn test_net_init() {
@@ -2414,23 +2408,6 @@ mod tests {
         } else {
             assert!(false);
         }
-    }
-
-    #[test]
-    fn test_pause_notifier() {
-        let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
-        net.realize().unwrap();
-
-        assert_ne!(net.pause_notifier_id, 0);
-
-        pause_notify(true);
-        assert_eq!(vm_paused(), true);
-        pause_notify(false);
-        assert_eq!(vm_paused(), false);
-
-        let id = net.pause_notifier_id;
-        net.init_vm_pause_notifier();
-        assert_ne!(id, net.pause_notifier_id);
     }
 
     #[test]
