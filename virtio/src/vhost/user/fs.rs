@@ -219,23 +219,8 @@ impl VirtioDevice for Fs {
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.base.device_features = 0_u64;
-        self.base.driver_features = 0_u64;
-        self.config_space = VirtioFsConfig::default();
         self.enable_irqfd = false;
-
-        let client = match &self.client {
-            None => return Err(anyhow!("Failed to get client when resetting virtio fs")),
-            Some(client_) => client_,
-        };
-        client
-            .lock()
-            .unwrap()
-            .delete_event()
-            .with_context(|| "Failed to delete virtio fs event")?;
-        self.client = None;
-
-        self.realize()
+        Ok(())
     }
 }
 
