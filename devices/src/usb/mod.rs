@@ -355,11 +355,13 @@ impl UsbDeviceBase {
                 USB_REQUEST_CLEAR_FEATURE => {
                     if value == USB_DEVICE_REMOTE_WAKEUP {
                         self.remote_wakeup = 0;
+                        info!("USB {}: remote wakeup is disabled", self.base.id);
                     }
                 }
                 USB_REQUEST_SET_FEATURE => {
                     if value == USB_DEVICE_REMOTE_WAKEUP {
                         self.remote_wakeup = 1;
+                        info!("USB {}: remote wakeup is enabled", self.base.id);
                     }
                 }
                 USB_REQUEST_SET_SEL => {
