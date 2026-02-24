@@ -544,6 +544,7 @@ fn qmp_command_exec(
         (netdev_add, netdev_add),
         (chardev_add, chardev_add),
         (cameradev_add, cameradev_add),
+        (netdev_replace, netdev_replace),
         (netlink_set, netlink_set),
         (set_viomem, set_viomem),
         (get_viomem, get_viomem),
