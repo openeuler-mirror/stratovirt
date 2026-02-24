@@ -46,6 +46,7 @@ use crate::aarch64::micro::{LayoutEntryType, MEM_LAYOUT};
 #[cfg(target_arch = "x86_64")]
 use crate::x86_64::micro::{LayoutEntryType, MEM_LAYOUT};
 use crate::{MachineBase, MachineError, MachineOps};
+use block_backend::qcow2::QCOW2_LIST;
 use cpu::CpuLifecycleState;
 #[cfg(target_arch = "x86_64")]
 use devices::sysbus::SysBusDevOps;
@@ -799,6 +800,65 @@ impl DeviceInterface for LightMachine {
                     None,
                 )
             }
+        }
+    }
+
+    fn human_monitor_command(&self, args: qmp_schema::HumanMonitorCmdArgument) -> Response {
+        let cmd_args: Vec<&str> = args.command_line.split(' ').collect();
+        match cmd_args[0] {
+            "info" => {
+                // Only support to query snapshots information by:
+                // "info snapshots"
+                if cmd_args.len() != 2 {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(
+                            "Invalid number of arguments".to_string(),
+                        ),
+                        None,
+                    );
+                }
+                if cmd_args[1] != "snapshots" {
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(format!(
+                            "Unsupported command: {} {}",
+                            cmd_args[0], cmd_args[1]
+                        )),
+                        None,
+                    );
+                }
+
+                let qcow2_list = QCOW2_LIST.lock().unwrap();
+                if qcow2_list.is_empty() {
+                    return Response::create_response(
+                        serde_json::to_value("There is no snapshot available.\r\n").unwrap(),
+                        None,
+                    );
+                }
+
+                let mut info_str = "List of snapshots present on all disks:\r\n".to_string();
+                // Note: VM state is "None" in disk snapshots. It's used for vm snapshots which we
+                // don't support.
+                let vmstate_str = "None\r\n".to_string();
+                info_str += &vmstate_str;
+
+                for (drive_name, qcow2driver) in qcow2_list.iter() {
+                    let dev_str = format!(
+                        "\r\nList of partial (non-loadable) snapshots on \'{}\':\r\n",
+                        drive_name
+                    );
+                    let snap_infos = qcow2driver.lock().unwrap().list_snapshots();
+                    info_str += &(dev_str + &snap_infos);
+                }
+
+                Response::create_response(serde_json::to_value(info_str).unwrap(), None)
+            }
+            _ => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "Unsupported command: {}",
+                    cmd_args[0]
+                )),
+                None,
+            ),
         }
     }
 
