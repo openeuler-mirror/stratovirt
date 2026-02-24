@@ -22,7 +22,7 @@ use super::super::{VhostIoHandler, VhostNotify, VhostOps};
 use super::{VhostBackend, VhostVringFile, VHOST_NET_SET_BACKEND};
 use crate::read_config_default;
 use crate::{
-    device::net::{build_device_config_space, create_tap, CtrlInfo, MAC_ADDR_LEN},
+    device::net::{build_device_config_space, create_tap, CtrlInfo},
     error::VirtioError,
     virtio_has_feature, CtrlVirtio, NetCtrlHandler, VirtioBase, VirtioDevice, VirtioInterrupt,
     VirtioNetConfig, VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
@@ -36,7 +36,7 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 use util::loop_context::{create_new_eventfd, EventNotifierHelper};
-use util::tap::Tap;
+use util::tap::{Tap, MAC_ADDR_LEN};
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;
@@ -149,8 +149,14 @@ impl VirtioDevice for Net {
             _ => Some(self.netdev_cfg.ifname.as_str()),
         };
 
-        self.taps = create_tap(self.netdev_cfg.tap_fds.as_ref(), host_dev_name, queue_pairs)
-            .with_context(|| "Failed to create tap for vhost net")?;
+        self.taps = create_tap(
+            self.netdev_cfg.tap_fds.as_ref(),
+            host_dev_name,
+            self.netdev_cfg.get_path(),
+            queue_pairs,
+            self.netdev_cfg.macnat,
+        )
+        .with_context(|| "Failed to create tap for vhost net")?;
         self.backends = Some(backends);
 
         self.init_config_features()?;

@@ -19,7 +19,7 @@ use vmm_sys_util::eventfd::EventFd;
 use super::super::VhostOps;
 use super::{listen_guest_notifier, VhostBackendType, VhostUserClient};
 use crate::{
-    device::net::{build_device_config_space, CtrlInfo, MAC_ADDR_LEN},
+    device::net::{build_device_config_space, CtrlInfo},
     read_config_default, virtio_has_feature, CtrlVirtio, NetCtrlHandler, VirtioBase, VirtioDevice,
     VirtioInterrupt, VirtioNetConfig, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1,
     VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_F_CTRL_MAC_ADDR,
@@ -33,6 +33,7 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 use util::loop_context::EventNotifierHelper;
+use util::tap::MAC_ADDR_LEN;
 
 /// Number of virtqueues.
 const QUEUE_NUM_NET: usize = 2;

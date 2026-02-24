@@ -43,10 +43,14 @@ pub struct NetDevcfg {
     pub vhost_fds: Option<Vec<i32>>,
     #[arg(long, default_value = "", value_parser = valid_id)]
     pub ifname: String,
+    #[arg(long, default_value = "", value_parser = valid_id)]
+    pub path: String,
     #[arg(long, default_value = "1", value_parser = parse_queues)]
     pub queues: u16,
     #[arg(long)]
     pub chardev: Option<String>,
+    #[arg(long, default_value = "off", value_parser = parse_bool, action = ArgAction::Append)]
+    pub macnat: bool,
 }
 
 impl NetDevcfg {
@@ -84,6 +88,14 @@ impl NetDevcfg {
         }
         Ok(())
     }
+
+    pub fn get_path(&self) -> Option<&str> {
+        if self.path.is_empty() {
+            None
+        } else {
+            Some(self.path.as_str())
+        }
+    }
 }
 
 fn parse_queues(q: &str) -> Result<u16> {
@@ -104,8 +116,10 @@ impl Default for NetDevcfg {
             vhost_kernel: false,
             vhost_fds: None,
             ifname: "".to_string(),
+            path: "".to_string(),
             queues: 2,
             chardev: None,
+            macnat: false,
         }
     }
 }
@@ -121,6 +135,10 @@ impl ConfigCheck for NetDevcfg {
         }
         if self.tap_fds.is_none() && self.ifname.is_empty() && self.netdev_type.ne("vhost-user") {
             bail!("Tap device is missing, use \'ifname\' or \'fd\' to configure a tap device");
+        }
+
+        if (self.vhost_kernel || self.netdev_type != "tap") && self.macnat {
+            bail!("macnat doesn't support vhost or vhost-user");
         }
 
         is_netdev_queues_valid(self.queues)?;
@@ -258,8 +276,10 @@ pub fn get_netdev_config(args: Box<qmp_schema::NetDevAddArgument>) -> Result<Net
         vhost_kernel: args.vhost.unwrap_or_default(),
         vhost_fds: None,
         ifname: String::new(),
+        path: String::new(),
         queues,
         chardev: args.chardev,
+        macnat: args.macnat.unwrap_or_default(),
     };
 
     if let Some(tap_fd) = args.fd {

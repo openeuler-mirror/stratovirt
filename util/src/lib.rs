@@ -27,6 +27,7 @@ pub mod leak_bucket;
 pub mod link_list;
 pub mod logger;
 pub mod loop_context;
+pub mod macnat;
 pub mod num_ops;
 pub mod offsetof;
 #[cfg(target_env = "ohos")]
