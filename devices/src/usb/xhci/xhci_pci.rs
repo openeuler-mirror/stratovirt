@@ -552,3 +552,221 @@ impl EventNotifierHelper for DoorbellHandler {
         )]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use super::*;
+    use crate::pci::PciHost;
+    use crate::usb::xhci::xhci_controller::INVALID_SLOT_ID;
+    use crate::{convert_bus_ref, convert_device_mut, PCI_BUS};
+    use address_space::GuestAddress;
+
+    /// Convert from Arc<Mutex<dyn Device>> to &mut XhciPciDevice.
+    #[macro_export]
+    macro_rules! MUT_XHCI_PCI {
+        ($trait_device:expr, $lock_device: ident, $struct_device: ident) => {
+            convert_device_mut!($trait_device, $lock_device, $struct_device, XhciPciDevice);
+        };
+    }
+
+    fn init_xhci_dev(devfn: u8, dev_id: &str) -> Arc<Mutex<PciHost>> {
+        EventLoop::object_init(&None).unwrap();
+
+        #[cfg(target_arch = "x86_64")]
+        let sys_io = AddressSpace::new(
+            Region::init_container_region(1 << 16, "sysio"),
+            "sysio",
+            None,
+        )
+        .unwrap();
+        let sys_mem = AddressSpace::new(
+            Region::init_container_region(u64::max_value(), "sysmem"),
+            "sysmem",
+            None,
+        )
+        .unwrap();
+        let pci_host = Arc::new(Mutex::new(PciHost::new(
+            #[cfg(target_arch = "x86_64")]
+            &sys_io,
+            &sys_mem,
+            (0xB000_0000, 0x1000_0000),
+            (0xC000_0000, 0x3000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (0xF000_0000, 0x1000_0000),
+            #[cfg(target_arch = "aarch64")]
+            (512 << 30, 512 << 30),
+            16,
+        )));
+        let locked_pci_host = pci_host.lock().unwrap();
+        let root_bus = Arc::downgrade(&locked_pci_host.child_bus().unwrap());
+
+        let config = XhciConfig {
+            classtype: "nec-usb-xhci".to_string(),
+            id: Some(dev_id.to_string()),
+            bus: "pcie.0".to_string(),
+            addr: (3, 0), // It doesn't actually work; just skips the bdf conversion
+            p2: Some(7),
+            p3: Some(7),
+            iothread: None,
+            streams: None,
+        };
+        let xhci_dev: XhciPciDevice = XhciPciDevice::new(&config, devfn, root_bus, &sys_mem);
+        assert_eq!(xhci_dev.base.base.id, "xhci".to_string());
+
+        xhci_dev.realize().unwrap();
+        drop(locked_pci_host);
+
+        pci_host
+    }
+
+    fn get_xhci_dev(devfn: u8, dev_id: &str) -> Arc<Mutex<dyn Device>> {
+        let pci_host = init_xhci_dev(devfn, dev_id);
+        let root_bus = pci_host.lock().unwrap().child_bus().unwrap();
+        PCI_BUS!(root_bus, locked_bus, pci_bus);
+        pci_bus.get_device(0, devfn).unwrap()
+    }
+
+    #[test]
+    fn test_xhci_snapshot() {
+        // init xhci device
+        let xhci_dev = get_xhci_dev(7, "xhci");
+        MUT_XHCI_PCI!(xhci_dev, locked_dev, xhci);
+
+        // build state A
+        if let Ok(mut locked_xhci) = xhci.xhci.lock() {
+            // oper register
+            locked_xhci.oper.usb_cmd.store(7, Ordering::SeqCst);
+            locked_xhci.oper.usb_status.store(7, Ordering::SeqCst);
+            locked_xhci.oper.dev_notify_ctrl = 7;
+            locked_xhci.oper.cmd_ring_ctrl = 7;
+            locked_xhci.oper.dcbaap = GuestAddress(7);
+            locked_xhci.oper.config = 7;
+
+            // ports
+            if let Ok(mut locked_port) = locked_xhci.usb_ports[6].lock() {
+                locked_port.portsc = 7;
+                locked_port.port_id = 7;
+                locked_port.used = true;
+                locked_port.slot_id = 7;
+            }
+
+            // slots
+            locked_xhci.slots[7].enabled = true;
+            locked_xhci.slots[7].addressed = true;
+            locked_xhci.slots[7].slot_ctx_addr = GuestAddress(7);
+            locked_xhci.slots[7].usb_port = Some(locked_xhci.usb_ports[6].clone()); // bound slot 7 with port 6
+
+            // interrupters
+            if let Ok(mut locked_intr) = locked_xhci.intrs[0].lock() {
+                locked_intr.iman = 7;
+                locked_intr.imod = 7;
+                locked_intr.erstsz = 7;
+                locked_intr.erstba = GuestAddress(7);
+                locked_intr.erdp = GuestAddress(7);
+                locked_intr.er_pcs = true;
+                locked_intr.er_start = GuestAddress(7);
+                locked_intr.er_size = 7;
+                locked_intr.er_ep_idx = 7;
+            }
+
+            // command ring
+            locked_xhci.cmd_ring.dequeue = GuestAddress(7);
+            locked_xhci.cmd_ring.ccs = true;
+        }
+
+        // get snapshot state vec
+        let dev_state = xhci.get_state_vec();
+        assert!(dev_state.is_ok());
+
+        // modify device state to B
+        if let Ok(mut locked_xhci) = xhci.xhci.lock() {
+            // oper register
+            locked_xhci.oper.usb_cmd.store(u32::MAX, Ordering::SeqCst);
+            locked_xhci
+                .oper
+                .usb_status
+                .store(u32::MAX, Ordering::SeqCst);
+            locked_xhci.oper.dev_notify_ctrl = u32::MAX;
+            locked_xhci.oper.cmd_ring_ctrl = u64::MAX;
+            locked_xhci.oper.dcbaap = GuestAddress(u64::MAX);
+            locked_xhci.oper.config = u32::MAX;
+
+            // ports
+            if let Ok(mut locked_port) = locked_xhci.usb_ports[6].lock() {
+                locked_port.portsc = u32::MAX;
+                locked_port.port_id = u8::MAX;
+                locked_port.used = false;
+                locked_port.slot_id = u32::MAX;
+            }
+
+            // slots
+            locked_xhci.slots[7].enabled = false;
+            locked_xhci.slots[7].addressed = false;
+            locked_xhci.slots[7].slot_ctx_addr = GuestAddress(u64::MAX);
+
+            // interrupters
+            if let Ok(mut locked_intr) = locked_xhci.intrs[0].lock() {
+                locked_intr.iman = u32::MAX;
+                locked_intr.imod = u32::MAX;
+                locked_intr.erstsz = u32::MAX;
+                locked_intr.erstba = GuestAddress(u64::MAX);
+                locked_intr.erdp = GuestAddress(u64::MAX);
+                locked_intr.er_pcs = true;
+                locked_intr.er_start = GuestAddress(u64::MAX);
+                locked_intr.er_size = u32::MAX;
+                locked_intr.er_ep_idx = u32::MAX;
+            }
+
+            // command ring
+            locked_xhci.cmd_ring.dequeue = GuestAddress(u64::MAX);
+            locked_xhci.cmd_ring.ccs = true;
+        }
+
+        // set snapshot state
+        let ret = xhci.set_state_mut(dev_state.unwrap().as_mut(), 0_u32);
+        assert!(ret.is_ok());
+
+        // test whether state equals to A
+        if let Ok(locked_xhci) = xhci.xhci.lock() {
+            // oper register
+            assert_eq!(locked_xhci.oper.usb_cmd.load(Ordering::SeqCst), 7);
+            assert_eq!(locked_xhci.oper.usb_status.load(Ordering::SeqCst), 7);
+            assert_eq!(locked_xhci.oper.dev_notify_ctrl, 7);
+            assert_eq!(locked_xhci.oper.cmd_ring_ctrl, 7);
+            assert_eq!(locked_xhci.oper.dcbaap, GuestAddress(7));
+            assert_eq!(locked_xhci.oper.config, 7);
+
+            // ports, since slot 7 and port 6 have been bound together previously, there will be some chain reactions
+            if let Ok(locked_port) = locked_xhci.usb_ports[6].lock() {
+                assert_eq!(locked_port.portsc, 0);
+                assert_eq!(locked_port.port_id, 7);
+                assert_eq!(locked_port.used, false);
+                assert_eq!(locked_port.slot_id, INVALID_SLOT_ID);
+            }
+
+            // slots
+            assert_eq!(locked_xhci.slots[7].enabled, false); // will turn true first, then false due to no dev attached
+            assert_eq!(locked_xhci.slots[7].addressed, false);
+            assert_eq!(locked_xhci.slots[7].slot_ctx_addr, GuestAddress(0));
+
+            // interrupters
+            if let Ok(locked_intr) = locked_xhci.intrs[0].lock() {
+                assert_eq!(locked_intr.iman, 7);
+                assert_eq!(locked_intr.imod, 7);
+                assert_eq!(locked_intr.erstsz, 7);
+                assert_eq!(locked_intr.erstba, GuestAddress(7));
+                assert_eq!(locked_intr.erdp, GuestAddress(7));
+                assert_eq!(locked_intr.er_pcs, true);
+                assert_eq!(locked_intr.er_start, GuestAddress(7));
+                assert_eq!(locked_intr.er_size, 7);
+                assert_eq!(locked_intr.er_ep_idx, 7);
+            }
+
+            // command ring
+            assert_eq!(locked_xhci.cmd_ring.dequeue, GuestAddress(7));
+            assert_eq!(locked_xhci.cmd_ring.ccs, true);
+        };
+    }
+}

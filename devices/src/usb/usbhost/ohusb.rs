@@ -12,11 +12,10 @@
 
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::ptr;
 
 use anyhow::{bail, Context as anyhowContext, Result};
 use libusb1_sys::constants::LIBUSB_OPTION_NO_DEVICE_DISCOVERY;
-use log::info;
+use log::{info, warn};
 use rusb::{Context, DeviceHandle, UsbContext};
 
 use super::host_usblib::set_option;
@@ -41,18 +40,27 @@ impl OhUsbDev {
         };
 
         let lib = OhUsb::new()?;
-        match lib.open_device(ptr::addr_of_mut!(ohusb_dev))? {
-            0 => {
-                if ohusb_dev.fd < 0 {
-                    bail!(
-                        "Failed to open usb device due to invalid fd {}",
-                        ohusb_dev.fd
-                    );
-                }
-            }
-            _ => bail!("Failed to open usb device"),
+        lib.open_device(&mut ohusb_dev)?;
+        if ohusb_dev.fd < 0 {
+            bail!(
+                "Failed to open usb device due to invalid fd {}",
+                ohusb_dev.fd
+            );
         }
         info!("OH USB: open_device: returned fd is {}", ohusb_dev.fd);
+
+        // SAFETY: The fd is acquired from USB subsystem.
+        let ret = unsafe { libc::flock(ohusb_dev.fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if ret != 0 {
+            warn!(
+                "Failed to acquire flock on usb device, err is {:?}",
+                std::io::Error::last_os_error()
+            );
+            bail!(
+                "Failed to acquire flock on usb device, err is {:?}",
+                std::io::Error::last_os_error()
+            );
+        }
 
         Ok(Self {
             lib,
@@ -74,5 +82,18 @@ impl OhUsbDev {
         }
 
         Ok(handle)
+    }
+}
+
+impl Drop for OhUsbDev {
+    fn drop(&mut self) {
+        // SAFETY: The fd is acquired from USB subsystem.
+        let ret = unsafe { libc::flock(self.dev_file.as_raw_fd(), libc::LOCK_UN) };
+        if ret != 0 {
+            warn!(
+                "Failed to release flock on usb device, err is {:?}",
+                std::io::Error::last_os_error()
+            );
+        }
     }
 }

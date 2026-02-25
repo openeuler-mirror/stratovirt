@@ -18,8 +18,8 @@ use std::{
     collections::{HashMap, LinkedList},
     ffi::{c_char, CStr},
     os::unix::io::RawFd,
+    ptr::NonNull,
     rc::Rc,
-    slice,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, Weak,
@@ -33,8 +33,9 @@ use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use libc::{c_int, c_void};
 use libusb1_sys::{
-    constants::LIBUSB_LOG_CB_GLOBAL, libusb_get_iso_packet_buffer_simple,
-    libusb_set_iso_packet_lengths, libusb_set_log_cb, libusb_transfer,
+    constants::{LIBUSB_ERROR_NO_MEM, LIBUSB_LOG_CB_GLOBAL},
+    libusb_device_handle, libusb_get_iso_packet_buffer_simple, libusb_set_iso_packet_lengths,
+    libusb_set_log_cb, libusb_transfer,
 };
 use log::{error, info, warn};
 use rusb::{
@@ -90,13 +91,21 @@ pub struct UsbHostRequest {
     pub host_transfer: *mut libusb_transfer,
     /// Async data buffer.
     pub buffer: Option<Vec<u8>>,
-    pub dev_mem: Option<UsbDevMem>,
+    pub dev_mem: Option<Arc<UsbDevMem>>,
     pub is_control: bool,
 }
 
-// SAFETY: The UsbHostRequest is created in main thread and then be passed to the
-// libUSB thread. Once this data is processed, it is cleaned up. So there will be
-// no problem with data sharing or synchronization.
+// SAFETY: `UsbHostRequest` contains a raw pointer (`*mut libusb_transfer`)
+// which is not inherently thread-safe. We guarantee `Send`/`Sync` safety under
+// the following conditions:
+// - The `libusb_transfer` object is created and freed only through libusb APIs,
+//   which ensure proper memory management.
+// - Access to the underlying `libusb_transfer` is externally synchronized:
+//   concurrent reads/writes are protected by higher-level synchronization.
+//   Once this data is processed, it is cleaned up.
+// - Therefore, transferring `UsbHostRequest` across threads (`Send`) and
+//   sharing references between threads (`Sync`) does not introduce data races
+//   or dangling pointers.
 unsafe impl Sync for UsbHostRequest {}
 // SAFETY: The reason is same as above.
 unsafe impl Send for UsbHostRequest {}
@@ -122,19 +131,17 @@ impl UsbHostRequest {
         }
     }
 
-    pub fn setup_data_buffer(&mut self, dev_mem: &Option<UsbDevMem>) {
+    pub fn setup_data_buffer(&mut self, dev_mem: &Option<Arc<UsbDevMem>>) {
         let mut locked_packet = self.packet.lock().unwrap();
         let size = locked_packet.get_iovecs_size();
         let data_buffer;
 
         match dev_mem {
-            Some(mem) if !mem.used.load(Ordering::SeqCst) && mem.size as u64 >= size => {
-                mem.used.store(true, Ordering::SeqCst);
-                self.dev_mem.clone_from(dev_mem);
-                // SAFETY: The dev_mem's mem is obtained from libusb.
-                unsafe {
-                    data_buffer = slice::from_raw_parts_mut(mem.mem, size as usize);
-                }
+            Some(mem) if !mem.is_used() && mem.can_cover(size) => {
+                mem.mark_used();
+                self.dev_mem = Some(Arc::clone(mem));
+                // SAFETY: pointer is valid with len until usbhost is dropped.
+                data_buffer = unsafe { std::slice::from_raw_parts_mut(mem.as_mut_ptr(), mem.len) };
             }
             _ => {
                 self.buffer = Some(vec![0; size as usize]);
@@ -160,7 +167,7 @@ impl UsbHostRequest {
         free_host_transfer(self.host_transfer);
         self.buffer = None;
         if let Some(dev_mem) = &self.dev_mem {
-            dev_mem.used.store(false, Ordering::SeqCst);
+            dev_mem.release();
         }
         self.host_transfer = std::ptr::null_mut();
     }
@@ -193,14 +200,19 @@ impl UsbHostRequest {
     }
 
     pub fn ctrl_transfer_packet(&self, packet: &mut UsbPacket, actual_length: usize) {
-        let setup_buf = get_buffer_from_transfer(self.host_transfer, 8);
+        // SAFETY:
+        // - `host_transfer` is provided by libusb callback and guaranteed valid here.
+        // - `transfer.buffer` is allocated and has at least `len` bytes.
+        // - We will only use the slice within the scope.
+        let setup_buf = unsafe { get_buffer_from_transfer(self.host_transfer, 8) };
         let mut len = ((setup_buf[7] as usize) << 8) | setup_buf[6] as usize;
         if len > actual_length {
             len = actual_length;
         }
 
         if packet.pid as u8 == USB_TOKEN_IN && actual_length != 0 {
-            let data = get_buffer_from_transfer(self.host_transfer, len + 8);
+            // SAFETY: same as above
+            let data = unsafe { get_buffer_from_transfer(self.host_transfer, len + 8) };
             packet.transfer_packet(&mut data[8..], len);
         }
     }
@@ -253,7 +265,12 @@ impl IsoTransfer {
     }
 
     pub fn reset(&mut self, max_packet_size: u32) {
-        // SAFETY: host_transfer is guaranteed to be valid once created.
+        // SAFETY:
+        // - `self.host_transfer` is a valid pointer to a `libusb_transfer`
+        //   allocated and managed by libusb.
+        // - The transfer object is alive for the duration of this call
+        //   and not freed concurrently.
+        // - No aliasing mutable references exist while this function runs.
         unsafe { libusb_set_iso_packet_lengths(self.host_transfer, max_packet_size) };
         self.packet = 0;
         self.copy_completed = false;
@@ -261,7 +278,12 @@ impl IsoTransfer {
 
     pub fn clear(&mut self, inflight: bool) {
         if inflight {
-            // SAFETY: host_transfer is guaranteed to be valid once created.
+            // SAFETY:
+            // - `self.host_transfer` is a valid pointer to a `libusb_transfer`
+            //   allocated and managed by libusb.
+            // - The transfer object is alive for the duration of this call
+            //   and not freed concurrently.
+            // - No aliasing mutable references exist while this function runs.
             unsafe {
                 (*self.host_transfer).user_data = std::ptr::null_mut();
             }
@@ -287,13 +309,22 @@ impl IsoTransfer {
             }
         }
         let buffer =
-            // SAFETY: host_transfer is guaranteed to be valid once created
-            // and packet is guaranteed to be not out of boundary.
+            // SAFETY:
+            // - `self.host_transfer` points to a valid `libusb_transfer`
+            //   allocated and managed by libusb, and has not been freed.
+            // - `self.packet` is less than the number of packets in this transfer,
+            //   ensured by the logic in `copy_data` which updates `self.packet`
+            //   and checks against `get_iso_packet_nums`.
             unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
 
         locked_packet.transfer_packet(
-            // SAFETY: buffer is already allocated and size will not be exceed
-            // the size of buffer.
+            // SAFETY:
+            // - `buffer` was obtained from `libusb_get_iso_packet_buffer_simple`,
+            //   which returns a pointer to valid, writable packet memory owned by libusb.
+            // - `size` is at most the packet length as computed above,
+            //   so the slice will not exceed the buffer boundary.
+            // - No other mutable reference to this packet buffer exists while
+            //   `transfer_packet` is operating.
             unsafe { std::slice::from_raw_parts_mut(buffer, size) },
             size,
         );
@@ -304,7 +335,13 @@ impl IsoTransfer {
     }
 }
 
-// SAFETY: The operation of libusb_transfer is protected by lock.
+// SAFETY:
+// `IsoTransfer` contains a raw pointer to a `libusb_transfer`.
+// - The transfer object is allocated and managed by libusb and remains
+//   valid for the lifetime of this `IsoTransfer`.
+// - The transfer is only accessed from one thread at a time, and is
+//   protected by lock therefore it is safe to move `IsoTransfer` between
+//   threads (`Send`).
 unsafe impl Sync for IsoTransfer {}
 // SAFETY: The reason is same as above.
 unsafe impl Send for IsoTransfer {}
@@ -415,12 +452,82 @@ pub struct UsbHostConfig {
     iso_urb_count: u32,
 }
 
-#[derive(Clone)]
 pub struct UsbDevMem {
-    mem: *mut u8,
-    size: usize,
+    mem: NonNull<u8>,
+    len: usize,
+    handle: *mut libusb_device_handle,
     used: Arc<AtomicBool>,
 }
+
+impl UsbDevMem {
+    pub fn new(dev_handle: &mut DeviceHandle<Context>, length: usize) -> Result<Arc<Self>> {
+        // SAFETY:
+        // - `dev_handle.as_raw()` returns a valid `*mut libusb_device_handle`
+        //   because `DeviceHandle` guarantees the handle is open and alive
+        //   for the lifetime of `dev_handle`.
+        // - Calling `libusb_dev_mem_alloc` with a valid handle and a non-zero
+        //   `length` is safe; if allocation fails, it returns a null pointer.
+        // - The returned pointer, if non-null, is exclusively owned by this
+        //   `UsbDevMem` instance
+        let mem = unsafe { libusb_dev_mem_alloc(dev_handle.as_raw(), length) };
+        if mem.is_null() {
+            return Err(from_libusb(LIBUSB_ERROR_NO_MEM).into());
+        }
+
+        Ok(Arc::new(Self {
+            // SAFETY: `mem` points to the previously allocated dev mem buffer with `length`
+            mem: unsafe { NonNull::new_unchecked(mem) },
+            len: length,
+            handle: dev_handle.as_raw(),
+            used: Arc::new(AtomicBool::new(false)),
+        }))
+    }
+
+    pub fn mark_used(&self) {
+        self.used.store(true, Ordering::SeqCst);
+    }
+
+    pub fn release(&self) {
+        self.used.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_used(&self) -> bool {
+        self.used.load(Ordering::SeqCst)
+    }
+
+    pub fn can_cover(&self, size: u64) -> bool {
+        size as usize <= self.len
+    }
+
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        self.mem.as_ptr()
+    }
+}
+
+impl Drop for UsbDevMem {
+    fn drop(&mut self) {
+        let ptr = self.mem.as_ptr();
+        // SAFETY:
+        // - `self.handle` is guaranteed to be a valid, open libusb device handle
+        // - `self.mem` points to a buffer previously allocated by
+        //   `libusb_dev_mem_alloc` and has not been freed yet.
+        // - `size` is exactly the size used when allocating `self.mem`.
+        // - `Drop` is only called once for this `UsbDevMem`, ensuring no double free.
+        unsafe {
+            libusb_dev_mem_free(self.handle, ptr, self.len);
+        }
+    }
+}
+
+// SAFETY:
+// - UsbDevMem only contains raw pointers to libusb-managed memory.
+// - libusb guarantees that memory returned by libusb_dev_mem_alloc
+//   is safe to access across threads, as long as freed only once.
+// - Drop ensures single free, and `used: Arc<AtomicBool>` protects
+//   concurrent usage state.
+unsafe impl Send for UsbDevMem {}
+// SAFETY: same as above
+unsafe impl Sync for UsbDevMem {}
 
 /// Abstract object of the host USB device.
 pub struct UsbHost {
@@ -433,7 +540,7 @@ pub struct UsbHost {
     /// A handle to an open USB device.
     handle: Option<DeviceHandle<Context>>,
     /// The direct DMA memory used for transfer.
-    devmem: Option<UsbDevMem>,
+    devmem: Option<Arc<UsbDevMem>>,
     /// Describes a device.
     ddesc: Option<DeviceDescriptor>,
     /// EventFd for libusb.
@@ -449,6 +556,8 @@ pub struct UsbHost {
     iso_urb_count: u32,
     #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
     oh_dev: OhUsbDev,
+    /// Indicate whether default state.
+    is_default_state: bool,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for util::link_list::List.
@@ -492,6 +601,7 @@ impl UsbHost {
             iso_urb_count,
             #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
             oh_dev,
+            is_default_state: false,
         })
     }
 
@@ -574,7 +684,7 @@ impl UsbHost {
             .unwrap_or_else(|| None)
     }
 
-    fn detach_kernel(&mut self) -> Result<()> {
+    fn detach_kernel(&mut self, reset: bool) -> Result<()> {
         let conf = self.libdev.as_ref().unwrap().active_config_descriptor()?;
 
         self.ifs_num = conf.num_interfaces();
@@ -601,6 +711,11 @@ impl UsbHost {
                 .detach_kernel_driver(i)
                 .unwrap_or_else(|e| error!("Failed to detach kernel driver: {:?}", e));
             self.ifs[i as usize].detached = true;
+        }
+
+        // set it to default state
+        if reset {
+            self.reset();
         }
 
         Ok(())
@@ -718,7 +833,7 @@ impl UsbHost {
         self.config.hostaddr = self.libdev.as_ref().unwrap().address();
         trace::usb_host_open_started(self.config.hostbus, self.config.hostaddr);
 
-        self.detach_kernel()?;
+        self.detach_kernel(true)?;
 
         self.ddesc = self.libdev.as_ref().unwrap().device_descriptor().ok();
 
@@ -733,13 +848,9 @@ impl UsbHost {
             speed => self.base.speed = speed - 1,
         };
 
-        match dev_mem_alloc(self.handle.as_mut().unwrap(), USBHOST_DEV_MEM_SIZE) {
+        match UsbDevMem::new(self.handle.as_mut().unwrap(), USBHOST_DEV_MEM_SIZE) {
             Ok(mem) => {
-                self.devmem = Some(UsbDevMem {
-                    mem: mem.as_mut_ptr(),
-                    size: mem.len(),
-                    used: Arc::new(AtomicBool::new(false)),
-                });
+                self.devmem = Some(mem);
             }
             Err(_) => {
                 warn!(
@@ -771,7 +882,7 @@ impl UsbHost {
 
     fn claim_interfaces(&mut self) -> UsbPacketStatus {
         self.base.altsetting = [0; USB_MAX_INTERFACES as usize];
-        if let Err(e) = self.detach_kernel() {
+        if let Err(e) = self.detach_kernel(false) {
             error!("Failed to detach kernel for usbhost: {:?}.", e);
             return UsbPacketStatus::Stall;
         }
@@ -880,16 +991,7 @@ impl UsbHost {
         self.abort_host_transfers()
             .unwrap_or_else(|e| error!("Failed to abort all libusb transfers: {:?}", e));
 
-        if let Some(devmem) = &self.devmem {
-            // SAFETY: The dev_mem's mem is obtained from libusb.
-            let mem = unsafe { slice::from_raw_parts_mut(devmem.mem, devmem.size) };
-            if let Err(e) = dev_mem_free(self.handle.as_mut().unwrap(), mem) {
-                warn!(
-                    "Failed to free dev mem of usbhost device {}, {}",
-                    self.device_id(),
-                    e
-                );
-            }
+        if self.devmem.is_some() {
             self.devmem = None;
         }
 
@@ -1179,6 +1281,29 @@ impl UsbHost {
         self.libdev = Some(self.handle.as_ref().unwrap().device());
         Ok(())
     }
+
+    fn do_reset(&mut self, force: bool) {
+        info!(
+            "Usb Host device {} reset force {} default_state {}",
+            self.device_id(),
+            force,
+            self.is_default_state
+        );
+        if self.handle.is_none() || (!force && self.is_default_state) {
+            return;
+        }
+
+        self.clear_iso_queues();
+
+        trace::usb_host_reset(self.config.hostbus, self.config.hostaddr);
+
+        self.handle
+            .as_mut()
+            .unwrap()
+            .reset()
+            .unwrap_or_else(|e| error!("Failed to reset the usb host device {:?}", e));
+        self.is_default_state = true;
+    }
 }
 
 impl Drop for UsbHost {
@@ -1199,8 +1324,8 @@ impl EventNotifierHelper for UsbHost {
                 .unwrap_or_else(|e| error!("Failed to handle event: {:?}", e));
             None
         });
-        // SAFETY: The usbhost is guaranteed to be valid.
-        if let Ok(pollfds) = unsafe { PollFds::new(usbhost) } {
+
+        if let Ok(pollfds) = PollFds::new(usbhost) {
             set_pollfd_notifiers(pollfds, &mut notifiers, handler);
         }
 
@@ -1331,20 +1456,11 @@ impl UsbDevice for UsbHost {
     }
 
     fn reset(&mut self) {
-        info!("Usb Host device {} reset", self.device_id());
-        if self.handle.is_none() {
-            return;
-        }
+        self.do_reset(false);
+    }
 
-        self.clear_iso_queues();
-
-        trace::usb_host_reset(self.config.hostbus, self.config.hostaddr);
-
-        self.handle
-            .as_mut()
-            .unwrap()
-            .reset()
-            .unwrap_or_else(|e| error!("Failed to reset the usb host device {:?}", e));
+    fn force_reset(&mut self) {
+        self.do_reset(true);
     }
 
     fn set_controller(&mut self, _cntlr: std::sync::Weak<Mutex<XhciDevice>>) {}
@@ -1381,6 +1497,7 @@ impl UsbDevice for UsbHost {
                         &*locked_packet as *const UsbPacket as u64,
                         &locked_packet.status,
                     );
+                    self.is_default_state = false;
                     return;
                 } else if device_req.request == USB_REQUEST_SET_CONFIGURATION {
                     self.set_config(device_req.value as u8, &mut locked_packet);

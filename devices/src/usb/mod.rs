@@ -465,6 +465,11 @@ pub trait UsbDevice: Send + Sync {
     /// Reset the USB device.
     fn reset(&mut self);
 
+    /// Force to reset the USB device.
+    fn force_reset(&mut self) {
+        self.reset();
+    }
+
     /// Set the controller which the USB device attached.
     /// USB device need to kick controller in some cases.
     fn set_controller(&mut self, cntlr: Weak<Mutex<XhciDevice>>);
@@ -822,5 +827,41 @@ mod tests {
         packet.transfer_packet(&mut data, 6);
         assert_eq!(packet.actual_length, 2);
         assert_eq!(data, [1, 2]);
+    }
+
+    #[test]
+    fn test_usb_device_base_snapshot() {
+        const USB_DEVICE_BUFFER_DEFAULT_LEN: usize = 4096;
+        const USB_DEVICE_TEST_ID: &str = "test_usb_device_base";
+
+        // construct test usb device base
+        let mut dev_base = UsbDeviceBase::new(
+            USB_DEVICE_TEST_ID.to_string(),
+            USB_DEVICE_BUFFER_DEFAULT_LEN,
+        );
+
+        // build state A
+        dev_base.addr = 7;
+        dev_base.remote_wakeup = 1;
+        dev_base.unplugged = true;
+
+        // get snapshot state vec
+        let dev_state = dev_base.get_usb_state();
+
+        // modify device state to B
+        dev_base.addr = u8::MAX;
+        dev_base.remote_wakeup = u32::MAX;
+        dev_base.unplugged = false;
+
+        // set snapshot state
+        dev_base.set_usb_state(&dev_state);
+
+        // test whether state equals to A
+        assert_eq!(dev_base.addr, 7);
+        assert_eq!(dev_base.remote_wakeup, 1);
+        assert_eq!(dev_base.unplugged, true);
+
+        // set unplugged to false to avoid trigger qmp message in Drop
+        dev_base.unplugged = false;
     }
 }

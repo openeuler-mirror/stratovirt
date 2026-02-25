@@ -12,6 +12,7 @@
 
 pub use super::hwf_adapter::usb::OhusbDevice;
 
+use std::ptr;
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
@@ -30,21 +31,25 @@ impl OhUsb {
         Ok(Self { capi })
     }
 
-    pub fn open_device(&self, dev_handle: *mut OhusbDevice) -> Result<i32> {
-        // SAFETY: We call related API sequentially for specified ctx.
-        let ret = unsafe { (self.capi.open_device)(dev_handle) };
-        if ret < 0 {
-            bail!("OH USB: open device failed.");
+    pub fn open_device(&self, dev_handle: &mut OhusbDevice) -> Result<()> {
+        // SAFETY: We call related API sequentially for specified ctx and dev_handle is
+        // valid while calling this function. In addition we need to check the returned
+        // value. At the same time, the C API "open_device" can be reenterred.
+        let ret = unsafe { (self.capi.open_device)(ptr::addr_of_mut!(*dev_handle)) };
+        if ret != 0 {
+            bail!("OH USB: open device failed, err {}", ret);
         }
-        Ok(ret)
+        Ok(())
     }
 
-    pub fn close_device(&self, dev_handle: *mut OhusbDevice) -> Result<i32> {
-        // SAFETY: We call related API sequentially for specified ctx.
-        let ret = unsafe { (self.capi.close_device)(dev_handle) };
-        if ret < 0 {
-            bail!("OH USB: close device failed.");
+    pub fn close_device(&self, dev_handle: *mut OhusbDevice) -> Result<()> {
+        // SAFETY: We call related API sequentially for specified ctx and dev_handle is
+        // valid while calling this function. It's not harmful to call it with invalid
+        // content in device_handle.
+        let ret = unsafe { (self.capi.close_device)(ptr::addr_of_mut!(*dev_handle)) };
+        if ret != 0 {
+            bail!("OH USB: close device failed, err {}", ret);
         }
-        Ok(ret)
+        Ok(())
     }
 }
