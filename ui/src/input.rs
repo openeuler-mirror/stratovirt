@@ -12,14 +12,15 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex, MutexGuard, RwLock},
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use log::debug;
 use once_cell::sync::Lazy;
 
 use util::bitmap::Bitmap;
+use util::evdev::InputEvent as RawInputEvent;
 
 // Logical window size for mouse.
 pub const ABS_MAX: u64 = 0x7fff;
@@ -571,6 +572,340 @@ pub trait ConsumerOpts: Send {
     fn do_consumer_event(&mut self, keycode: u16, down: bool) -> Result<()>;
 }
 
+//
+// the code for multitouch
+//
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum MultitouchType {
+    #[default]
+    Screen,
+    Pad,
+}
+
+impl From<MultitouchType> for usize {
+    fn from(val: MultitouchType) -> usize {
+        match val {
+            MultitouchType::Screen => 0,
+            MultitouchType::Pad => 1,
+        }
+    }
+}
+
+static MT_OPS_HANDLER: LazyLock<Vec<Mutex<Option<MultiTouchDevice>>>> = LazyLock::new(|| {
+    vec![
+        // Screen
+        Mutex::new(None),
+        // Pad
+        Mutex::new(None),
+    ]
+});
+
+#[inline]
+fn get_mt_handler(
+    touchtype: MultitouchType,
+) -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
+    let locked_handler = MT_OPS_HANDLER[Into::<usize>::into(touchtype)]
+        .lock()
+        .unwrap();
+    if locked_handler.is_none() {
+        bail!("no multitouch {:?} device", touchtype);
+    }
+    Ok(locked_handler)
+}
+
+#[inline]
+fn get_mt_screen_handler() -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
+    get_mt_handler(MultitouchType::Screen)
+}
+
+#[inline]
+fn get_mt_pad_handler() -> Result<MutexGuard<'static, Option<MultiTouchDevice>>> {
+    get_mt_handler(MultitouchType::Pad)
+}
+
+pub fn register_mt_handler(
+    ops: Arc<Mutex<dyn MultitouchOps>>,
+    x_max: i32,
+    y_max: i32,
+    slot_max: u32,
+    touchtype: MultitouchType,
+) -> Result<()> {
+    let mt_state = MultiTouchDevice {
+        ops,
+        x_max,
+        y_max,
+        slot_max,
+        slots: vec![MultiTouchAbsData::default(); (slot_max + 1) as usize],
+    };
+
+    let idx: usize = touchtype.into();
+    let mut locked_handler = MT_OPS_HANDLER[idx].lock().unwrap();
+    if locked_handler.is_some() {
+        bail!("The same multitouch device supports only one");
+    }
+    *locked_handler = Some(mt_state);
+    drop(locked_handler);
+
+    input_state_changed(touchtype, InputStateChangeReason::MultitouchRegister);
+    Ok(())
+}
+
+pub fn unregister_mt_handler(touchtype: MultitouchType) {
+    input_state_changed(touchtype, InputStateChangeReason::MultitouchUnregister);
+    let idx: usize = touchtype.into();
+    *MT_OPS_HANDLER[idx].lock().unwrap() = None;
+}
+
+#[derive(Clone)]
+pub enum MultiTouchEventKind {
+    BEGIN,
+    UPDATE,
+    END,
+}
+
+#[derive(Clone)]
+pub struct MultiTouchAbsData {
+    pub kind: MultiTouchEventKind,
+    pub x: i32,
+    pub y: i32,
+    pub major: i32,
+    pub minor: i32,
+    pub slot: i32,
+    pub tracking_id: i32,
+}
+
+impl MultiTouchAbsData {
+    pub fn new(
+        kind: MultiTouchEventKind,
+        x: i32,
+        y: i32,
+        major: i32,
+        minor: i32,
+        slot: i32,
+        tracking_id: i32,
+    ) -> Self {
+        Self {
+            kind,
+            x,
+            y,
+            major,
+            minor,
+            slot,
+            tracking_id,
+        }
+    }
+
+    fn scale_axis(&mut self, ui_width: i32, ui_height: i32, x_max: i32, y_max: i32) -> Result<()> {
+        self.x = Self::scale(self.x, 0, ui_width, 0, x_max)?;
+        self.y = Self::scale(self.y, 0, ui_height, 0, y_max)?;
+        Ok(())
+    }
+
+    fn scale(val: i32, min_in: i32, max_in: i32, min_out: i32, max_out: i32) -> Result<i32> {
+        let range_in = (max_in - min_in) as i64;
+        let range_out = (max_out - min_out) as i64;
+
+        if range_in == 0 {
+            bail!("try div by zero, max_in {} min_in {}", max_in, min_in);
+        }
+
+        Ok(((val - min_in) as i64 * range_out / range_in + min_out as i64) as i32)
+    }
+}
+
+impl Default for MultiTouchAbsData {
+    fn default() -> Self {
+        Self {
+            kind: MultiTouchEventKind::END,
+            x: 0,
+            y: 0,
+            major: 0,
+            minor: 0,
+            slot: -1,
+            tracking_id: -1,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct MultiTouchDevice {
+    ops: Arc<Mutex<dyn MultitouchOps>>,
+    x_max: i32,
+    y_max: i32,
+    slot_max: u32,
+    slots: Vec<MultiTouchAbsData>,
+}
+
+impl MultiTouchDevice {
+    fn get_max_size(&self) -> (i32, i32) {
+        (self.x_max, self.y_max)
+    }
+
+    fn send_event(
+        &mut self,
+        evt: &mut MultiTouchAbsData,
+        ui_width: i32,
+        ui_height: i32,
+    ) -> Result<()> {
+        let mut locked_ops = self.ops.lock().unwrap();
+        let slot_id = evt.slot as usize;
+
+        if slot_id as u32 > self.slot_max {
+            bail!("slot id {} exceeds {}", slot_id, self.slot_max);
+        }
+
+        match evt.kind {
+            MultiTouchEventKind::BEGIN => {
+                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max)?
+            }
+            MultiTouchEventKind::END => locked_ops.send_event(evt)?,
+            MultiTouchEventKind::UPDATE => {
+                if self.slots[slot_id].tracking_id == -1 {
+                    bail!("UPDATE is only valid after the pointer was pressed");
+                }
+                evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max)?;
+            }
+        }
+        self.slots[slot_id] = evt.clone();
+
+        for slot in self.slots.iter() {
+            if slot.tracking_id == -1 {
+                continue;
+            }
+            locked_ops.send_event(slot)?;
+        }
+
+        Ok(())
+    }
+
+    fn send_raw_input_events(&mut self, evts: &[RawInputEvent]) -> Result<()> {
+        let mut locked_ops = self.ops.lock().unwrap();
+        for evt in evts {
+            locked_ops.send_raw_event(evt)?;
+        }
+        Ok(())
+    }
+
+    fn send_sync(&self) -> Result<()> {
+        self.ops.lock().unwrap().send_sync()
+    }
+
+    fn lift_all_fingers(&mut self) -> Result<()> {
+        let mut locked_ops = self.ops.lock().unwrap();
+        for slot in self.slots.iter_mut() {
+            if slot.tracking_id != -1 {
+                slot.tracking_id = -1;
+                locked_ops.send_event(slot)?;
+            }
+        }
+        locked_ops.send_sync()?;
+        Ok(())
+    }
+}
+
+pub trait MultitouchOps: Send {
+    fn send_event(&mut self, evt: &MultiTouchAbsData) -> Result<()>;
+    fn send_raw_event(&mut self, evt: &RawInputEvent) -> Result<()>;
+    fn send_sync(&mut self) -> Result<()>;
+}
+
+pub fn send_mt_screen_event(
+    evt: &mut MultiTouchAbsData,
+    ui_width: i32,
+    ui_height: i32,
+) -> Result<()> {
+    get_mt_screen_handler()?
+        .as_mut()
+        .unwrap()
+        .send_event(evt, ui_width, ui_height)
+}
+
+pub fn send_mt_screen_sync() -> Result<()> {
+    get_mt_screen_handler()?.as_ref().unwrap().send_sync()
+}
+
+pub fn send_mt_pad_raw_events(evts: &[RawInputEvent]) -> Result<()> {
+    get_mt_pad_handler()?
+        .as_mut()
+        .unwrap()
+        .send_raw_input_events(evts)
+}
+
+pub fn send_mt_pad_sync() -> Result<()> {
+    get_mt_pad_handler()?.as_ref().unwrap().send_sync()
+}
+
+pub fn get_mt_pad_feature() -> Result<(i32, i32)> {
+    Ok(get_mt_pad_handler()?.as_ref().unwrap().get_max_size())
+}
+
+pub fn lift_all_fingers() -> Result<()> {
+    get_mt_screen_handler()?
+        .as_mut()
+        .unwrap()
+        .lift_all_fingers()
+}
+
+//
+// notifier for input device (un)registration
+//
+static NOTIFIER_MANAGER: Lazy<RwLock<InputStateNotifier>> =
+    Lazy::new(|| RwLock::new(InputStateNotifier::new()));
+
+pub type InputStateNotifyCallback = dyn Fn(MultitouchType, InputStateChangeReason) + Send + Sync;
+
+#[derive(Clone, Copy)]
+pub enum InputStateChangeReason {
+    MultitouchRegister,
+    MultitouchUnregister,
+}
+
+struct InputStateNotifier {
+    notifiers: HashMap<u64, Arc<InputStateNotifyCallback>>,
+    next_id: u64,
+}
+
+impl InputStateNotifier {
+    fn new() -> Self {
+        Self {
+            notifiers: HashMap::new(),
+            next_id: 0,
+        }
+    }
+
+    fn register_notifier(&mut self, notifier: Arc<InputStateNotifyCallback>) -> u64 {
+        let id = self.next_id;
+        self.notifiers.insert(id, notifier);
+        self.next_id += 1;
+        id
+    }
+
+    fn unregister_notifier(&mut self, id: u64) {
+        self.notifiers.remove(&id);
+    }
+
+    fn notify(&self, touchtype: MultitouchType, reason: InputStateChangeReason) {
+        for (_, notify) in self.notifiers.iter() {
+            notify(touchtype, reason);
+        }
+    }
+}
+
+pub fn register_input_notifier(notifier: Arc<InputStateNotifyCallback>) -> u64 {
+    NOTIFIER_MANAGER
+        .write()
+        .unwrap()
+        .register_notifier(notifier)
+}
+
+pub fn unregister_input_notifier(id: u64) {
+    NOTIFIER_MANAGER.write().unwrap().unregister_notifier(id);
+}
+
+fn input_state_changed(touchtype: MultitouchType, reason: InputStateChangeReason) {
+    NOTIFIER_MANAGER.read().unwrap().notify(touchtype, reason);
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::bail;
@@ -639,6 +974,11 @@ mod tests {
         pub button: u32,
         x: u32,
         y: u32,
+    }
+
+    fn get_keyboard_state(keycode: u16) -> bool {
+        let locked_input = INPUTS.lock().unwrap();
+        locked_input.keyboard_state.keystate.contains(&keycode)
     }
 
     impl PointerOpts for TestTablet {
@@ -746,5 +1086,42 @@ mod tests {
         drop(locked_input);
 
         test_input.unregister_input();
+    }
+
+    #[cfg(feature = "keycode")]
+    #[test]
+    fn test_keyboard_process() {
+        // Test keyboard_update
+        let keycode_list = vec![
+            KEYCODE_SHIFT,
+            KEYCODE_CTRL,
+            KEYCODE_ALT,
+            KEYCODE_ALT_R,
+            KEYCODE_CAPS_LOCK,
+            KEYCODE_NUM_LOCK,
+        ];
+        for keycode in keycode_list {
+            assert!(keyboard_update(true, keycode).is_ok());
+            assert_eq!(get_keyboard_state(keycode), true);
+            assert!(keyboard_update(false, keycode).is_ok());
+            assert_eq!(get_keyboard_state(keycode), false);
+        }
+        assert_eq!(keyboard_modifier_get(KeyboardModifier::KeyModNumlock), true);
+        keyboard_state_reset();
+        assert_eq!(
+            keyboard_modifier_get(KeyboardModifier::KeyModNumlock),
+            false
+        );
+
+        // Test update_key_state
+        assert!(update_key_state(true, 97, 0x07E1).is_ok());
+        assert_eq!(get_keyboard_state(0x07E1), true);
+        assert!(update_key_state(true, 96, 0x47).is_ok());
+        assert_eq!(get_keyboard_state(0x47), true);
+
+        // Test kbd_led_state
+        set_kbd_led_state(3 as u8);
+        assert_eq!(check_kbd_led_state(3 as u8), true);
+        assert_eq!(get_kbd_led_state(), 3 as u8);
     }
 }

@@ -13,21 +13,28 @@
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{error, info};
+use log::{error, info, warn};
 use util::byte_code::ByteCode;
 
 use super::{
     channel::{recv_slice, send_obj, OhUiChannel},
+    dup_fd,
     msg::*,
+    touchpad::*,
 };
 use crate::{
-    console::{get_active_console, graphic_hardware_ui_info, set_dpy_rotation, Rotation},
+    console::{
+        get_active_console, get_dpy_standing, graphic_hardware_ui_info, set_dpy_rotation,
+        set_dpy_standing, Rotation,
+    },
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
-        release_all_btn, release_all_key, trigger_key, Axis, ABS_MAX, CAPS_LOCK_LED,
+        lift_all_fingers, register_input_notifier, release_all_btn, release_all_key,
+        send_mt_screen_event, send_mt_screen_sync, trigger_key, Axis, InputStateChangeReason,
+        MultiTouchAbsData, MultiTouchEventKind, MultitouchType, ABS_MAX, CAPS_LOCK_LED,
         CONSUMER_PREFIX, INPUT_BUTTON_WHEEL_DOWN, INPUT_BUTTON_WHEEL_LEFT,
         INPUT_BUTTON_WHEEL_RIGHT, INPUT_BUTTON_WHEEL_UP, INPUT_POINT_BACK, INPUT_POINT_FORWARD,
         INPUT_POINT_LEFT, INPUT_POINT_MIDDLE, INPUT_POINT_RIGHT, KEYCODE_CAPS_LOCK,
@@ -35,6 +42,7 @@ use crate::{
     },
     keycode::{DpyMod, KeyCode},
 };
+use machine_manager::notifier::register_vm_pause_notifier;
 
 fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
     if x < 0.0 || y < 0.0 || x > w || y > h {
@@ -77,6 +85,9 @@ impl WindowState {
     }
 
     fn press_btn(&mut self, btn: u32) -> Result<()> {
+        if let Ok(true) = stop_slide() {
+            return Ok(());
+        }
         input_button(btn, true)?;
         input_point_sync()
     }
@@ -112,6 +123,7 @@ impl WindowState {
 
     fn move_pointer(&mut self, x: f64, y: f64) -> Result<()> {
         let (pos_x, pos_y) = trans_mouse_pos(x, y, f64::from(self.width), f64::from(self.height));
+        let _ = stop_slide();
         input_move_abs(Axis::X, pos_x)?;
         input_move_abs(Axis::Y, pos_y)?;
         input_point_sync()
@@ -136,27 +148,95 @@ impl WindowState {
 }
 
 #[derive(Default)]
+struct InputDeviceState {
+    input_notifier_id: u64,
+    has_multitouch_screen: bool,
+    has_multitouch_pad: bool,
+}
+
+#[derive(Default)]
 pub struct OhUiMsgHandler {
     state: Mutex<WindowState>,
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<Option<MsgReader>>,
-    writer: Mutex<Option<MsgWriter>>,
+    writer: Arc<Mutex<Option<MsgWriter>>>,
+    vm_pause: Arc<RwLock<bool>>,
+    pause_notifier_id: Mutex<u64>,
+    input_state: Arc<Mutex<InputDeviceState>>,
+    surface_size: RwLock<(u32, u32)>,
 }
 
 impl OhUiMsgHandler {
     pub fn new() -> Self {
-        OhUiMsgHandler {
+        let handler = OhUiMsgHandler {
             state: Mutex::new(WindowState::default()),
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
             reader: Mutex::new(None),
-            writer: Mutex::new(None),
-        }
+            writer: Arc::new(Mutex::new(None)),
+            vm_pause: Arc::new(RwLock::new(false)),
+            pause_notifier_id: Mutex::new(0),
+            input_state: Arc::new(Mutex::new(InputDeviceState::default())),
+            surface_size: RwLock::new((0, 0)),
+        };
+        handler.register_pause_notifier(handler.vm_pause.clone());
+        handler.register_input_change_notifier();
+
+        handler
+    }
+
+    fn register_pause_notifier(&self, vm_pause: Arc<RwLock<bool>>) {
+        let pause_notify = Arc::new(move |paused: bool| {
+            info!("Message Handler get vm pause state {:?}", paused);
+            *vm_pause.write().unwrap() = paused;
+            if !paused {
+                let _ = Self::release_input_keys();
+            }
+        });
+        *self.pause_notifier_id.lock().unwrap() = register_vm_pause_notifier(pause_notify);
+    }
+
+    fn register_input_change_notifier(&self) {
+        let writer = self.writer.clone();
+        let input_state = self.input_state.clone();
+        let notifier = Arc::new(
+            move |touchtype: MultitouchType, reason: InputStateChangeReason| {
+                let internal_reason = match touchtype {
+                    MultitouchType::Screen => match reason {
+                        InputStateChangeReason::MultitouchRegister => {
+                            input_state.lock().unwrap().has_multitouch_screen = true;
+                            INPUT_MULTITOUCH_SCREEN_ONLINE
+                        }
+                        InputStateChangeReason::MultitouchUnregister => {
+                            input_state.lock().unwrap().has_multitouch_screen = false;
+                            INPUT_MULTITOUCH_SCREEN_OFFLINE
+                        }
+                    },
+                    MultitouchType::Pad => match reason {
+                        InputStateChangeReason::MultitouchRegister => {
+                            input_state.lock().unwrap().has_multitouch_pad = true;
+                            if let Err(e) = init_tp_emu() {
+                                error!("failed to init touchpad emulator {:?}", e);
+                            }
+                            INPUT_MULTITOUCH_PAD_ONLINE
+                        }
+                        InputStateChangeReason::MultitouchUnregister => {
+                            input_state.lock().unwrap().has_multitouch_pad = false;
+                            uninit_tp_emu();
+                            INPUT_MULTITOUCH_PAD_OFFLINE
+                        }
+                    },
+                };
+                send_input_device_change_msg(writer.clone(), internal_reason);
+            },
+        );
+
+        self.input_state.lock().unwrap().input_notifier_id = register_input_notifier(notifier);
     }
 
     pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
         let fd = channel.lock().unwrap().get_stream_raw_fd().unwrap();
-        *self.reader.lock().unwrap() = Some(MsgReader::new(fd));
-        *self.writer.lock().unwrap() = Some(MsgWriter::new(fd));
+        *self.reader.lock().unwrap() = Some(MsgReader::new(dup_fd(fd)));
+        *self.writer.lock().unwrap() = Some(MsgWriter::new(dup_fd(fd)));
     }
 
     pub fn handle_msg(&self, token_id: Arc<RwLock<u64>>) -> Result<()> {
@@ -171,74 +251,43 @@ impl OhUiMsgHandler {
         let hdr = &reader.header;
         let event_type = hdr.event_type;
         let body_size = hdr.size as usize;
+
+        if event_type >= EventType::Max {
+            error!("unsupported event type {:?}", event_type);
+            reader.clear();
+            return Ok(());
+        }
+
+        if self.filter_message(&event_type) {
+            reader.clear();
+            return Ok(());
+        }
+
         trace::trace_scope_start!(handle_msg, args = (&event_type));
 
         let body_bytes = reader.body.as_ref().unwrap();
-        if let Err(e) = match event_type {
-            EventType::MouseButton => {
-                let body = MouseButtonEvent::from_bytes(&body_bytes[..]).unwrap();
-                self.handle_mouse_button(body)
-            }
-            EventType::MouseMotion => {
-                let body = MouseMotionEvent::from_bytes(&body_bytes[..]).unwrap();
-                self.handle_mouse_motion(body)
-            }
-            EventType::Keyboard => {
-                let body = KeyboardEvent::from_bytes(&body_bytes[..]).unwrap();
-                self.handle_keyboard(body)
-            }
-            EventType::WindowInfo => {
-                let body = WindowInfoEvent::from_bytes(&body_bytes[..]).unwrap();
-                self.handle_windowinfo(body);
-                Ok(())
-            }
-            EventType::Scroll => {
-                let body = ScrollEvent::from_bytes(&body_bytes[..]).unwrap();
-                self.handle_scroll(body)
-            }
-            EventType::Focus => {
-                let body = FocusEvent::from_bytes(&body_bytes[..]).unwrap();
-                trace::oh_event_focus(body.state);
-                if body.state == CLIENT_FOCUSOUT_EVENT {
-                    reader.clear();
-                    release_all_key()?;
-                    release_all_btn()?;
-                }
-                Ok(())
-            }
-            EventType::Ledstate => Ok(()),
-            EventType::Greet => {
-                let body = GreetEvent::from_bytes(&body_bytes[..]).unwrap();
-                trace::oh_event_greet(body.token_id);
-                *token_id.write().unwrap() = body.token_id;
-                let cursor = self.state.lock().unwrap().cursor.clone();
-                self.handle_cursor_define(
-                    cursor.w,
-                    cursor.h,
-                    cursor.hot_x,
-                    cursor.hot_y,
-                    cursor.size_per_pixel,
-                );
-                Ok(())
-            }
-            EventType::WindowInfoV2 => {
-                let body = WindowInfoV2Event::from_bytes(&body_bytes[..]).unwrap();
-                info!("WindowInfoV2: {:?}", body);
-                self.handle_windowinfo_v2(body)
-            }
-            _ => {
-                error!(
-                    "unsupported type {:?} and body size {}",
-                    event_type, body_size
-                );
-                trace::oh_event_unsupported_type(&event_type, body_size.try_into().unwrap());
-                Ok(())
-            }
-        } {
+
+        if event_type == EventType::Greet {
+            let body = GreetEvent::from_bytes(&body_bytes[..body_size]).unwrap();
+            *token_id.write().unwrap() = body.token_id;
+        }
+
+        let handler = &MSG_HANDLER_TABLE[event_type as usize];
+        if let Err(e) = handler(self, &body_bytes[..body_size]) {
             error!("handle_msg: error: {e}");
         }
         reader.clear();
         Ok(())
+    }
+
+    fn filter_message(&self, et: &EventType) -> bool {
+        if !*self.vm_pause.read().unwrap() {
+            return false;
+        }
+
+        let ret =
+            matches!(et, EventType::WindowInfoExtension) || matches!(et, EventType::WindowInfo);
+        !ret
     }
 
     fn handle_mouse_button(&self, mb: &MouseButtonEvent) -> Result<()> {
@@ -327,25 +376,102 @@ impl OhUiMsgHandler {
         let cons = get_active_console();
 
         for con in cons {
-            let c = match con.upgrade() {
-                Some(c) => c,
-                None => continue,
-            };
-            if let Err(e) = graphic_hardware_ui_info(c, wi.width, wi.height) {
-                error!("handle_windowinfo failed with error {e}");
+            if let Some(c) = con.upgrade() {
+                if let Err(e) = graphic_hardware_ui_info(c.clone(), wi.width, wi.height) {
+                    error!("handle_windowinfo failed with error {e}");
+                }
             }
         }
         trace::oh_event_windowinfo(wi.width, wi.height);
     }
 
-    fn handle_windowinfo_v2(&self, wi_v2: &WindowInfoV2Event) -> Result<()> {
-        let wi = WindowInfoEvent {
-            width: wi_v2.width,
-            height: wi_v2.height,
-        };
-        self.handle_windowinfo(&wi);
-        set_dpy_rotation(Rotation::try_from(wi_v2.rotation).map_err(|e| anyhow!("{:?}", e))?);
+    fn handle_windowinfo_extension(&self, wie: &WindowInfoExtensionEvent) -> Result<()> {
+        *self.surface_size.write().unwrap() = (wie.surface_width, wie.surface_height);
+        set_dpy_rotation(Rotation::try_from(wie.rotation).map_err(|e| anyhow!("{:?}", e))?);
         Ok(())
+    }
+
+    fn handle_focuschange(&self, fe: &FocusEvent) -> Result<()> {
+        trace::oh_event_focus(fe.state);
+        match fe.state {
+            CLIENT_FOCUSIN_EVENT => {
+                info!("received focus-in event");
+            }
+            CLIENT_FOCUSOUT_EVENT => {
+                info!("received focus-out event");
+                Self::release_input_keys()?;
+            }
+            _ => warn!("focus message type error."),
+        }
+        Ok(())
+    }
+
+    fn handle_multitouch_screen_event(&self, mtt: &MultiTouchScreenEvent) -> Result<()> {
+        let mtt_type = mtt.event_type;
+        let slot_id = mtt.tracking_id;
+        let mut tracking_id = mtt.tracking_id;
+
+        if mtt_type == MULTITOUCH_EVENT_CANCEL {
+            return lift_all_fingers();
+        }
+
+        let evt_type = match mtt_type {
+            MULTITOUCH_EVENT_DOWN => {
+                // send mouse move event if display is standing to wakeup the guest
+                if get_dpy_standing() {
+                    let _ = self.state.lock().unwrap().move_pointer(0.0, 0.0);
+                    set_dpy_standing(false);
+                }
+                MultiTouchEventKind::BEGIN
+            }
+            MULTITOUCH_EVENT_MOVE => MultiTouchEventKind::UPDATE,
+            MULTITOUCH_EVENT_UP => {
+                tracking_id = -1;
+                MultiTouchEventKind::END
+            }
+            _ => bail!("unsupported multitouch screen event type {}", mtt_type),
+        };
+        let mut evt = MultiTouchAbsData::new(
+            evt_type,
+            mtt.x,
+            mtt.y,
+            mtt.major,
+            mtt.minor,
+            slot_id,
+            tracking_id,
+        );
+        let (w, h) = *self.surface_size.read().unwrap();
+
+        send_mt_screen_event(&mut evt, w as i32, h as i32)?;
+        send_mt_screen_sync()?;
+        trace::oh_event_multitouch(
+            mtt.x,
+            mtt.y,
+            mtt.major,
+            mtt.minor,
+            tracking_id,
+            mtt.blob_id,
+            mtt.pressure,
+        );
+        Ok(())
+    }
+
+    fn handle_touchpad_scroll(&self, mtt: &TouchPadScrollEvent) -> Result<()> {
+        let action = try_into_mt_event(mtt.action)?;
+        let evt = TouchPadScrollData::new(action, mtt.horizontal, mtt.vertical);
+        send_scroll_event(evt)
+    }
+
+    fn handle_touchpad_pinch(&self, mtt: &TouchPadPinchEvent) -> Result<()> {
+        let action = try_into_mt_event(mtt.action)?;
+        let evt = TouchPadPinchData::new(action, mtt.pinch);
+        send_pinch_event(evt)
+    }
+
+    fn handle_touchpad_swipe(&self, mtt: &TouchPadSwipeEvent) -> Result<()> {
+        let action = try_into_mt_event(mtt.action)?;
+        let evt = TouchPadSwipeData::new(action, mtt.avg_x, mtt.avg_y);
+        send_swipe_event(evt)
     }
 
     pub fn send_windowinfo(&self, w: u32, h: u32) {
@@ -354,6 +480,23 @@ impl OhUiMsgHandler {
             let body = WindowInfoEvent::new(w, h);
             if let Err(e) = writer.send_message(EventType::WindowInfo, &body) {
                 error!("send_windowinfo: failed to send message with error {e}");
+            }
+        }
+    }
+
+    pub fn send_input_device_state(&self) {
+        match self.input_state.lock().unwrap().has_multitouch_screen {
+            true => {
+                send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_SCREEN_ONLINE)
+            }
+            false => {
+                send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_SCREEN_OFFLINE)
+            }
+        }
+        match self.input_state.lock().unwrap().has_multitouch_pad {
+            true => send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_PAD_ONLINE),
+            false => {
+                send_input_device_change_msg(self.writer.clone(), INPUT_MULTITOUCH_PAD_OFFLINE)
             }
         }
     }
@@ -370,6 +513,155 @@ impl OhUiMsgHandler {
     pub fn reset(&self) {
         *self.reader.lock().unwrap() = None;
         *self.writer.lock().unwrap() = None;
+    }
+
+    fn release_input_keys() -> Result<()> {
+        release_all_key()?;
+        release_all_btn()?;
+        lift_all_fingers()?;
+        lift_tp_fingers()
+    }
+}
+
+type MsgHandleFunc = Box<dyn Fn(&OhUiMsgHandler, &[u8]) -> Result<()> + Send + Sync>;
+
+static MSG_HANDLER_TABLE: LazyLock<Vec<MsgHandleFunc>> = LazyLock::new(|| {
+    vec![
+        // WindowInfo        0
+        Box::new(window_info_handler),
+        // MouseButton       1
+        Box::new(mouse_button_handler),
+        // MouseMotion       2
+        Box::new(mouse_motion_handler),
+        // Keyboard          3
+        Box::new(keyboard_handler),
+        // Scroll            4
+        Box::new(scroll_handler),
+        // Ledstate          5
+        Box::new(stub_handler),
+        // FrameBufferDirty  6
+        Box::new(stub_handler),
+        // Greet             7
+        Box::new(greet_handler),
+        // CursorDefine      8
+        Box::new(stub_handler),
+        // Focus             9
+        Box::new(focus_handler),
+        // VmCtrlInfo        10
+        Box::new(stub_handler),
+        // FlushFrame        11
+        Box::new(flush_frame_handler),
+        // MultitouchScreen  12
+        Box::new(mtt_screen_handler),
+        // InputDeviceChange 13
+        Box::new(stub_handler),
+        // WindowInfoV2      14
+        Box::new(windowinfo_extension_handler),
+        // VmViewChange      15
+        Box::new(vm_view_change_handler),
+        // TouchPadScroll    16
+        Box::new(tp_scroll_handler),
+        // TouchPadPinch     17
+        Box::new(tp_pinch_handler),
+        // TouchPadSwipe     18
+        Box::new(tp_swipe_handler),
+    ]
+});
+
+fn stub_handler(_msg_handler: &OhUiMsgHandler, _body_bytes: &[u8]) -> Result<()> {
+    Ok(())
+}
+
+fn window_info_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = WindowInfoEvent::from_bytes(body_bytes).unwrap();
+    info!("{:?}", body);
+    msg_handler.handle_windowinfo(body);
+    Ok(())
+}
+
+fn mouse_button_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = MouseButtonEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_mouse_button(body)
+}
+
+fn mouse_motion_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = MouseMotionEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_mouse_motion(body)
+}
+
+fn keyboard_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = KeyboardEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_keyboard(body)
+}
+
+fn scroll_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = ScrollEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_scroll(body)
+}
+
+fn greet_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = GreetEvent::from_bytes(body_bytes).unwrap();
+    trace::oh_event_greet(body.token_id);
+    let cursor = msg_handler.state.lock().unwrap().cursor.clone();
+    msg_handler.handle_cursor_define(
+        cursor.w,
+        cursor.h,
+        cursor.hot_x,
+        cursor.hot_y,
+        cursor.size_per_pixel,
+    );
+    Ok(())
+}
+
+fn focus_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = FocusEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_focuschange(body)
+}
+
+fn flush_frame_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    stub_handler(msg_handler, body_bytes)
+}
+
+fn mtt_screen_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = MultiTouchScreenEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_multitouch_screen_event(body)
+}
+
+fn windowinfo_extension_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = WindowInfoExtensionEvent::from_bytes(body_bytes).unwrap();
+    info!("{:?}", body);
+    msg_handler.handle_windowinfo_extension(body)
+}
+
+fn vm_view_change_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    stub_handler(msg_handler, body_bytes)
+}
+
+fn tp_scroll_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = TouchPadScrollEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_touchpad_scroll(body)
+}
+
+fn tp_pinch_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = TouchPadPinchEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_touchpad_pinch(body)
+}
+
+fn tp_swipe_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = TouchPadSwipeEvent::from_bytes(body_bytes).unwrap();
+    // only handle three fingers swipe
+    if body.finger_count != THREE_FINGERS as u32 {
+        return Ok(());
+    }
+    msg_handler.handle_touchpad_swipe(body)
+}
+
+fn send_input_device_change_msg(writer: Arc<Mutex<Option<MsgWriter>>>, reason: u64) {
+    if let Some(writer) = writer.lock().unwrap().as_mut() {
+        let body = InputDeviceChange::new(reason);
+        if let Err(e) = writer.send_message(EventType::InputDeviceChange, &body) {
+            error!("failed to send InputDeviceChange message with error {e}");
+        }
     }
 }
 
