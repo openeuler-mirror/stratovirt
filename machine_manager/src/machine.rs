@@ -25,9 +25,9 @@ use crate::qmp::qmp_schema::{
     BlockDevAddArgument, BlockdevSnapshotInternalArgument, CameraDevAddArgument,
     CharDevAddArgument, ChardevInfo, Cmd, CmdLine, CmdParameter, DeviceAddArgument, DeviceProps,
     Events, GetViomemArgument, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
-    MigrateCapabilities, NetDevAddArgument, PropList, QmpCommand, QmpErrorClass, QmpEvent,
-    QueryMemGpaArgument, QueryVcpuRegArgument, SetViomemArgument, Target, TypeLists,
-    UpdateRegionArgument,
+    MigrateCapabilities, NetDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, PropList,
+    QmpCommand, QmpErrorClass, QmpEvent, QueryMemGpaArgument, QueryVcpuRegArgument,
+    SetViomemArgument, Target, TypeLists, UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -192,6 +192,20 @@ pub trait DeviceInterface {
     fn netdev_add(&mut self, args: Box<NetDevAddArgument>) -> Response;
 
     fn netdev_del(&mut self, id: String) -> Response;
+
+    fn netdev_replace(&mut self, _args: NetDevReplaceArgument) -> Response {
+        Response::create_response(
+            serde_json::to_value("netdev_replace not supported for VM".to_string()).unwrap(),
+            None,
+        )
+    }
+
+    fn netlink_set(&self, _args: NetLinkSetArgument) -> Response {
+        Response::create_response(
+            serde_json::to_value("netlink_set not supported for VM".to_string()).unwrap(),
+            None,
+        )
+    }
 
     /// Create a new chardev device.
     fn chardev_add(&mut self, _args: CharDevAddArgument) -> Response;

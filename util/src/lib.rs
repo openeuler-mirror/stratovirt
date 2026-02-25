@@ -27,6 +27,7 @@ pub mod leak_bucket;
 pub mod link_list;
 pub mod logger;
 pub mod loop_context;
+pub mod macnat;
 pub mod num_ops;
 pub mod offsetof;
 #[cfg(target_env = "ohos")]
@@ -45,8 +46,12 @@ pub mod v4l2;
 
 pub use error::UtilError;
 
-use std::{any::Any, sync::Mutex};
+use std::{
+    any::{type_name, Any},
+    sync::Mutex,
+};
 
+use anyhow::{anyhow, Result};
 use log::debug;
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, OutputFlags, SetArg, Termios};
 use once_cell::sync::Lazy;
@@ -163,4 +168,28 @@ impl<T: Any> AsAny for T {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+pub fn any_typecast_clone<T: Clone + 'static, A: AsAny + ?Sized>(t: &A) -> Result<T> {
+    t.as_any().downcast_ref::<T>().cloned().ok_or(anyhow!(
+        "any_typecast_clone: failed to downcast {} to {}",
+        type_name::<A>(),
+        type_name::<T>()
+    ))
+}
+
+pub fn any_typecast<T: 'static, A: AsAny + ?Sized>(t: &A) -> Result<&T> {
+    t.as_any().downcast_ref::<T>().ok_or(anyhow!(
+        "any_typecast: failed to downcast {} to {}",
+        type_name::<A>(),
+        type_name::<T>()
+    ))
+}
+
+pub fn any_typecast_mut<T: 'static, A: AsAny + ?Sized>(t: &mut A) -> Result<&mut T> {
+    t.as_any_mut().downcast_mut::<T>().ok_or(anyhow!(
+        "any_typecast_mut: failed to downcast {} to {}",
+        type_name::<A>(),
+        type_name::<T>()
+    ))
 }

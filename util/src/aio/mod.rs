@@ -24,6 +24,8 @@ use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread::yield_now;
+use std::time::{Duration, Instant};
 use std::{cmp, str::FromStr};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -889,6 +891,58 @@ pub unsafe fn iovec_write_zero(iovec: &[Iovec]) {
     }
 }
 
+#[derive(Default, Clone)]
+pub struct IoRef {
+    ref_cnt: Arc<AtomicU32>,
+}
+
+impl Drop for IoRef {
+    fn drop(&mut self) {
+        loop {
+            let ref_count = self.ref_cnt.load(Ordering::Relaxed);
+            let new_count = ref_count.saturating_sub(1);
+            if self.ref_cnt.compare_exchange(
+                ref_count,
+                new_count,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) == Ok(ref_count)
+            {
+                break;
+            }
+        }
+    }
+}
+
+impl IoRef {
+    pub fn inc_ref(&self) -> Self {
+        self.ref_cnt.fetch_add(1, Ordering::Relaxed);
+        self.clone()
+    }
+
+    #[inline]
+    pub fn ref_cnt(&self) -> u32 {
+        self.ref_cnt.load(Ordering::Relaxed)
+    }
+}
+
+pub const DEFAULT_IO_TIMEOUT: u64 = 3;
+pub fn wait_io_done(io_inflight: &IoRef, timeout_sec: u64, id: &str) {
+    let cur = Instant::now();
+    while io_inflight.ref_cnt() > 0 {
+        if cur.elapsed() >= Duration::from_secs(timeout_sec) {
+            warn!(
+                "Elapsed {}s but {} IOs are ongoing for device {}",
+                timeout_sec,
+                io_inflight.ref_cnt(),
+                id
+            );
+            break;
+        }
+        yield_now();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use vmm_sys_util::tempfile::TempFile;
@@ -1116,5 +1170,18 @@ mod tests {
 
         let result2 = unsafe { iovec_is_zero(&iovecs2) };
         assert_eq!(result2, false);
+    }
+
+    #[test]
+    fn test_ioref() {
+        let ioref = IoRef::default();
+        assert_eq!(ioref.ref_cnt(), 0);
+
+        {
+            let inc_ioref = ioref.inc_ref();
+            assert_eq!(inc_ioref.ref_cnt(), 1);
+            assert_eq!(ioref.ref_cnt(), 1);
+        }
+        assert_eq!(ioref.ref_cnt(), 0);
     }
 }

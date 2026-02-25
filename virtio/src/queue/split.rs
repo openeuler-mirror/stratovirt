@@ -238,6 +238,11 @@ impl QueueConfig {
             0_u64
         };
     }
+
+    pub fn update_queue_size(&mut self, queue_size: u16) {
+        self.max_size = queue_size;
+        self.size = queue_size;
+    }
 }
 
 /// Virtio used element.

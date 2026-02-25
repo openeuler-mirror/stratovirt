@@ -167,6 +167,36 @@ Remove a network backend.
 <- { "return": {} }
 ```
 
+### netdev_replace
+
+Replace tap for virtio-net device.
+
+#### Arguments
+
+* `id` : the device's ID.
+
+#### Example
+
+```json
+-> { "execute": "netdev_replace", "arguments": { "id": "nic0", "ifname": "tap0", "macnat": false } }
+<- { "return": {} }
+```
+
+### netlink_set
+
+Set link status for virtio-net device.
+
+#### Arguments
+
+* `id` : the device's ID.
+
+#### Example
+
+```json
+-> { "execute": "netlink_set", "arguments": { "id": "nic0", "up": false } }
+<- { "return": {} }
+```
+
 ## Camera device backend management
 
 ### cameradev_add

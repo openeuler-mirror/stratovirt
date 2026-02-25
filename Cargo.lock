@@ -1954,6 +1954,7 @@ dependencies = [
  "migration_derive",
  "once_cell",
  "serde",
+ "serde-big-array",
  "serde_json",
  "thiserror",
  "trace",

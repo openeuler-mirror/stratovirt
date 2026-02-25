@@ -17,31 +17,36 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use std::{cmp, fs, mem};
 
 use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
 use once_cell::sync::Lazy;
-use util::aio::Iovec;
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
+use util::aio::{wait_io_done, IoRef, Iovec, DEFAULT_IO_TIMEOUT};
+use util::macnat::{IpvtapMacnat, Macnat};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd};
 
 use crate::{
     check_config_space_rw, gpa_hva_iovec_map, iov_discard_front, iov_to_buf, mem_to_buf,
     read_config_default, report_virtio_error, virtio_has_feature, ElemIovec, Element, Queue,
     VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt, VirtioInterruptType, VirtioNetHdr,
-    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC, VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC,
-    VIRTIO_NET_CTRL_MAC_ADDR_SET, VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN,
-    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX, VIRTIO_NET_CTRL_RX_ALLMULTI,
-    VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST, VIRTIO_NET_CTRL_RX_NOMULTI,
-    VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC, VIRTIO_NET_CTRL_VLAN,
-    VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR, VIRTIO_NET_F_CSUM,
-    VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX, VIRTIO_NET_F_CTRL_RX_EXTRA,
-    VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN,
-    VIRTIO_NET_F_GUEST_TSO4, VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO,
-    VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
-    VIRTIO_NET_F_MQ, VIRTIO_NET_OK, VIRTIO_TYPE_NET,
+    CONFIG_STATUS_DRIVER_OK, VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_RING_INDIRECT_DESC,
+    VIRTIO_F_VERSION_1, VIRTIO_NET_CTRL_MAC, VIRTIO_NET_CTRL_MAC_ADDR_SET,
+    VIRTIO_NET_CTRL_MAC_TABLE_SET, VIRTIO_NET_CTRL_MQ, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX,
+    VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN, VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET, VIRTIO_NET_CTRL_RX,
+    VIRTIO_NET_CTRL_RX_ALLMULTI, VIRTIO_NET_CTRL_RX_ALLUNI, VIRTIO_NET_CTRL_RX_NOBCAST,
+    VIRTIO_NET_CTRL_RX_NOMULTI, VIRTIO_NET_CTRL_RX_NOUNI, VIRTIO_NET_CTRL_RX_PROMISC,
+    VIRTIO_NET_CTRL_VLAN, VIRTIO_NET_CTRL_VLAN_ADD, VIRTIO_NET_CTRL_VLAN_DEL, VIRTIO_NET_ERR,
+    VIRTIO_NET_F_CSUM, VIRTIO_NET_F_CTRL_MAC_ADDR, VIRTIO_NET_F_CTRL_RX,
+    VIRTIO_NET_F_CTRL_RX_EXTRA, VIRTIO_NET_F_CTRL_VLAN, VIRTIO_NET_F_CTRL_VQ,
+    VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_ECN, VIRTIO_NET_F_GUEST_TSO4,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
+    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MQ,
+    VIRTIO_NET_F_STATUS, VIRTIO_NET_OK, VIRTIO_NET_S_LINK_UP, VIRTIO_TYPE_NET,
 };
 use address_space::{AddressAttr, AddressSpace};
 use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
@@ -49,26 +54,29 @@ use machine_manager::event_loop::{register_event_helper, unregister_event_helper
 use machine_manager::state_query::{
     register_state_query_callback, unregister_state_query_callback,
 };
-use migration::{
-    migration::Migratable, DeviceStateDesc, FieldDesc, MigrationHook, MigrationManager,
-    StateTransfer,
+use machine_manager::{
+    event,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
 };
-use migration_derive::{ByteCode, Desc};
+use migration::{
+    migration::Migratable, DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer,
+};
+use migration_derive::DescSerde;
 use util::byte_code::ByteCode;
-use util::gen_base_func;
 use util::loop_context::{
     create_new_eventfd, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
     NotifierOperation,
 };
 use util::num_ops::str_to_num;
 use util::tap::{
-    Tap, IFF_MULTI_QUEUE, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN, TUN_F_UFO,
+    Tap, IFF_MULTI_QUEUE, MAC_ADDR_LEN, TUN_F_CSUM, TUN_F_TSO4, TUN_F_TSO6, TUN_F_TSO_ECN,
+    TUN_F_UFO,
 };
+use util::{any_typecast_clone, gen_base_func};
 
 /// Number of virtqueues(rx/tx/ctrl).
 const QUEUE_NUM_NET: usize = 3;
-/// The Mac Address length.
-pub const MAC_ADDR_LEN: usize = 6;
 /// The length of ethernet header.
 const ETHERNET_HDR_LENGTH: usize = 14;
 /// The max "multicast + unicast" mac address table length.
@@ -94,7 +102,7 @@ static USED_MAC_TABLE: Lazy<Arc<Mutex<[i8; MAX_MAC_ADDR_NUM]>>> =
 
 /// Configuration of virtio-net devices.
 #[repr(C, packed)]
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VirtioNetConfig {
     /// Mac Address.
     pub mac: [u8; MAC_ADDR_LEN],
@@ -114,6 +122,7 @@ pub struct VirtioNetConfig {
 impl ByteCode for VirtioNetConfig {}
 
 /// The control mode used for packet receive filtering.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 struct CtrlRxMode {
     /// If the device should receive all incoming packets.
     promisc: bool,
@@ -144,13 +153,13 @@ impl Default for CtrlRxMode {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct MacAddress {
     address: [u8; MAC_ADDR_LEN],
 }
 
 /// The Mac information used to filter incoming packet.
-#[derive(Default)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct CtrlMacInfo {
     /// Unicast mac address table.
     uni_mac_table: Vec<MacAddress>,
@@ -162,6 +171,7 @@ struct CtrlMacInfo {
     multi_mac_of: bool,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CtrlInfo {
     /// The control rx mode for packet receive filtering.
     rx_mode: CtrlRxMode,
@@ -170,6 +180,7 @@ pub struct CtrlInfo {
     /// The map of all the vlan ids.
     vlan_map: HashMap<u16, u32>,
     /// The net device status.
+    #[serde(skip)]
     config: Arc<Mutex<VirtioNetConfig>>,
 }
 
@@ -519,6 +530,9 @@ pub struct NetCtrlHandler {
     pub driver_features: u64,
     /// Device is broken or not.
     pub device_broken: Arc<AtomicBool>,
+    /// Indicate if IO is inflight.
+    pub io_inflight: Option<IoRef>,
+    /// Tap devices.
     pub taps: Option<Vec<Tap>>,
 }
 
@@ -646,9 +660,11 @@ impl EventNotifierHelper for NetCtrlHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
             let mut locked_net_io = cloned_net_io.lock().unwrap();
-            if locked_net_io.device_broken.load(Ordering::SeqCst) {
+            if locked_net_io.device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
+
+            let _inflight = locked_net_io.io_inflight.as_ref().map(|r| r.inc_ref());
             locked_net_io.handle_ctrl().unwrap_or_else(|e| {
                 error!("Failed to handle ctrl queue, error is {:?}.", e);
                 report_virtio_error(
@@ -684,18 +700,70 @@ impl RTxVirtio {
 type RxVirtio = RTxVirtio;
 type TxVirtio = RTxVirtio;
 
-struct NetIoQueue {
+struct NetIoQueue<T> {
     rx: RxVirtio,
     tx: TxVirtio,
     ctrl_info: Arc<Mutex<CtrlInfo>>,
+    config: Arc<Mutex<VirtioNetConfig>>,
     mem_space: Arc<AddressSpace>,
     interrupt_cb: Arc<VirtioInterrupt>,
     listen_state: Arc<Mutex<ListenState>>,
+    link_status: Arc<AtomicBool>,
     driver_features: u64,
     queue_size: u16,
+    macnat: Option<T>,
+    io_inflight: IoRef,
 }
 
-impl NetIoQueue {
+impl<T: Macnat + 'static> NetIoQueue<T> {
+    fn rx_min_bytes(&self) -> usize {
+        const MIN_LEN: usize = NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH;
+
+        if let Some(macnat) = self.macnat.as_ref() {
+            cmp::max(NET_HDR_LENGTH + macnat.rx_min_len(), MIN_LEN)
+        } else {
+            MIN_LEN
+        }
+    }
+
+    // return true if ignore the packet, otherwise return false.
+    // iovecs bytes must be larger than `len`.
+    fn process_rx_packet(
+        &self,
+        iovecs: &[Iovec],
+        len: usize,
+        tap_mac: Option<&[u8; MAC_ADDR_LEN]>,
+    ) -> Result<bool> {
+        let buf = if let Some(macnat) = self.macnat.as_ref() {
+            // SAFETY: `tap_mac` must be valid if macnat is enabled.
+            macnat.handle_rx_packet(
+                iovecs,
+                NET_HDR_LENGTH,
+                &self.config.lock().unwrap().mac,
+                tap_mac.unwrap(),
+            )?
+        } else {
+            let mut buf = vec![0u8; len];
+            get_net_header(iovecs, &mut buf).and_then(|size| {
+                if size != buf.len() {
+                    bail!(
+                        "Invalid header length {}, expected length {}",
+                        size,
+                        buf.len()
+                    );
+                }
+                Ok(())
+            })?;
+            buf
+        };
+
+        Ok(self
+            .ctrl_info
+            .lock()
+            .unwrap()
+            .filter_packets(&buf[NET_HDR_LENGTH..]))
+    }
+
     fn handle_rx(&self, tap: &Arc<RwLock<Option<Tap>>>) -> Result<()> {
         trace::virtio_receive_request("Net".to_string(), "to rx".to_string());
         if tap.read().unwrap().is_none() {
@@ -705,6 +773,10 @@ impl NetIoQueue {
         let mut queue = self.rx.queue.lock().unwrap();
         let mut rx_packets: u16 = 0;
         loop {
+            if !self.link_status.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -737,29 +809,16 @@ impl NetIoQueue {
             } else {
                 -1
             };
+            let tap_mac = locked_tap.as_ref().unwrap().get_mac();
             drop(locked_tap);
-            if size < (NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH) as isize {
+
+            let len = self.rx_min_bytes();
+            if size < len as isize {
                 queue.vring.push_back();
                 break;
             }
 
-            let mut buf = vec![0_u8; NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH];
-            get_net_header(&iovecs, &mut buf).and_then(|size| {
-                if size != buf.len() {
-                    bail!(
-                        "Invalid header length {}, expected length {}",
-                        size,
-                        buf.len()
-                    );
-                }
-                Ok(())
-            })?;
-            if self
-                .ctrl_info
-                .lock()
-                .unwrap()
-                .filter_packets(&buf[NET_HDR_LENGTH..])
-            {
+            if self.process_rx_packet(&iovecs, len, tap_mac.as_ref())? {
                 queue.vring.push_back();
                 continue;
             }
@@ -811,10 +870,27 @@ impl NetIoQueue {
                 bail!("The length of out iovec is 0");
             }
 
+            // drop all tx packets if link is down
+            if !self.link_status.load(Ordering::SeqCst) {
+                queue
+                    .vring
+                    .add_used(elem.index, 0)
+                    .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
+                if queue.vring.should_notify(self.driver_features) {
+                    (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
+                        .with_context(|| {
+                            VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
+                        })?;
+                    trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
+                }
+                continue;
+            }
+
             let (_, iovecs) =
                 gpa_hva_iovec_map(&elem.out_iovec, &self.mem_space, queue.vring.get_cache())?;
+
             let locked_tap = tap.read().unwrap();
-            if locked_tap.is_none() || locked_tap.as_ref().unwrap().send_packets(&iovecs) == -1 {
+            if locked_tap.is_none() {
                 queue.vring.push_back();
                 queue
                     .vring
@@ -823,6 +899,26 @@ impl NetIoQueue {
                 self.listen_state.lock().unwrap().set_tap_full(true);
                 break;
             }
+
+            if let Some(macnat) = self.macnat.as_ref() {
+                let tap_mac = locked_tap
+                    .as_ref()
+                    .unwrap()
+                    .get_mac()
+                    .with_context(|| "No host mac address for macnat")?;
+                macnat.handle_tx_packet(&iovecs, NET_HDR_LENGTH, &tap_mac)?;
+            }
+
+            if locked_tap.as_ref().unwrap().send_packets(&iovecs) == -1 {
+                queue.vring.push_back();
+                queue
+                    .vring
+                    .suppress_queue_notify(self.driver_features, true)
+                    .with_context(|| "Failed to suppress tx queue notify")?;
+                self.listen_state.lock().unwrap().set_tap_full(true);
+                break;
+            }
+
             drop(locked_tap);
 
             queue
@@ -886,6 +982,18 @@ impl ListenState {
 
     fn tap_fd_handler(&mut self, tap: &Tap) -> Vec<EventNotifier> {
         let mut notifiers = Vec::new();
+
+        if !tap.enabled.load(Ordering::SeqCst) {
+            notifiers.push(EventNotifier::new(
+                NotifierOperation::Delete,
+                tap.as_raw_fd(),
+                None,
+                EventSet::empty(),
+                Vec::new(),
+            ));
+            self.is_listening = false;
+            return notifiers;
+        }
 
         if !self.is_listening && (self.queue_avail || self.tap_full) {
             notifiers.push(EventNotifier::new(
@@ -963,13 +1071,13 @@ fn build_event_notifier(
     EventNotifier::new(op, fd, None, event, handlers)
 }
 
-struct NetIoHandler {
+struct NetIoHandler<T> {
     /// The context name of iothread for tap and rx virtio queue.
     /// Since we placed the handlers of RxVirtio, TxVirtio and tap_fd in different threads,
     /// thread name is needed to change the monitoring status of tap_fd.
     rx_iothread: Option<String>,
     /// Virtio queue used for net io.
-    net_queue: Arc<NetIoQueue>,
+    net_queue: Arc<NetIoQueue<T>>,
     /// The context of tap device.
     tap: Arc<RwLock<Option<Tap>>>,
     /// Device is broken or not.
@@ -980,7 +1088,7 @@ struct NetIoHandler {
     update_evt: Arc<EventFd>,
 }
 
-impl NetIoHandler {
+impl<T: Macnat + 'static> NetIoHandler<T> {
     fn update_evt_handler(&mut self) -> Result<()> {
         let mut locked_tap = self.tap.write().unwrap();
         let old_tap_fd = if locked_tap.is_some() {
@@ -1008,7 +1116,7 @@ impl NetIoHandler {
     }
 
     /// Register event notifier for update_evt.
-    fn update_evt_notifier(&self, net_io: Arc<Mutex<NetIoHandler>>) -> Vec<EventNotifier> {
+    fn update_evt_notifier(&self, net_io: Arc<Mutex<NetIoHandler<T>>>) -> Vec<EventNotifier> {
         let device_broken = self.device_broken.clone();
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
@@ -1041,10 +1149,11 @@ impl NetIoHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
 
+            let _inflight = net_queue.io_inflight.inc_ref();
             net_queue.listen_state.lock().unwrap().set_queue_avail(true);
             let mut locked_queue = net_queue.rx.queue.lock().unwrap();
 
@@ -1108,10 +1217,11 @@ impl NetIoHandler {
         let handler: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            if device_broken.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
 
+            let _inflight = net_queue.io_inflight.inc_ref();
             if let Err(ref e) = net_queue.handle_tx(&tap) {
                 error!("Failed to handle tx(tx event) for net, {:?}", e);
                 report_virtio_error(
@@ -1135,7 +1245,6 @@ impl NetIoHandler {
             if let Err(e) = EventLoop::update_event(notifiers, rx_iothread.as_ref()) {
                 error!("Update tap notifiers failed in handle tx: {:?}", e);
             }
-
             None
         });
         let tx_fd = self.net_queue.tx.queue_evt.as_raw_fd();
@@ -1158,10 +1267,11 @@ impl NetIoHandler {
             return vec![];
         }
         let handler: Rc<NotifierCallback> = Rc::new(move |events: EventSet, _| {
-            if device_broken.load(Ordering::SeqCst) {
+            if device_broken.load(Ordering::SeqCst) || MigrationManager::is_active() {
                 return None;
             }
 
+            let _inflight = net_queue.io_inflight.inc_ref();
             if events.contains(EventSet::OUT) {
                 net_queue.listen_state.lock().unwrap().set_tap_full(false);
                 net_queue
@@ -1209,8 +1319,8 @@ impl NetIoHandler {
 
 /// Status of net device.
 #[repr(C)]
-#[derive(Copy, Clone, Desc, ByteCode)]
-#[desc_version(compat_version = "0.1.0")]
+#[derive(Clone, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
 pub struct VirtioNetState {
     /// Bit mask of features supported by the backend.
     pub device_features: u64,
@@ -1220,6 +1330,11 @@ pub struct VirtioNetState {
     pub config_space: VirtioNetConfig,
     /// Device broken status.
     broken: bool,
+    /// The control rx mode for packet receive filtering.
+    ctrl_info: Option<CtrlInfo>,
+    /// The used default mac number.
+    #[serde(with = "BigArray")]
+    used_mac: [i8; MAX_MAC_ADDR_NUM],
 }
 
 /// Network device structure.
@@ -1235,6 +1350,8 @@ pub struct Net {
     config_space: Arc<Mutex<VirtioNetConfig>>,
     /// Tap device opened.
     taps: Option<Vec<Tap>>,
+    /// link status
+    link_status: Arc<AtomicBool>,
     /// The send half of Rust's channel to send tap information.
     senders: Option<Vec<Sender<SenderConfig>>>,
     /// Eventfd for config space update.
@@ -1245,6 +1362,16 @@ pub struct Net {
     rx_deactivate_evts: Vec<RawFd>,
     /// The deactivate events for transporting.
     tx_deactivate_evts: Vec<RawFd>,
+    /// interrupt callback
+    interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    /// memory address space
+    mem_space: Option<Arc<AddressSpace>>,
+    /// queue events
+    queue_evts: Option<Vec<Arc<EventFd>>>,
+    /// timer id
+    timer_id: Option<u64>,
+    /// indicate if io is inflight
+    io_inflight: IoRef,
 }
 
 impl Net {
@@ -1260,8 +1387,319 @@ impl Net {
             base: VirtioBase::new(VIRTIO_TYPE_NET, queue_num, queue_size),
             net_cfg,
             netdev_cfg,
+            link_status: Arc::new(AtomicBool::new(true)),
             ..Default::default()
         }
+    }
+
+    fn register_update_notifier<T: Macnat + 'static>(
+        &mut self,
+        net_io: Arc<Mutex<NetIoHandler<T>>>,
+        update_evt: Arc<EventFd>,
+    ) -> Result<()> {
+        let cloned_nio = net_io.clone();
+        let update_evt_notifiers = net_io.lock().unwrap().update_evt_notifier(cloned_nio);
+
+        register_event_helper(
+            update_evt_notifiers,
+            self.net_cfg.iothread.as_ref(),
+            &mut self.base.deactivate_evts,
+        )?;
+        self.update_evts.push(update_evt);
+        Ok(())
+    }
+
+    fn register_rx_notifier<T: Macnat + 'static>(
+        &mut self,
+        net_io: Arc<Mutex<NetIoHandler<T>>>,
+    ) -> Result<()> {
+        let rx_notifiers = net_io.lock().unwrap().rx_virtio_notifier();
+        register_event_helper(
+            rx_notifiers,
+            self.net_cfg.rx_iothread.as_ref(),
+            &mut self.rx_deactivate_evts,
+        )
+    }
+
+    fn register_tx_notifier<T: Macnat + 'static>(
+        &mut self,
+        net_io: Arc<Mutex<NetIoHandler<T>>>,
+    ) -> Result<()> {
+        let tx_notifiers = net_io.lock().unwrap().tx_virtio_notifier();
+        register_event_helper(
+            tx_notifiers,
+            self.net_cfg.tx_iothread.as_ref(),
+            &mut self.tx_deactivate_evts,
+        )
+    }
+
+    fn register_tap_notifier<T: Macnat + 'static>(
+        &mut self,
+        net_io: Arc<Mutex<NetIoHandler<T>>>,
+    ) -> Result<()> {
+        let tap_notifiers = net_io.lock().unwrap().tap_notifier();
+        register_event_helper(
+            tap_notifiers,
+            self.net_cfg.rx_iothread.as_ref(),
+            &mut self.rx_deactivate_evts,
+        )
+    }
+
+    fn register_notifiers<T: Macnat + 'static>(
+        &mut self,
+        net_queue: Arc<NetIoQueue<T>>,
+        tap: Option<Tap>,
+        receiver: Receiver<Option<Tap>>,
+    ) -> Result<()> {
+        let update_evt = Arc::new(create_new_eventfd()?);
+        let tap = Arc::new(RwLock::new(tap));
+        let net_io = Arc::new(Mutex::new(NetIoHandler {
+            rx_iothread: self.net_cfg.rx_iothread.as_ref().cloned(),
+            net_queue,
+            tap,
+            device_broken: self.base.broken.clone(),
+            receiver,
+            update_evt: update_evt.clone(),
+        }));
+
+        self.register_update_notifier(net_io.clone(), update_evt)?;
+        self.register_rx_notifier(net_io.clone())?;
+        self.register_tx_notifier(net_io.clone())?;
+        self.register_tap_notifier(net_io.clone())
+    }
+
+    fn get_macnat_handler(&self) -> Option<IpvtapMacnat> {
+        self.netdev_cfg.macnat.then_some(IpvtapMacnat)
+    }
+
+    fn send_status_event(msg: String) {
+        const VIRTIO_NET_DEV_STATUS_CODE: u32 = 1;
+
+        let event = VmNotifyEvent {
+            klass: DEVICE_CLASS_ID,
+            type_t: VIRTIO_NET_TYPE,
+            code: VIRTIO_NET_DEV_STATUS_CODE,
+            message: Some(msg),
+        };
+        event!(VmNotifyEvent; event);
+    }
+
+    fn notify_config_update(&self) -> Result<()> {
+        if let Some(senders) = &self.senders {
+            for (index, sender) in senders.iter().enumerate() {
+                match self.taps.as_ref() {
+                    Some(taps) => {
+                        let tap = taps
+                            .get(index)
+                            .cloned()
+                            .with_context(|| format!("Failed to get index {} tap", index))?;
+                        sender
+                            .send(Some(tap))
+                            .with_context(|| VirtioError::ChannelSend("tap fd".to_string()))?;
+                    }
+                    None => sender
+                        .send(None)
+                        .with_context(|| "Failed to send status of None to channel".to_string())?,
+                }
+            }
+
+            for update_evt in &self.update_evts {
+                update_evt
+                    .write(1)
+                    .with_context(|| VirtioError::EventFdWrite)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn notify_config(&mut self) -> Result<()> {
+        if self.device_status() & CONFIG_STATUS_DRIVER_OK == 0 || self.interrupt_cb.is_none() {
+            warn!(
+                "Can't notify driver config change, device status {}",
+                self.device_status()
+            );
+            return Ok(());
+        }
+
+        self.increase_config_generation();
+        (self.interrupt_cb.as_ref().unwrap())(&VirtioInterruptType::Config, None, false)
+            .with_context(|| "Failed to trigger config irq for virtio net device")
+    }
+
+    // Should trigger config interrupt if return true.
+    fn update_config_status(&mut self, set: bool, bit: u16) -> bool {
+        let mut locked_config = self.config_space.lock().unwrap();
+        let old_status = locked_config.status;
+
+        if set {
+            locked_config.status |= bit;
+        } else {
+            locked_config.status &= !bit;
+        }
+
+        locked_config.status != old_status
+    }
+
+    fn drop_tx_queue_data(&self, vq: &Arc<Mutex<Queue>>) -> Result<()> {
+        let mut locked_vq = vq.lock().unwrap();
+
+        loop {
+            let elem = locked_vq
+                .vring
+                .pop_avail(self.mem_space.as_ref().unwrap(), self.base.driver_features)
+                .with_context(|| "Failed to pop avail ring for net tx")?;
+            if elem.desc_num == 0 {
+                break;
+            }
+
+            locked_vq
+                .vring
+                .add_used(elem.index, 0)
+                .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
+        }
+
+        if locked_vq.vring.should_notify(self.base.driver_features) {
+            (self.interrupt_cb.as_ref().unwrap())(
+                &VirtioInterruptType::Vring,
+                Some(&locked_vq),
+                false,
+            )
+            .with_context(|| VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring))?;
+        }
+        Ok(())
+    }
+
+    fn drop_tx_data(&self) -> Result<()> {
+        if self.base.broken.load(Ordering::SeqCst)
+            || !self.base.device_activated.load(Ordering::SeqCst)
+            || self.interrupt_cb.is_none()
+        {
+            return Ok(());
+        }
+
+        let ctrl_idx = if (self.base.driver_features & (1 << VIRTIO_NET_F_CTRL_VQ) != 0)
+            && !self.base.queues.len().is_multiple_of(2)
+        {
+            self.base.queues.len() - 1
+        } else {
+            0
+        };
+
+        for (i, vq) in self.base.queues.iter().enumerate() {
+            // skip rx and ctrl queues
+            if i % 2 == 0 || i == ctrl_idx {
+                continue;
+            }
+
+            if vq.lock().unwrap().is_enabled() {
+                self.drop_tx_queue_data(vq)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn set_link_status(&mut self, up: bool) -> Result<()> {
+        self.link_status.store(up, Ordering::SeqCst);
+        self.enable_taps(up);
+        if self.update_config_status(up, VIRTIO_NET_S_LINK_UP) {
+            self.notify_config()?;
+        }
+
+        if up {
+            self.notify_config_update()
+        } else {
+            self.drop_tx_data()
+        }
+    }
+
+    fn unregister_trans_evts(&mut self) -> Result<()> {
+        unregister_event_helper(
+            self.net_cfg.rx_iothread.as_ref(),
+            &mut self.rx_deactivate_evts,
+        )?;
+        unregister_event_helper(
+            self.net_cfg.tx_iothread.as_ref(),
+            &mut self.tx_deactivate_evts,
+        )
+    }
+
+    fn enable_taps(&mut self, enable: bool) {
+        if let Some(taps) = self.taps.as_mut() {
+            for tap in taps.iter_mut() {
+                tap.enabled.store(enable, Ordering::SeqCst);
+            }
+        }
+    }
+
+    pub fn update_netdev_cfg(
+        &mut self,
+        ifname: String,
+        path: Option<String>,
+        macnat: bool,
+    ) -> Result<()> {
+        // The reason why delay 500ms then send the message of device status to SA is
+        // (1) We need to reply qmp result firstly.
+        // (2) SA explicitly processes qmp reply and events as timing sequence. And it
+        //     is waiting for our reply and then need time interval to process reply.
+        const NOTIFY_DELAY_MS: u64 = 500;
+
+        self.netdev_cfg.ifname = ifname;
+        self.netdev_cfg.path = path.unwrap_or_default();
+        self.netdev_cfg.macnat = macnat;
+
+        if self.link_status.load(Ordering::SeqCst) {
+            self.set_link_status(false)?;
+        }
+
+        self.create_taps()?;
+
+        if self.base.device_activated.load(Ordering::SeqCst) {
+            let mem_space = self.mem_space.take().unwrap();
+            let interrupt_cb = self.interrupt_cb.take().unwrap();
+            let queue_evts = self.queue_evts.take().unwrap();
+            self.deactivate()?;
+            self.activate(mem_space, interrupt_cb, queue_evts)?;
+        }
+
+        if let Some(timer_id) = self.timer_id.take() {
+            EventLoop::get_ctx(None).unwrap().timer_del(timer_id);
+        }
+        self.timer_id = Some(EventLoop::get_ctx(None).unwrap().timer_add(
+            Box::new(|| Self::send_status_event("activated".to_string())),
+            Duration::from_millis(NOTIFY_DELAY_MS),
+        ));
+        Ok(())
+    }
+
+    fn create_taps(&mut self) -> Result<()> {
+        let queue_pairs = self.netdev_cfg.queues / 2;
+        if !self.netdev_cfg.ifname.is_empty() {
+            self.taps = create_tap(
+                None,
+                Some(&self.netdev_cfg.ifname),
+                self.netdev_cfg.get_path(),
+                queue_pairs,
+                self.netdev_cfg.macnat,
+            )
+            .with_context(|| "Failed to open tap with file path")?;
+        } else if let Some(fds) = self.netdev_cfg.tap_fds.as_mut() {
+            let mut created_fds = 0;
+            if let Some(taps) = &self.taps {
+                for (index, tap) in taps.iter().enumerate() {
+                    if fds.get(index).map_or(-1, |fd| *fd as RawFd) == tap.as_raw_fd() {
+                        created_fds += 1;
+                    }
+                }
+            }
+
+            if created_fds != fds.len() {
+                self.taps = create_tap(Some(fds), None, None, queue_pairs, self.netdev_cfg.macnat)
+                    .with_context(|| "Failed to open tap")?;
+            }
+        } else {
+            self.taps = None;
+        }
+        Ok(())
     }
 }
 
@@ -1355,12 +1793,16 @@ fn check_mq(dev_name: &str, queue_pair: u16) -> Result<()> {
 /// # Arguments
 ///
 /// * `net_fd` - Fd of tap device opened.
-/// * `host_dev_name` - Path of tap device on host.
+/// * `host_dev_name` - Name of tap device on host.
+/// * `host_dev_path` - Path of tap device on host.
 /// * `queue_pairs` - The number of virtio queue pairs.
+/// * `macnat` - Indicate if enable macnat feature.
 pub fn create_tap(
     net_fds: Option<&Vec<i32>>,
     host_dev_name: Option<&str>,
+    host_dev_path: Option<&str>,
     queue_pairs: u16,
+    macnat: bool,
 ) -> Result<Option<Vec<Tap>>> {
     if net_fds.is_none() && host_dev_name.is_none() {
         return Ok(None);
@@ -1375,18 +1817,20 @@ pub fn create_tap(
             let fd = fds
                 .get(index as usize)
                 .with_context(|| format!("Failed to get fd from index {}", index))?;
-            Tap::new(None, Some(*fd), queue_pairs)
+            Tap::new(None, None, Some(*fd), queue_pairs, macnat)
                 .with_context(|| format!("Failed to create tap, index is {}", index))?
         } else {
             // `unwrap()` won't fail because the arguments have been checked
             let dev_name = host_dev_name.unwrap();
             check_mq(dev_name, queue_pairs)?;
-            Tap::new(Some(dev_name), None, queue_pairs).with_context(|| {
-                format!(
-                    "Failed to create tap with name {}, index is {}",
-                    dev_name, index
-                )
-            })?
+            Tap::new(Some(dev_name), host_dev_path, None, queue_pairs, macnat).with_context(
+                || {
+                    format!(
+                        "Failed to create tap with name {}, index is {}",
+                        dev_name, index
+                    )
+                },
+            )?
         };
 
         tap.set_hdr_size(NET_HDR_LENGTH as u32)
@@ -1437,27 +1881,7 @@ impl VirtioDevice for Net {
             );
         }
 
-        let queue_pairs = self.netdev_cfg.queues / 2;
-        if !self.netdev_cfg.ifname.is_empty() {
-            self.taps = create_tap(None, Some(&self.netdev_cfg.ifname), queue_pairs)
-                .with_context(|| "Failed to open tap with file path")?;
-        } else if let Some(fds) = self.netdev_cfg.tap_fds.as_mut() {
-            let mut created_fds = 0;
-            if let Some(taps) = &self.taps {
-                for (index, tap) in taps.iter().enumerate() {
-                    if fds.get(index).map_or(-1, |fd| *fd as RawFd) == tap.as_raw_fd() {
-                        created_fds += 1;
-                    }
-                }
-            }
-
-            if created_fds != fds.len() {
-                self.taps = create_tap(Some(fds), None, queue_pairs)
-                    .with_context(|| "Failed to open tap")?;
-            }
-        } else {
-            self.taps = None;
-        }
+        self.create_taps()?;
 
         if let Some(ref taps) = self.taps {
             for (idx, tap) in taps.iter().enumerate() {
@@ -1495,9 +1919,15 @@ impl VirtioDevice for Net {
             | (1 << VIRTIO_NET_F_CTRL_MAC_ADDR)
             | (1 << VIRTIO_NET_F_CTRL_VQ)
             | (1 << VIRTIO_F_RING_INDIRECT_DESC)
-            | (1 << VIRTIO_F_RING_EVENT_IDX);
+            | (1 << VIRTIO_F_RING_EVENT_IDX)
+            | (1 << VIRTIO_NET_F_STATUS);
 
         let mut locked_config = self.config_space.lock().unwrap();
+        locked_config.status = if self.link_status.load(Ordering::SeqCst) {
+            VIRTIO_NET_S_LINK_UP
+        } else {
+            0
+        };
 
         let queue_pairs = self.netdev_cfg.queues / 2;
         if self.net_cfg.mq
@@ -1589,6 +2019,7 @@ impl VirtioDevice for Net {
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 device_broken: self.base.broken.clone(),
+                io_inflight: Some(self.io_inflight.clone()),
                 taps: self.taps.clone(),
             };
 
@@ -1605,6 +2036,7 @@ impl VirtioDevice for Net {
         let features = self.driver_features(0_u32);
         let flags = get_tap_offload_flags(u64::from(features));
 
+        let mut notify_link_down = false;
         let mut senders = Vec::new();
         let queue_pairs = queue_num / 2;
         for index in 0..queue_pairs {
@@ -1616,62 +2048,46 @@ impl VirtioDevice for Net {
             let (sender, receiver) = channel();
             senders.push(sender);
 
-            if let Some(tap) = self.taps.as_ref().map(|t| t[index].clone()) {
-                tap.set_offload(flags)
-                    .with_context(|| "Failed to set tap offload")?;
+            let tap = self.taps.as_ref().map(|t| t[index].clone());
+            if let Some(tap) = tap.as_ref() {
+                match tap.set_offload(flags) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        error!(
+                            "Failed to set tap offload with flags {}, error {:?}",
+                            flags, e
+                        );
+                        notify_link_down = true;
+                    }
+                }
             }
 
-            let update_evt = Arc::new(create_new_eventfd()?);
             let net_queue = Arc::new(NetIoQueue {
                 rx: RxVirtio::new(rx_queue, rx_queue_evt),
                 tx: TxVirtio::new(tx_queue, tx_queue_evt),
                 ctrl_info: ctrl_info.clone(),
+                config: ctrl_info.lock().unwrap().config.clone(),
                 mem_space: mem_space.clone(),
                 interrupt_cb: interrupt_cb.clone(),
                 driver_features,
                 listen_state: Arc::new(Mutex::new(ListenState::new())),
+                link_status: self.link_status.clone(),
                 queue_size: self.queue_size_max(),
+                macnat: self.get_macnat_handler(),
+                io_inflight: self.io_inflight.clone(),
             });
-            let tap = Arc::new(RwLock::new(self.taps.as_ref().map(|t| t[index].clone())));
-            let net_io = Arc::new(Mutex::new(NetIoHandler {
-                rx_iothread: self.net_cfg.rx_iothread.as_ref().cloned(),
-                net_queue,
-                tap,
-                device_broken: self.base.broken.clone(),
-                receiver,
-                update_evt: update_evt.clone(),
-            }));
-            let cloned_net_io = net_io.clone();
-            let locked_net_io = net_io.lock().unwrap();
-            let update_evt_notifiers = locked_net_io.update_evt_notifier(cloned_net_io);
-            let rx_notifiers = locked_net_io.rx_virtio_notifier();
-            let tx_notifiers = locked_net_io.tx_virtio_notifier();
-            let tap_notifiers = locked_net_io.tap_notifier();
-            drop(locked_net_io);
-            register_event_helper(
-                update_evt_notifiers,
-                self.net_cfg.iothread.as_ref(),
-                &mut self.base.deactivate_evts,
-            )?;
-            register_event_helper(
-                rx_notifiers,
-                self.net_cfg.rx_iothread.as_ref(),
-                &mut self.rx_deactivate_evts,
-            )?;
-            register_event_helper(
-                tap_notifiers,
-                self.net_cfg.rx_iothread.as_ref(),
-                &mut self.rx_deactivate_evts,
-            )?;
-            register_event_helper(
-                tx_notifiers,
-                self.net_cfg.tx_iothread.as_ref(),
-                &mut self.tx_deactivate_evts,
-            )?;
-            self.update_evts.push(update_evt);
+
+            self.register_notifiers(net_queue, tap, receiver)?;
         }
         self.senders = Some(senders);
         self.base.broken.store(false, Ordering::SeqCst);
+        self.interrupt_cb = Some(interrupt_cb);
+        self.mem_space = Some(mem_space);
+        self.queue_evts = Some(queue_evts);
+
+        if notify_link_down {
+            self.set_link_status(false)?;
+        }
 
         Ok(())
     }
@@ -1679,16 +2095,8 @@ impl VirtioDevice for Net {
     // configs[0]: NetDevcfg. configs[1]: NetworkInterfaceConfig.
     fn update_config(&mut self, dev_config: Vec<Arc<dyn ConfigCheck>>) -> Result<()> {
         if dev_config.len() == 2 {
-            self.netdev_cfg = dev_config[0]
-                .as_any()
-                .downcast_ref::<NetDevcfg>()
-                .unwrap()
-                .clone();
-            self.net_cfg = dev_config[1]
-                .as_any()
-                .downcast_ref::<NetworkInterfaceConfig>()
-                .unwrap()
-                .clone();
+            self.netdev_cfg = any_typecast_clone(dev_config[0].as_ref())?;
+            self.net_cfg = any_typecast_clone(dev_config[1].as_ref())?;
 
             // Set tap offload.
             // The features about offload is included in bits 0 to 31.
@@ -1705,50 +2113,22 @@ impl VirtioDevice for Net {
         }
 
         self.realize()?;
-
-        if let Some(senders) = &self.senders {
-            for (index, sender) in senders.iter().enumerate() {
-                match self.taps.take() {
-                    Some(taps) => {
-                        let tap = taps
-                            .get(index)
-                            .cloned()
-                            .with_context(|| format!("Failed to get index {} tap", index))?;
-                        sender
-                            .send(Some(tap))
-                            .with_context(|| VirtioError::ChannelSend("tap fd".to_string()))?;
-                    }
-                    None => sender
-                        .send(None)
-                        .with_context(|| "Failed to send status of None to channel".to_string())?,
-                }
-            }
-
-            for update_evt in &self.update_evts {
-                update_evt
-                    .write(1)
-                    .with_context(|| VirtioError::EventFdWrite)?;
-            }
-        }
-
-        Ok(())
+        self.notify_config_update()
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.net_cfg.id);
         unregister_event_helper(
             self.net_cfg.iothread.as_ref(),
             &mut self.base.deactivate_evts,
         )?;
-        unregister_event_helper(
-            self.net_cfg.rx_iothread.as_ref(),
-            &mut self.rx_deactivate_evts,
-        )?;
-        unregister_event_helper(
-            self.net_cfg.tx_iothread.as_ref(),
-            &mut self.tx_deactivate_evts,
-        )?;
+        self.unregister_trans_evts()?;
         self.update_evts.clear();
+        self.senders = None;
         self.ctrl_info = None;
+        self.interrupt_cb = None;
+        self.mem_space = None;
+        self.queue_evts = None;
         Ok(())
     }
 
@@ -1765,26 +2145,39 @@ impl VirtioDevice for Net {
 
 impl StateTransfer for Net {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
+        wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.net_cfg.id);
+
+        let ctrl_info = self.ctrl_info.as_ref().map(|c| c.lock().unwrap().clone());
         let state = VirtioNetState {
             device_features: self.base.device_features,
             driver_features: self.base.driver_features,
             config_space: *self.config_space.lock().unwrap(),
             broken: self.base.broken.load(Ordering::SeqCst),
+            ctrl_info,
+            used_mac: *USED_MAC_TABLE.lock().unwrap(),
         };
-        Ok(state.as_bytes().to_vec())
+        Ok(serde_json::to_vec(&state)?)
     }
 
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-        let s_len = std::mem::size_of::<VirtioNetState>();
-        if state.len() != s_len {
-            bail!("Invalid state length {}, expected {}", state.len(), s_len);
-        }
-        let state = VirtioNetState::from_bytes(state)
+        let state: VirtioNetState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("NET"))?;
+
         self.base.device_features = state.device_features;
         self.base.driver_features = state.driver_features;
         self.base.broken.store(state.broken, Ordering::SeqCst);
+        self.link_status.store(
+            state.config_space.status & VIRTIO_NET_S_LINK_UP == VIRTIO_NET_S_LINK_UP,
+            Ordering::SeqCst,
+        );
         *self.config_space.lock().unwrap() = state.config_space;
+
+        self.ctrl_info = state
+            .ctrl_info
+            .as_ref()
+            .map(|c| Arc::new(Mutex::new(c.clone())));
+        *USED_MAC_TABLE.lock().unwrap() = state.used_mac;
+
         Ok(())
     }
 
@@ -1864,12 +2257,12 @@ mod tests {
     #[test]
     fn test_net_create_tap() {
         // Test None net_fds and host_dev_name.
-        assert!(create_tap(None, None, 16).unwrap().is_none());
+        assert!(create_tap(None, None, None, 16, false).unwrap().is_none());
 
         // Test create tap with net_fds and host_dev_name.
         let net_fds = vec![32, 33];
         let tap_name = "tap0";
-        if let Err(err) = create_tap(Some(&net_fds), Some(tap_name), 1) {
+        if let Err(err) = create_tap(Some(&net_fds), Some(tap_name), None, 1, false) {
             let err_msg = "Failed to create tap, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
@@ -1877,7 +2270,7 @@ mod tests {
         }
 
         // Test create tap with empty net_fds.
-        if let Err(err) = create_tap(Some(&vec![]), None, 1) {
+        if let Err(err) = create_tap(Some(&vec![]), None, None, 1, false) {
             let err_msg = "Failed to get fd from index 0".to_string();
             assert_eq!(err.to_string(), err_msg);
         } else {
@@ -1885,7 +2278,7 @@ mod tests {
         }
 
         // Test create tap with tap_name which is not exist.
-        if let Err(err) = create_tap(None, Some("the_tap_is_not_exist"), 1) {
+        if let Err(err) = create_tap(None, Some("the_tap_is_not_exist"), None, 1, false) {
             let err_msg =
                 "Failed to create tap with name the_tap_is_not_exist, index is 0".to_string();
             assert_eq!(err.to_string(), err_msg);
@@ -1977,5 +2370,25 @@ mod tests {
         } else {
             assert!(false);
         }
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let mut net = Net::new(NetworkInterfaceConfig::default(), NetDevcfg::default());
+        net.realize().unwrap();
+
+        let device_features = net.base.device_features;
+        let driver_features = net.base.driver_features;
+        let broken = net.base.broken.load(Ordering::SeqCst);
+
+        let init_state = net.get_state_vec().unwrap();
+        net.base.device_features = 0;
+        net.base.driver_features = 0;
+        net.base.broken.store(true, Ordering::SeqCst);
+
+        net.set_state_mut(&init_state, 0u32).unwrap();
+        assert_eq!(device_features, net.base.device_features);
+        assert_eq!(driver_features, net.base.driver_features);
+        assert_eq!(broken, net.base.broken.load(Ordering::SeqCst));
     }
 }

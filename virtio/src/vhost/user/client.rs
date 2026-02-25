@@ -29,6 +29,7 @@ use super::message::{
     VhostUserMsgReq, VhostUserVringAddr, VhostUserVringState,
 };
 use super::sock::VhostUserSock;
+use super::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::device::block::VirtioBlkConfig;
 use crate::VhostUser::message::VhostUserConfig;
 use crate::{virtio_has_feature, Queue, QueueConfig};
@@ -140,6 +141,12 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
             );
             return;
         }
+    }
+
+    // This case can happen when device has not been activated.
+    if !locked_client.ready {
+        info!("vhost user device has not been activated.");
+        return;
     }
 
     if let Err(e) = locked_client.activate_vhost_user() {
@@ -413,6 +420,7 @@ pub struct VhostUserClient {
     inflight: Option<VhostInflight>,
     backend_type: VhostBackendType,
     pub protocol_features: u64,
+    ready: bool,
 }
 
 impl VhostUserClient {
@@ -448,6 +456,7 @@ impl VhostUserClient {
             inflight: None,
             backend_type,
             protocol_features: 0_u64,
+            ready: false,
         })
     }
 
@@ -577,17 +586,17 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
-                .with_context(|| {
-                    format!(
-                        "Failed to set vring kick for vhost-user, index: {}",
-                        queue_index,
-                    )
-                })?;
             self.set_vring_call(queue_index, self.call_events[queue_index].clone())
                 .with_context(|| {
                     format!(
                         "Failed to set vring call for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring kick for vhost-user, index: {}",
                         queue_index,
                     )
                 })?;
@@ -610,16 +619,20 @@ impl VhostUserClient {
             }
         }
 
+        self.ready = true;
         Ok(())
     }
 
-    fn reset_queues(&mut self) -> Result<()> {
+    pub fn reset_queues(&mut self) -> Result<()> {
         for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             if !queue_mutex.lock().unwrap().vring.is_enabled() {
                 continue;
             }
-            self.set_vring_enable(queue_index, false)
-                .with_context(|| format!("Failed to set vring disable, index: {}", queue_index))?;
+            if virtio_has_feature(self.features, VHOST_USER_F_PROTOCOL_FEATURES) {
+                self.set_vring_enable(queue_index, false).with_context(|| {
+                    format!("Failed to set vring disable, index: {}", queue_index)
+                })?;
+            }
             self.get_vring_base(queue_index)
                 .with_context(|| format!("Failed to get vring base, index: {}", queue_index))?;
         }
@@ -628,17 +641,20 @@ impl VhostUserClient {
 
     pub fn reset_vhost_user(&mut self, reset_owner: bool) {
         let dev_type = self.backend_type.to_string();
-        if reset_owner {
-            if let Err(e) = self.reset_owner() {
-                warn!("Failed to reset owner for vhost-user {}: {:?}", dev_type, e);
-            }
-        } else if let Err(e) = self.reset_queues() {
+
+        if let Err(e) = self.reset_queues() {
             warn!(
                 "Failed to reset queues for vhost-user {}: {:?}",
                 dev_type, e
             );
         }
+        if reset_owner {
+            if let Err(e) = self.reset_owner() {
+                warn!("Failed to reset owner for vhost-user {}: {:?}", dev_type, e);
+            }
+        }
 
+        self.ready = false;
         self.queue_evts.clear();
         self.call_events.clear();
         self.queues.clear();
@@ -810,6 +826,45 @@ impl VhostUserClient {
             .sock
             .send_msg(Some(&hdr), Some(&inflight), payload_opt, &[fd])
             .with_context(|| "Failed to send msg for setting inflight fd")?;
+        Ok(())
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    pub fn resume_queues(&self) -> Result<()> {
+        for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
+            let queue = queue_mutex.lock().unwrap();
+            if !queue.vring.is_enabled() {
+                warn!("Queue {} is not enabled, skip it", queue_index);
+                continue;
+            }
+            // When spdk/ovs has been killed, stratovirt can not get the last avail
+            // index in spdk/ovs, it can only use used index as last avail index.
+            let last_avail_idx = queue.vring.get_used_idx()?;
+            self.set_vring_base(queue_index, last_avail_idx)
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring base for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+            self.set_vring_call(queue_index, self.call_events[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring call for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring kick for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+        }
         Ok(())
     }
 }

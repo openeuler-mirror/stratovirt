@@ -446,7 +446,11 @@ Six properties are supported for netdev.
 * fds: file descriptors of opened tap device.
 
 * queues: the optional queues attribute controls the number of queues to be used for either multiple queue virtio-net or
-  vhost-net device. The max queues number supported is no more than 16. 
+  vhost-net device. The max queues number supported is no more than 16.
+
+* path: the abstract path of tap device. `path` property should be defined with `ifname` and have higher priority than `ifname`. If `path` is defined, the tap device will be opened by `path` instead of `ifname` via /dev/net/tun.
+
+* macnat: indicate if translate the mac address in ethernet packet between guest mac and host mac. Currently only support ipvtap with IPv4 and default value is off.
 
 NB: to configure a tap device, use either `fd` or `ifname`, if both of them are given, the tap device would be created according to `ifname`.
 
@@ -473,10 +477,10 @@ is a single function device, the function number should be set to zero.
 
 ```shell
 # virtio mmio net device
--netdev tap,id=<netdevid>,ifname=<host_dev_name>
+-netdev tap,id=<netdevid>,ifname=<host_dev_name>[,path=<host_dev_path>][,macnat={on|off}]
 -device virtio-net-device,id=<net_id>,netdev=<netdev_id>[,iothread=<iothread1>][,rx-iothread=<iothread2>][,tx-iothread=<iothread3>][,mac=<macaddr>]
 # virtio pci net device
--netdev tap,id=<netdevid>,ifname=<host_dev_name>[,queues=<N>]
+-netdev tap,id=<netdevid>,ifname=<host_dev_name>[,queues=<N>][,path=<host_dev_path>][,macnat={on|off}]
 -device virtio-net-pci,id=<net_id>,netdev=<netdev_id>,bus=<pcie.0>,addr=<0x2>[,multifunction={on|off}][,iothread=<iothread1>][,rx-iothread=<iothread2>][,tx-iothread=<iothread3>][,mac=<macaddr>][,mq={on|off}][,queue-size=<queuesize>]
 ```
 
