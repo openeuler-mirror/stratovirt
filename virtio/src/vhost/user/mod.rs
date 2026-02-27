@@ -15,6 +15,8 @@ pub mod fs;
 #[cfg(feature = "vhostuser_block")]
 mod block;
 mod client;
+#[cfg(feature = "vhostuser_gpu")]
+mod gpu;
 mod message;
 #[cfg(feature = "vhostuser_net")]
 mod net;
@@ -24,6 +26,8 @@ mod sock;
 pub use self::block::{Block, VhostUserBlkDevConfig};
 pub use self::client::*;
 pub use self::fs::*;
+#[cfg(feature = "vhostuser_gpu")]
+pub use self::gpu::{VhostUserGpu, VhostUserGpuDevConfig};
 pub use self::message::*;
 #[cfg(feature = "vhostuser_net")]
 pub use self::net::Net;

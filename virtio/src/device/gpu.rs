@@ -76,7 +76,7 @@ const VIRTIO_GPU_RES_EFI_FRAMEBUF: u32 = 0x40000000;
 const VIRTIO_GPU_RES_FRAMEBUF: u32 = VIRTIO_GPU_RES_WIN_FRAMEBUF | VIRTIO_GPU_RES_EFI_FRAMEBUF;
 
 /// The maximum number of outputs.
-const VIRTIO_GPU_MAX_OUTPUTS: usize = 16;
+pub const VIRTIO_GPU_MAX_OUTPUTS: usize = 16;
 /// The default maximum memory 256M.
 const VIRTIO_GPU_DEFAULT_MAX_HOSTMEM: u64 = 0x10000000;
 
@@ -149,12 +149,12 @@ impl Default for GpuResource {
 
 #[allow(unused)]
 #[derive(Default, Clone, Copy)]
-struct VirtioGpuOutputState {
-    con_id: usize,
-    width: u32,
-    height: u32,
-    x_coor: i32,
-    y_coor: i32,
+pub struct VirtioGpuOutputState {
+    pub con_id: usize,
+    pub width: u32,
+    pub height: u32,
+    x_coord: i32,
+    y_coord: i32,
 }
 
 trait CtrlHdr {
@@ -331,15 +331,15 @@ struct VirtioGpuResourceDetachBacking {
 
 impl ByteCode for VirtioGpuResourceDetachBacking {}
 
-struct GpuOpts {
+pub struct GpuOpts {
     /// Status of the emulated physical outputs.
-    output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
+    pub output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>>,
     /// Config space of the GPU device.
-    config_space: Arc<Mutex<VirtioGpuConfig>>,
+    pub config_space: Arc<Mutex<VirtioGpuConfig>>,
     /// Callback to trigger interrupt.
-    interrupt_cb: Option<Arc<VirtioInterrupt>>,
+    pub interrupt_cb: Option<Arc<VirtioInterrupt>>,
     /// Whether to use it in the bios phase.
-    enable_bar0: bool,
+    pub enable_bar0: bool,
 }
 
 impl HardWareOperations for GpuOpts {
@@ -364,7 +364,6 @@ impl HardWareOperations for GpuOpts {
 
     fn hw_ui_info(&self, con: Arc<Mutex<DisplayConsole>>, width: u32, height: u32) {
         let con_id = con.lock().unwrap().con_id;
-
         // Update output size.
         for output_state in self.output_states.lock().unwrap().iter_mut() {
             if output_state.con_id == con_id {
@@ -1679,11 +1678,11 @@ impl EventNotifierHelper for GpuIoHandler {
 }
 
 #[derive(Clone, Copy, Debug, ByteCode)]
-struct VirtioGpuConfig {
-    events_read: u32,
-    events_clear: u32,
-    num_scanouts: u32,
-    _reserved: u32,
+pub struct VirtioGpuConfig {
+    pub events_read: u32,
+    pub events_clear: u32,
+    pub num_scanouts: u32,
+    pub num_capsets: u32,
 }
 
 /// GPU device structure.
