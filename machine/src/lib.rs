@@ -295,23 +295,41 @@ impl MachineBase {
                 log::error!("Fail to pause bsp, {:?}", e);
             }
         }
-        self.sys_io
+        if let Err(e) = self
+            .sys_io
             .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
-            .is_ok()
+        {
+            error!("Failed to io write addr {:x}, error: {:?}", addr, e);
+            false
+        } else {
+            true
+        }
     }
 
     fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
         let length = data.len() as u64;
-        self.sys_mem
+        if let Err(e) = self
+            .sys_mem
             .read(&mut data, GuestAddress(addr), length, AddressAttr::MMIO)
-            .is_ok()
+        {
+            error!("Failed to mmio read addr {:x}, error: {:?}", addr, e);
+            false
+        } else {
+            true
+        }
     }
 
     fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
         let count = data.len() as u64;
-        self.sys_mem
+        if let Err(e) = self
+            .sys_mem
             .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
-            .is_ok()
+        {
+            error!("Failed to mmio write addr {:x}, error: {:?}", addr, e);
+            false
+        } else {
+            true
+        }
     }
 }
 
