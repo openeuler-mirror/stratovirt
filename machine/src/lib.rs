@@ -130,8 +130,8 @@ use virtio::VhostUser::FsState;
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Input,
-    InputConfig, Multitouch, MultitouchConfig, Serial, SerialPort, VirtioBlkDevConfig,
+    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, BalloonState, Block, BlockState,
+    Input, InputConfig, Multitouch, MultitouchConfig, Serial, SerialPort, VirtioBlkDevConfig,
     VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState, VirtioPciDevice,
     VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
@@ -732,16 +732,18 @@ pub trait MachineOps: MachineLifecycle {
                     ("addr", config.addr),
                     ("multifunction", config.multifunction)
                 );
-                self.add_virtio_mmio_device(config.id.clone(), balloon)?;
+                self.add_virtio_mmio_device(config.id.clone(), balloon.clone())?;
             }
             _ => {
                 check_arg_exist!(("bus", config.bus), ("addr", config.addr));
                 let bdf = PciBdf::new(config.bus.unwrap(), config.addr.unwrap());
                 let multi_func = config.multifunction.unwrap_or_default();
-                self.add_virtio_pci_device(&config.id, &bdf, balloon, multi_func, false)
+                self.add_virtio_pci_device(&config.id, &bdf, balloon.clone(), multi_func, false)
                     .with_context(|| "Failed to add virtio pci balloon device")?;
             }
         }
+
+        MigrationManager::register_device_instance(BalloonState::descriptor(), balloon, &config.id);
 
         Ok(())
     }
