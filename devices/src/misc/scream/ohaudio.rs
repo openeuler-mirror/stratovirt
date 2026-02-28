@@ -317,6 +317,12 @@ impl OhAudioRender {
         self.stream_data.lock().unwrap().clear();
         *self.status.write().unwrap() = AudioStatus::Ready;
     }
+
+    fn destroy_ctx(&mut self) {
+        for ctx in self.ctx.iter_mut() {
+            *ctx = None;
+        }
+    }
 }
 
 impl OhAudioProcess for OhAudioRender {
@@ -345,15 +351,10 @@ impl OhAudioProcess for OhAudioRender {
 
     fn destroy(&mut self) {
         info!("Renderer destroy");
-        let status = *self.status.read().unwrap();
-        match status {
-            AudioStatus::Error => self.set_ctx(None),
-            AudioStatus::Started => {
-                self.flush();
-                self.stop_ctx();
-            }
-            _ => self.stop_ctx(),
+        if *self.status.read().unwrap() == AudioStatus::Started {
+            self.flush();
         }
+        self.destroy_ctx();
         self.stream_data.lock().unwrap().clear();
         self.set_flushing(false);
         *self.status.write().unwrap() = AudioStatus::Ready;
@@ -557,6 +558,12 @@ impl OhAudioCapture {
         self.stream.reset();
         *self.status.write().unwrap() = AudioStatus::Ready;
     }
+
+    fn destroy_ctx(&mut self) {
+        for ctx in self.ctx.iter_mut() {
+            *ctx = None;
+        }
+    }
 }
 
 impl OhAudioProcess for OhAudioCapture {
@@ -588,11 +595,7 @@ impl OhAudioProcess for OhAudioCapture {
 
     fn destroy(&mut self) {
         info!("Capturer destroy");
-        if *self.status.read().unwrap() == AudioStatus::Error {
-            self.set_ctx(None);
-        } else {
-            self.stop_ctx();
-        }
+        self.destroy_ctx();
         self.stream.reset();
         *self.status.write().unwrap() = AudioStatus::Ready;
         trace::oh_scream_capture_destroy();
