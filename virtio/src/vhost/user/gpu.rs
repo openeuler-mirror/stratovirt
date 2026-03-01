@@ -1074,3 +1074,501 @@ impl VhostUserGpuProcessor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    use vhost::vhost_user::{
+        gpu_message::{VhostUserGpuCursorPos, VhostUserGpuEdidRequest, VirtioGpuRect},
+        message::VhostUserU64 as VhostUserU64Test,
+        GpuBackend,
+    };
+
+    use super::*;
+    use machine_manager::config::str_slip_to_clap;
+
+    const DEFAULT_WIDTH: u32 = 1024;
+    const DEFAULT_HEIGHT: u32 = 768;
+
+    #[cfg(test)]
+    fn init_test() -> (VhostUserGpuProcessor, GpuBackend) {
+        let output_states: Arc<Mutex<[VirtioGpuOutputState; VIRTIO_GPU_MAX_OUTPUTS]>> =
+            Default::default();
+        let mut output_states_temp = output_states.lock().unwrap();
+        output_states_temp[0].width = DEFAULT_WIDTH;
+        output_states_temp[0].height = DEFAULT_HEIGHT;
+        drop(output_states_temp);
+
+        let socket = UnixStream::pair();
+        assert!(socket.is_ok());
+        let (sender_fd, receiver_fd) = socket.unwrap();
+
+        let mut scanouts = vec![];
+        let scanout = VUGpuScanout {
+            con: None,
+            ..Default::default()
+        };
+        scanouts.push(scanout);
+
+        let handler = VhostUserGpuProcessor::new(
+            Arc::new(Mutex::new(receiver_fd)),
+            1,
+            output_states,
+            scanouts,
+        );
+        let backend = GpuBackend::from_stream(sender_fd);
+        (handler, backend)
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_parse_cmdline() {
+        // Test0: Right.
+        let gpu_cmd = "vhost-user-gpu-pci,id=vhost-user-gpu-id,bus=pcie.0,addr=0x4.0x0,xres=2160,yres=1440,chardev=vhost-user-gpu,virgl=true";
+        let gpu_cfg =
+            VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd, true, false)).unwrap();
+        assert_eq!(gpu_cfg.classtype, "vhost-user-gpu-pci");
+        assert_eq!(gpu_cfg.id, "vhost-user-gpu-id");
+        assert_eq!(gpu_cfg.bus, Some("pcie.0".to_string()));
+        assert_eq!(gpu_cfg.addr, Some((4, 0)));
+        assert_eq!(gpu_cfg.max_outputs, 1);
+        assert_eq!(gpu_cfg.edid, true);
+        assert_eq!(gpu_cfg.xres, 2160);
+        assert_eq!(gpu_cfg.yres, 1440);
+        assert_eq!(gpu_cfg.num_queues, Some(2));
+        assert_eq!(gpu_cfg.chardev, "vhost-user-gpu");
+        assert_eq!(gpu_cfg.queue_size, 256);
+        assert_eq!(gpu_cfg.virgl, true);
+        println!("parse success");
+
+        // Test1: Right.
+        let gpu_cmd1 = "vhost-user-gpu-pci,id=vhost-user-gpu-id,bus=pcie.0,addr=0x4.0x0,xres=2160,yres=1440,max_outputs=13,edid=false,num-queues=3,queue-size=512,chardev=vhost-user-gpu,virgl=false";
+        let gpu_cfg =
+            VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd1, true, false)).unwrap();
+        assert_eq!(gpu_cfg.classtype, "vhost-user-gpu-pci");
+        assert_eq!(gpu_cfg.id, "vhost-user-gpu-id");
+        assert_eq!(gpu_cfg.bus, Some("pcie.0".to_string()));
+        assert_eq!(gpu_cfg.addr, Some((4, 0)));
+        assert_eq!(gpu_cfg.max_outputs, 13);
+        assert_eq!(gpu_cfg.edid, false);
+        assert_eq!(gpu_cfg.xres, 2160);
+        assert_eq!(gpu_cfg.yres, 1440);
+        assert_eq!(gpu_cfg.num_queues, Some(3));
+        assert_eq!(gpu_cfg.chardev, "vhost-user-gpu");
+        assert_eq!(gpu_cfg.queue_size, 512);
+        assert_eq!(gpu_cfg.virgl, false);
+
+        // Test2: Default.
+        let gpu_cmd2 = "vhost-user-gpu-pci,id=vhost-user-gpu-id,bus=pcie.0,addr=0x3.0x0,chardev=vhost-user-gpu";
+        let gpu_cfg =
+            VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd2, true, false)).unwrap();
+        assert_eq!(gpu_cfg.classtype, "vhost-user-gpu-pci");
+        assert_eq!(gpu_cfg.id, "vhost-user-gpu-id");
+        assert_eq!(gpu_cfg.bus, Some("pcie.0".to_string()));
+        assert_eq!(gpu_cfg.addr, Some((3, 0)));
+        assert_eq!(gpu_cfg.max_outputs, 1);
+        assert_eq!(gpu_cfg.edid, true);
+        assert_eq!(gpu_cfg.xres, 1024);
+        assert_eq!(gpu_cfg.yres, 768);
+        assert_eq!(gpu_cfg.num_queues, Some(2));
+        assert_eq!(gpu_cfg.chardev, "vhost-user-gpu");
+        assert_eq!(gpu_cfg.queue_size, 256);
+        assert_eq!(gpu_cfg.virgl, true);
+
+        // Test3/4: max_outputs is illegal.
+        let gpu_cmd3 = "vhost-user-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=17";
+        let result = VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd3, true, false));
+        assert!(result.is_err());
+        let gpu_cmd4 = "vhost-user-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=0";
+        let result = VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd4, true, false));
+        assert!(result.is_err());
+
+        // Test5: queue_size is illegal.
+        let gpu_cmd5 = "vhost-user-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,queue_size=1025";
+        let result = VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd5, true, false));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_get_protocol_features() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(VhostUserU64Test::new(0)));
+        let response_cloned = response.clone();
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = backend.get_protocol_features().unwrap();
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        let expected_value: VhostUserU64Test = VhostUserU64Test::new(
+            (1 << VHOST_USER_GPU_PROTOCOL_F_EDID) | (1 << VHOST_USER_GPU_PROTOCOL_F_DMABUF2),
+        );
+        assert_eq!(response.lock().unwrap().value, expected_value.value);
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_set_protocol_features() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let set_value: VhostUserU64Test = VhostUserU64Test::new(
+            (1 << VHOST_USER_GPU_PROTOCOL_F_EDID) | (1 << VHOST_USER_GPU_PROTOCOL_F_DMABUF2),
+        );
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.set_protocol_features(&set_value));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_get_display_info() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(VirtioGpuRespDisplayInfo::default()));
+        let response_cloned = response.clone();
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = backend.get_display_info().unwrap();
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        let resp = response.lock().unwrap();
+        let expect_rect = VirtioGpuRect {
+            x: 0,
+            y: 0,
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
+        };
+        assert_eq!(resp.pmodes[0].r, expect_rect);
+        assert_eq!(resp.pmodes[0].enabled, 1);
+        assert_eq!(resp.pmodes[0].flags, 0);
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_cursor_pos() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let cursor_pos: VhostUserGpuCursorPos = VhostUserGpuCursorPos {
+            scanout_id: 0,
+            x: DEFAULT_WIDTH,
+            y: DEFAULT_HEIGHT,
+        };
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.cursor_pos(&cursor_pos));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_cursor_pos_hide() {
+        let (mut handler, backend) = init_test();
+        // valid scanout_id
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let cursor_pos: VhostUserGpuCursorPos = VhostUserGpuCursorPos {
+            scanout_id: 0,
+            x: DEFAULT_WIDTH,
+            y: DEFAULT_HEIGHT,
+        };
+        let cursor_update: VhostUserGpuCursorUpdate = VhostUserGpuCursorUpdate {
+            pos: cursor_pos.clone(),
+            hot_x: 0,
+            hot_y: 0,
+        };
+        let data = [0_u8; 4 * 64 * 64];
+        let backend_cloned = backend.clone();
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend_cloned.cursor_update(&cursor_update, &data));
+            if resp.is_some() && resp.as_ref().unwrap().is_err() {
+                return;
+            }
+            *resp = Some(backend_cloned.cursor_pos_hide(&cursor_pos));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+
+        // invalid scanout_id
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let cursor_pos: VhostUserGpuCursorPos = VhostUserGpuCursorPos {
+            scanout_id: 1,
+            x: DEFAULT_WIDTH,
+            y: DEFAULT_HEIGHT,
+        };
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.cursor_pos_hide(&cursor_pos));
+        });
+
+        // process msg
+        assert!(handler.process_cmd().is_err());
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_cursor_update() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let cursor_pos: VhostUserGpuCursorPos = VhostUserGpuCursorPos {
+            scanout_id: 0,
+            x: DEFAULT_WIDTH,
+            y: DEFAULT_HEIGHT,
+        };
+        let cursor_update: VhostUserGpuCursorUpdate = VhostUserGpuCursorUpdate {
+            pos: cursor_pos,
+            hot_x: 0,
+            hot_y: 0,
+        };
+        let data = [0_u8; 4 * 64 * 64];
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.cursor_update(&cursor_update, &data));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_set_scanout() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let scanout: VhostUserGpuScanout = VhostUserGpuScanout {
+            scanout_id: 0,
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
+        };
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.set_scanout(&scanout));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_update_scanout() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let update: VhostUserGpuUpdate = VhostUserGpuUpdate {
+            scanout_id: 0,
+            x: 0,
+            y: 0,
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
+        };
+        let data = [0_u8; 12];
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.update_scanout(&update, &data));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_dambuf_scanout() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let scanout: VhostUserGpuDMABUFScanout = VhostUserGpuDMABUFScanout {
+            scanout_id: 0,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1280,
+            fd_width: 0,
+            fd_height: 0,
+            fd_stride: 0,
+            fd_flags: 0,
+            fd_drm_fourcc: 0,
+        };
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.set_dmabuf_scanout(&scanout, None::<&File>));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+
+        assert_eq!(handler.scanouts[0].width, 1920);
+        assert_eq!(handler.scanouts[0].height, 1280);
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_dmabuf_scanout2() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let scanout: VhostUserGpuDMABUFScanout = VhostUserGpuDMABUFScanout {
+            scanout_id: 0,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1280,
+            fd_width: 0,
+            fd_height: 0,
+            fd_stride: 0,
+            fd_flags: 0,
+            fd_drm_fourcc: 0,
+        };
+        let scanout2 = VhostUserGpuDMABUFScanout2 {
+            dmabuf_scanout: scanout,
+            modifier: 1,
+        };
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.set_dmabuf_scanout2(&scanout2, None::<&File>));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+
+        assert_eq!(handler.scanouts[0].width, 1920);
+        assert_eq!(handler.scanouts[0].height, 1280);
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_dmabuf_update() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(None::<Result<(), std::io::Error>>));
+        let response_cloned = response.clone();
+        let update: VhostUserGpuUpdate = VhostUserGpuUpdate {
+            scanout_id: 0,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1280,
+        };
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = Some(backend.update_dmabuf_scanout(&update));
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        assert!(response.lock().unwrap().is_some());
+        assert!(response.lock().unwrap().as_ref().unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_vhost_user_gpu_pci_get_edid() {
+        let (mut handler, backend) = init_test();
+
+        let response = Arc::new(Mutex::new(VirtioGpuRespGetEdid::default()));
+        let response_cloned = response.clone();
+        let edid_requert: VhostUserGpuEdidRequest = VhostUserGpuEdidRequest { scanout_id: 0 };
+        let sender_thread = thread::spawn(move || {
+            let mut resp = response_cloned.lock().unwrap();
+            *resp = backend.get_edid(&edid_requert).unwrap();
+        });
+
+        // process msg
+        if let Err(e) = handler.process_cmd() {
+            panic!("process_cmd failed: {:?}", e);
+        }
+
+        assert!(sender_thread.join().is_ok());
+        let resp = response.lock().unwrap();
+        assert_eq!(resp.hdr.type_, VIRTIO_GPU_RESP_OK_EDID);
+        assert_eq!(resp.size, 1024);
+
+        let mut expect_edid = [0_u8; 1024];
+        let mut edid_info =
+            EdidInfo::new("HWV", "STRA Monitor", 100, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+        edid_info.edid_array_fulfill(&mut expect_edid);
+        assert_eq!(resp.edid, expect_edid);
+    }
+}
