@@ -22,7 +22,8 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
-use log::{error, warn};
+use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
 use vmm_sys_util::{epoll::EventSet, eventfd::EventFd, timerfd::TimerFd};
 
 use crate::{
@@ -42,6 +43,12 @@ use machine_manager::{
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::BalloonInfo,
 };
+use migration::{
+    DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, MigrationStatus,
+    StateTransfer,
+};
+use migration_derive::DescSerde;
+use util::aio::{wait_io_done, IoRef, DEFAULT_IO_TIMEOUT};
 use util::bitmap::Bitmap;
 use util::byte_code::ByteCode;
 use util::loop_context::{
@@ -625,6 +632,10 @@ struct BalloonIoHandler {
     event_timer: Arc<Mutex<TimerFd>>,
     /// Actual balloon size
     balloon_actual: Arc<AtomicU32>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
+    /// Indicate if IO is inflight.
+    io_inflight: IoRef,
 }
 
 impl BalloonIoHandler {
@@ -646,6 +657,10 @@ impl BalloonIoHandler {
         };
         let mut locked_queue = queue.lock().unwrap();
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = locked_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -681,6 +696,10 @@ impl BalloonIoHandler {
         let mut locked_queue = queue.lock().unwrap();
 
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = locked_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -716,6 +735,10 @@ impl BalloonIoHandler {
         let mut locked_queue = queue.lock().unwrap();
 
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let elem = locked_queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)
@@ -799,6 +822,7 @@ impl EventNotifierHelper for BalloonIoHandler {
             if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+            let _inflight = locked_balloon_io.io_inflight.inc_ref();
             if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_INFLATE_EVENT) {
                 error!("Failed to inflate balloon: {:?}", e);
                 report_virtio_error(
@@ -822,6 +846,7 @@ impl EventNotifierHelper for BalloonIoHandler {
             if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
                 return None;
             }
+            let _inflight = locked_balloon_io.io_inflight.inc_ref();
             if let Err(e) = locked_balloon_io.process_balloon_queue(BALLOON_DEFLATE_EVENT) {
                 error!("Failed to deflate balloon: {:?}", e);
                 report_virtio_error(
@@ -846,6 +871,7 @@ impl EventNotifierHelper for BalloonIoHandler {
                 if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
                     return None;
                 }
+                let _inflight = locked_balloon_io.io_inflight.inc_ref();
                 if let Err(e) = locked_balloon_io.reporting_evt_handler() {
                     error!("Failed to report free pages: {:?}", e);
                     report_virtio_error(
@@ -867,6 +893,7 @@ impl EventNotifierHelper for BalloonIoHandler {
                 if locked_balloon_io.device_broken.load(Ordering::SeqCst) {
                     return None;
                 }
+                let _inflight = locked_balloon_io.io_inflight.inc_ref();
                 if let Err(e) = locked_balloon_io.auto_msg_evt_handler() {
                     error!("Failed to msg: {:?}", e);
                     report_virtio_error(
@@ -979,6 +1006,10 @@ pub struct Balloon {
     mem_space: Arc<AddressSpace>,
     /// Event timer for BALLOON_CHANGED event.
     event_timer: Arc<Mutex<TimerFd>>,
+    /// If the vm is doing memory snapshot.
+    migrating: Arc<AtomicBool>,
+    /// Indicate if IO is inflight.
+    io_inflight: IoRef,
 }
 
 impl Balloon {
@@ -1005,6 +1036,8 @@ impl Balloon {
             mem_info: Arc::new(Mutex::new(BlnMemInfo::new())),
             mem_space,
             event_timer: Arc::new(Mutex::new(TimerFd::new().unwrap())),
+            migrating: Arc::new(AtomicBool::new(false)),
+            io_inflight: IoRef::default(),
         }
     }
 
@@ -1193,6 +1226,8 @@ impl VirtioDevice for Balloon {
             mem_info: self.mem_info.clone(),
             event_timer: self.event_timer.clone(),
             balloon_actual: self.actual.clone(),
+            migrating: self.migrating.clone(),
+            io_inflight: self.io_inflight.clone(),
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -1210,6 +1245,24 @@ impl VirtioDevice for Balloon {
     fn reset(&mut self) -> Result<()> {
         if virtio_has_feature(self.base.device_features, VIRTIO_BALLOON_F_MESSAGE_VQ) {
             self.num_pages = 0;
+        }
+        Ok(())
+    }
+}
+
+impl MigrationHook for Balloon {
+    fn notify_status(&self, save: bool, status: MigrationStatus) -> Result<()> {
+        if save {
+            match status {
+                MigrationStatus::Active => {
+                    self.migrating.store(true, Ordering::SeqCst);
+                    let id = self.bln_cfg.id.clone();
+                    info!("Drain the request for balloon device {}", id);
+                    wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &id);
+                }
+                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -1246,6 +1299,46 @@ pub fn balloon_allow_list(syscall_allow_list: &mut Vec<BpfRule>) {
         BpfRule::new(libc::SYS_timerfd_settime),
         BpfRule::new(libc::SYS_timerfd_gettime),
     ])
+}
+
+/// State of balloon device.
+#[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct BalloonState {
+    /// Bitmask of features supported by the backend.
+    device_features: u64,
+    /// Bit mask of features negotiated by the backend and the frontend.
+    driver_features: u64,
+    /// Target memory pages of balloon device.
+    num_pages: u32,
+    /// Actual memory pages of balloon device.
+    actual: u32,
+}
+
+impl StateTransfer for Balloon {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        let state = BalloonState {
+            device_features: self.base.device_features,
+            driver_features: self.base.driver_features,
+            num_pages: self.num_pages,
+            actual: self.actual.load(Ordering::Acquire),
+        };
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let state: BalloonState = serde_json::from_slice(state)
+            .with_context(|| MigrationError::FromBytesError("BALLOON"))?;
+        self.base.device_features = state.device_features;
+        self.base.driver_features = state.driver_features;
+        self.num_pages = state.num_pages;
+        self.actual.store(state.actual, Ordering::Release);
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&BalloonState::descriptor().name).unwrap_or(!0)
+    }
 }
 
 #[cfg(test)]
@@ -1492,6 +1585,8 @@ mod tests {
             mem_info: bln.mem_info.clone(),
             event_timer: bln.event_timer.clone(),
             balloon_actual: bln.actual.clone(),
+            io_inflight: bln.io_inflight.clone(),
+            migrating: bln.migrating.clone(),
         };
 
         let balloon = Arc::new(Mutex::new(bln));
@@ -1712,5 +1807,40 @@ mod tests {
         // Test methods of balloon.
         let ram_size = bln.mem_info.lock().unwrap().get_ram_size();
         assert_eq!(ram_size, MEMORY_SIZE);
+    }
+
+    // Test get/set device state.
+    #[test]
+    fn test_state_transfer() {
+        let bln_cfg = BalloonConfig {
+            id: "bln".to_string(),
+            ..Default::default()
+        };
+
+        let mem_space = address_space_init();
+        let mut balloon = Balloon::new(bln_cfg, mem_space);
+        balloon.realize().unwrap();
+
+        let device_features = balloon.base.device_features;
+        let driver_features = balloon.base.driver_features;
+        let num_pages = balloon.num_pages;
+        let actual = balloon.actual.clone();
+
+        // Get and modify the device state.
+        let init_state = balloon.get_state_vec().unwrap();
+        balloon.base.device_features = 0;
+        balloon.base.driver_features = 0;
+        balloon.num_pages = 1234;
+        balloon.actual.store(2468, Ordering::Release);
+
+        // Set and check the device state.
+        balloon.set_state_mut(&init_state, 0_u32).unwrap();
+        assert_eq!(device_features, balloon.base.device_features);
+        assert_eq!(driver_features, balloon.base.driver_features);
+        assert_eq!(num_pages, balloon.num_pages);
+        assert_eq!(
+            actual.load(Ordering::SeqCst),
+            balloon.actual.load(Ordering::SeqCst)
+        );
     }
 }
