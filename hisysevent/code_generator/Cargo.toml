@@ -1,6 +1,6 @@
 [package]
 name = "code_generator"
-version = "2.4.0"
+version = "2.5.0"
 authors = ["Huawei StratoVirt Team"]
 edition = "2021"
 license = "Mulan PSL v2"
