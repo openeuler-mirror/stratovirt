@@ -88,6 +88,8 @@ define_qmp_command_enum!(
     chardev_remove("chardev-remove", chardev_remove),
     netdev_add("netdev_add", Box<netdev_add>),
     netdev_del("netdev_del", netdev_del),
+    netdev_replace("netdev_replace", NetDevReplaceArgument),
+    netlink_set("netlink_set", NetLinkSetArgument),
     cameradev_add("cameradev_add", cameradev_add),
     cameradev_del("cameradev_del", cameradev_del),
     query_hotpluggable_cpus("query-hotpluggable-cpus", query_hotpluggable_cpus, default),
@@ -485,6 +487,7 @@ pub struct netdev_add {
     pub script: Option<String>,
     pub queues: Option<u16>,
     pub chardev: Option<String>,
+    pub macnat: Option<bool>,
 }
 
 pub type NetDevAddArgument = netdev_add;
@@ -684,6 +687,62 @@ pub struct netdev_del {
     pub id: String,
 }
 generate_command_impl!(netdev_del, Empty);
+
+/// netdev_replace
+///
+/// Replace tap for virtio-net device.
+///
+/// # Arguments
+///
+/// * `id` - The name of virtio-net device.
+///
+/// # Errors
+///
+/// If `id` is not a valid virtio-net device, DeviceNotFound.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "netdev_replace", "arguments": { "id": "nic0", "ifname": "tap0", "macnat": false } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct netdev_replace {
+    pub id: String,
+    pub ifname: String,
+    pub path: Option<String>,
+    pub macnat: bool,
+}
+pub type NetDevReplaceArgument = netdev_replace;
+generate_command_impl!(netdev_replace, Empty);
+
+/// netlink_set
+///
+/// Set link status for virtio-net device.
+///
+/// # Arguments
+///
+/// * `id` - The name of virtio-net device.
+///
+/// # Errors
+///
+/// If `id` is not a valid virtio-net device, DeviceNotFound.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "netlink_set", "arguments": { "id": "nic0", "up": false } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct netlink_set {
+    pub id: String,
+    pub up: bool,
+}
+pub type NetLinkSetArgument = netlink_set;
+generate_command_impl!(netlink_set, Empty);
 
 /// cameradev_del
 ///
@@ -2153,6 +2212,7 @@ pub struct VmNotifyEvent {
 pub const DEVICE_CLASS_ID: u32 = 1;
 // types for DEVICE_CLASS_ID
 pub const CAMERA_TYPE: u32 = 1;
+pub const VIRTIO_NET_TYPE: u32 = 2;
 pub const PVPANIC_TYPE: u32 = 3;
 
 #[cfg(test)]

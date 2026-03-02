@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use log::{error, warn};
 use serde_json::json;
-use util::set_termi_canon_mode;
+use util::{any_typecast_mut, set_termi_canon_mode};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -71,7 +71,9 @@ use machine_manager::machine::{
     DeviceInterface, MachineAddressInterface, MachineExternalInterface, MachineInterface,
     MachineLifecycle, MachineTestInterface, MigrateInterface, VmState,
 };
-use machine_manager::qmp::qmp_schema::{BlockDevAddArgument, UpdateRegionArgument};
+use machine_manager::qmp::qmp_schema::{
+    BlockDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, UpdateRegionArgument,
+};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
 use machine_manager::state_query::query_workloads;
 #[cfg(feature = "gtk")]
@@ -87,7 +89,7 @@ use util::loop_context::{
     create_new_eventfd, read_fd, EventLoopManager, EventNotifier, NotifierCallback,
     NotifierOperation,
 };
-use virtio::{qmp_balloon, qmp_query_balloon};
+use virtio::{qmp_balloon, qmp_query_balloon, Net};
 
 const MAX_REGION_SIZE: u64 = 65536;
 
@@ -1536,6 +1538,62 @@ impl DeviceInterface for StdMachine {
                 None,
             ),
         }
+    }
+
+    fn netdev_replace(&mut self, args: NetDevReplaceArgument) -> Response {
+        let net_dev = self.base.net_devs.get(&args.id);
+        if net_dev.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!("no net dev {}", args.id)),
+                None,
+            );
+        }
+
+        let mut locked_dev = net_dev.unwrap().lock().unwrap();
+        any_typecast_mut(&mut *locked_dev).map_or(
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "net device {} not support tap replacement",
+                    args.id
+                )),
+                None,
+            ),
+            |net: &mut Net| match net.update_netdev_cfg(args.ifname, args.path, args.macnat) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            },
+        )
+    }
+
+    fn netlink_set(&self, args: NetLinkSetArgument) -> Response {
+        let net_dev = self.base.net_devs.get(&args.id);
+        if net_dev.is_none() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::DeviceNotFound(format!("no net dev {}", args.id)),
+                None,
+            );
+        }
+
+        let mut locked_dev = net_dev.unwrap().lock().unwrap();
+        any_typecast_mut(&mut *locked_dev).map_or(
+            Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(format!(
+                    "net device {} not support link status set",
+                    args.id
+                )),
+                None,
+            ),
+            |net: &mut Net| match net.set_link_status(args.up) {
+                Ok(()) => Response::create_empty_response(),
+                Err(e) => Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ),
+            },
+        )
     }
 
     #[cfg(feature = "usb_camera")]

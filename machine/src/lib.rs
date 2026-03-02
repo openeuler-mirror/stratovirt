@@ -123,14 +123,19 @@ use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, 
 use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
 #[cfg(any(feature = "vhost_vsock", feature = "vhost_net"))]
 use virtio::VhostKern;
-#[cfg(any(feature = "vhostuser_block", feature = "vhostuser_net"))]
+#[cfg(any(
+    feature = "vhostuser_block",
+    feature = "vhostuser_net",
+    feature = "vhostuser_gpu"
+))]
 use virtio::VhostUser;
+use virtio::VhostUser::FsState;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, Block, BlockState, Input,
-    InputConfig, Multitouch, MultitouchConfig, Serial, SerialPort, VirtioBlkDevConfig,
+    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, BalloonState, Block, BlockState,
+    Input, InputConfig, Multitouch, MultitouchConfig, Serial, SerialPort, VirtioBlkDevConfig,
     VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState, VirtioPciDevice,
     VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
@@ -180,6 +185,8 @@ pub struct MachineBase {
     hypervisor: Arc<Mutex<dyn HypervisorOps>>,
     /// migrate hypervisor.
     migration_hypervisor: Arc<Mutex<dyn MigrateOps>>,
+    /// virtio-net-pci devices.
+    net_devs: HashMap<String, Arc<Mutex<dyn VirtioDevice>>>,
 }
 
 impl MachineBase {
@@ -253,6 +260,7 @@ impl MachineBase {
             machine_ram,
             hypervisor,
             migration_hypervisor,
+            net_devs: HashMap::new(),
         })
     }
 
@@ -287,23 +295,41 @@ impl MachineBase {
                 log::error!("Fail to pause bsp, {:?}", e);
             }
         }
-        self.sys_io
+        if let Err(e) = self
+            .sys_io
             .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
-            .is_ok()
+        {
+            error!("Failed to io write addr {:x}, error: {:?}", addr, e);
+            false
+        } else {
+            true
+        }
     }
 
     fn mmio_read(&self, addr: u64, mut data: &mut [u8]) -> bool {
         let length = data.len() as u64;
-        self.sys_mem
+        if let Err(e) = self
+            .sys_mem
             .read(&mut data, GuestAddress(addr), length, AddressAttr::MMIO)
-            .is_ok()
+        {
+            error!("Failed to mmio read addr {:x}, error: {:?}", addr, e);
+            false
+        } else {
+            true
+        }
     }
 
     fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
         let count = data.len() as u64;
-        self.sys_mem
+        if let Err(e) = self
+            .sys_mem
             .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
-            .is_ok()
+        {
+            error!("Failed to mmio write addr {:x}, error: {:?}", addr, e);
+            false
+        } else {
+            true
+        }
     }
 }
 
@@ -728,16 +754,18 @@ pub trait MachineOps: MachineLifecycle {
                     ("addr", config.addr),
                     ("multifunction", config.multifunction)
                 );
-                self.add_virtio_mmio_device(config.id.clone(), balloon)?;
+                self.add_virtio_mmio_device(config.id.clone(), balloon.clone())?;
             }
             _ => {
                 check_arg_exist!(("bus", config.bus), ("addr", config.addr));
                 let bdf = PciBdf::new(config.bus.unwrap(), config.addr.unwrap());
                 let multi_func = config.multifunction.unwrap_or_default();
-                self.add_virtio_pci_device(&config.id, &bdf, balloon, multi_func, false)
+                self.add_virtio_pci_device(&config.id, &bdf, balloon.clone(), multi_func, false)
                     .with_context(|| "Failed to add virtio pci balloon device")?;
             }
         }
+
+        MigrationManager::register_device_instance(BalloonState::descriptor(), balloon, &config.id);
 
         Ok(())
     }
@@ -917,13 +945,17 @@ pub trait MachineOps: MachineLifecycle {
                 )
             })?;
 
-        let mut serial_port = SerialPort::new(serialport_cfg, chardev_cfg)?;
+        let mut serial_port = SerialPort::new(&serialport_cfg, chardev_cfg)?;
         let port = Arc::new(Mutex::new(serial_port.clone()));
         serial_port.realize()?;
         if !is_console {
             serial_port.chardev.lock().unwrap().set_device(port.clone());
         }
-        serial.ports.lock().unwrap().push(port);
+        serial
+            .ports
+            .lock()
+            .unwrap()
+            .insert(serialport_cfg.nr.unwrap(), port);
 
         Ok(())
     }
@@ -1061,7 +1093,7 @@ pub trait MachineOps: MachineLifecycle {
                     ("addr", dev_cfg.addr),
                     ("multifunction", dev_cfg.multifunction)
                 );
-                self.add_virtio_mmio_device(dev_cfg.id.clone(), device)
+                self.add_virtio_mmio_device(dev_cfg.id.clone(), device.clone())
                     .with_context(|| "Failed to add vhost user fs device")?;
             }
             _ => {
@@ -1073,10 +1105,18 @@ pub trait MachineOps: MachineLifecycle {
                 let msi_irq_manager = root_pci_bus.msi_irq_manager.clone();
                 drop(locked_bus);
                 let need_irqfd = msi_irq_manager.as_ref().unwrap().irqfd_enable();
-                self.add_virtio_pci_device(&dev_cfg.id, &bdf, device, multi_func, need_irqfd)
-                    .with_context(|| "Failed to add pci fs device")?;
+                self.add_virtio_pci_device(
+                    &dev_cfg.id,
+                    &bdf,
+                    device.clone(),
+                    multi_func,
+                    need_irqfd,
+                )
+                .with_context(|| "Failed to add pci fs device")?;
             }
         }
+
+        MigrationManager::register_device_instance(FsState::descriptor(), device, &dev_cfg.id);
 
         Ok(())
     }
@@ -1404,12 +1444,14 @@ pub trait MachineOps: MachineLifecycle {
         check_arg_exist!(("bus", net_cfg.bus), ("addr", net_cfg.addr));
         let bdf = PciBdf::new(net_cfg.bus.clone().unwrap(), net_cfg.addr.unwrap());
         let multi_func = net_cfg.multifunction.unwrap_or_default();
+        let id = net_cfg.id.clone();
+        let is_vhost = netdev_cfg.vhost_type().is_some();
 
         #[cfg(all(not(feature = "vhost_net"), not(feature = "vhostuser_net")))]
         let need_irqfd = false;
         #[cfg(any(feature = "vhost_net", feature = "vhostuser_net"))]
         let mut need_irqfd = false;
-        let device: Arc<Mutex<dyn VirtioDevice>> = if netdev_cfg.vhost_type().is_some() {
+        let device: Arc<Mutex<dyn VirtioDevice>> = if is_vhost {
             if netdev_cfg.vhost_type().unwrap() == "vhost-kernel" {
                 #[cfg(not(feature = "vhost_net"))]
                 bail!("Unsupported Vhost_net");
@@ -1455,9 +1497,12 @@ pub trait MachineOps: MachineLifecycle {
             );
             device
         };
-        self.add_virtio_pci_device(&net_cfg.id, &bdf, device, multi_func, need_irqfd)?;
+        self.add_virtio_pci_device(&net_cfg.id, &bdf, device.clone(), multi_func, need_irqfd)?;
         if !hotplug {
             self.reset_bus(&net_cfg.id)?;
+        }
+        if !is_vhost {
+            self.machine_base_mut().net_devs.insert(id, device);
         }
         Ok(())
     }
@@ -1513,6 +1558,44 @@ pub trait MachineOps: MachineLifecycle {
         if !hotplug {
             self.reset_bus(&device_cfg.id)?;
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "vhostuser_gpu")]
+    fn add_vhost_user_gpu_pci(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserGpuDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+        if device_cfg.num_queues.is_none() {
+            bail!("invalid num_queues");
+        }
+
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user gpu",
+                    &device_cfg.chardev
+                )
+            })?;
+
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserGpu::new(&device_cfg, chardev_cfg, self.get_sys_mem())?,
+        ));
+
+        let root_bus = self.get_pci_host()?.lock().unwrap().child_bus().unwrap();
+        PCI_BUS!(root_bus, locked_bus, _root_pci_bus);
+        drop(locked_bus);
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device.clone(), false, false)
+            .with_context(|| {
+                format!(
+                    "Failed to add virtio pci device, device id: {}",
+                    &device_cfg.id
+                )
+            })?;
         Ok(())
     }
 
@@ -2121,6 +2204,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-user-blk-device",add_vhost_user_blk_device, vm_config, cfg_args),
                 #[cfg(feature = "vhostuser_block")]
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
+                #[cfg(feature = "vhostuser_gpu")]
+                ("vhost-user-gpu-pci", add_vhost_user_gpu_pci, vm_config, cfg_args),
                 #[cfg(feature = "vhost_vsock")]
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]

@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::fs::File;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::slice::from_raw_parts;
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,7 @@ use super::message::{
     VhostUserMsgReq, VhostUserVringAddr, VhostUserVringState,
 };
 use super::sock::VhostUserSock;
-use crate::device::block::VirtioBlkConfig;
+use super::VHOST_USER_F_PROTOCOL_FEATURES;
 use crate::VhostUser::message::VhostUserConfig;
 use crate::{virtio_has_feature, Queue, QueueConfig};
 use address_space::{
@@ -44,6 +45,8 @@ use util::unix::do_mmap;
 
 /// Vhost supports multiple queue
 pub const VHOST_USER_PROTOCOL_F_MQ: u8 = 0;
+/// Vhost supports reply ack
+pub const VHOST_USER_PROTOCOL_F_REPLY_ACK: u8 = 3;
 /// Vhost supports `VHOST_USER_SET_CONFIG` and `VHOST_USER_GET_CONFIG` msg.
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 /// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
@@ -140,6 +143,12 @@ fn vhost_user_reconnect(client: &Arc<Mutex<VhostUserClient>>) {
             );
             return;
         }
+    }
+
+    // This case can happen when device has not been activated.
+    if !locked_client.ready {
+        info!("vhost user device has not been activated.");
+        return;
     }
 
     if let Err(e) = locked_client.activate_vhost_user() {
@@ -388,6 +397,7 @@ pub enum VhostBackendType {
     TypeNet,
     TypeBlock,
     TypeFs,
+    TypeGpu,
 }
 
 impl std::fmt::Display for VhostBackendType {
@@ -396,6 +406,7 @@ impl std::fmt::Display for VhostBackendType {
             VhostBackendType::TypeNet => write!(f, "net"),
             VhostBackendType::TypeBlock => write!(f, "block"),
             VhostBackendType::TypeFs => write!(f, "fs"),
+            VhostBackendType::TypeGpu => write!(f, "gpu"),
         }
     }
 }
@@ -413,6 +424,7 @@ pub struct VhostUserClient {
     inflight: Option<VhostInflight>,
     backend_type: VhostBackendType,
     pub protocol_features: u64,
+    ready: bool,
 }
 
 impl VhostUserClient {
@@ -448,6 +460,7 @@ impl VhostUserClient {
             inflight: None,
             backend_type,
             protocol_features: 0_u64,
+            ready: false,
         })
     }
 
@@ -577,13 +590,6 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
-            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
-                .with_context(|| {
-                    format!(
-                        "Failed to set vring kick for vhost-user, index: {}",
-                        queue_index,
-                    )
-                })?;
             self.set_vring_call(queue_index, self.call_events[queue_index].clone())
                 .with_context(|| {
                     format!(
@@ -591,9 +597,19 @@ impl VhostUserClient {
                         queue_index,
                     )
                 })?;
+            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring kick for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
         }
 
-        if self.backend_type == VhostBackendType::TypeBlock {
+        if matches!(
+            self.backend_type,
+            VhostBackendType::TypeBlock | VhostBackendType::TypeGpu
+        ) {
             // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
             // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.
             // Currently, only vhost-user-blk device support negotiate VHOST_USER_F_PROTOCOL_FEATURES.
@@ -610,16 +626,20 @@ impl VhostUserClient {
             }
         }
 
+        self.ready = true;
         Ok(())
     }
 
-    fn reset_queues(&mut self) -> Result<()> {
+    pub fn reset_queues(&mut self) -> Result<()> {
         for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
             if !queue_mutex.lock().unwrap().vring.is_enabled() {
                 continue;
             }
-            self.set_vring_enable(queue_index, false)
-                .with_context(|| format!("Failed to set vring disable, index: {}", queue_index))?;
+            if virtio_has_feature(self.features, VHOST_USER_F_PROTOCOL_FEATURES) {
+                self.set_vring_enable(queue_index, false).with_context(|| {
+                    format!("Failed to set vring disable, index: {}", queue_index)
+                })?;
+            }
             self.get_vring_base(queue_index)
                 .with_context(|| format!("Failed to get vring base, index: {}", queue_index))?;
         }
@@ -628,17 +648,20 @@ impl VhostUserClient {
 
     pub fn reset_vhost_user(&mut self, reset_owner: bool) {
         let dev_type = self.backend_type.to_string();
-        if reset_owner {
-            if let Err(e) = self.reset_owner() {
-                warn!("Failed to reset owner for vhost-user {}: {:?}", dev_type, e);
-            }
-        } else if let Err(e) = self.reset_queues() {
+
+        if let Err(e) = self.reset_queues() {
             warn!(
                 "Failed to reset queues for vhost-user {}: {:?}",
                 dev_type, e
             );
         }
+        if reset_owner {
+            if let Err(e) = self.reset_owner() {
+                warn!("Failed to reset owner for vhost-user {}: {:?}", dev_type, e);
+            }
+        }
 
+        self.ready = false;
         self.queue_evts.clear();
         self.call_events.clear();
         self.queues.clear();
@@ -674,7 +697,6 @@ impl VhostUserClient {
         let features = client
             .wait_ack_msg::<u64>(request)
             .with_context(|| "Failed to wait ack msg for getting protocols features")?;
-
         Ok(features)
     }
 
@@ -688,7 +710,6 @@ impl VhostUserClient {
             .sock
             .send_msg(Some(&hdr), Some(&value), payload_opt, &[])
             .with_context(|| "Failed to send msg for setting value")?;
-
         Ok(())
     }
 
@@ -697,23 +718,20 @@ impl VhostUserClient {
         self.set_value(VhostUserMsgReq::SetProtocolFeatures, features)
     }
 
-    /// Get virtio blk config from vhost.
-    pub fn get_virtio_blk_config(&self) -> Result<VirtioBlkConfig> {
+    /// Get virtio config from vhost.
+    pub fn get_virtio_config<T: Default>(&self) -> Result<T> {
         let request = VhostUserMsgReq::GetConfig as u32;
-        let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
+        let config_len = size_of::<VhostUserConfig<T>>();
         let hdr = VhostUserMsgHdr::new(
             request,
             VhostUserHdrFlag::NeedReply as u32,
             config_len as u32,
         );
-        let cnf = VhostUserConfig::new(0, 0, VirtioBlkConfig::default())?;
+        let cnf = VhostUserConfig::<T>::new(0, 0, T::default())?;
         let body_opt: Option<&u32> = None;
         // SAFETY: the memory is allocated by us and it has been already aligned.
         let payload_opt: Option<&[u8]> = Some(unsafe {
-            from_raw_parts(
-                (&cnf as *const VhostUserConfig<VirtioBlkConfig>) as *const u8,
-                config_len,
-            )
+            from_raw_parts((&cnf as *const VhostUserConfig<T>) as *const u8, config_len)
         });
         let client = self.client.lock().unwrap();
         client
@@ -721,19 +739,19 @@ impl VhostUserClient {
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
             .with_context(|| "Failed to send msg for getting config")?;
         let res = client
-            .wait_ack_msg::<VhostUserConfig<VirtioBlkConfig>>(request)
+            .wait_ack_msg::<VhostUserConfig<T>>(request)
             .with_context(|| "Failed to wait ack msg for getting virtio blk config")?;
         Ok(res.config)
     }
 
-    /// Set virtio blk config to vhost.
-    pub fn set_virtio_blk_config(&self, cnf: VirtioBlkConfig) -> Result<()> {
+    /// Set virtio config to vhost.
+    pub fn set_virtio_config<T: Default>(&self, cnf: T) -> Result<()> {
         let client = self.client.lock().unwrap();
         let request = VhostUserMsgReq::SetConfig as u32;
-        let config_len = size_of::<VhostUserConfig<VirtioBlkConfig>>();
+        let config_len = size_of::<VhostUserConfig<T>>();
         let hdr = VhostUserMsgHdr::new(request, 0, config_len as u32);
         let payload_opt: Option<&[u8]> = None;
-        let config = VhostUserConfig::new(0, 0, cnf)?;
+        let config = VhostUserConfig::<T>::new(0, 0, cnf)?;
         client
             .sock
             .send_msg(Some(&hdr), Some(&config), payload_opt, &[])
@@ -812,6 +830,45 @@ impl VhostUserClient {
             .with_context(|| "Failed to send msg for setting inflight fd")?;
         Ok(())
     }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
+
+    pub fn resume_queues(&self) -> Result<()> {
+        for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
+            let queue = queue_mutex.lock().unwrap();
+            if !queue.vring.is_enabled() {
+                warn!("Queue {} is not enabled, skip it", queue_index);
+                continue;
+            }
+            // When spdk/ovs has been killed, stratovirt can not get the last avail
+            // index in spdk/ovs, it can only use used index as last avail index.
+            let last_avail_idx = queue.vring.get_used_idx()?;
+            self.set_vring_base(queue_index, last_avail_idx)
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring base for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+            self.set_vring_call(queue_index, self.call_events[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring call for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+            self.set_vring_kick(queue_index, self.queue_evts[queue_index].clone())
+                .with_context(|| {
+                    format!(
+                        "Failed to set vring kick for vhost-user, index: {}",
+                        queue_index,
+                    )
+                })?;
+        }
+        Ok(())
+    }
 }
 
 impl VhostOps for VhostUserClient {
@@ -826,7 +883,6 @@ impl VhostOps for VhostUserClient {
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[])
             .with_context(|| "Failed to send msg for setting owner")?;
-
         Ok(())
     }
 
@@ -1102,5 +1158,22 @@ impl VhostOps for VhostUserClient {
 
         trace::vhost_get_vring_base(queue_idx, res.value as u16);
         Ok(res.value as u16)
+    }
+
+    fn set_socket(&self, sender_fd: &UnixStream) -> Result<()> {
+        if self.backend_type != VhostBackendType::TypeGpu {
+            return Ok(());
+        }
+        let request = VhostUserMsgReq::SetSocket as u32;
+        let hdr = VhostUserMsgHdr::new(request, VhostUserHdrFlag::Version as u32, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
+        let raw_fd = sender_fd.as_raw_fd();
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[raw_fd])
+            .with_context(|| "Failed to send msg for set socket")?;
+        Ok(())
     }
 }

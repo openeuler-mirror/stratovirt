@@ -10,17 +10,19 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
-use std::os::unix::io::RawFd;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use vmm_sys_util::eventfd::EventFd;
 
 use super::qmp_schema::{self as schema};
 use crate::socket::SocketRWHandler;
+use util::loop_context::create_new_eventfd;
 use util::time::NANOSECONDS_PER_SECOND;
 
 static QMP_CHANNEL: OnceLock<Arc<QmpChannel>> = OnceLock::new();
@@ -45,13 +47,13 @@ static QMP_CHANNEL: OnceLock<Arc<QmpChannel>> = OnceLock::new();
 #[macro_export]
 macro_rules! event {
     ( $x:tt ) => {{
-        QmpChannel::send_event(&$crate::qmp::qmp_schema::QmpEvent::$x {
+        QmpChannel::async_send_event($crate::qmp::qmp_schema::QmpEvent::$x {
             data: Default::default(),
             timestamp: $crate::qmp::qmp_channel::create_timestamp(),
         });
     }};
     ( $x:tt;$y:expr ) => {{
-        QmpChannel::send_event(&$crate::qmp::qmp_schema::QmpEvent::$x {
+        QmpChannel::async_send_event($crate::qmp::qmp_schema::QmpEvent::$x {
             data: $y,
             timestamp: $crate::qmp::qmp_channel::create_timestamp(),
         });
@@ -89,6 +91,10 @@ pub struct QmpChannel {
     event_writer: RwLock<Option<SocketRWHandler>>,
     /// Restore file descriptor received from client.
     fds: Arc<RwLock<BTreeMap<String, RawFd>>>,
+    /// The event fd to notify to asynchronously send `QmpEvent`.
+    evtfd: EventFd,
+    /// Events `QmpEvent` to send.
+    events: Mutex<VecDeque<schema::QmpEvent>>,
 }
 
 impl QmpChannel {
@@ -100,6 +106,8 @@ impl QmpChannel {
             Arc::new(QmpChannel {
                 event_writer: RwLock::new(None),
                 fds: Arc::new(RwLock::new(BTreeMap::new())),
+                evtfd: create_new_eventfd().expect("Failed to create eventfd for qmp channel"),
+                events: Mutex::new(VecDeque::new()),
             })
         });
     }
@@ -142,13 +150,53 @@ impl QmpChannel {
         Self::inner().fds.read().unwrap().get(name).copied()
     }
 
-    /// Send a `QmpEvent` to client.
+    /// Get file descriptor of eventfd in `QMP_CHANNEL`.
+    pub fn get_event_fd() -> RawFd {
+        Self::inner().evtfd.as_raw_fd()
+    }
+
+    /// Asynchronously send a `QmpEvent` to client.
     ///
     /// # Arguments
     ///
     /// * `event` - The `QmpEvent` sent to client.
+    pub fn async_send_event(event: schema::QmpEvent) {
+        const MAX_EVENT_COUNT: usize = 50;
+
+        if !Self::is_connected() {
+            return;
+        }
+
+        let mut events = Self::inner().events.lock().unwrap();
+        while events.len() >= MAX_EVENT_COUNT {
+            let dropped = events.pop_front();
+            warn!(
+                "QmpEvent count exceeds {}. {:?} is dropped",
+                MAX_EVENT_COUNT, dropped
+            );
+        }
+
+        events.push_back(event);
+        if let Err(e) = Self::inner().evtfd.write(1) {
+            error!(
+                "Failed to write event fd to notify qmp event async, {:?}",
+                e
+            );
+        }
+    }
+
+    /// Send all events `QmpEvent` to client.
+    pub fn send_event() {
+        loop {
+            let Some(event) = Self::inner().events.lock().unwrap().pop_front() else {
+                break;
+            };
+            Self::do_send_event(&event);
+        }
+    }
+
     #[allow(clippy::unused_io_amount)]
-    pub fn send_event(event: &schema::QmpEvent) {
+    fn do_send_event(event: &schema::QmpEvent) {
         if Self::is_connected() {
             let mut event_str = serde_json::to_string(&event).unwrap();
             let mut writer_locked = Self::inner().event_writer.write().unwrap();
@@ -166,7 +214,7 @@ impl QmpChannel {
         }
     }
 
-    fn inner() -> &'static std::sync::Arc<QmpChannel> {
+    fn inner() -> &'static Arc<QmpChannel> {
         // SAFETY: Global variable QMP_CHANNEL is only used in the main thread,
         // so there are no competition or synchronization.
         QMP_CHANNEL.get().expect("Qmp channel not initialized")

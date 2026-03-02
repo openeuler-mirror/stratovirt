@@ -460,4 +460,22 @@ mod tests {
             Err(_) => false,
         };
     }
+
+    #[test]
+    fn test_usb_tablet_snapshot() {
+        let config = UsbTabletConfig {
+            classtype: "usb-tablet".to_string(),
+            id: "test_usb_tablet".to_string(),
+            bus: None,
+            port: None,
+        };
+
+        let mut tablet_device = UsbTablet::new(config);
+
+        let dev_state = tablet_device.get_state_vec();
+        assert!(dev_state.is_ok());
+
+        let ret = tablet_device.set_state_mut(dev_state.unwrap().as_ref(), 0_u32);
+        assert!(ret.is_ok());
+    }
 }

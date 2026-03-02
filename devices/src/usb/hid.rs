@@ -815,3 +815,110 @@ impl Display for Hid {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_common_hid_snapshot() {
+        // construct test hid device
+        let mut hid_device = Hid::new(HidType::UnKnown);
+
+        // build state A
+        hid_device.head = 7;
+        hid_device.num = 7;
+        hid_device.protocol = 7;
+        hid_device.idle = 7;
+
+        // get snapshot state vec
+        let dev_state = hid_device.get_state();
+        assert!(dev_state.is_ok());
+
+        // modify device state to B
+        hid_device.head = u32::MAX;
+        hid_device.num = u32::MAX;
+        hid_device.protocol = u8::MAX;
+        hid_device.idle = u8::MAX;
+
+        // set snapshot state
+        let dev_state = dev_state.unwrap();
+        let ret = hid_device.set_state(&dev_state);
+        assert!(ret.is_ok());
+
+        // test whether state equals to A
+        assert_eq!(hid_device.head, 7);
+        assert_eq!(hid_device.num, 7);
+        assert_eq!(hid_device.protocol, 7);
+        assert_eq!(hid_device.idle, 7);
+    }
+
+    #[test]
+    fn test_kbd_hid_snapshot() {
+        // construct test hid device
+        let mut hid_device = Hid::new(HidType::Keyboard);
+
+        // build state A
+        hid_device.keyboard.keycodes = [7; QUEUE_LENGTH as usize];
+        hid_device.keyboard.modifiers = 7;
+        hid_device.keyboard.key_buf = [7; QUEUE_LENGTH as usize];
+        hid_device.keyboard.key_num = 7;
+
+        // get snapshot state vec
+        let dev_state = hid_device.get_state();
+        assert!(dev_state.is_ok());
+
+        // modify device state to B
+        hid_device.keyboard.keycodes = [u32::MAX; QUEUE_LENGTH as usize];
+        hid_device.keyboard.modifiers = u16::MAX;
+        hid_device.keyboard.key_buf = [u8::MAX; QUEUE_LENGTH as usize];
+        hid_device.keyboard.key_num = u32::MAX;
+
+        // set snapshot state
+        let dev_state = dev_state.unwrap();
+        let ret = hid_device.set_state(&dev_state);
+        assert!(ret.is_ok());
+
+        // test whether state equals to A
+        assert_eq!(hid_device.keyboard.keycodes, [7; QUEUE_LENGTH as usize]);
+        assert_eq!(hid_device.keyboard.modifiers, 7);
+        assert_eq!(hid_device.keyboard.key_buf, [7; QUEUE_LENGTH as usize]);
+        assert_eq!(hid_device.keyboard.key_num, 7);
+    }
+
+    #[test]
+    fn test_tablet_hid_snapshot() {
+        // construct test hid device
+        let mut hid_device = Hid::new(HidType::Tablet);
+
+        // build state A
+        hid_device.pointer.queue[7].pos_x = 7;
+        hid_device.pointer.queue[7].pos_y = 7;
+        hid_device.pointer.queue[7].v_wheel = 7;
+        hid_device.pointer.queue[7].h_wheel = 7;
+        hid_device.pointer.queue[7].button_state = 7;
+
+        // get snapshot state vec
+        let dev_state = hid_device.get_state();
+        assert!(dev_state.is_ok());
+
+        // modify device state to B
+        hid_device.pointer.queue[7].pos_x = u32::MAX;
+        hid_device.pointer.queue[7].pos_y = u32::MAX;
+        hid_device.pointer.queue[7].v_wheel = i32::MAX;
+        hid_device.pointer.queue[7].h_wheel = i32::MAX;
+        hid_device.pointer.queue[7].button_state = u32::MAX;
+
+        // set snapshot state
+        let dev_state = dev_state.unwrap();
+        let ret = hid_device.set_state(&dev_state);
+        assert!(ret.is_ok());
+
+        // test whether state equals to A
+        assert_eq!(hid_device.pointer.queue[7].pos_x, 7);
+        assert_eq!(hid_device.pointer.queue[7].pos_y, 7);
+        assert_eq!(hid_device.pointer.queue[7].v_wheel, 7);
+        assert_eq!(hid_device.pointer.queue[7].h_wheel, 7);
+        assert_eq!(hid_device.pointer.queue[7].button_state, 7);
+    }
+}

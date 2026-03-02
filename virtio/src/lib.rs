@@ -135,6 +135,8 @@ pub const VIRTIO_NET_F_HOST_TSO6: u32 = 12;
 pub const VIRTIO_NET_F_HOST_UFO: u32 = 14;
 /// Device can merge receive buffers.
 pub const VIRTIO_NET_F_MRG_RXBUF: u32 = 15;
+/// Status in net config is available.
+pub const VIRTIO_NET_F_STATUS: u32 = 16;
 /// Control channel is available.
 pub const VIRTIO_NET_F_CTRL_VQ: u32 = 17;
 /// Control channel RX mode support.
@@ -175,8 +177,14 @@ pub const VIRTIO_BLK_F_DISCARD: u32 = 13;
 pub const VIRTIO_BLK_F_WRITE_ZEROES: u32 = 14;
 /// Unmap flags for write zeroes command.
 pub const VIRTIO_BLK_WRITE_ZEROES_FLAG_UNMAP: u32 = 1;
+/// GPU virgl feature is supported.
+pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
 /// GPU EDID feature is supported.
 pub const VIRTIO_GPU_F_EDID: u32 = 1;
+/// GPU RESOURCE_UUID feature is supported.
+pub const VIRTIO_GPU_F_RESOURCE_UUID: u32 = 2;
+/// GPU blob resource is supported.
+pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
 /// TODO: need to change to 5 or bigger
 pub const VIRTIO_GPU_F_MONOCHROME: u32 = 4;
 
@@ -184,6 +192,8 @@ pub const VIRTIO_GPU_F_MONOCHROME: u32 = 4;
 pub const VIRTIO_NET_OK: u8 = 0;
 /// The device sets control err status to driver.
 pub const VIRTIO_NET_ERR: u8 = 1;
+
+pub const VIRTIO_NET_S_LINK_UP: u16 = 1;
 
 /// Driver can send control commands.
 pub const VIRTIO_NET_CTRL_RX: u8 = 0;
@@ -626,6 +636,13 @@ pub trait VirtioDevice: Send + AsAny {
         self.virtio_base_mut()
             .config_generation
             .store(val, Ordering::SeqCst);
+    }
+
+    /// Increase config generation.
+    fn increase_config_generation(&mut self) {
+        self.virtio_base_mut()
+            .config_generation
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Get msix vector of config change interrupt.

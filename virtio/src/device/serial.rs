@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
@@ -35,7 +36,7 @@ use crate::{
 use address_space::{AddressAttr, AddressSpace};
 use chardev_backend::chardev::{Chardev, ChardevNotifyDevice, ChardevStatus, InputReceiver};
 use machine_manager::{
-    config::{ChardevType, VirtioSerialInfo, VirtioSerialPortCfg, DEFAULT_VIRTQUEUE_SIZE},
+    config::{ChardevType, VirtioSerialInfo, VirtioSerialPortCfg},
     event_loop::EventLoop,
     event_loop::{register_event_helper, unregister_event_helper},
 };
@@ -73,6 +74,11 @@ const VIRTIO_CONSOLE_RESIZE: u16 = 5;
 const VIRTIO_CONSOLE_PORT_OPEN: u16 = 6;
 // Sent by the device to give a tag to the port.
 const VIRTIO_CONSOLE_PORT_NAME: u16 = 7;
+
+const DEFAULT_PORT_QUEUE_SIZE: u16 = 128;
+const DEFAULT_CTRL_QUEUE_SIZE: u16 = 32;
+const CTRL_IN_QUEUE_IDX: usize = 2;
+const CTRL_OUT_QUEUE_IDX: usize = 3;
 
 /// If the driver negotiated the VIRTIO_CONSOLE_F_MULTIPORT, the two control queues are used.
 /// The layout of the control message is VirtioConsoleControl.
@@ -143,6 +149,8 @@ pub struct VirtioSerialState {
     broken: bool,
 }
 
+type SharedSerialPort = Arc<Mutex<SerialPort>>;
+
 /// Virtio serial device structure.
 #[derive(Default)]
 pub struct Serial {
@@ -152,8 +160,8 @@ pub struct Serial {
     config_space: VirtioConsoleConfig,
     /// Max serial ports number.
     pub max_nr_ports: u32,
-    /// Serial port vector for serialport.
-    pub ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
+    /// Serial port hashmap for serialport.
+    pub ports: Arc<Mutex<HashMap<u32, SharedSerialPort>>>,
     /// If the vm is doing memory snapshot.
     migrating: Arc<AtomicBool>,
     /// If there is a queue in processing.
@@ -172,17 +180,21 @@ impl Serial {
         // Each port has 2 queues(receiveq/transmitq).
         // And there exist 2 control queues(control receiveq/control transmitq).
         let queue_num = serial_cfg.max_ports as usize * 2 + 2;
-        let queue_size = DEFAULT_VIRTQUEUE_SIZE;
 
-        Serial {
-            base: VirtioBase::new(VIRTIO_TYPE_CONSOLE, queue_num, queue_size),
+        let mut serial = Serial {
+            base: VirtioBase::new(VIRTIO_TYPE_CONSOLE, queue_num, DEFAULT_PORT_QUEUE_SIZE),
             config_space: VirtioConsoleConfig::new(serial_cfg.max_ports),
             max_nr_ports: serial_cfg.max_ports,
             migrating: Arc::new(AtomicBool::new(false)),
             processing_queue: Arc::new(AtomicBool::new(false)),
             queue_evts: Arc::new(Mutex::new(Vec::new())),
             ..Default::default()
-        }
+        };
+
+        serial.base.queues_config[CTRL_IN_QUEUE_IDX].update_queue_size(DEFAULT_CTRL_QUEUE_SIZE);
+        serial.base.queues_config[CTRL_OUT_QUEUE_IDX].update_queue_size(DEFAULT_CTRL_QUEUE_SIZE);
+
+        serial
     }
 
     fn control_queues_activate(
@@ -196,9 +208,9 @@ impl Serial {
         // queue[2]: control receiveq(host to guest).
         // queue[3]: control transmitq(guest to host).
         let handler = SerialControlHandler {
-            input_queue: queues[2].clone(),
-            output_queue: queues[3].clone(),
-            output_queue_evt: queue_evts[3].clone(),
+            input_queue: queues[CTRL_IN_QUEUE_IDX].clone(),
+            output_queue: queues[CTRL_OUT_QUEUE_IDX].clone(),
+            output_queue_evt: queue_evts[CTRL_OUT_QUEUE_IDX].clone(),
             mem_space,
             interrupt_cb,
             driver_features: self.base.driver_features,
@@ -213,7 +225,7 @@ impl Serial {
             .push(handler.output_queue_evt.clone());
 
         let handler_h = Arc::new(Mutex::new(handler));
-        for port in self.ports.lock().unwrap().iter_mut() {
+        for port in self.ports.lock().unwrap().values() {
             port.lock().unwrap().ctrl_handler = Some(Arc::downgrade(&handler_h.clone()));
         }
         let notifiers = EventNotifierHelper::internal_notifiers(handler_h);
@@ -223,27 +235,22 @@ impl Serial {
     }
 }
 
-pub fn get_max_nr(ports: &Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>) -> u32 {
+pub fn get_max_nr(ports: &Arc<Mutex<HashMap<u32, SharedSerialPort>>>) -> u32 {
     let mut max: u32 = 0;
-    for port in ports.lock().unwrap().iter() {
-        let nr = port.lock().unwrap().nr;
-        if nr > max {
-            max = nr;
+    for nr in ports.lock().unwrap().keys() {
+        if *nr > max {
+            max = *nr;
         }
     }
     max
 }
 
+#[inline]
 pub fn find_port_by_nr(
-    ports: &Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
+    ports: &Arc<Mutex<HashMap<u32, SharedSerialPort>>>,
     nr: u32,
-) -> Option<Arc<Mutex<SerialPort>>> {
-    for port in ports.lock().unwrap().iter() {
-        if port.lock().unwrap().nr == nr {
-            return Some(port.clone());
-        }
-    }
-    None
+) -> Option<SharedSerialPort> {
+    ports.lock().unwrap().get(&nr).cloned()
 }
 
 impl VirtioDevice for Serial {
@@ -333,7 +340,7 @@ impl VirtioDevice for Serial {
     }
 
     fn deactivate(&mut self) -> Result<()> {
-        for port in self.ports.lock().unwrap().iter_mut() {
+        for port in self.ports.lock().unwrap().values() {
             port.lock().unwrap().deactivate();
         }
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
@@ -354,7 +361,7 @@ impl StateTransfer for Serial {
         };
 
         for port in self.ports.lock().unwrap().iter() {
-            let locked_port = port.lock().unwrap();
+            let locked_port = port.1.lock().unwrap();
             state.port_state.push(PortState {
                 nr: locked_port.nr,
                 guest_connected: locked_port.guest_connected,
@@ -447,7 +454,7 @@ pub struct SerialPort {
 }
 
 impl SerialPort {
-    pub fn new(port_cfg: VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Result<Self> {
+    pub fn new(port_cfg: &VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Result<Self> {
         // Console is default host connected. And pty chardev has opened by default in realize()
         // function.
         let is_console = matches!(port_cfg.classtype.as_str(), "virtconsole");
@@ -457,7 +464,7 @@ impl SerialPort {
         }
 
         Ok(SerialPort {
-            name: Some(port_cfg.id),
+            name: Some(port_cfg.id.clone()),
             paused: false,
             chardev: Arc::new(Mutex::new(Chardev::new(chardev_cfg)?)),
             nr: port_cfg.nr.unwrap(),
@@ -509,7 +516,7 @@ struct SerialPortHandler {
     driver_features: u64,
     /// Virtio serial device is broken or not.
     device_broken: Arc<AtomicBool>,
-    port: Option<Arc<Mutex<SerialPort>>>,
+    port: Option<SharedSerialPort>,
     nr: u32,
     /// If the vm is doing memory snapshot.
     migrating: Arc<AtomicBool>,
@@ -527,7 +534,7 @@ struct SerialControlHandler {
     driver_features: u64,
     /// Virtio serial device is broken or not.
     device_broken: Arc<AtomicBool>,
-    ports: Arc<Mutex<Vec<Arc<Mutex<SerialPort>>>>>,
+    ports: Arc<Mutex<HashMap<u32, SharedSerialPort>>>,
     /// If the vm is doing memory snapshot.
     migrating: Arc<AtomicBool>,
     /// If there is a queue in processing.
@@ -912,7 +919,7 @@ impl SerialControlHandler {
 
             let cloned_ports = self.ports.clone();
             let mut locked_ports = cloned_ports.lock().unwrap();
-            for port in locked_ports.iter_mut() {
+            for (_, port) in locked_ports.iter_mut() {
                 self.send_control_event(port.lock().unwrap().nr, VIRTIO_CONSOLE_PORT_ADD, 1);
             }
             return;
