@@ -141,6 +141,8 @@ use virtio::{
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
+#[cfg(feature = "virtio_pmem")]
+use virtio::{Pmem, PmemState, VirtioPmemDevConfig};
 #[cfg(feature = "virtio_rng")]
 use virtio::{Rng, RngConfig, RngState};
 
@@ -818,6 +820,56 @@ pub trait MachineOps: MachineLifecycle {
                     .with_context(|| "Failed to add pci mem device")?;
             }
         }
+        Ok(())
+    }
+
+    /// Add virtio pmem device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_pmem")]
+    fn add_virtio_pmem(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let option = VirtioPmemDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let memoption = vm_config
+            .object
+            .mem_object
+            .remove(&option.memdev)
+            .with_context(|| {
+                format!(
+                    "Object for memory-backend-* {} config not found",
+                    option.memdev
+                )
+            })?;
+
+        let max_size = vm_config.machine_config.mem_config.max_size;
+        let pmem = Arc::new(Mutex::new(Pmem::new(option.clone(), memoption, max_size)));
+        match option.classtype.as_str() {
+            "virtio-pmem-device" => {
+                check_arg_nonexist!(
+                    ("bus", option.bus),
+                    ("addr", option.addr),
+                    ("multifunction", option.multifunction)
+                );
+                let device = self
+                    .add_virtio_mmio_device(option.id.clone(), pmem.clone())
+                    .with_context(|| "Failed to add virtio mmio pmem device")?;
+                MigrationManager::register_transport_instance(
+                    VirtioMmioState::descriptor(),
+                    device,
+                    &option.id,
+                );
+            }
+            _ => {
+                check_arg_exist!(("bus", option.bus), ("addr", option.addr));
+                let bdf = PciBdf::new(option.bus.clone().unwrap(), option.addr.unwrap());
+                let multi_func = option.multifunction.unwrap_or_default();
+                self.add_virtio_pci_device(&option.id, &bdf, pmem.clone(), multi_func, false)
+                    .with_context(|| "Failed to add virtio pci pmem device")?;
+            }
+        }
+        MigrationManager::register_device_instance(PmemState::descriptor(), pmem, &option.id);
         Ok(())
     }
 
@@ -2210,6 +2262,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
+                #[cfg(feature = "virtio_pmem")]
+                ("virtio-pmem-device" | "virtio-pmem-pci", add_virtio_pmem, vm_config, cfg_args),
                 #[cfg(feature = "vfio_device")]
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]

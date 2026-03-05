@@ -18,6 +18,8 @@ pub mod input;
 pub mod memory;
 pub mod multitouch;
 pub mod net;
+#[cfg(feature = "virtio_pmem")]
+pub mod pmem;
 #[cfg(feature = "virtio_rng")]
 pub mod rng;
 #[cfg(feature = "virtio_scsi")]
