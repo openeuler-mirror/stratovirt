@@ -28,7 +28,6 @@ use acpi::{
     IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
-use boot_loader::{load_linux, BootLoaderConfig};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::acpi::cpu_controller::{CpuConfig, CpuController};
 use devices::acpi::ged::{Ged, GedEvent};
@@ -172,6 +171,26 @@ impl StdMachine {
             .reset_fwcfg_boot_order()
             .with_context(|| "Fail to update boot order information to FwCfg device")?;
 
+        // Must reload boot resource for direct kernel boot.
+        if locked_vm.get_fwcfg_dev().is_none() {
+            // MEM_LAYOUT is defined statically, will not overflow.
+            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
+            let gap_range = (gap_start, gap_end - gap_start);
+            let ioapic_addr = MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32;
+            let lapic_addr = MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32;
+            let ident_tss_range = Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]);
+            locked_vm.load_boot_source(
+                None,
+                gap_range,
+                ioapic_addr,
+                lapic_addr,
+                ident_tss_range,
+            )?;
+        }
+
         if QmpChannel::is_connected() {
             let reset_msg = qmp_schema::Reset { guest: true };
             event!(Reset; reset_msg);
@@ -286,6 +305,10 @@ impl StdMachineOps for StdMachine {
         nr_cpus: u8,
         max_cpus: u8,
     ) -> Result<Option<Arc<Mutex<dyn FwCfgOps>>>> {
+        if self.base.vm_config.lock().unwrap().pflashs.is_none() {
+            return Ok(None);
+        }
+
         let mut fwcfg = FwCfgIO::new(self.base.sys_mem.clone(), &self.base.sysbus)?;
         fwcfg.add_data_entry(FwCfgEntryType::NbCpus, nr_cpus.as_bytes().to_vec())?;
         fwcfg.add_data_entry(FwCfgEntryType::MaxCpus, max_cpus.as_bytes().to_vec())?;
@@ -428,38 +451,6 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
-    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
-        let boot_source = self.base.boot_source.lock().unwrap();
-        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
-
-        // MEM_LAYOUT is defined statically, will not overflow.
-        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-        let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-        let bootloader_config = BootLoaderConfig {
-            kernel: boot_source.kernel_file.clone(),
-            initrd,
-            kernel_cmdline: boot_source.kernel_cmdline.to_string(),
-            cpu_count: self.base.cpu_topo.nrcpus,
-            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
-            gap_range: (gap_start, gap_end - gap_start),
-            ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
-            lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
-            ident_tss_range: Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]),
-            prot64_mode: false,
-        };
-        let layout = load_linux(&bootloader_config, &self.base.sys_mem, fwcfg)
-            .with_context(|| MachineError::LoadKernErr)?;
-
-        Ok(CPUBootConfig {
-            prot64_mode: false,
-            boot_ip: layout.boot_ip,
-            boot_sp: layout.boot_sp,
-            boot_selector: layout.boot_selector,
-            ..Default::default()
-        })
-    }
-
     fn add_rtc_device(&mut self, mem_size: u64) -> Result<()> {
         let mut rtc = RTC::new(&self.base.sysbus).with_context(|| "Failed to create RTC device")?;
         rtc.set_memory(
@@ -530,7 +521,22 @@ impl MachineOps for StdMachine {
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
         let migrate = locked_vm.get_migrate_info();
         let boot_config = if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
-            Some(locked_vm.load_boot_source(fwcfg.as_ref())?)
+            // MEM_LAYOUT is defined statically, will not overflow.
+            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
+            let gap_range = (gap_start, gap_end - gap_start);
+            let ioapic_addr = MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32;
+            let lapic_addr = MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32;
+            let ident_tss_range = Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]);
+            Some(locked_vm.load_boot_source(
+                fwcfg.as_ref(),
+                gap_range,
+                ioapic_addr,
+                lapic_addr,
+                ident_tss_range,
+            )?)
         } else {
             None
         };
@@ -557,6 +563,7 @@ impl MachineOps for StdMachine {
             locked_vm
                 .build_acpi_tables(&fw_cfg)
                 .with_context(|| "Failed to create ACPI tables")?;
+
             let mut mem_array = Vec::new();
             let mem_size = vm_config.machine_config.mem_config.mem_size;
             let below_size =
@@ -571,7 +578,6 @@ impl MachineOps for StdMachine {
                     mem_size - below_size,
                 ));
             }
-
             locked_vm
                 .build_smbios(&fw_cfg, mem_array)
                 .with_context(|| "Failed to create smbios tables")?;
