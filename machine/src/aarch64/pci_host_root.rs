@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use devices::pci::config::{
-    PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCI_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
+    PciConfig, CLASS_CODE_HOST_BRIDGE, DEVICE_ID, PCIE_CONFIG_SPACE_SIZE, PCI_VENDOR_ID_REDHAT,
     REVISION_ID, SUB_CLASS_CODE, VENDOR_ID,
 };
 use devices::pci::{le_write_u16, PciDevBase, PciDevOps, PciState};
@@ -37,7 +37,7 @@ impl PciHostRoot {
         Self {
             base: PciDevBase {
                 base: DeviceBase::new("PCI Host Root".to_string(), false, Some(parent_bus)),
-                config: PciConfig::new(0, PCI_CONFIG_SPACE_SIZE, 0),
+                config: PciConfig::new(0, PCIE_CONFIG_SPACE_SIZE, 0),
                 devfn: 0,
                 bme: Arc::new(AtomicBool::new(false)),
             },
