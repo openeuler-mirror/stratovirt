@@ -649,21 +649,20 @@ fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
 }
 
 pub fn dup_fd(fd: RawFd) -> RawFd {
-    // SAFETY: It doesn't matter if fd is valid.
-    // Event though it's invalid, dup syscall can return err.
-    let new_fd = unsafe { libc::dup(fd) };
-    if new_fd == -1 {
-        error!(
-            "Failed to duplicate fd {}, err {:?}",
-            fd,
-            std::io::Error::last_os_error()
-        );
-        // Directly return the old fd. There would be badfd error
-        // occurred while handling disconnection,
-        // but it doesn't matter.
-        return fd;
+    // SAFETY: The caller may pass an invalid fd. We attempt to duplicate it
+    // and return either the duplicated fd or the original fd on failure.
+    // Prefer an atomic dup+close-on-exec where available to avoid a race.
+    let new_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if new_fd != -1 {
+        return new_fd;
     }
-    new_fd
+
+    let err = std::io::Error::last_os_error();
+    error!(
+        "Failed to fcntl(F_DUPFD_CLOEXEC) for fd {}: {:?}. Returning original fd.",
+        fd, err
+    );
+    return fd;
 }
 
 /// Migration
