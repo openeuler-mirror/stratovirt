@@ -33,3 +33,8 @@ pub fn obj_checksum<T: ByteCode>(t: &T) -> u8 {
 
     (sum & 0xff) as u8
 }
+
+/// Generate checksum for acpi and smbios.
+pub fn generate_checksum(data: &[u8]) -> u8 {
+    (255 - data.iter().fold(0u8, |acc, x| acc.wrapping_add(*x))).wrapping_add(1)
+}

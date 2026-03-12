@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use super::{
-    X86BootLoaderConfig, EBDA_START, MB_BIOS_BEGIN, REAL_MODE_IVT_BEGIN, VGA_RAM_BEGIN,
+    X86BootLoaderConfig, EBDA_START, REAL_MODE_IVT_BEGIN, RSDP_BEGIN, VGA_RAM_BEGIN,
     VMLINUX_RAM_START,
 };
 use crate::error::BootLoaderError;
@@ -138,7 +138,8 @@ pub struct BootParams {
     pad1: u32,
     tboot_addr: [u8; 0x8],
     ist_info: [u8; 0x10],
-    pad2: [u8; 0x10],
+    pub rsdp_address: u64,
+    pad2: [u8; 0x8],
     hd0_info: [u8; 0x10],
     hd1_info: [u8; 0x10],
     sys_desc_table: [u8; 0x10],
@@ -201,7 +202,7 @@ impl BootParams {
             E820_RAM,
         );
         self.add_e820_entry(EBDA_START, VGA_RAM_BEGIN - EBDA_START, E820_RESERVED);
-        self.add_e820_entry(MB_BIOS_BEGIN, 0, E820_RESERVED);
+        self.add_e820_entry(RSDP_BEGIN, VMLINUX_RAM_START - RSDP_BEGIN, E820_RESERVED);
 
         let high_memory_start = VMLINUX_RAM_START;
         let layout_32bit_gap_end = config.gap_range.0 + config.gap_range.1;
@@ -279,8 +280,8 @@ mod test {
         assert!(boot_params.e820_table[1].size == 0x400);
         assert!(boot_params.e820_table[1].type_ == 2);
 
-        assert!(boot_params.e820_table[2].addr == 0x000F_0000);
-        assert!(boot_params.e820_table[2].size == 0);
+        assert!(boot_params.e820_table[2].addr == 0x000D_0000);
+        assert!(boot_params.e820_table[2].size == 0x0003_0000);
         assert!(boot_params.e820_table[2].type_ == 2);
 
         assert!(boot_params.e820_table[3].addr == 0x0010_0000);

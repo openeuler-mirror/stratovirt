@@ -184,6 +184,7 @@ impl StdMachine {
             let ident_tss_range = Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]);
             locked_vm.load_boot_source(
                 None,
+                true,
                 gap_range,
                 ioapic_addr,
                 lapic_addr,
@@ -532,6 +533,8 @@ impl MachineOps for StdMachine {
             let ident_tss_range = Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]);
             Some(locked_vm.load_boot_source(
                 fwcfg.as_ref(),
+                // If no fwcfg, will load ACPI to memory.
+                fwcfg.is_none(),
                 gap_range,
                 ioapic_addr,
                 lapic_addr,
@@ -559,29 +562,27 @@ impl MachineOps for StdMachine {
             locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
         }
 
-        if let Some(fw_cfg) = fwcfg {
-            locked_vm
-                .build_acpi_tables(&fw_cfg)
-                .with_context(|| "Failed to create ACPI tables")?;
-
-            let mut mem_array = Vec::new();
-            let mem_size = vm_config.machine_config.mem_config.mem_size;
-            let below_size =
-                std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
+        let mut mem_array = Vec::new();
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        let below_size =
+            std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
+        mem_array.push((
+            MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+            below_size,
+        ));
+        if mem_size > below_size {
             mem_array.push((
-                MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
-                below_size,
+                MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                mem_size - below_size,
             ));
-            if mem_size > below_size {
-                mem_array.push((
-                    MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
-                    mem_size - below_size,
-                ));
-            }
-            locked_vm
-                .build_smbios(&fw_cfg, mem_array)
-                .with_context(|| "Failed to create smbios tables")?;
         }
+        locked_vm
+            .build_smbios(fwcfg.as_ref(), mem_array)
+            .with_context(|| "Failed to build SMBIOS")?;
+
+        locked_vm
+            .build_acpi_tables(fwcfg.as_ref())
+            .with_context(|| "Failed to build ACPI tables")?;
 
         locked_vm
             .reset_fwcfg_boot_order()
@@ -790,7 +791,7 @@ impl AcpiBuilder for StdMachine {
         package.append_child(AmlInteger(0));
         dsdt.append_child(AmlNameDecl::new("_S5", package).aml_bytes().as_slice());
 
-        let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
+        let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut dsdt)
             .with_context(|| "Fail to add DSTD table to loader")?;
         Ok(dsdt_begin)
     }
@@ -839,7 +840,7 @@ impl AcpiBuilder for StdMachine {
             madt.append_child(&lapic.aml_bytes());
         }
 
-        let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
+        let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut madt)
             .with_context(|| "Fail to add MADT table to loader")?;
         Ok(madt_begin)
     }
@@ -955,7 +956,7 @@ impl AcpiBuilder for StdMachine {
             next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
         }
 
-        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
+        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut srat)
             .with_context(|| "Fail to add SRAT table to loader")?;
         Ok(srat_begin)
     }

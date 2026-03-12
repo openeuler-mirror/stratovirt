@@ -635,18 +635,16 @@ impl MachineOps for StdMachine {
                 .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
         }
 
-        // If it is direct kernel boot mode, the ACPI can not be enabled.
-        if let Some(fw_cfg) = fwcfg {
-            let mut mem_array = Vec::new();
-            let mem_size = vm_config.machine_config.mem_config.mem_size;
-            mem_array.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
-            locked_vm
-                .build_acpi_tables(&fw_cfg)
-                .with_context(|| "Failed to create ACPI tables")?;
-            locked_vm
-                .build_smbios(&fw_cfg, mem_array)
-                .with_context(|| "Failed to create smbios tables")?;
-        }
+        let mut mem_array = Vec::new();
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        mem_array.push((MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size));
+        locked_vm
+            .build_smbios(fwcfg.as_ref(), mem_array.clone())
+            .with_context(|| "Failed to build SMBIOS data")?;
+
+        locked_vm
+            .build_acpi_tables(fwcfg.as_ref())
+            .with_context(|| "Failed to build ACPI tables")?;
 
         locked_vm
             .reset_fwcfg_boot_order()
@@ -842,7 +840,7 @@ impl AcpiBuilder for StdMachine {
         // Counter read block physical address
         gtdt.set_field(80, 0xFFFF_FFFF_FFFF_FFFF_u64);
 
-        let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &gtdt)
+        let gtdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut gtdt)
             .with_context(|| "Fail to add GTDT table to loader")?;
         Ok(gtdt_begin)
     }
@@ -925,7 +923,7 @@ impl AcpiBuilder for StdMachine {
         }
         dbg2.set_field(offset, 0_u8);
 
-        let dbg2_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dbg2)
+        let dbg2_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut dbg2)
             .with_context(|| "Fail to add DBG2 table to loader")?;
         Ok(dbg2_begin)
     }
@@ -976,7 +974,7 @@ impl AcpiBuilder for StdMachine {
         // Without SMMU, id mapping is the first node in ITS group node
         iort.set_field(120, 48_u32);
 
-        let iort_begin = StdMachine::add_table_to_loader(acpi_data, loader, &iort)
+        let iort_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut iort)
             .with_context(|| "Fail to add IORT table to loader")?;
         Ok(iort_begin)
     }
@@ -1021,7 +1019,7 @@ impl AcpiBuilder for StdMachine {
         // PCI Vendor ID: it is not a PCI device
         spcr.set_field(66, 0xffff_u16);
 
-        let spcr_begin = StdMachine::add_table_to_loader(acpi_data, loader, &spcr)
+        let spcr_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut spcr)
             .with_context(|| "Fail to add SPCR table to loader")?;
         Ok(spcr_begin)
     }
@@ -1053,7 +1051,7 @@ impl AcpiBuilder for StdMachine {
         // 3. Info of devices attached to system bus.
         dsdt.append_child(self.base.sysbus.lock().unwrap().aml_bytes().as_slice());
 
-        let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &dsdt)
+        let dsdt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut dsdt)
             .with_context(|| "Fail to add DSDT table to loader")?;
         Ok(dsdt_begin)
     }
@@ -1116,7 +1114,7 @@ impl AcpiBuilder for StdMachine {
         gic_its.base_addr = MEM_LAYOUT[LayoutEntryType::GicIts as usize].0;
         madt.append_child(&gic_its.aml_bytes());
 
-        let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &madt)
+        let madt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut madt)
             .with_context(|| "Fail to add MADT table to loader")?;
         Ok(madt_begin)
     }
@@ -1177,7 +1175,7 @@ impl AcpiBuilder for StdMachine {
             next_base = self.build_srat_mem(next_base, *id, node, &mut srat);
         }
 
-        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &srat)
+        let srat_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut srat)
             .with_context(|| "Fail to add SRAT table to loader")?;
         Ok(srat_begin)
     }
@@ -1190,7 +1188,7 @@ impl AcpiBuilder for StdMachine {
         let mut pptt = AcpiTable::new(*b"PPTT", 2, *b"STRATO", *b"VIRTPPTT", 1);
         let mut uid = 0_u32;
         self.build_pptt_sockets(&mut pptt, &mut uid);
-        let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &pptt)
+        let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut pptt)
             .with_context(|| "Fail to add PPTT table to loader")?;
         Ok(pptt_begin)
     }

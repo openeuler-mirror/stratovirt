@@ -151,7 +151,15 @@ impl MachineOps for LightMachine {
             let gap_range = (gap_start, gap_end - gap_start);
             let ioapic_addr = MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32;
             let lapic_addr = MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32;
-            Some(locked_vm.load_boot_source(None, gap_range, ioapic_addr, lapic_addr, None)?)
+            Some(locked_vm.load_boot_source(
+                None,
+                // No ACPI for LightMachine.
+                false,
+                gap_range,
+                ioapic_addr,
+                lapic_addr,
+                None,
+            )?)
         } else {
             None
         };

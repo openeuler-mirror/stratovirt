@@ -12,6 +12,7 @@
 
 use super::aml_compiler::AmlBuilder;
 use util::byte_code::ByteCode;
+use util::checksum::generate_checksum;
 
 /// Offset of checksum field in ACPI table.
 pub const TABLE_CHECKSUM_OFFSET: u32 = 9;
@@ -171,6 +172,12 @@ impl AcpiTable {
 
         let table_len = self.entries.len() as u32;
         self.entries[4..=7].copy_from_slice(table_len.as_bytes());
+    }
+
+    pub fn update_checksum(&mut self) {
+        self.entries[TABLE_CHECKSUM_OFFSET as usize] = 0;
+        let checksum = generate_checksum(&self.entries);
+        self.entries[TABLE_CHECKSUM_OFFSET as usize] = checksum;
     }
 }
 
@@ -356,6 +363,17 @@ impl AcpiRsdp {
             extended_checksum: 0,
             reserved: [0_u8; 3],
         }
+    }
+
+    pub fn set_xsdt_addr(&mut self, addr: u64) {
+        self.xsdt_tlb_addr = addr;
+    }
+
+    pub fn update_checksum(&mut self) {
+        self.checksum = 0;
+        self.extended_checksum = 0;
+        self.checksum = generate_checksum(&self.as_bytes()[..20]);
+        self.extended_checksum = generate_checksum(self.as_bytes());
     }
 }
 
