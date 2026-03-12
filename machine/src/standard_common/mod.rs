@@ -22,6 +22,8 @@ use std::string::String;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
+#[cfg(target_arch = "x86_64")]
+use boot_loader::{load_acpi_to_memory, ARCH_RSDP_BEGIN};
 use log::{error, warn};
 use serde_json::json;
 use util::{any_typecast_mut, set_termi_canon_mode};
@@ -130,16 +132,22 @@ pub struct StdMachine {
 pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn init_pci_host(&self) -> Result<()>;
 
-    /// Build all ACPI tables and RSDP, and add them to FwCfg as file entries.
+    /// Build all ACPI tables and RSDP, link to fwcfg or write to memory.
     ///
     /// # Arguments
     ///
-    /// `fw_cfg` - FwCfgOps trait object.
-    fn build_acpi_tables(&self, fw_cfg: &Arc<Mutex<dyn FwCfgOps>>) -> Result<()>
+    /// `fw_cfg` - Optional fwcfg device.
+    fn build_acpi_tables(&self, fw_cfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<()>
     where
         Self: Sized,
     {
-        let mut loader = TableLoader::new();
+        // aarch64 does not support ACPI without fwcfg.
+        #[cfg(target_arch = "aarch64")]
+        if fw_cfg.is_none() {
+            return Ok(());
+        }
+
+        let mut loader = TableLoader::new(fw_cfg.is_some());
         let acpi_tables = Arc::new(Mutex::new(Vec::new()));
         loader.add_alloc_entry(ACPI_TABLE_FILE, acpi_tables.clone(), 64_u32, false)?;
 
@@ -209,20 +217,27 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
 
         let xsdt_addr = Self::build_xsdt_table(&acpi_tables, &mut loader, xsdt_entries)?;
 
-        let mut locked_fw_cfg = fw_cfg.lock().unwrap();
-        Self::build_rsdp(
-            &mut loader,
-            &mut *locked_fw_cfg as &mut dyn FwCfgOps,
-            xsdt_addr,
-        )
-        .with_context(|| "Failed to build ACPI RSDP")?;
+        let rsdp_data = Self::build_rsdp_data(&mut loader, xsdt_addr)
+            .with_context(|| "Failed to build ACPI RSDP")?;
 
-        locked_fw_cfg
-            .add_file_entry(ACPI_TABLE_LOADER_FILE, loader.cmd_entries())
-            .with_context(|| "Failed to add ACPI table loader file entry")?;
-        locked_fw_cfg
-            .add_file_entry(ACPI_TABLE_FILE, acpi_tables.lock().unwrap().to_vec())
-            .with_context(|| "Failed to add ACPI-tables file entry")?;
+        let acpi_tables = acpi_tables.lock().unwrap().to_vec();
+
+        if let Some(fw_cfg) = fw_cfg {
+            let mut locked_fw_cfg = fw_cfg.lock().unwrap();
+            locked_fw_cfg
+                .add_file_entry(ACPI_RSDP_FILE, rsdp_data)
+                .with_context(|| "Failed to add RSDP file entry")?;
+            locked_fw_cfg
+                .add_file_entry(ACPI_TABLE_LOADER_FILE, loader.cmd_entries())
+                .with_context(|| "Failed to add ACPI table loader file entry")?;
+            locked_fw_cfg
+                .add_file_entry(ACPI_TABLE_FILE, acpi_tables)
+                .with_context(|| "Failed to add ACPI-tables file entry")?;
+        } else {
+            #[cfg(target_arch = "x86_64")]
+            load_acpi_to_memory(&self.machine_base().sys_mem, rsdp_data, acpi_tables)
+                .with_context(|| "Failed to load ACPI to guest memory")?;
+        }
 
         Ok(())
     }
@@ -398,8 +413,13 @@ pub(crate) trait AcpiBuilder {
     fn add_table_to_loader(
         acpi_data: &Arc<Mutex<Vec<u8>>>,
         loader: &mut TableLoader,
-        table: &AcpiTable,
+        table: &mut AcpiTable,
     ) -> Result<u64> {
+        #[cfg(target_arch = "x86_64")]
+        if !loader.works() {
+            table.update_checksum();
+        }
+
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let table_begin = locked_acpi_data.len() as u32;
         locked_acpi_data.extend(table.aml_bytes());
@@ -575,20 +595,9 @@ pub(crate) trait AcpiBuilder {
         // Reserved
         mcfg.append_child(&[0_u8; 4]);
 
-        let mut acpi_data_locked = acpi_data.lock().unwrap();
-        let mcfg_begin = acpi_data_locked.len() as u32;
-        acpi_data_locked.extend(mcfg.aml_bytes());
-        let mcfg_end = acpi_data_locked.len() as u32;
-        drop(acpi_data_locked);
-
-        loader.add_cksum_entry(
-            ACPI_TABLE_FILE,
-            // mcfg_begin is much less than u32::MAX, will not overflow.
-            mcfg_begin + TABLE_CHECKSUM_OFFSET,
-            mcfg_begin,
-            mcfg_end - mcfg_begin,
-        )?;
-        Ok(u64::from(mcfg_begin))
+        let mcfg_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut mcfg)
+            .with_context(|| "Fail to add MCFG table to loader")?;
+        Ok(mcfg_begin)
     }
 
     /// Build ACPI FADT table, returns the offset of ACPI FADT table in `acpi_data`.
@@ -669,6 +678,26 @@ pub(crate) trait AcpiBuilder {
             fadt.set_field(256, 0x01_u8);
             fadt.set_field(257, 0x08_u8);
             fadt.set_field(260, u64::from(SLEEP_CTRL_OFFSET));
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        if !loader.works() {
+            // FACS address field's offset in FADT.
+            let facs_offset = 36_u32;
+            // xDSDT address field's offset in FADT.
+            let xdsdt_offset = 140_u32;
+            let acpi_begin = ARCH_RSDP_BEGIN
+                .checked_add(size_of::<AcpiRsdp>() as u64)
+                .unwrap();
+            fadt.set_field(
+                facs_offset as usize,
+                u32::try_from(facs_addr.checked_add(acpi_begin).unwrap())?,
+            );
+            fadt.set_field(
+                xdsdt_offset as usize,
+                dsdt_addr.checked_add(acpi_begin).unwrap(),
+            );
+            fadt.update_checksum();
         }
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
@@ -817,7 +846,7 @@ pub(crate) trait AcpiBuilder {
             }
         }
 
-        let slit_begin = StdMachine::add_table_to_loader(acpi_data, loader, &slit)
+        let slit_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut slit)
             .with_context(|| "Fail to add SLIT table to loader")?;
         Ok(slit_begin)
     }
@@ -841,6 +870,26 @@ pub(crate) trait AcpiBuilder {
 
         // usize is enough for storing table len.
         xsdt.set_table_len(xsdt.table_len() + size_of::<u64>() * xsdt_entries.len());
+
+        #[cfg(target_arch = "x86_64")]
+        if !loader.works() {
+            // Offset of table entries in XSDT.
+            let mut entry_offset = 36_u32;
+            // Size of each entry.
+            let entry_size = size_of::<u64>() as u8;
+            let acpi_begin = ARCH_RSDP_BEGIN
+                .checked_add(size_of::<AcpiRsdp>() as u64)
+                .unwrap();
+            for &entry in &xsdt_entries {
+                xsdt.set_field(
+                    entry_offset as usize,
+                    entry.checked_add(acpi_begin).unwrap(),
+                );
+                // u32 is enough for storing offset.
+                entry_offset += u32::from(entry_size);
+            }
+            xsdt.update_checksum();
+        }
 
         let mut locked_acpi_data = acpi_data.lock().unwrap();
         let xsdt_begin = locked_acpi_data.len() as u32;
@@ -876,18 +925,34 @@ pub(crate) trait AcpiBuilder {
         Ok(u64::from(xsdt_begin))
     }
 
-    /// Build ACPI RSDP and add it to FwCfg as file-entry.
+    /// Build ACPI RSDP and return the data without writing to FwCfg.
     ///
     /// # Arguments
     ///
     /// `loader` - ACPI table loader.
-    /// `fw_cfg`: FwCfgOps trait object.
     /// `xsdt_addr` - Offset of ACPI XSDT table in `acpi_data`.
-    fn build_rsdp(loader: &mut TableLoader, fw_cfg: &mut dyn FwCfgOps, xsdt_addr: u64) -> Result<()>
+    ///
+    /// # Returns
+    ///
+    /// RSDP data as Vec<u8>
+    fn build_rsdp_data(loader: &mut TableLoader, xsdt_addr: u64) -> Result<Vec<u8>>
     where
         Self: Sized,
     {
+        #[cfg(target_arch = "x86_64")]
+        let mut rsdp = AcpiRsdp::new(*b"STRATO");
+        #[cfg(not(target_arch = "x86_64"))]
         let rsdp = AcpiRsdp::new(*b"STRATO");
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let acpi_begin = ARCH_RSDP_BEGIN
+                .checked_add(size_of::<AcpiRsdp>() as u64)
+                .unwrap();
+            rsdp.set_xsdt_addr(xsdt_addr.checked_add(acpi_begin).unwrap());
+            rsdp.update_checksum();
+        }
+
         let rsdp_data = Arc::new(Mutex::new(rsdp.aml_bytes().to_vec()));
 
         loader.add_alloc_entry(ACPI_RSDP_FILE, rsdp_data.clone(), 16, true)?;
@@ -906,10 +971,8 @@ pub(crate) trait AcpiBuilder {
         let exd_cksum_offset = 32_u32;
         loader.add_cksum_entry(ACPI_RSDP_FILE, cksum_offset, 0, 20)?;
         loader.add_cksum_entry(ACPI_RSDP_FILE, exd_cksum_offset, 0, 36)?;
-
-        fw_cfg.add_file_entry(ACPI_RSDP_FILE, rsdp_data.lock().unwrap().to_vec())?;
-
-        Ok(())
+        let data = rsdp_data.lock().unwrap().to_vec();
+        Ok(data)
     }
 }
 
