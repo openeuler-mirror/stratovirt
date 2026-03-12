@@ -128,6 +128,20 @@ impl KvmCpu {
         Ok(())
     }
 
+    pub fn arch_set_pvtime_gpa(&self, base_ipa: u64) -> Result<()> {
+        let gpa = base_ipa + 64 * self.id as u64;
+        let pvtime_attr = kvm_device_attr {
+            group: KVM_ARM_VCPU_PVTIME_CTRL,
+            attr: u64::from(KVM_ARM_VCPU_PVTIME_IPA),
+            addr: &gpa as *const u64 as u64,
+            flags: 0,
+        };
+
+        self.fd
+            .set_device_attr(&pvtime_attr)
+            .with_context(|| "Failed to set pvtime device attr")
+    }
+
     pub fn arch_vcpu_init(&self) -> Result<()> {
         self.fd
             .vcpu_init(&self.kvi.lock().unwrap())

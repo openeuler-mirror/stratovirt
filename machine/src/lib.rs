@@ -55,6 +55,8 @@ use address_space::{
     GuestAddress, Region,
 };
 #[cfg(target_arch = "aarch64")]
+use address_space::{register_ram_region, HostMemMapping};
+#[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
@@ -593,11 +595,46 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `CPUFeatures` - The features of vcpu.
+    /// * `pvtime_reg_base` - The Memory layout base of pvsteal time.
+    /// * `pvtime_reg_size` - The Memory layout size of pvsteal time.
+    /// * `max_cpus` - The max cpu numbers.
     #[cfg(target_arch = "aarch64")]
-    fn cpu_post_init(&self, vcpu_cfg: &CPUFeatures) -> Result<()> {
-        if vcpu_cfg.pmu {
-            for cpu in self.machine_base().cpus.iter() {
+    fn cpu_post_init(
+        &mut self,
+        vcpu_cfg: &CPUFeatures,
+        pvtime_reg_base: u64,
+        pvtime_reg_size: u64,
+        max_cpus: u8,
+    ) -> Result<()> {
+        use cpu::PVTIME_SIZE_PER_CPU;
+
+        if vcpu_cfg.steal_time {
+            let pvtime_size = PVTIME_SIZE_PER_CPU * max_cpus as u64;
+            if pvtime_size > pvtime_reg_size {
+                bail!("pvtime requires a {pvtime_size} for {max_cpus} cpus, but only {pvtime_reg_size} has been reserved");
+            }
+            let host_mmap = Arc::new(HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                pvtime_reg_size,
+                None,
+                false,
+                true,
+                false,
+            )?);
+            let mem_region = Region::init_ram_region(host_mmap.clone(), "pvtime_ram");
+            self.get_sys_mem()
+                .root()
+                .add_subregion(mem_region, pvtime_reg_base)?;
+            register_ram_region("pvtime".to_string(), host_mmap)?;
+        }
+        for cpu in self.machine_base().cpus.iter() {
+            if vcpu_cfg.pmu {
                 cpu.hypervisor_cpu.init_pmu()?;
+            }
+
+            if vcpu_cfg.steal_time {
+                cpu.hypervisor_cpu.init_pvtime(pvtime_reg_base)?
             }
         }
         Ok(())
