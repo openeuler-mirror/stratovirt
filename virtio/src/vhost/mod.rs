@@ -112,6 +112,10 @@ pub trait VhostOps {
     fn set_socket(&self, _sender_fd: &UnixStream) -> Result<()> {
         Ok(())
     }
+
+    fn reset_device(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub struct VhostIoHandler {
