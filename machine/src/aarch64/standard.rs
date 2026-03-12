@@ -90,6 +90,7 @@ pub enum LayoutEntryType {
     FwCfg,
     Ged,
     PowerDev,
+    PvTime,
     Mmio,
     PcieMmio,
     PciePio,
@@ -110,6 +111,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x0902_0000, 0x0000_0018),    // FwCfg
     (0x0908_0000, 0x0000_0004),    // Ged
     (0x0909_0000, 0x0000_1000),    // PowerDev
+    (0x090a_0000, 0x0001_0000),    // Pvsteal Time
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x1000_0000, 0x2EFF_0000),    // PcieMmio
     (0x3EFF_0000, 0x0001_0000),    // PciePio
@@ -586,7 +588,12 @@ impl MachineOps for StdMachine {
         // Interrupt Controller Chip init
         locked_vm.init_interrupt_controller(u64::from(nr_cpus))?;
 
-        locked_vm.cpu_post_init(&cpu_config)?;
+        locked_vm.cpu_post_init(
+            &cpu_config,
+            MEM_LAYOUT[LayoutEntryType::PvTime as usize].0,
+            MEM_LAYOUT[LayoutEntryType::PvTime as usize].1,
+            vm_config.machine_config.max_cpus,
+        )?;
 
         #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
         locked_vm.add_ohui_server(vm_config)?;

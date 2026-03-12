@@ -253,6 +253,8 @@ pub struct CpuConfig {
     pub pmu: PmuConfig,
     #[arg(long, default_value = "off")]
     pub sve: SveConfig,
+    #[arg(long, alias = "kvm-steal-time", default_value = "off")]
+    pub steal_time: StealTimeConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -292,6 +294,27 @@ impl FromStr for SveConfig {
             "off" => Ok(SveConfig::Off),
             _ => Err(anyhow!(
                 "Invalid SVE option, must be one of \"on\" or \"off\"."
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum StealTimeConfig {
+    On,
+    #[default]
+    Off,
+}
+
+impl FromStr for StealTimeConfig {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "on" => Ok(StealTimeConfig::On),
+            "off" => Ok(StealTimeConfig::Off),
+            _ => Err(anyhow!(
+                "Invalid steal time option,must be one of \'on\" or \"off\"."
             )),
         }
     }
