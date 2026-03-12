@@ -58,7 +58,7 @@ use util::pixman::{pixman_format_bpp, pixman_format_code_t, pixman_image_create_
 use crate::vhost::VhostOps;
 use crate::VhostUser::client::{
     VhostBackendType, VhostUserClient, VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ,
-    VHOST_USER_PROTOCOL_F_REPLY_ACK,
+    VHOST_USER_PROTOCOL_F_REPLY_ACK, VHOST_USER_PROTOCOL_F_RESET_DEVICE,
 };
 use crate::VhostUser::listen_guest_notifier;
 use crate::VhostUser::message::{MAX_ATTACHED_FD_ENTRIES, VHOST_USER_F_PROTOCOL_FEATURES};
@@ -263,6 +263,7 @@ impl VirtioDevice for VhostUserGpu {
         }
         let supported_protocol_features = (1 << VHOST_USER_PROTOCOL_F_MQ)
             | (1 << VHOST_USER_PROTOCOL_F_CONFIG)
+            | (1 << VHOST_USER_PROTOCOL_F_RESET_DEVICE)
             | (1 << VHOST_USER_PROTOCOL_F_REPLY_ACK);
         self.protocol_features = supported_protocol_features & protocol_features;
         locked_client
@@ -294,8 +295,7 @@ impl VirtioDevice for VhostUserGpu {
         }
         drop(locked_client);
 
-        self.base.device_features = (1_u64 << VIRTIO_GPU_F_EDID)
-            | (1u64 << VIRTIO_F_VERSION_1)
+        self.base.device_features = (1u64 << VIRTIO_F_VERSION_1)
             | (1u64 << VIRTIO_F_RING_INDIRECT_DESC)
             | (1u64 << VIRTIO_F_RING_EVENT_IDX)
             | (1u64 << VIRTIO_GPU_F_MONOCHROME);
@@ -303,6 +303,10 @@ impl VirtioDevice for VhostUserGpu {
             self.base.device_features |= 1_u64 << VIRTIO_GPU_F_VIRGL;
             // TODO. VIRTIO_GPU_F_RESOURCE_BLOB not support now.
             // self.base.device_features |= (1_u64 << VIRTIO_GPU_F_RESOURCE_BLOB);
+        }
+
+        if self.cfg.edid {
+            self.base.device_features |= 1_u64 << VIRTIO_GPU_F_EDID;
         }
 
         self.base.device_features &= features;
@@ -441,6 +445,14 @@ impl VirtioDevice for VhostUserGpu {
     fn reset(&mut self) -> Result<()> {
         info!("vhost-user-gpu do reset");
         self.enable_irqfd = false;
+        self.client
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .reset_vhost_user(false);
+        let client = self.client.as_ref().unwrap().lock().unwrap();
+        client.reset_device()?;
         Ok(())
     }
 }
