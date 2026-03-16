@@ -431,8 +431,12 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `mem_size` - memory size of VM.
-    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()>;
+    /// * `mem_config` - memory configuration of VM.
+    fn init_machine_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()>;
 
     fn create_machine_ram(&self, mem_config: &MachineMemConfig, thread_num: u8) -> Result<()> {
         let root = self.get_vm_ram();
@@ -477,7 +481,7 @@ pub trait MachineOps: MachineLifecycle {
         let migrate_info = self.get_migrate_info();
         if migrate_info.mode != MigrateMode::File || !migrate_info.mapped {
             self.create_machine_ram(mem_config, nr_cpus)?;
-            self.init_machine_ram(sys_mem, mem_config.mem_size)?;
+            self.init_machine_ram(sys_mem, mem_config)?;
         }
 
         MigrationManager::register_memory_instance(sys_mem.clone());
@@ -792,7 +796,7 @@ pub trait MachineOps: MachineLifecycle {
             })?;
 
         let max_size = vm_config.machine_config.mem_config.max_size;
-        let device = virtio::Memory::new_arc(option.clone(), memoption, max_size)?;
+        let device = virtio::Memory::new_arc(option.clone(), memoption)?;
 
         let current_size = device.lock().unwrap().get_region_size()
             + vm_config.machine_config.mem_config.current_size;
@@ -843,8 +847,7 @@ pub trait MachineOps: MachineLifecycle {
                 )
             })?;
 
-        let max_size = vm_config.machine_config.mem_config.max_size;
-        let pmem = Arc::new(Mutex::new(Pmem::new(option.clone(), memoption, max_size)));
+        let pmem = Arc::new(Mutex::new(Pmem::new(option.clone(), memoption)));
         match option.classtype.as_str() {
             "virtio-pmem-device" => {
                 check_arg_nonexist!(
