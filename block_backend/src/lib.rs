@@ -470,17 +470,23 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
             let exit_notifier = Arc::new(move || {
                 if let Some(qcow2) = cloned_qcow2.upgrade() {
                     info!("clean up qcow2 {:?} resources.", cloned_drive_id);
+                    let mut locked_qcow2 = qcow2.lock().unwrap();
                     if drain {
                         info!("Drain the inflight IO for drive \"{}\"", cloned_drive_id);
-                        let incomplete = qcow2.lock().unwrap().get_inflight();
+                        let incomplete = locked_qcow2.get_inflight();
                         while incomplete.load(Ordering::SeqCst) != 0 {
                             yield_now();
                         }
                     }
-                    if let Err(e) = qcow2.lock().unwrap().flush() {
+                    if let Err(e) = locked_qcow2.flush() {
                         error!("Failed to flush qcow2 {:?}", e);
                     }
-                    info!("Flush qcow2 {} metadata success.", cloned_drive_id);
+                    locked_qcow2.driver.flush_data(&cloned_drive_id);
+                    let disk_size = locked_qcow2.driver.disk_size().unwrap_or(0_u64);
+                    info!(
+                        "Flush qcow2 {} metadata success, disk size {}",
+                        cloned_drive_id, disk_size
+                    );
                 }
             }) as Arc<ExitNotifier>;
             TempCleaner::add_exit_notifier(prop.id.clone(), exit_notifier);
