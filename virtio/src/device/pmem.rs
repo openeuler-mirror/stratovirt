@@ -222,15 +222,10 @@ pub struct Pmem {
 }
 
 impl Pmem {
-    pub fn new(config: VirtioPmemDevConfig, memobj: MemBackendObjConfig, max_size: u64) -> Self {
+    pub fn new(config: VirtioPmemDevConfig, memobj: MemBackendObjConfig) -> Self {
         info!("virtio-pmem: new Config {:?}", config);
         let pmem_config = VirtioPmemConfig {
-            start: alloc_base_addr(
-                max_size,
-                config.memaddr,
-                memobj.size,
-                VIRTIO_PMEM_BLOCK_SIZE,
-            ),
+            start: alloc_base_addr(config.memaddr, memobj.size, VIRTIO_PMEM_BLOCK_SIZE),
             _size: memobj.size,
         };
         Self {
