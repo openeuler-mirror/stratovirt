@@ -1352,6 +1352,7 @@ impl VirtioDevice for Block {
         }
         self.update_evts.clear();
         self.senders.clear();
+        self.queue_evts.lock().unwrap().clear();
         Ok(())
     }
 
