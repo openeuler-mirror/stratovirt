@@ -36,6 +36,7 @@ pub enum LayoutEntryType {
     GicRedist,
     Uart,
     Rtc,
+    PvTime,
     Mmio,
     Mem,
     HighGicRedist,
@@ -48,6 +49,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x080A_0000, 0x00F6_0000),    // GicRedist (max 123 redistributors)
     (0x0900_0000, 0x0000_1000),    // Uart
     (0x0901_0000, 0x0000_1000),    // Rtc
+    (0x090a_0000, 0x0001_0000),    // PvTime
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x4000_0000, 0x80_0000_0000), // Mem
     (256 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
@@ -187,7 +189,12 @@ impl MachineOps for LightMachine {
 
         locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
-        locked_vm.cpu_post_init(&cpu_config)?;
+        locked_vm.cpu_post_init(
+            &cpu_config,
+            MEM_LAYOUT[LayoutEntryType::PvTime as usize].0,
+            MEM_LAYOUT[LayoutEntryType::PvTime as usize].1,
+            vm_config.machine_config.max_cpus,
+        )?;
 
         // Add mmio devices
         locked_vm
