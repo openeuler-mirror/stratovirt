@@ -61,7 +61,8 @@ use machine_manager::config::str_slip_to_clap;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    BootIndexInfo, DriveConfig, MigrateMode, NumaNode, Param, SerialConfig, VmConfig,
+    BootIndexInfo, DriveConfig, MachineMemConfig, MigrateMode, NumaNode, Param, SerialConfig,
+    VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{MachineLifecycle, VmState};
@@ -402,19 +403,32 @@ impl StdMachineOps for StdMachine {
 impl MachineOps for StdMachine {
     gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
-    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+    fn init_machine_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()> {
         let vm_ram = self.get_vm_ram();
 
         let layout_size = MEM_LAYOUT[LayoutEntryType::Mem as usize].1;
         let ram = Region::init_alias_region(
             vm_ram.clone(),
             0,
-            std::cmp::min(layout_size, mem_size),
+            std::cmp::min(layout_size, mem_config.mem_size),
             "pc_ram",
         );
         sys_mem
             .root()
-            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
+            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+
+        let plug_base = MEM_LAYOUT[LayoutEntryType::Mem as usize]
+            .0
+            .checked_add(mem_config.mem_size)
+            .unwrap();
+        virtio::PLUG_ADDR_BASE
+            .set(plug_base)
+            .expect("Failed to init memory plug base address");
+        Ok(())
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {

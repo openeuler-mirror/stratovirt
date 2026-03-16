@@ -43,7 +43,7 @@ use hypervisor::kvm::*;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    BootIndexInfo, DriveConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
+    BootIndexInfo, DriveConfig, MachineMemConfig, MigrateMode, NumaNode, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::VmState;
@@ -373,14 +373,18 @@ impl StdMachineOps for StdMachine {
 impl MachineOps for StdMachine {
     gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
-    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+    fn init_machine_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()> {
         let ram = self.get_vm_ram();
         let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
 
         let below4g_ram = Region::init_alias_region(
             ram.clone(),
             0,
-            std::cmp::min(below4g_size, mem_size),
+            std::cmp::min(below4g_size, mem_config.mem_size),
             "below4g_ram",
         );
         sys_mem.root().add_subregion(
@@ -388,16 +392,25 @@ impl MachineOps for StdMachine {
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
         )?;
 
-        if mem_size > below4g_size {
+        if mem_config.mem_size > below4g_size {
             let above4g_ram = Region::init_alias_region(
                 ram.clone(),
                 below4g_size,
-                mem_size - below4g_size,
+                mem_config.mem_size - below4g_size,
                 "above4g_ram",
             );
             let above4g_start = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
             sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
+
+        let mut plug_base = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        if mem_config.mem_size > below4g_size {
+            let above4g_size = mem_config.mem_size - below4g_size;
+            plug_base = plug_base.checked_add(above4g_size).unwrap();
+        }
+        virtio::PLUG_ADDR_BASE
+            .set(plug_base)
+            .expect("Failed to init memory plug base address");
         Ok(())
     }
 

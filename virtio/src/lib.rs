@@ -951,6 +951,7 @@ pub fn virtio_register_pcidevops_type() -> Result<()> {
 }
 
 pub static DEFAULT_PLUGGABLE_ADDR_BASE: OnceLock<Arc<Mutex<PluggableAddrBase>>> = OnceLock::new();
+pub static PLUG_ADDR_BASE: OnceLock<u64> = OnceLock::new();
 pub const INVALID_ADDR: u64 = 0;
 
 #[derive(Copy, Clone, Default)]
@@ -959,19 +960,27 @@ pub struct PluggableAddrBase {
     auto_alloc: bool,
 }
 
-pub fn alloc_base_addr(
-    max_size: u64,
-    maddr_cfg: Option<u64>,
-    region_size: u64,
-    block_size: u64,
-) -> u64 {
+pub fn alloc_base_addr(maddr_cfg: Option<u64>, region_size: u64, block_size: u64) -> u64 {
+    let addr_base = match PLUG_ADDR_BASE.get() {
+        Some(&addr) => addr,
+        None => {
+            error!("pluggable address base is not initialized");
+            return INVALID_ADDR;
+        }
+    };
+    if block_size == 0 {
+        error!("block size must not be zero");
+        return INVALID_ADDR;
+    }
+
     let auto_alloc = maddr_cfg.is_none();
     let pluggable = DEFAULT_PLUGGABLE_ADDR_BASE.get_or_init(|| {
         Arc::new(Mutex::new(PluggableAddrBase {
-            addr: max_size,
+            addr: addr_base,
             auto_alloc,
         }))
     });
+
     let mut locked_pluggable = pluggable.lock().unwrap();
     if auto_alloc != locked_pluggable.auto_alloc {
         error!("inconsistent maddr configuration options");

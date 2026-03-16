@@ -652,7 +652,7 @@ pub struct Memory {
 }
 
 impl Memory {
-    fn new_internal(option: MemoryConfig, memobj: MemBackendObjConfig, max_size: u64) -> Self {
+    fn new_internal(option: MemoryConfig, memobj: MemBackendObjConfig) -> Self {
         info!("virtio-mem: new MemoryConfig {:?}", option);
         let mut mem = Self {
             base: VirtioBase::new(VIRTIO_TYPE_MEM, QUEUE_NUM_MEM, DEFAULT_VIRTQUEUE_SIZE),
@@ -673,12 +673,7 @@ impl Memory {
             None => DEFAULT_MEM_BLOCK_SIZE,
         };
         config.region_size = mem.backend.lock().unwrap().size;
-        config.addr = alloc_base_addr(
-            max_size,
-            option.memaddr,
-            config.region_size,
-            config.block_size,
-        );
+        config.addr = alloc_base_addr(option.memaddr, config.region_size, config.block_size);
         config.usable_region_size = config.region_size;
         config.node_id = match option.node {
             Some(node) => {
@@ -699,12 +694,8 @@ impl Memory {
         mem
     }
 
-    pub fn new_arc(
-        option: MemoryConfig,
-        memobj: MemBackendObjConfig,
-        max_size: u64,
-    ) -> Result<Arc<Mutex<Self>>> {
-        let mem = Self::new_internal(option, memobj, max_size);
+    pub fn new_arc(option: MemoryConfig, memobj: MemBackendObjConfig) -> Result<Arc<Mutex<Self>>> {
+        let mem = Self::new_internal(option, memobj);
         let id = mem.id.clone();
         let mem_arc = Arc::new(Mutex::new(mem));
         register_viomem_device(id, mem_arc.clone())?;

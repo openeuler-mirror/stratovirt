@@ -22,7 +22,7 @@ use devices::legacy::{FwCfgOps, Serial, SERIAL_ADDR};
 use devices::Device;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
-use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
+use machine_manager::config::{MachineMemConfig, MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::gen_base_func;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
@@ -50,13 +50,17 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
 impl MachineOps for LightMachine {
     gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
-    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+    fn init_machine_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()> {
         let vm_ram = self.get_vm_ram();
         let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
         let below4g_ram = Region::init_alias_region(
             vm_ram.clone(),
             0,
-            std::cmp::min(below4g_size, mem_size),
+            std::cmp::min(below4g_size, mem_config.mem_size),
             "below4g_ram",
         );
         sys_mem.root().add_subregion(
@@ -64,17 +68,25 @@ impl MachineOps for LightMachine {
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
         )?;
 
-        if mem_size > below4g_size {
+        if mem_config.mem_size > below4g_size {
             let above4g_ram = Region::init_alias_region(
                 vm_ram.clone(),
                 below4g_size,
-                mem_size - below4g_size,
+                mem_config.mem_size - below4g_size,
                 "above4g_ram",
             );
             let above4g_start = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
             sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
 
+        let mut plug_base = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        if mem_config.mem_size > below4g_size {
+            let above4g_size = mem_config.mem_size - below4g_size;
+            plug_base = plug_base.checked_add(above4g_size).unwrap();
+        }
+        virtio::PLUG_ADDR_BASE
+            .set(plug_base)
+            .expect("Failed to init memory plug base address");
         Ok(())
     }
 
