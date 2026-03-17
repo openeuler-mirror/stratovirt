@@ -133,7 +133,11 @@ impl Multitouch {
                     .to_raw();
             }
             MultitouchType::Pad => {
-                key_bits.set_bit(BTN_LEFT as usize);
+                key_bits
+                    .set_bit(BTN_LEFT as usize)
+                    .set_bit(BTN_TOOL_FINGER as usize)
+                    .set_bit(BTN_TOOL_DOUBLETAP as usize)
+                    .set_bit(BTN_TOOL_TRIPLETAP as usize);
                 let msc_bits = *EvdevBuf::new().set_bit(MSC_TIMESTAMP as usize);
                 evdev_cfg.event_supported = EvdevBufHelper::new()
                     .push(EV_ABS, abs_bits)
