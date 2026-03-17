@@ -39,6 +39,9 @@ pub struct Exec {
     /// Specify the file to write the process pid to
     #[arg(long)]
     pub pid_file: Option<PathBuf>,
+    /// The user who executes commands within the container (format: uid:gid)
+    #[arg(long, value_parser = parse_user)]
+    pub user: Option<(u32, u32)>,
     /// Specify environment variables
     #[arg(short, long, value_parser = parse_key_val::<String, String>, number_of_values = 1)]
     pub env: Vec<(String, String)>,
@@ -51,6 +54,19 @@ pub struct Exec {
     /// Specify the command to execute in the container
     #[arg(required = false)]
     pub command: Vec<String>,
+}
+
+fn parse_user(s: &str) -> Result<(u32, u32)> {
+    let (uid_str, gid_str) = s
+        .split_once(":")
+        .with_context(|| format!("Invalid user {}. Format: --user uid:gid", s))?;
+    let uid = uid_str
+        .parse::<u32>()
+        .with_context(|| format!("Invalid uid: {}", uid_str))?;
+    let gid = gid_str
+        .parse::<u32>()
+        .with_context(|| format!("Invalid gid: {}", gid_str))?;
+    Ok((uid, gid))
 }
 
 fn parse_key_val<T, U>(s: &str) -> Result<(T, U)>
@@ -89,6 +105,12 @@ impl Exec {
             }
             config.process.noNewPrivileges = Some(self.no_new_privs);
             config.process.args = Some(self.command.clone());
+
+            // Override the user, if passed.
+            if let Some((uid, gid)) = self.user {
+                config.process.user.uid = uid;
+                config.process.user.gid = gid;
+            }
         }
 
         let container = LinuxContainer::load_from_state(&container_state, &self.console_socket)?;
@@ -124,5 +146,37 @@ mod tests {
         assert_eq!(value, "info");
 
         assert!(parse_key_val::<String, String>("OZONEC_LOG_LEVEL").is_err());
+    }
+
+    #[test]
+    fn test_parse_user() {
+        let res = parse_user("1000:2000").unwrap();
+        assert_eq!(res, (1000, 2000));
+        let res = parse_user("0:0").unwrap();
+        assert_eq!(res, (0, 0));
+        // u32::MAX.
+        let res = parse_user("4294967295:4294967295").unwrap();
+        assert_eq!(res, (u32::MAX, u32::MAX));
+
+        let res = parse_user("1000");
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Format: --user uid:gid"));
+
+        let res = parse_user("abc:2000");
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("Invalid uid: abc"));
+
+        let res = parse_user("1000:xyz");
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("Invalid gid: xyz"));
+
+        assert!(parse_user(":").is_err());
+        assert!(parse_user("1000:").is_err());
+        assert!(parse_user(":2000").is_err());
+        let res = parse_user("1000:2000:3000");
+        assert!(res.is_err());
     }
 }
