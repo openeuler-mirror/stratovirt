@@ -13,7 +13,7 @@
 use std::{
     cell::RefCell,
     fs::File,
-    io::{Seek, SeekFrom},
+    io::{Seek, SeekFrom, Write},
     os::{
         linux::fs::MetadataExt,
         unix::prelude::{AsRawFd, RawFd},
@@ -70,6 +70,22 @@ impl<T: Clone + 'static> FileDriver<T> {
             aio: Rc::new(RefCell::new(aio)),
             delete_evts: Vec::new(),
             block_prop,
+        }
+    }
+
+    pub fn flush_data(&mut self, drive_id: &str) {
+        if let Err(e) = self.file.flush() {
+            error!(
+                "Failed to flush file for device '{}', error is {:?}",
+                drive_id, e
+            );
+        }
+
+        if let Err(e) = self.file.sync_all() {
+            error!(
+                "Failed to sync file for device '{}', error is {:?}",
+                drive_id, e
+            );
         }
     }
 
