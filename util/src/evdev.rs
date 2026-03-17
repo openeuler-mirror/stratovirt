@@ -55,6 +55,9 @@ pub const ABS_MAX: u8 = 0x3F;
 
 pub const BTN_LEFT: u16 = 0x110;
 pub const BTN_TOUCH: u16 = 0x14A;
+pub const BTN_TOOL_FINGER: u16 = 0x145;
+pub const BTN_TOOL_DOUBLETAP: u16 = 0x14D;
+pub const BTN_TOOL_TRIPLETAP: u16 = 0x14E;
 
 pub const MSC_TIMESTAMP: u16 = 0x05;
 

@@ -36,6 +36,8 @@ const SUPPORT_SLOT_MAX: usize = 3;
 // ABS_TRACKING_ID 1
 // ABS_MT_POSITION_X
 // ABS_MT_POSITION_Y
+// BTN_TOUCH 1
+// BTN_TOOL_DOUBLETAP 1
 // SYN_REPORT
 //
 // So 20 is enough for current limitation of 2 fingers support.
@@ -59,6 +61,7 @@ pub const THREE_FINGERS: usize = 3;
 // Minimum scroll pixels, When the scroll pixels is too small,
 // Windows will think it is a two-finger touch.
 const MIN_SCROLL_PIXELS: i32 = 180;
+const BTN_TOOLS: [u16; THREE_FINGERS] = [BTN_TOOL_FINGER, BTN_TOOL_DOUBLETAP, BTN_TOOL_TRIPLETAP];
 
 #[derive(Clone)]
 struct MultiTouchPadAbsData {
@@ -144,6 +147,7 @@ struct TouchpadEmulator {
     touch_state: Arc<(Mutex<MultiTouchPadStatus>, Condvar)>,
     slide_begin: Instant,
     sliding: bool,
+    begin: bool,
 }
 
 impl TouchpadEmulator {
@@ -158,6 +162,7 @@ impl TouchpadEmulator {
             touch_state: Arc::new((Mutex::new(MultiTouchPadStatus::default()), Condvar::new())),
             slide_begin: Instant::now(),
             sliding: false,
+            begin: true,
         }
     }
 
@@ -277,6 +282,16 @@ impl TouchpadEmulator {
             self.evts
                 .push(InputEvent::new_u8(EV_ABS, ABS_MT_POSITION_Y, slot.y));
         }
+
+        if self.begin {
+            self.begin = false;
+            self.evts.push(InputEvent::new(EV_KEY as u16, BTN_TOUCH, 1));
+            self.evts.push(InputEvent::new(
+                EV_KEY as u16,
+                BTN_TOOLS[finger_count - 1],
+                1,
+            ));
+        }
         self.evts.push(InputEvent::new(EV_SYN, SYN_REPORT, 0));
         send_mt_pad_raw_events(&self.evts)
     }
@@ -302,7 +317,7 @@ impl TouchpadEmulator {
             }
             MultiTouchEventKind::END => {
                 self.set_touch_status(MultiTouchPadStatus::Up);
-                self.lift_all_fingers()?;
+                self.lift_fingers(Some(TWO_FINGERS))?;
                 if self.slots[0].x_update.abs() > SLIDE_CHECK_PIXELS
                     || self.slots[0].y_update.abs() > SLIDE_CHECK_PIXELS
                 {
@@ -403,7 +418,7 @@ impl TouchpadEmulator {
             }
             MultiTouchEventKind::END => {
                 self.set_touch_status(MultiTouchPadStatus::Up);
-                self.lift_all_fingers()?;
+                self.lift_fingers(Some(TWO_FINGERS))?;
             }
         }
         Ok(())
@@ -441,7 +456,7 @@ impl TouchpadEmulator {
             }
             MultiTouchEventKind::END => {
                 self.set_touch_status(MultiTouchPadStatus::Up);
-                self.lift_all_fingers()?;
+                self.lift_fingers(Some(THREE_FINGERS))?;
             }
         }
         Ok(())
@@ -460,12 +475,17 @@ impl TouchpadEmulator {
         self.handle_finger_event(THREE_FINGERS)
     }
 
-    fn lift_all_fingers(&mut self) -> Result<()> {
+    fn lift_fingers(&mut self, finger_count: Option<usize>) -> Result<()> {
         if !self.init {
             return Ok(());
         }
 
-        let len = self.slots.len();
+        if finger_count.is_some_and(|val| val == 0 || val > THREE_FINGERS) {
+            warn!("unsupported count of fingers: {:?}", finger_count);
+            return Ok(());
+        }
+
+        let len = finger_count.unwrap_or(self.slots.len());
         self.evts.clear();
 
         for i in 0..len {
@@ -474,7 +494,21 @@ impl TouchpadEmulator {
             self.evts
                 .push(InputEvent::new_u8(EV_ABS, ABS_MT_TRACKING_ID, -1));
         }
+
+        self.evts.push(InputEvent::new(EV_KEY as u16, BTN_TOUCH, 0));
+        if finger_count.is_none() {
+            // Lift all fingers.
+            // The current touchpad only supports two-finger and three-finger.
+            for &btn in &BTN_TOOLS[1..] {
+                self.evts.push(InputEvent::new(EV_KEY as u16, btn, 0));
+            }
+        } else {
+            self.evts
+                .push(InputEvent::new(EV_KEY as u16, BTN_TOOLS[len - 1], 0));
+        }
+
         self.evts.push(InputEvent::new(EV_SYN, SYN_REPORT, 0));
+        self.begin = true;
 
         send_mt_pad_raw_events(&self.evts)
     }
@@ -504,7 +538,7 @@ pub fn lift_tp_fingers() -> Result<()> {
         .lock()
         .unwrap()
         .set_touch_status(MultiTouchPadStatus::Up);
-    TP_EMU.lock().unwrap().lift_all_fingers()
+    TP_EMU.lock().unwrap().lift_fingers(None)
 }
 
 pub fn init_tp_emu() -> Result<()> {
