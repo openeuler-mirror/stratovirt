@@ -724,4 +724,13 @@ mod tests {
         let input = Input::new(input_config);
         assert!(input.is_err());
     }
+
+    #[test]
+    fn test_from_absinfo() {
+        let abs_info = InputAbsInfo::new(1, 10, 5);
+        let input_abs_info = VirtioInputAbsInfo::from_absinfo(abs_info);
+        assert_eq!(input_abs_info.min[0], 1);
+        assert_eq!(input_abs_info.max[0], 10);
+        assert_eq!(input_abs_info.res[0], 5);
+    }
 }
