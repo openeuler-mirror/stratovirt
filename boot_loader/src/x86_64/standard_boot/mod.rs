@@ -15,13 +15,14 @@ mod elf;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info};
 
 use self::elf::load_elf_kernel;
 use super::bootparam::RealModeKernelHeader;
+use super::X86BootLoader;
 use super::X86BootLoaderConfig;
 use super::{BOOT_HDR_START, CMDLINE_START};
 use crate::error::BootLoaderError;
@@ -30,6 +31,36 @@ use crate::x86_64::{INITRD_ADDR_MAX, SETUP_START};
 use address_space::AddressSpace;
 use devices::legacy::{FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
+
+fn load_setup_data(
+    mut setup_data: Vec<u8>,
+    boot_header: &RealModeKernelHeader,
+    fwcfg: &mut dyn FwCfgOps,
+) -> Result<()> {
+    let min_setup_len = std::cmp::min(
+        setup_data.len(),
+        BOOT_HDR_START as usize + boot_header.as_bytes().len(),
+    );
+    setup_data.as_mut_slice()[BOOT_HDR_START as usize..min_setup_len]
+        .copy_from_slice(&boot_header.as_bytes()[0..(min_setup_len - BOOT_HDR_START as usize)]);
+
+    fwcfg
+        .add_data_entry(
+            FwCfgEntryType::SetupAddr,
+            (SETUP_START as u32).as_bytes().to_vec(),
+        )
+        .with_context(|| "Failed to add setup-addr to FwCfg")?;
+    fwcfg
+        .add_data_entry(
+            FwCfgEntryType::SetupSize,
+            (setup_data.len() as u32).as_bytes().to_vec(),
+        )
+        .with_context(|| "Failed to add setup-size entry to FwCfg")?;
+    fwcfg
+        .add_data_entry(FwCfgEntryType::SetupData, setup_data)
+        .with_context(|| "Failed to add setup-data entry to FwCfg")?;
+    Ok(())
+}
 
 fn load_image(
     image: &mut File,
@@ -200,11 +231,21 @@ fn load_kernel_cmdline(
 pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
-    fwcfg: &mut dyn FwCfgOps,
-) -> Result<()> {
+    fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+) -> Result<X86BootLoader> {
+    let fwcfg = fwcfg.with_context(|| "Failed to load linux: No FwCfg provided")?;
+    let fwcfg = &mut *fwcfg.lock().unwrap();
+
+    let boot_loader_layout = X86BootLoader {
+        boot_ip: 0xFFF0,
+        boot_sp: 0x8000,
+        boot_selector: 0xF000,
+        ..Default::default()
+    };
+
     if config.kernel.is_none() {
         setup_e820_table(config, sys_mem, fwcfg)?;
-        return Ok(());
+        return Ok(boot_loader_layout);
     }
 
     let mut kernel_image = File::open(config.kernel.as_ref().unwrap().clone())
@@ -218,41 +259,24 @@ pub fn load_linux(
     load_kernel_cmdline(config, &mut boot_header, fwcfg)?;
     setup_e820_table(config, sys_mem, fwcfg)?;
     load_initrd(config, sys_mem, &mut boot_header, fwcfg)?;
-    if let Err(e) = boot_header.check_valid_kernel() {
-        if let Some(err) = e.downcast_ref::<BootLoaderError>() {
-            match err {
-                BootLoaderError::ElfKernel => {
-                    load_elf_kernel(&mut kernel_image, sys_mem, fwcfg)?;
-                    return Ok(());
+
+    // Load kernel.
+    match boot_header.check_valid_kernel() {
+        Ok(()) => {
+            let setup_data = load_kernel_image(&mut kernel_image, &boot_header, fwcfg)?;
+            load_setup_data(setup_data, &boot_header, fwcfg)?;
+        }
+        Err(e) => {
+            if let Some(err) = e.downcast_ref::<BootLoaderError>() {
+                match err {
+                    BootLoaderError::ElfKernel => {
+                        load_elf_kernel(&mut kernel_image, sys_mem, fwcfg)?;
+                    }
+                    _ => return Err(e),
                 }
-                _ => return Err(e),
             }
         }
     }
 
-    let mut setup_data = load_kernel_image(&mut kernel_image, &boot_header, fwcfg)?;
-    let min_setup_len = std::cmp::min(
-        setup_data.len(),
-        BOOT_HDR_START as usize + boot_header.as_bytes().len(),
-    );
-    setup_data.as_mut_slice()[BOOT_HDR_START as usize..min_setup_len]
-        .copy_from_slice(&boot_header.as_bytes()[0..(min_setup_len - BOOT_HDR_START as usize)]);
-
-    fwcfg
-        .add_data_entry(
-            FwCfgEntryType::SetupAddr,
-            (SETUP_START as u32).as_bytes().to_vec(),
-        )
-        .with_context(|| "Failed to add setup-addr to FwCfg")?;
-    fwcfg
-        .add_data_entry(
-            FwCfgEntryType::SetupSize,
-            (setup_data.len() as u32).as_bytes().to_vec(),
-        )
-        .with_context(|| "Failed to add setup-size entry to FwCfg")?;
-    fwcfg
-        .add_data_entry(FwCfgEntryType::SetupData, setup_data)
-        .with_context(|| "Failed to add setup-data entry to FwCfg")?;
-
-    Ok(())
+    Ok(boot_loader_layout)
 }

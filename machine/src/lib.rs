@@ -56,6 +56,9 @@ use address_space::{
 };
 #[cfg(target_arch = "aarch64")]
 use address_space::{register_ram_region, HostMemMapping};
+use boot_loader::{load_linux, BootLoaderConfig};
+#[cfg(target_arch = "x86_64")]
+use boot_loader::{load_smbios_to_memory, ARCH_SMBIOS_BEGIN};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuTopology, CPU};
@@ -365,11 +368,22 @@ pub trait MachineOps: MachineLifecycle {
 
     fn machine_base_mut(&mut self) -> &mut MachineBase;
 
+    /// Build all SMBIOS tables and entry, link to fwcfg or write to memory.
+    ///
+    /// # Arguments
+    ///
+    /// `fw_cfg` - Optional fwcfg device.
     fn build_smbios(
         &self,
-        fw_cfg: &Arc<Mutex<dyn FwCfgOps>>,
+        fw_cfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
         mem_array: Vec<(u64, u64)>,
     ) -> Result<()> {
+        // aarch64 does not support ACPI without fwcfg.
+        #[cfg(target_arch = "aarch64")]
+        if fw_cfg.is_none() {
+            return Ok(());
+        }
+
         let vm_config = self.get_vm_config();
         let vmcfg_lock = vm_config.lock().unwrap();
 
@@ -379,21 +393,78 @@ pub trait MachineOps: MachineLifecycle {
             &vmcfg_lock.machine_config,
             mem_array,
         );
-        let ep = build_smbios_ep30(table.len() as u32);
 
-        let mut locked_fw_cfg = fw_cfg.lock().unwrap();
-        locked_fw_cfg
-            .add_file_entry(SMBIOS_TABLE_FILE, table)
-            .with_context(|| "Failed to add smbios table file entry")?;
-        locked_fw_cfg
-            .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
-            .with_context(|| "Failed to add smbios anchor file entry")?;
+        let ep = build_smbios_ep30(
+            #[cfg(target_arch = "x86_64")]
+            ARCH_SMBIOS_BEGIN,
+            table.len() as u32,
+        );
+
+        if let Some(fw_cfg) = fw_cfg {
+            let mut locked_fw_cfg = fw_cfg.lock().unwrap();
+            locked_fw_cfg
+                .add_file_entry(SMBIOS_TABLE_FILE, table)
+                .with_context(|| "Failed to add smbios table file entry")?;
+            locked_fw_cfg
+                .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
+                .with_context(|| "Failed to add smbios anchor file entry")?;
+        } else {
+            #[cfg(target_arch = "x86_64")]
+            load_smbios_to_memory(&self.machine_base().sys_mem, table, ep)
+                .with_context(|| "Failed to load SMBIOS to guest memory")?;
+        }
 
         Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
+    fn load_boot_source(
+        &self,
+        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+        mem_rsdp: bool,
+        gap_range: (u64, u64),
+        ioapic_addr: u32,
+        lapic_addr: u32,
+        ident_tss_range: Option<(u64, u64)>,
+    ) -> Result<CPUBootConfig> {
+        let boot_source = self.machine_base().boot_source.lock().unwrap();
+        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
+
+        let bootloader_config = BootLoaderConfig {
+            kernel: boot_source.kernel_file.clone(),
+            initrd,
+            kernel_cmdline: boot_source.kernel_cmdline.to_string(),
+            cpu_count: self.machine_base().cpu_topo.nrcpus,
+            gap_range,
+            ioapic_addr,
+            lapic_addr,
+            ident_tss_range,
+            // go direct_boot if fwcfg is not present.
+            prot64_mode: fwcfg.is_none(),
+        };
+        let layout = load_linux(
+            &bootloader_config,
+            &self.machine_base().sys_mem,
+            fwcfg,
+            mem_rsdp,
+        )
+        .with_context(|| MachineError::LoadKernErr)?;
+
+        Ok(CPUBootConfig {
+            prot64_mode: fwcfg.is_none(),
+            boot_ip: layout.boot_ip,
+            boot_sp: layout.boot_sp,
+            boot_selector: layout.boot_selector,
+            zero_page: layout.zero_page_addr,
+            code_segment: layout.segments.code_segment,
+            data_segment: layout.segments.data_segment,
+            gdt_base: layout.segments.gdt_base,
+            gdt_size: layout.segments.gdt_limit,
+            idt_base: layout.segments.idt_base,
+            idt_size: layout.segments.idt_limit,
+            pml4_start: layout.boot_pml4_addr,
+        })
+    }
 
     #[cfg(target_arch = "aarch64")]
     fn load_boot_source(
@@ -401,8 +472,6 @@ pub trait MachineOps: MachineLifecycle {
         fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
         mem_start: u64,
     ) -> Result<CPUBootConfig> {
-        use boot_loader::{load_linux, BootLoaderConfig};
-
         let mut boot_source = self.machine_base().boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 

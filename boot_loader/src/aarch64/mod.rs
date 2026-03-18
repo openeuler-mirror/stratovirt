@@ -23,7 +23,8 @@ use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use devices::legacy::{error::LegacyError as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
 
-const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
+/// Linux requires kernel offset aligned to 2MB.
+const AARCH64_KERNEL_OFFSET: u64 = 0x20_0000;
 
 /// Boot loader config used for aarch64.
 #[derive(Default, Debug)]

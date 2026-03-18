@@ -178,6 +178,8 @@ struct TableLoaderFileEntry {
 /// Represents loader-entries that contents file and blob data of file.
 #[derive(Default)]
 pub struct TableLoader {
+    /// Works or not. e.g, for direct boot, table loader does not need working.
+    works: bool,
     /// Command entries.
     cmds: Vec<TableLoaderEntry>,
     /// File entries.
@@ -186,11 +188,16 @@ pub struct TableLoader {
 
 impl TableLoader {
     /// Construct function.
-    pub fn new() -> TableLoader {
+    pub fn new(works: bool) -> TableLoader {
         TableLoader {
+            works,
             cmds: Vec::new(),
             files: Vec::new(),
         }
+    }
+
+    pub fn works(&self) -> bool {
+        self.works
     }
 
     /// Get byte stream of all loader-entries.
@@ -230,6 +237,10 @@ impl TableLoader {
         align: u32,
         is_fseg: bool,
     ) -> Result<()> {
+        if !self.works {
+            return Ok(());
+        }
+
         let file = file.to_string();
         if align & (align - 1) != 0 {
             return Err(anyhow!(AcpiError::Alignment(align)));
@@ -265,6 +276,10 @@ impl TableLoader {
         start: u32,
         length: u32,
     ) -> Result<()> {
+        if !self.works {
+            return Ok(());
+        }
+
         let file = file.to_string();
         let file_entry = self
             .find_matched_file(&file)
@@ -323,6 +338,10 @@ impl TableLoader {
         src_file: &str,
         src_offset: u32,
     ) -> Result<()> {
+        if !self.works {
+            return Ok(());
+        }
+
         let dst_file = dst_file.to_string();
         let src_file = src_file.to_string();
         let dst_file_entry = self
@@ -372,7 +391,7 @@ mod test {
 
     #[test]
     fn test_alloc_cmd() {
-        let mut table_loader = TableLoader::new();
+        let mut table_loader = TableLoader::new(true);
 
         let file_name = "etc/table-loader".to_string();
         let file_blob = Arc::new(Mutex::new(Vec::new()));
@@ -399,7 +418,7 @@ mod test {
 
     #[test]
     fn test_add_pointer_cmd() {
-        let mut table_loader = TableLoader::new();
+        let mut table_loader = TableLoader::new(true);
 
         let dst_file = "etc/rdsp".to_string();
         let src_file = "etc/table-loader".to_string();
@@ -434,7 +453,7 @@ mod test {
 
     #[test]
     fn test_add_cksum_pointer() {
-        let mut table_loader = TableLoader::new();
+        let mut table_loader = TableLoader::new(true);
 
         let file = "etc/table-loader".to_string();
         let file_len = 100_u32;

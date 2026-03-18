@@ -17,6 +17,8 @@ use machine_manager::config::{
     SmbiosType2Config, SmbiosType3Config, SmbiosType4Config,
 };
 use util::byte_code::ByteCode;
+#[cfg(target_arch = "x86_64")]
+use util::checksum::generate_checksum;
 
 const TYPE0_HANDLE: u16 = 0x0;
 const TYPE1_HANDLE: u16 = 0x100;
@@ -1048,10 +1050,36 @@ impl SmbiosEntryPoint30 {
             ..Default::default()
         }
     }
+
+    #[cfg(target_arch = "x86_64")]
+    fn set_table_address(&mut self, tables_begin: u64) {
+        self.structure_table_address = tables_begin;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn update_checksum(&mut self) {
+        self.checksum = 0;
+        self.checksum = generate_checksum(self.as_bytes());
+    }
 }
 
-pub fn build_smbios_ep30(table_len: u32) -> Vec<u8> {
+pub fn build_smbios_ep30(
+    #[cfg(target_arch = "x86_64")] smbios_begin: u64,
+    table_len: u32,
+) -> Vec<u8> {
+    #[cfg(target_arch = "x86_64")]
+    let mut ep = SmbiosEntryPoint30::new(table_len);
+    #[cfg(not(target_arch = "x86_64"))]
     let ep = SmbiosEntryPoint30::new(table_len);
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        let tables_begin = smbios_begin
+            .checked_add(size_of::<SmbiosEntryPoint30>() as u64)
+            .unwrap();
+        ep.set_table_address(tables_begin);
+        ep.update_checksum();
+    }
 
     ep.as_bytes().to_vec()
 }
