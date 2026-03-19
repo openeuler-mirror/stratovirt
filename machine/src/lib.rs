@@ -140,9 +140,9 @@ use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
     virtio_register_sysbusdevops_type, Balloon, BalloonConfig, BalloonState, Block, BlockState,
-    Input, InputConfig, Multitouch, MultitouchConfig, Serial, SerialPort, VirtioBlkDevConfig,
-    VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState, VirtioPciDevice,
-    VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    Input, InputConfig, MttState, Multitouch, MultitouchConfig, Serial, SerialPort,
+    VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
@@ -1209,17 +1209,20 @@ pub trait MachineOps: MachineLifecycle {
                     ("addr", cfg.addr),
                     ("multifunction", cfg.multifunction)
                 );
-                self.add_virtio_mmio_device(cfg.id.clone(), dev)
+                self.add_virtio_mmio_device(cfg.id.clone(), dev.clone())
                     .with_context(|| "Failed to add virtio mmio input device")?;
             }
             _ => {
                 check_arg_exist!(("bus", cfg.bus), ("addr", cfg.addr));
                 let bdf = PciBdf::new(cfg.bus.clone().unwrap(), cfg.addr.unwrap());
                 let multi_func = cfg.multifunction.unwrap_or_default();
-                self.add_virtio_pci_device(&cfg.id, &bdf, dev, multi_func, false)
+                self.add_virtio_pci_device(&cfg.id, &bdf, dev.clone(), multi_func, false)
                     .with_context(|| "Failed to add virtio pci input device")?;
             }
         }
+
+        MigrationManager::register_device_instance(MttState::descriptor(), dev, &cfg.id);
+
         Ok(())
     }
 

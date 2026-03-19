@@ -19,10 +19,7 @@ use std::os::unix::io::RawFd;
 use std::path::Path;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex, RwLock,
-};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -44,11 +41,13 @@ use channel::*;
 use machine_manager::{
     config::{DisplayConfig, VIRTIO_GPU_ENABLE_BAR0_SIZE},
     event_loop::{register_event_helper, EventLoop},
+    qmp::qmp_schema::OhuiStatus,
     temp_cleaner::TempCleaner,
 };
 use migration::snapshot::OHUI_SNAPSHOT_ID;
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
+use msg::SNAPSHOT_COMPLETE;
 use msg_handle::*;
 use util::{
     loop_context::{
@@ -89,7 +88,8 @@ impl GuestSurface {
     }
 }
 
-const CURSOR_SIZE: u64 = 16 * 1024;
+// image size is 128 * 128, and 4 Bytes per pixel
+const CURSOR_SIZE: u64 = 64 * 1024;
 
 struct CursorInfo {
     buffer: u64,
@@ -109,8 +109,6 @@ pub struct OhUiServer {
     channel: Arc<Mutex<OhUiChannel>>,
     // message handler
     msg_handler: OhUiMsgHandler,
-    // connected or not
-    connected: AtomicBool,
     // iothread processing unix socket
     iothread: OnceCell<Option<String>>,
     //address of framebuffer
@@ -119,6 +117,8 @@ pub struct OhUiServer {
     fb_file: Option<FileBackend>,
     // tokenID of OHUI client
     pub token_id: Arc<RwLock<u64>>,
+    // ohui server status
+    status: RwLock<OhuiStatus>,
     // Cursor
     cursor: Arc<Mutex<CursorInfo>>,
 }
@@ -222,11 +222,11 @@ impl OhUiServer {
             surface: RwLock::new(GuestSurface::new()),
             channel,
             msg_handler: OhUiMsgHandler::new(),
-            connected: AtomicBool::new(false),
             iothread: OnceCell::new(),
             framebuffer,
             fb_file,
             token_id: Arc::new(RwLock::new(0)),
+            status: RwLock::new(OhuiStatus::uninit),
             cursor: cursor.clone(),
         });
 
@@ -235,6 +235,7 @@ impl OhUiServer {
             Arc::new(Mutex::new(OhUiMigration {
                 cursor,
                 ohui_srv: ohui_srv.clone(),
+                ui_size: (0, 0),
             })),
             OHUI_SNAPSHOT_ID,
         );
@@ -324,15 +325,23 @@ impl OhUiServer {
         self.msg_handler.send_input_device_state();
     }
 
-    #[inline(always)]
     fn connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
+        *self.status.read().unwrap() == OhuiStatus::connected
     }
 
-    #[inline(always)]
-    fn set_connect(&self, conn: bool) {
-        self.connected.store(conn, Ordering::Relaxed);
-        if conn {
+    fn set_iothread(&self, iothread: Option<String>) {
+        if self.iothread.set(iothread).is_err() {
+            error!("Failed to initialize iothread of OHUI Server.");
+        }
+    }
+
+    pub fn get_status(&self) -> OhuiStatus {
+        *self.status.read().unwrap()
+    }
+
+    fn set_status(&self, status: OhuiStatus) {
+        *self.status.write().unwrap() = status;
+        if status == OhuiStatus::connected {
             self.msg_handler.update_sock(self.channel.clone());
         } else {
             self.msg_handler.reset();
@@ -340,10 +349,12 @@ impl OhUiServer {
         }
     }
 
-    fn set_iothread(&self, iothread: Option<String>) {
-        if self.iothread.set(iothread).is_err() {
-            error!("Failed to initialize iothread of OHUI Server.");
-        }
+    fn get_ui_size(&self) -> (u32, u32) {
+        self.msg_handler.get_ui_size()
+    }
+
+    fn notify_snapshot_state(&self, state: u32) {
+        self.msg_handler.notify_snapshot_state(state);
     }
 }
 
@@ -429,6 +440,10 @@ impl DisplayChangeListenerOperations for OhUiServer {
         Ok(())
     }
 
+    fn dpy_get_left_pressing(&self) -> bool {
+        self.msg_handler.get_left_pressing()
+    }
+
     fn dpy_cursor_update(&self, cursor: &DisplayMouse) -> Result<()> {
         let mut locked_cursor = self.cursor.lock().unwrap();
         if locked_cursor.buffer == 0 {
@@ -483,6 +498,7 @@ pub fn ohui_init(ohui_srv: Arc<OhUiServer>, cfg: &DisplayConfig) -> Result<()> {
     )));
     dcl.lock().unwrap().update_interval = DISPLAY_UPDATE_INTERVAL_DEFAULT;
     register_display(&dcl)?;
+    ohui_srv.set_status(OhuiStatus::disconnected);
     // start listener
     ohui_start_listener(ohui_srv)
 }
@@ -497,7 +513,7 @@ impl OhUiTrans {
     }
 
     fn handle_disconnect(&self) {
-        self.server.set_connect(false);
+        self.server.set_status(OhuiStatus::disconnected);
         if let Err(e) = ohui_start_listener(self.server.clone()) {
             error!("Failed to restart listener: {:?}.", e)
         }
@@ -579,7 +595,7 @@ impl OhUiListener {
     fn handle_connection(&self) -> Result<()> {
         // Register OhUiTrans read notifier
         ohui_register_event(OhUiTrans::new(self.server.clone()), self.server.clone())?;
-        self.server.set_connect(true);
+        self.server.set_status(OhuiStatus::connected);
         // Send window info to the client
         self.server.send_window_info();
         // Send input device state
@@ -643,7 +659,8 @@ fn ohui_register_event<T: EventNotifierHelper>(e: T, srv: Arc<OhUiServer>) -> Re
 }
 
 fn ohui_start_listener(server: Arc<OhUiServer>) -> Result<()> {
-    ohui_register_event(OhUiListener::new(server.clone()), server)?;
+    ohui_register_event(OhUiListener::new(server.clone()), server.clone())?;
+    server.set_status(OhuiStatus::listening);
     info!("Successfully start listener.");
     Ok(())
 }
@@ -669,16 +686,23 @@ pub fn dup_fd(fd: RawFd) -> RawFd {
 #[derive(Clone, Debug, Default, DescSerde, Serialize, Deserialize)]
 #[desc_version(current_version = "0.1.0")]
 struct OhUiMigrationState {
+    // cursor info
     cursor_img: Vec<u8>,
     width: u32,
     height: u32,
     hot_x: u32,
     hot_y: u32,
+    // ui info
+    #[serde(default)]
+    ui_width: u32,
+    #[serde(default)]
+    ui_height: u32,
 }
 
 struct OhUiMigration {
     cursor: Arc<Mutex<CursorInfo>>,
     ohui_srv: Arc<OhUiServer>,
+    ui_size: (u32, u32),
 }
 
 impl StateTransfer for OhUiMigration {
@@ -699,6 +723,7 @@ impl StateTransfer for OhUiMigration {
         state.height = cursor.height;
         state.hot_x = cursor.hot_x;
         state.hot_y = cursor.hot_y;
+        (state.ui_width, state.ui_height) = self.ohui_srv.get_ui_size();
         Ok(serde_json::to_vec(&state)?)
     }
 
@@ -718,6 +743,7 @@ impl StateTransfer for OhUiMigration {
         cursor.height = mgt_state.height;
         cursor.hot_x = mgt_state.hot_x;
         cursor.hot_y = mgt_state.hot_y;
+        self.ui_size = (mgt_state.ui_width, mgt_state.ui_height);
         Ok(())
     }
 
@@ -736,6 +762,37 @@ impl MigrationHook for OhUiMigration {
             cursor.hot_y,
             bytes_per_pixel() as u32,
         );
+        Ok(())
+    }
+
+    fn notify_status(&self, save: bool, status: migration::MigrationStatus) -> Result<()> {
+        // If the ui size has changed, we need to delay snapshot animation 1500ms to
+        // mask Windows resolution adaptation.
+        const NOTIFY_CHANGE_DELAY: u64 = 1500;
+
+        self.ohui_srv
+            .msg_handler
+            .set_migrating(status == migration::MigrationStatus::Active);
+
+        if save {
+            return Ok(());
+        }
+
+        if status == migration::MigrationStatus::Completed {
+            if self.ui_size != self.ohui_srv.get_ui_size() {
+                let ohui_srv = self.ohui_srv.clone();
+                EventLoop::get_ctx(None).unwrap().timer_add(
+                    Box::new(move || {
+                        info!("delayed {}ms, notify snapshot complete", SNAPSHOT_COMPLETE);
+                        ohui_srv.notify_snapshot_state(SNAPSHOT_COMPLETE);
+                    }),
+                    Duration::from_millis(NOTIFY_CHANGE_DELAY),
+                );
+            } else {
+                info!("notify snapshot complete");
+                self.ohui_srv.notify_snapshot_state(SNAPSHOT_COMPLETE);
+            }
+        }
         Ok(())
     }
 }

@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -27,8 +28,8 @@ use super::{
 };
 use crate::{
     console::{
-        get_active_console, get_dpy_standing, graphic_hardware_ui_info, set_dpy_rotation,
-        set_dpy_standing, Rotation,
+        get_active_console, get_dpy_standing, graphic_hardware_ui_expanded_screen,
+        graphic_hardware_ui_info, set_dpy_rotation, set_dpy_standing, Rotation,
     },
     input::{
         self, get_kbd_led_state, input_button, input_move_abs, input_point_sync, keyboard_update,
@@ -42,7 +43,7 @@ use crate::{
     },
     keycode::{DpyMod, KeyCode},
 };
-use machine_manager::notifier::register_vm_pause_notifier;
+use machine_manager::notifier::vm_paused;
 
 fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
     if x < 0.0 || y < 0.0 || x > w || y > h {
@@ -75,6 +76,9 @@ struct CursorState {
 struct WindowState {
     width: u32,
     height: u32,
+    // Status to check whether the mouse's left button
+    // is pressing or not.
+    left_pressing: bool,
     cursor: CursorState,
 }
 
@@ -89,12 +93,26 @@ impl WindowState {
             return Ok(());
         }
         input_button(btn, true)?;
-        input_point_sync()
+        input_point_sync()?;
+        // This should be faster than interrupt to guest.
+        if btn == INPUT_POINT_LEFT {
+            self.left_pressing = true;
+        }
+        Ok(())
     }
 
     fn release_btn(&mut self, btn: u32) -> Result<()> {
         input_button(btn, false)?;
-        input_point_sync()
+        input_point_sync()?;
+        // This should be faster than interrupt to guest.
+        if btn == INPUT_POINT_LEFT {
+            self.left_pressing = false;
+        }
+        Ok(())
+    }
+
+    fn get_left_pressing(&self) -> bool {
+        self.left_pressing
     }
 
     fn do_key_action(&self, keycode: u16, action: u16) -> Result<()> {
@@ -160,10 +178,10 @@ pub struct OhUiMsgHandler {
     hmcode2svcode: HashMap<u16, u16>,
     reader: Mutex<Option<MsgReader>>,
     writer: Arc<Mutex<Option<MsgWriter>>>,
-    vm_pause: Arc<RwLock<bool>>,
-    pause_notifier_id: Mutex<u64>,
     input_state: Arc<Mutex<InputDeviceState>>,
     surface_size: RwLock<(u32, u32)>,
+    ui_size: RwLock<(u32, u32)>,
+    migrating: AtomicBool,
 }
 
 impl OhUiMsgHandler {
@@ -173,26 +191,14 @@ impl OhUiMsgHandler {
             hmcode2svcode: KeyCode::keysym_to_qkeycode(DpyMod::Ohui),
             reader: Mutex::new(None),
             writer: Arc::new(Mutex::new(None)),
-            vm_pause: Arc::new(RwLock::new(false)),
-            pause_notifier_id: Mutex::new(0),
             input_state: Arc::new(Mutex::new(InputDeviceState::default())),
             surface_size: RwLock::new((0, 0)),
+            ui_size: RwLock::new((0, 0)),
+            migrating: AtomicBool::new(false),
         };
-        handler.register_pause_notifier(handler.vm_pause.clone());
         handler.register_input_change_notifier();
 
         handler
-    }
-
-    fn register_pause_notifier(&self, vm_pause: Arc<RwLock<bool>>) {
-        let pause_notify = Arc::new(move |paused: bool| {
-            info!("Message Handler get vm pause state {:?}", paused);
-            *vm_pause.write().unwrap() = paused;
-            if !paused {
-                let _ = Self::release_input_keys();
-            }
-        });
-        *self.pause_notifier_id.lock().unwrap() = register_vm_pause_notifier(pause_notify);
     }
 
     fn register_input_change_notifier(&self) {
@@ -231,6 +237,14 @@ impl OhUiMsgHandler {
         );
 
         self.input_state.lock().unwrap().input_notifier_id = register_input_notifier(notifier);
+    }
+
+    pub fn get_left_pressing(&self) -> bool {
+        self.state.lock().unwrap().get_left_pressing()
+    }
+
+    pub fn get_ui_size(&self) -> (u32, u32) {
+        *self.ui_size.read().unwrap()
     }
 
     pub fn update_sock(&self, channel: Arc<Mutex<OhUiChannel>>) {
@@ -281,12 +295,25 @@ impl OhUiMsgHandler {
     }
 
     fn filter_message(&self, et: &EventType) -> bool {
-        if !*self.vm_pause.read().unwrap() {
+        if self.migrating.load(Ordering::Relaxed) {
+            return matches!(et, EventType::Keyboard)
+                || matches!(et, EventType::Ledstate)
+                || matches!(et, EventType::MouseButton)
+                || matches!(et, EventType::MouseMotion)
+                || matches!(et, EventType::MultitouchScreen)
+                || matches!(et, EventType::TouchPadPinch)
+                || matches!(et, EventType::TouchPadScroll)
+                || matches!(et, EventType::TouchPadSwipe);
+        }
+
+        if !vm_paused() {
             return false;
         }
 
-        let ret =
-            matches!(et, EventType::WindowInfoExtension) || matches!(et, EventType::WindowInfo);
+        let ret = matches!(et, EventType::WindowInfoExtension)
+            || matches!(et, EventType::WindowInfo)
+            || matches!(et, EventType::VmViewChange)
+            || matches!(et, EventType::ExpandedScreen);
         !ret
     }
 
@@ -382,7 +409,22 @@ impl OhUiMsgHandler {
                 }
             }
         }
+        *self.ui_size.write().unwrap() = (wi.width, wi.height);
         trace::oh_event_windowinfo(wi.width, wi.height);
+    }
+
+    fn handle_expanded_screen(&self, expanded_screen: &ExpandedScreenEvent) {
+        let cons = get_active_console();
+
+        for con in cons {
+            if let Some(c) = con.upgrade() {
+                if let Err(e) =
+                    graphic_hardware_ui_expanded_screen(c.clone(), expanded_screen.state)
+                {
+                    error!("handle_expanded_screen failed with error {e}");
+                }
+            }
+        }
     }
 
     fn handle_windowinfo_extension(&self, wie: &WindowInfoExtensionEvent) -> Result<()> {
@@ -510,6 +552,19 @@ impl OhUiMsgHandler {
         }
     }
 
+    pub fn notify_snapshot_state(&self, state: u32) {
+        if let Some(writer) = self.writer.lock().unwrap().as_mut() {
+            let body = SnapshotState::new(state);
+            if let Err(e) = writer.send_message(EventType::SnapshotState, &body) {
+                error!("notify_snapshot_state: failed to send message with error {e}");
+            }
+        }
+    }
+
+    pub fn set_migrating(&self, migrating: bool) {
+        self.migrating.store(migrating, Ordering::Relaxed);
+    }
+
     pub fn reset(&self) {
         *self.reader.lock().unwrap() = None;
         *self.writer.lock().unwrap() = None;
@@ -565,6 +620,8 @@ static MSG_HANDLER_TABLE: LazyLock<Vec<MsgHandleFunc>> = LazyLock::new(|| {
         Box::new(tp_pinch_handler),
         // TouchPadSwipe     18
         Box::new(tp_swipe_handler),
+        // ExpandedScreen    19
+        Box::new(expanded_screen_handler),
     ]
 });
 
@@ -654,6 +711,12 @@ fn tp_swipe_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<(
         return Ok(());
     }
     msg_handler.handle_touchpad_swipe(body)
+}
+
+fn expanded_screen_handler(msg_handler: &OhUiMsgHandler, body_bytes: &[u8]) -> Result<()> {
+    let body = ExpandedScreenEvent::from_bytes(body_bytes).unwrap();
+    msg_handler.handle_expanded_screen(body);
+    Ok(())
 }
 
 fn send_input_device_change_msg(writer: Arc<Mutex<Option<MsgWriter>>>, reason: u64) {

@@ -19,6 +19,7 @@ use ui::input::{
     register_mt_handler, unregister_mt_handler, MultiTouchAbsData, MultiTouchEventKind,
     MultitouchOps, MultitouchType,
 };
+use util::aio::{wait_io_done, DEFAULT_IO_TIMEOUT};
 
 use crate::{
     virtio_has_feature, VirtioBase, VirtioDevice, VirtioInterrupt, VIRTIO_INPUT_F_MTT_SCREEN,
@@ -28,6 +29,9 @@ use crate::{EvdevConfig, Input, InputIoHandler};
 use address_space::AddressSpace;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
+use migration_derive::DescSerde;
+use serde::{Deserialize, Serialize};
 use util::evdev::*;
 use util::loop_context::EventNotifierHelper;
 use util::num_ops::str_to_num;
@@ -307,6 +311,7 @@ impl VirtioDevice for Multitouch {
 
 impl MultitouchOps for InputIoHandler {
     fn send_event(&mut self, mtt_evt: &MultiTouchAbsData) -> Result<()> {
+        let _io_ref = self.io_inflight.inc_ref();
         match mtt_evt.kind {
             MultiTouchEventKind::BEGIN | MultiTouchEventKind::UPDATE => {
                 let evts = [
@@ -354,6 +359,7 @@ impl MultitouchOps for InputIoHandler {
     }
 
     fn send_raw_event(&mut self, evt: &InputEvent) -> Result<()> {
+        let _io_ref = self.io_inflight.inc_ref();
         if !self.send_event(evt) {
             unregister_mt_handler(self.get_mt_type().unwrap());
             bail!(
@@ -365,6 +371,7 @@ impl MultitouchOps for InputIoHandler {
     }
 
     fn send_sync(&mut self) -> Result<()> {
+        let _io_ref = self.io_inflight.inc_ref();
         let evt = InputEvent::new(EV_SYN, SYN_REPORT, 0);
         if !self.send_event(&evt) {
             unregister_mt_handler(self.get_mt_type().unwrap());
@@ -376,6 +383,43 @@ impl MultitouchOps for InputIoHandler {
         Ok(())
     }
 }
+
+#[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
+#[desc_version(current_version = "0.1.0")]
+pub struct MttState {
+    device_features: u64,
+    driver_features: u64,
+    broken: bool,
+}
+
+impl StateTransfer for Multitouch {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        wait_io_done(&self.device.io_inflight, DEFAULT_IO_TIMEOUT, "Multitouch");
+
+        let state = MttState {
+            device_features: self.virtio_base().device_features,
+            driver_features: self.virtio_base().driver_features,
+            broken: self.virtio_base().broken.load(Ordering::SeqCst),
+        };
+        Ok(serde_json::to_vec(&state)?)
+    }
+
+    fn set_state_mut(&mut self, mtt_state: &[u8], _version: u32) -> Result<()> {
+        let state: MttState = serde_json::from_slice(mtt_state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("Multitouch"))?;
+        let virtio_base = self.virtio_base_mut();
+        virtio_base.device_features = state.device_features;
+        virtio_base.driver_features = state.driver_features;
+        virtio_base.broken.store(state.broken, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&MttState::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for Multitouch {}
 
 #[cfg(test)]
 mod tests {
@@ -518,5 +562,31 @@ mod tests {
         assert!(lift_all_fingers().is_ok());
         assert!(multitouch.reset().is_ok());
         assert!(multitouch.deactivate().is_ok());
+    }
+
+    #[test]
+    fn test_state_transfer() {
+        let mut multitouch = get_default_test_multitouch(MultitouchType::Screen);
+        multitouch.realize().unwrap();
+
+        let device_features = multitouch.virtio_base().device_features;
+        let driver_features = multitouch.virtio_base().driver_features;
+        let broken = multitouch.virtio_base().broken.load(Ordering::SeqCst);
+
+        let init_state = multitouch.get_state_vec().unwrap();
+        multitouch.virtio_base_mut().device_features = 0;
+        multitouch.virtio_base_mut().driver_features = 0;
+        multitouch
+            .virtio_base()
+            .broken
+            .store(true, Ordering::SeqCst);
+
+        multitouch.set_state_mut(&init_state, 0u32).unwrap();
+        assert_eq!(device_features, multitouch.virtio_base().device_features);
+        assert_eq!(driver_features, multitouch.virtio_base().driver_features);
+        assert_eq!(
+            broken,
+            multitouch.virtio_base().broken.load(Ordering::SeqCst)
+        );
     }
 }

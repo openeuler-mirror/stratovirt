@@ -55,6 +55,8 @@ pub enum EventType {
     TouchPadScroll = 16,
     TouchPadPinch = 17,
     TouchPadSwipe = 18,
+    ExpandedScreen = 19,
+    SnapshotState = 20,
     #[default]
     Max,
 }
@@ -75,6 +77,36 @@ impl WindowInfoEvent {
         WindowInfoEvent { width, height }
     }
 }
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct ExpandedScreenEvent {
+    pub state: u32,
+}
+
+impl ByteCode for ExpandedScreenEvent {}
+
+impl ExpandedScreenEvent {
+    pub fn new(state: u32) -> Self {
+        ExpandedScreenEvent { state }
+    }
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct SnapshotState {
+    pub state: u32,
+}
+
+impl ByteCode for SnapshotState {}
+
+impl SnapshotState {
+    pub fn new(state: u32) -> Self {
+        Self { state }
+    }
+}
+
+pub const SNAPSHOT_COMPLETE: u32 = 1;
 
 #[repr(C, packed)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -370,6 +402,10 @@ pub fn event_msg_data_len(event_type: EventType) -> usize {
             size_of::<TouchPadPinchEvent>(),
             // TouchPadSwipe
             size_of::<TouchPadSwipeEvent>(),
+            // ExpandedScreen
+            size_of::<ExpandedScreenEvent>(),
+            // DisplaySizeChange
+            size_of::<SnapshotState>(),
         ]
     });
 

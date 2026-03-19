@@ -229,6 +229,14 @@ pub trait DeviceInterface {
         )
     }
 
+    /// Query ohui status.
+    fn query_ohui_status(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query_ohui_status not supported for VM".to_string()),
+            None,
+        )
+    }
+
     /// Control OH audio's control authority.
     fn switch_audio_record(&self, _authorized: String) -> Response {
         Response::create_response(

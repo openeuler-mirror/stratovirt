@@ -544,6 +544,7 @@ fn qmp_command_exec(
         (query_mem, query_mem),
         (query_vnc, query_vnc),
         (query_display_image, query_display_image),
+        (query_ohui_status, query_ohui_status),
         (list_type, list_type),
         (query_hotpluggable_cpus, query_hotpluggable_cpus),
         (query_workloads, query_workloads);

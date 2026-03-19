@@ -239,6 +239,24 @@ Remove a camera backend.
 <- { "return": {} }
 ```
 
+## OHUI display management
+
+### query-ohui-status
+
+Query OHUI server status.
+
+#### Notes
+
+* Only aarch64 standard VM on OHOS is supported.
+* Possible status is "undefined", "uninit", "disconnected", "listening" or "connected".
+
+#### Example
+
+```json
+-> { "execute": "query-ohui-status" }
+<- { "return": "listening" }
+```
+
 ## Character device backend management
 
 Currently, It only supports Standard VM.
