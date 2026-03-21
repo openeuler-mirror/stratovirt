@@ -30,7 +30,7 @@ use crate::acpi::power::PowerDev;
 #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
 use crate::legacy::Ramfb;
 #[cfg(target_arch = "x86_64")]
-use crate::legacy::{FwCfgIO, RTC};
+use crate::legacy::{FwCfgIO, I8042, RTC};
 #[cfg(target_arch = "aarch64")]
 use crate::legacy::{FwCfgMem, PL011, PL031};
 use crate::legacy::{PFlash, Serial};
@@ -138,7 +138,10 @@ impl SysBus {
             region.set_ioeventfds(&locked_dev.ioeventfds());
             match locked_dev.sysbusdev_base().dev_type {
                 #[cfg(target_arch = "x86_64")]
-                SysBusDevType::Serial | SysBusDevType::FwCfg | SysBusDevType::Rtc => {
+                SysBusDevType::Serial
+                | SysBusDevType::FwCfg
+                | SysBusDevType::Rtc
+                | SysBusDevType::I8042 => {
                     self.sys_io
                         .root()
                         .add_subregion(region, region_base)
@@ -209,6 +212,7 @@ impl Default for SysRes {
 pub enum SysBusDevType {
     Serial,
     Rtc,
+    I8042,
     VirtioMmio,
     #[cfg(target_arch = "aarch64")]
     PL011,
@@ -393,6 +397,7 @@ pub fn devices_register_sysbusdevops_type() -> Result<()> {
         register_sysbusdevops_type::<FwCfgIO>()?;
         register_sysbusdevops_type::<CpuController>()?;
         register_sysbusdevops_type::<RTC>()?;
+        register_sysbusdevops_type::<I8042>()?;
     }
     #[cfg(target_arch = "aarch64")]
     {

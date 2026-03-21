@@ -225,3 +225,15 @@ name = "fwcfg_add_file"
 args = "index: usize, filename: &str, data_len: usize"
 message = "index {} filename {:?} data_len {}"
 enabled = true
+
+[[events]]
+name = "i8042_read"
+args = "offset: u64, value: u8"
+message = "offset 0x{:04x} value 0x{:02x}"
+enabled = true
+
+[[events]]
+name = "i8042_write"
+args = "offset: u64, value: u8"
+message = "offset 0x{:04x} value 0x{:02x}"
+enabled = true
