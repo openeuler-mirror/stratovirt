@@ -32,8 +32,8 @@ use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::acpi::cpu_controller::{CpuConfig, CpuController};
 use devices::acpi::ged::{Ged, GedEvent};
 use devices::legacy::{
-    error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, RTC,
-    SERIAL_ADDR,
+    error::LegacyError as DevErrorKind, FwCfgEntryType, FwCfgIO, FwCfgOps, PFlash, Serial, I8042,
+    RTC, SERIAL_ADDR,
 };
 use devices::pci::{PciBus, PciHost};
 use devices::{convert_bus_mut, Device, MUT_PCI_BUS};
@@ -462,6 +462,15 @@ impl MachineOps for StdMachine {
         );
         rtc.realize()
             .with_context(|| "Failed to realize RTC device")?;
+        Ok(())
+    }
+
+    fn add_i8042_device(&mut self) -> Result<()> {
+        let i8042 = I8042::new(&self.base.sysbus, self.reset_req.clone())
+            .with_context(|| "Failed to create I8042 device")?;
+        i8042
+            .realize()
+            .with_context(|| "Failed to realize I8042 device")?;
         Ok(())
     }
 

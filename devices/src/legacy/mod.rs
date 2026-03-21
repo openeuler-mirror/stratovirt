@@ -12,13 +12,14 @@
 
 //! # Legacy
 //!
-//! This mod emulate legacy devices include RTC and Serial.
+//! This mod emulate legacy devices include RTC, I8042 and Serial.
 //!
 //! ## Design
 //!
 //! This module offers support for:
 //! 1. Pl031 device, Arm PrimeCell Real Time Clock.
-//! 2. Serial device, Serial UART.
+//! 2. I8042 device, PS/2 controller.
+//! 3. Serial device, Serial UART.
 //!
 //! ## Platform Support
 //!
@@ -28,6 +29,8 @@
 pub mod error;
 
 mod fwcfg;
+#[cfg(target_arch = "x86_64")]
+mod i8042;
 mod pflash;
 #[cfg(target_arch = "aarch64")]
 mod pl011;
@@ -39,6 +42,8 @@ mod ramfb;
 mod rtc;
 mod serial;
 
+#[cfg(target_arch = "x86_64")]
+pub use self::i8042::I8042;
 #[cfg(target_arch = "x86_64")]
 pub use self::rtc::{RTC, RTC_PORT_INDEX};
 pub use error::LegacyError;

@@ -721,6 +721,12 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    /// Add i8042 PS/2 controller device.
+    #[cfg(target_arch = "x86_64")]
+    fn add_i8042_device(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Add Generic event device.
     fn add_ged_device(&mut self) -> Result<()> {
         Ok(())
@@ -2324,6 +2330,10 @@ pub trait MachineOps: MachineLifecycle {
             vm_config.machine_config.mem_config.mem_size,
         )
         .with_context(|| MachineError::AddDevErr("RTC".to_string()))?;
+
+        #[cfg(target_arch = "x86_64")]
+        self.add_i8042_device()
+            .with_context(|| MachineError::AddDevErr("I8042".to_string()))?;
 
         self.add_ged_device()
             .with_context(|| MachineError::AddDevErr("Ged".to_string()))?;
