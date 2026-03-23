@@ -1895,7 +1895,7 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<Arc<Mutex<dyn PciDevOps>>> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let sys_mem = self.get_sys_mem();
-        let pcidev = VirtioPciDevice::new(
+        let virtio_pci_dev = VirtioPciDevice::new(
             id.to_string(),
             devfn,
             sys_mem.clone(),
@@ -1904,11 +1904,10 @@ pub trait MachineOps: MachineLifecycle {
             multi_func,
             need_irqfd,
         );
-        let clone_pcidev = Arc::new(Mutex::new(pcidev.clone()));
-        pcidev
+        let pcidev = virtio_pci_dev
             .realize()
             .with_context(|| "Failed to add virtio pci device")?;
-        Ok(clone_pcidev)
+        Ok(pcidev)
     }
 
     /// Set the parent bus slot on when device attached
