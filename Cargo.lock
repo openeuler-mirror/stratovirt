@@ -2075,7 +2075,6 @@ dependencies = [
  "byteorder",
  "clap",
  "devices",
- "hypervisor",
  "kvm-bindings",
  "kvm-ioctls",
  "libc",
