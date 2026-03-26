@@ -1,46 +1,36 @@
-# StratoVirt
-StratoVirt is an enterprise-level virtualization platform for cloud data centers
-in the computing industry. It implements a set of architecture that supports
-three scenarios: virtual machines, containers, and serverless computing.
+# StratoVirt：
+StratoVirt是计算产业中面向云数据中心的企业级虚拟化平台，实现了一套架构统一支持虚拟机、容器、Serverless三种场景。
+StratoVirt在轻量低噪、软硬协同、Rust语言级安全等方面具备关键技术竞争优势。
 
-StratoVirt has competitive advantages in light weight and low noise, software
-and hardware coordination, and Rust language-level security.
+StratoVirt预留了接口和设计来支持更多特性，同时支持标准虚拟化和轻量级虚拟化，也预留了对新型异构设备扩展支持能力。
 
-StratoVirt reserves interfaces and design to support more features, now can support
-standard and lightweight virtualization together,
-as well as the ability to extend support for new heterogeneous devices.
+## 如何开始
 
-## How to start
-
-### Preparation
-Before building StratoVirt, make sure that Rust language and Cargo have already
-been installed. If not, you can find installation guidance via link:
+### 环境准备
+在编译StratoVirt前，请确保Rust语言环境和Cargo软件已经安装成功。如果没有安装，请参考右侧链接进行安装：
 https://www.rust-lang.org/tools/install
 
-And it will get smaller memory overhead if you prepare musl toolchain for rust.
-
-### Build StratoVirt
-To build StratoVirt, clone the project and build it first:
+### 编译软件
+为了编译StratoVirt，需要先克隆代码工程，然后执行编译命令，如下：
 ```sh
 $ git clone https://gitcode.com/openeuler/stratovirt.git
 $ cd stratovirt
 $ make build
 ```
-Now you can find StratoVirt binary in `target/release/stratovirt`.
+可以在`target/release/stratovirt`路径下找到生成的二进制文件
 
-### Run a VM with StratoVirt
-To run StratoVirt quickly, requires
-* A PE or bzImage (only x86_64) format Linux kernel
-* An EXT4 filesystem, raw format rootfs disk image
-* Firmware file of EDK2 which follows UEFI specification
+### 使用StratoVirt启动虚拟机
+为了快速上手StratoVirt，需要准备
+* PE格式或bzImage格式(仅x86_64)的Linux内核镜像
+* ext4文件系统，raw格式rootfs的镜像
+* 遵循UEFI的edk2固件文件
 
-You can get kernel and rootfs image from link:
-https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/
+可以通过右侧链接获取我们准备好的linux内核镜像和rootfs镜像：https://repo.openeuler.org/openEuler-22.03-LTS/stratovirt_img/
 
-For more detail info: [StratoVirt Boot](./docs/boot.md)
+更详细的启动指导，请参考[StratoVirt Boot](./docs/boot.ch.md)。
 
 ```shell
-# Parameters
+# 前置参数
 arch=`uname -m`
 if [ ${arch} = "x86_64" ]; then
     con=ttyS0
@@ -53,21 +43,21 @@ else
     exit 1
 fi
 
-# Start microvm. If the socket of qmp exists, remove it first.
+# 启动microvm机型，如果-qmp的socket文件已经存在，请先删除它
 $ ./target/release/stratovirt \
     -machine microvm \
     -kernel /path/to/kernel \
-    -append "console=ttyS0 root=/dev/vda reboot=k panic=1" \
+    -append "console=${con} root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
     -device virtio-blk-device,drive=rootfs,id=rootfs \
     -qmp unix:/path/to/socket,server,nowait \
     -serial stdio
 
-# Start standard VM. If the socket of qmp exists, remove it first.
+# 启动标准机型，如果-qmp的socket文件已经存在，请先删除它
 $ ./target/release/stratovirt \
     -machine ${machine} \
     -kernel /path/to/kernel \
-    -append "console={con} root=/dev/vda reboot=k panic=1" \
+    -append "console=${con} root=/dev/vda reboot=k panic=1" \
     -drive file=/path/to/firmware,if=pflash,unit=0,readonly=true \
     -device pcie-root-port,port=0x0,addr=0x1.0x0,bus=pcie.0,id=pcie.1 \
     -drive file=/path/to/rootfs,id=rootfs,readonly=off \
@@ -76,31 +66,26 @@ $ ./target/release/stratovirt \
     -serial stdio
 ```
 
-## More detail
-The detailed guidance of making rootfs, compiling kernel and building StratoVirt
-can be found in [StratoVirt QuickStart](./docs/quickstart.md).
+## 更多资料
+关于制作rootfs镜像、编译内核镜像以及编译StratoVirt的详细指导，请参考[StratoVirt Quickstart](./docs/quickstart.ch.md)。
 
-StratoVirt supports much more features, the detailed guidance can be found in
-[Configuration Guidebook](docs/config_guidebook.md).
+StratoVirt支持的更多特性的配置指导，请参考[Configuration Guidebook](docs/config_guidebook.md)。
 
-StratoVirt's core architecture design, refer to
-[StratoVirt design](./docs/design.md).
+StratoVirt核心架构设计信息，请参考[StratoVirt Design](./docs/design.ch.md)。
 
-## How to contribute
-We welcome new contributors! And we are happy to provide guidance and help for
-new contributors. StratoVirt follows Rust formatting conventions, which can be
-found at:
+## 如何贡献
+我们非常欢迎新贡献者的加入，并且非常乐意为新的贡献者提供指导和帮助。
+StratoVirt遵循Rust语言编程规范，请参考以下链接：
 
 https://github.com/rust-dev-tools/fmt-rfcs/tree/master/guide
+
 https://github.com/rust-lang/rust-clippy
 
-You can get more information about StratoVirt at:
+如果你想获取更多关于StratoVirt的信息，请参考以下链接：
 
 https://gitcode.com/openeuler/stratovirt/wiki
 
-If you find a bug or have some ideas, please send an email to the
-[virt mailing list](https://mailweb.openeuler.org/postorius/lists/virt.openeuler.org/)
-or submit an [issue](https://gitcode.com/openeuler/stratovirt/issues).
+如果您发现了一个bug或者有一些想法想要交流，欢迎发邮件到[virt邮件列表](https://mailweb.openeuler.org/postorius/lists/virt.openeuler.org/)或者提交一个[issue](https://gitcode.com/openeuler/stratovirt/issues)。
 
-## Licensing
-StratoVirt is licensed under the Mulan PSL v2.
+## 许可
+StratoVirt使用Mulan PSL v2开源协议许可
