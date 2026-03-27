@@ -1089,12 +1089,13 @@ impl Region {
             }
             RegionType::Ram | RegionType::IO | RegionType::RomDevice | RegionType::RamDevice => {
                 info!(
-                    "{}0x{:X} - 0x{:X}, (Prio {}, {}) : {}",
+                    "{}0x{:X} - 0x{:X}, (Prio {}, {} romd {:?}) : {}",
                     tab,
                     self.offset().raw_value(),
                     self.offset().raw_value() + self.size(),
                     self.priority(),
                     self.get_region_type_name(),
+                    self.get_rom_device_romd(),
                     self.name
                 );
             }
