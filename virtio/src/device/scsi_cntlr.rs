@@ -498,7 +498,7 @@ impl<T: Clone + ByteCode + Default, U: Clone + ByteCode + Default> VirtioScsiReq
             mode: ScsiXferMode::ScsiXferNone,
             interrupt_cb,
             driver_features,
-            // Safety: in_iovec will not be empty since it has been checked after "iov_read_object".
+            // SAFETY: in_iovec will not be empty since it has been checked after "iov_read_object".
             resp_addr: elem.in_iovec[0].addr,
             req,
             resp,

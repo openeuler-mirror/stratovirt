@@ -402,7 +402,7 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `save` - current process doing save/restore operation.
-    /// * `status - current status in save/restore process.
+    /// * `status` - current status in save/restore process.
     pub fn notify_status(save: bool, status: MigrationStatus) -> Result<()> {
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
         for (_, transport) in locked_vmm.transports.iter() {
