@@ -555,11 +555,18 @@ pub trait MachineOps: MachineLifecycle {
             self.init_machine_ram(sys_mem, mem_config)?;
         }
 
+        let plug_base = self.get_plug_addr_base(mem_config);
+        virtio::PLUG_ADDR_BASE
+            .set(plug_base)
+            .expect("Failed to init memory plug base address");
+
         MigrationManager::register_memory_instance(sys_mem.clone());
         register_ram_list();
 
         Ok(())
     }
+
+    fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64;
 
     fn mem_show(&self) {
         self.machine_base().sys_mem.memspace_show();
