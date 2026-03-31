@@ -426,16 +426,17 @@ impl MachineOps for StdMachine {
             let above4g_start = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
             sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
+        Ok(())
+    }
 
+    fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
         let mut plug_base = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
         if mem_config.mem_size > below4g_size {
             let above4g_size = mem_config.mem_size - below4g_size;
             plug_base = plug_base.checked_add(above4g_size).unwrap();
         }
-        virtio::PLUG_ADDR_BASE
-            .set(plug_base)
-            .expect("Failed to init memory plug base address");
-        Ok(())
+        plug_base
     }
 
     fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {

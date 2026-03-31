@@ -422,15 +422,14 @@ impl MachineOps for StdMachine {
         sys_mem
             .root()
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        Ok(())
+    }
 
-        let plug_base = MEM_LAYOUT[LayoutEntryType::Mem as usize]
+    fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
+        MEM_LAYOUT[LayoutEntryType::Mem as usize]
             .0
             .checked_add(mem_config.mem_size)
-            .unwrap();
-        virtio::PLUG_ADDR_BASE
-            .set(plug_base)
-            .expect("Failed to init memory plug base address");
-        Ok(())
+            .unwrap()
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
