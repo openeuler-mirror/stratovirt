@@ -383,8 +383,6 @@ pub trait BlockDriverOps<T: Clone>: Send {
 
     fn resize(&mut self, new_size: u64) -> Result<()>;
 
-    fn drain_request(&self);
-
     fn get_inflight(&self) -> Arc<AtomicU64>;
 
     fn register_io_event(
@@ -432,9 +430,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     if drain {
                         info!("Drain the inflight IO for drive \"{}\"", cloned_drive_id);
                         let incomplete = raw.lock().unwrap().get_inflight();
-                        while incomplete.load(Ordering::SeqCst) != 0 {
-                            yield_now();
-                        }
+                        drain_request(&cloned_drive_id, incomplete);
                     }
                     info!(
                         "Drain the inflight IO for drive \"{}\" ends.",
@@ -473,9 +469,7 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
                     if drain {
                         info!("Drain the inflight IO for drive \"{}\"", cloned_drive_id);
                         let incomplete = qcow2.lock().unwrap().get_inflight();
-                        while incomplete.load(Ordering::SeqCst) != 0 {
-                            yield_now();
-                        }
+                        drain_request(&cloned_drive_id, incomplete);
                     }
                     let mut locked_qcow2 = qcow2.lock().unwrap();
                     if let Err(e) = locked_qcow2.flush() {
@@ -502,4 +496,11 @@ pub fn create_block_backend<T: Clone + 'static + Send + Sync>(
 pub fn remove_block_backend(id: &str) {
     QCOW2_LIST.lock().unwrap().remove(id);
     TempCleaner::remove_exit_notifier(id);
+}
+
+pub fn drain_request(id: &str, incomplete: Arc<AtomicU64>) {
+    trace::block_drain_request(id);
+    while incomplete.load(Ordering::SeqCst) != 0 {
+        yield_now();
+    }
 }

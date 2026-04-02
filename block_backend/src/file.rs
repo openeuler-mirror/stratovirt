@@ -183,12 +183,6 @@ impl<T: Clone + 'static> FileDriver<T> {
         self.aio.borrow_mut().flush_request()
     }
 
-    pub fn drain_request(&self) {
-        while self.incomplete.load(Ordering::Acquire) != 0 {
-            continue;
-        }
-    }
-
     pub fn register_io_event(
         &mut self,
         broken: Arc<AtomicBool>,
