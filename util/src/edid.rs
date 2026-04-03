@@ -70,7 +70,6 @@ impl EdidInfo {
         }
 
         let mut offset: usize = 54;
-        let mut xtra3_offset: usize = 0;
         let mut dta_offset: usize = 0;
         if edid_array.len() >= 256 {
             dta_offset = 128;
@@ -118,38 +117,52 @@ impl EdidInfo {
 
         // 18 Byte Data Blocks: 72 bytes
         self.fullfill_desc_timing(edid_array, offset);
-        offset += 18;
+        offset = self.next_desc_offset(edid_array, dta_offset, offset);
 
-        self.fullfill_desc_range(edid_array, offset, 0xfd);
-        offset += 18;
-
-        if !self.name.is_empty() {
-            self.fullfill_desc_text(edid_array, offset, 0xfc);
-            offset += 18;
-        }
-
-        if self.serial != 0 {
-            self.fullfill_desc_text(edid_array, offset, 0xff);
-            offset += 18;
-        }
-
-        if offset < 126 {
-            xtra3_offset = offset;
-            self.fullfill_desc_xtra3_std(edid_array, xtra3_offset);
-            offset += 18;
-        }
-
-        while offset < 126 {
-            self.fullfill_desc_dummy(edid_array, offset);
-            offset += 18;
-        }
+        let xtra3_offset = offset;
+        self.fullfill_desc_xtra3_std(edid_array, xtra3_offset);
+        offset = self.next_desc_offset(edid_array, dta_offset, offset);
 
         // Established Timings: 3 bytes
         // Standard Timings: 16 bytes
         self.fullfill_modes(edid_array, xtra3_offset, dta_offset);
 
+        self.fullfill_desc_range(edid_array, offset, 0xfd);
+        offset = self.next_desc_offset(edid_array, dta_offset, offset);
+
+        if !self.name.is_empty() {
+            self.fullfill_desc_text(edid_array, offset, 0xfc);
+            offset = self.next_desc_offset(edid_array, dta_offset, offset);
+        }
+
+        if self.serial != 0 {
+            self.fullfill_desc_text(edid_array, offset, 0xff);
+            offset = self.next_desc_offset(edid_array, dta_offset, offset);
+        }
+
+        while offset != 0 {
+            self.fullfill_desc_dummy(edid_array, offset);
+            offset = self.next_desc_offset(edid_array, dta_offset, offset);
+        }
+
         // EXTENSION Flag and Checksum
-        self.fullfill_checksum(edid_array)
+        self.fullfill_checksum(edid_array, 127);
+        self.fullfill_checksum(&mut edid_array[128..], 127);
+    }
+
+    fn next_desc_offset(&self, edid_array: &mut [u8], dta_offset: usize, offset: usize) -> usize {
+        if offset + 36 < 127 {
+            return offset + 18;
+        }
+        if dta_offset != 0 {
+            if offset < 127 {
+                return dta_offset + edid_array[dta_offset + 2] as usize;
+            }
+            if offset + 36 < dta_offset + 127 {
+                return offset + 18;
+            }
+        }
+        0
     }
 
     fn fullfill_ext_dta(&mut self, edid_array: &mut [u8], offset: usize) {
@@ -261,7 +274,7 @@ impl EdidInfo {
     fn fullfill_desc_xtra3_std(&mut self, edid_array: &mut [u8], offset: usize) {
         // additional standard timings 3
         self.fullfill_desc_type(edid_array, offset, 0xf7);
-        edid_array[offset + 4] = 10;
+        edid_array[offset + 5] = 10;
     }
 
     fn fullfill_desc_dummy(&mut self, edid_array: &mut [u8], offset: usize) {
@@ -434,7 +447,7 @@ impl EdidInfo {
             if mode.byte != 0 {
                 edid_array[mode.byte as usize] |= (1 << mode.bit) as u8;
             } else if mode.xtra3 != 0 && xtra3_offset != 0 {
-                edid_array[xtra3_offset] |= (1 << mode.bit) as u8;
+                edid_array[xtra3_offset + mode.xtra3 as usize] |= (1 << mode.bit) as u8;
             } else if std_offset < 54
                 && self.fullfill_std_mode(edid_array, std_offset, mode.xres, mode.yres) == 0
             {
@@ -487,19 +500,19 @@ impl EdidInfo {
 
     fn fullfill_ext_dta_mode(&mut self, edid_array: &mut [u8], dta_offset: usize, dta: u32) {
         let index = edid_array[dta_offset + 2] as usize;
-        edid_array[index] = dta as u8;
+        edid_array[dta_offset + index] = dta as u8;
         edid_array[dta_offset + 2] += 1;
         edid_array[dta_offset + 4] += 1;
     }
 
-    fn fullfill_checksum(&mut self, edid_array: &mut [u8]) {
+    fn fullfill_checksum(&mut self, edid_array: &mut [u8], len: usize) {
         let mut sum: u32 = 0;
-        for elem in edid_array.iter() {
+        for elem in edid_array[..len].iter() {
             sum += u32::from(*elem);
         }
         sum &= 0xff;
         if sum != 0 {
-            edid_array[127] = (0x100 - sum) as u8;
+            edid_array[len] = (0x100 - sum) as u8;
         }
     }
 }
