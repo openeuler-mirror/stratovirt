@@ -25,3 +25,5 @@ pub mod rng;
 #[cfg(feature = "virtio_scsi")]
 pub mod scsi_cntlr;
 pub mod serial;
+#[cfg(feature = "virtio_snd")]
+pub mod sound;
