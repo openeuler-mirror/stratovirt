@@ -1,0 +1,542 @@
+// Copyright (c) 2026 Huawei Technologies Co.,Ltd. All rights reserved.
+//
+// StratoVirt is licensed under Mulan PSL v2.
+// You can use this software according to the terms and conditions of the Mulan
+// PSL v2.
+// You may obtain a copy of Mulan PSL v2 at:
+//         http://license.coscl.org.cn/MulanPSL2
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY
+// KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+// NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+// See the Mulan PSL v2 for more details.
+
+use std::collections::VecDeque;
+use std::io::{Read, Write};
+use std::os::unix::io::RawFd;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result};
+use audio::volume::{VolumeListener, MAX_VOLUME};
+use log::{error, info};
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
+use util::byte_code::ByteCode;
+use vmm_sys_util::epoll::EventSet;
+
+use super::dev::{Pcm, VirtQ};
+use super::spec::*;
+use super::{read_request, SUPPORTED_FORMATS, SUPPORTED_MAX_CHANNELS, SUPPORTED_RATES};
+use crate::Element;
+use address_space::{AddressSpace, RegionCache};
+use audio::{AudioInterface, AudioStreamIo};
+use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
+
+struct StreamElem {
+    elem: Element,
+    buf: Option<Vec<u8>>,
+    pos: usize,
+}
+
+impl StreamElem {
+    fn new(elem: Element) -> Self {
+        Self {
+            elem,
+            buf: None,
+            pos: 0,
+        }
+    }
+
+    fn index(&self) -> u16 {
+        self.elem.index
+    }
+
+    fn in_avail(&self) -> usize {
+        Element::iovec_size(&self.elem.in_iovec) as usize
+    }
+
+    #[inline]
+    fn write_offset(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        offset: u64,
+        buf: &[u8],
+    ) -> Result<usize> {
+        self.elem
+            .iov_from_buf_with_offset(sys_mem, cache, offset, buf)
+    }
+
+    fn populate(&mut self, sys_mem: &Arc<AddressSpace>, cache: &Option<RegionCache>) {
+        if self.buf.is_none() {
+            let size = Element::iovec_size(&self.elem.out_iovec) as usize - size_of::<PcmXfer>();
+            let mut buf = vec![0u8; size];
+            let len = self
+                .elem
+                .iov_to_buf_with_offset(sys_mem, cache, size_of::<PcmXfer>() as u64, &mut buf)
+                .unwrap();
+            assert!(len == buf.len());
+            self.buf = Some(buf);
+            self.pos = 0;
+        }
+    }
+
+    fn copy_to_buf(&mut self, dst: &mut [u8]) -> usize {
+        if self.buf.is_none() {
+            return 0;
+        }
+        let start = self.pos;
+        let buf = self.buf.as_ref().unwrap();
+        let left = buf.len() - start;
+        let to_copy = dst.len().min(left);
+        let end = start + to_copy;
+
+        dst[..to_copy].copy_from_slice(&buf[start..end]);
+        self.pos = end;
+        to_copy
+    }
+
+    fn consumed_all(&self) -> bool {
+        if let Some(buf) = self.buf.as_ref() {
+            buf.len() == self.pos
+        } else {
+            true
+        }
+    }
+}
+
+pub struct StreamIoHandler {
+    queue: VecDeque<StreamElem>,
+    pub vq: VirtQ,
+    pub period_bytes: usize,
+}
+
+impl StreamIoHandler {
+    fn flush(&mut self) -> Result<()> {
+        let sys_mem = self.vq.sys_mem();
+        let cache = self.vq.get_cache();
+        let mut queue = std::mem::take(&mut self.queue);
+
+        loop {
+            let Some(elem) = queue.pop_front() else {
+                break;
+            };
+
+            let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
+            let len = elem.write_offset(&sys_mem, &cache, 0, resp.as_bytes())?;
+            self.vq.add_used(elem.index(), len as u32)?;
+        }
+        Ok(())
+    }
+
+    fn append(&mut self, elem: Element) {
+        self.queue.push_back(StreamElem::new(elem));
+    }
+}
+
+impl AudioStreamIo for StreamIoHandler {}
+
+// Used to read from tx queue.
+impl Read for StreamIoHandler {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut copied = 0;
+        let sys_mem = self.vq.sys_mem();
+        let cache = self.vq.get_cache();
+
+        loop {
+            if copied >= buf.len() {
+                break;
+            }
+
+            let Some(elem) = self.queue.front_mut() else {
+                break;
+            };
+
+            elem.populate(&sys_mem, &cache);
+            copied += elem.copy_to_buf(&mut buf[copied..]);
+
+            if elem.consumed_all() {
+                let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
+                let elem = self.queue.pop_front().unwrap();
+                let len = elem
+                    .write_offset(&sys_mem, &cache, 0, resp.as_bytes())
+                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+                self.vq
+                    .add_used(elem.index(), len as u32)
+                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+            }
+        }
+
+        Ok(copied)
+    }
+}
+
+// Used to write to rx queue.
+impl Write for StreamIoHandler {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut copied = 0;
+        let mut left = buf.len();
+        let sys_mem = self.vq.sys_mem();
+        let cache = self.vq.get_cache();
+
+        loop {
+            if copied >= buf.len() {
+                break;
+            }
+
+            let Some(elem) = self.queue.front_mut() else {
+                break;
+            };
+
+            // We have to take care about the size of in buffer to guarantee there's enough space
+            // to save PCM data blob and PcmStatus.
+            let max_size = elem.in_avail().saturating_sub(size_of::<PcmStatus>());
+            let avail = max_size.saturating_sub(elem.pos);
+            if max_size == 0 || avail == 0 {
+                let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
+                let elem = self.queue.pop_front().unwrap();
+                let len = elem
+                    .write_offset(&sys_mem, &cache, 0, resp.as_bytes())
+                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+                self.vq
+                    .add_used(elem.index(), len as u32)
+                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+                continue;
+            }
+
+            let to_copy = left.min(avail);
+            let len = elem
+                .write_offset(
+                    &sys_mem,
+                    &cache,
+                    elem.pos as u64,
+                    &buf[copied..copied + to_copy],
+                )
+                .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+            elem.pos += len;
+            copied += len;
+            left -= len;
+
+            if elem.pos >= self.period_bytes {
+                let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
+                let mut elem = self.queue.pop_front().unwrap();
+                elem.pos += elem
+                    .write_offset(&sys_mem, &cache, elem.pos as u64, resp.as_bytes())
+                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+                self.vq
+                    .add_used(elem.index(), elem.pos as u32)
+                    .map_err(|_| std::io::ErrorKind::Other)?;
+            }
+        }
+        Ok(0)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct Stream {
+    pub info: PcmInfo,
+    pub params: PcmSetParams,
+    pub interface: Arc<Mutex<Option<Box<dyn AudioInterface>>>>,
+    pub io_handler: Arc<Mutex<StreamIoHandler>>,
+    vm_pause_notifier: Option<u64>,
+}
+
+impl Stream {
+    pub fn new(direction: u8, vq: VirtQ) -> Self {
+        Self {
+            info: PcmInfo {
+                hdr: SoundInfo::default(),
+                direction,
+                features: 0,
+                channels_min: SUPPORTED_MAX_CHANNELS,
+                channels_max: SUPPORTED_MAX_CHANNELS,
+                formats: SUPPORTED_FORMATS as u64,
+                rates: SUPPORTED_RATES as u64,
+                padding: [0; 5],
+            },
+            params: PcmSetParams::default(),
+            interface: Arc::new(Mutex::new(None)),
+            io_handler: Arc::new(Mutex::new(StreamIoHandler {
+                queue: VecDeque::new(),
+                vq,
+                period_bytes: 0,
+            })),
+            vm_pause_notifier: None,
+        }
+    }
+
+    pub fn flush(&self) -> Result<()> {
+        if let Err(e) = self.io_handler.lock().unwrap().flush() {
+            error!("Failed to flush all elements, {:?}", e);
+        }
+        Ok(())
+    }
+
+    pub fn register_vm_pause_notifier(&mut self) {
+        let interface = self.interface.clone();
+        let notifier = Arc::new(move |pause| {
+            if let Some(interface) = interface.lock().unwrap().as_mut() {
+                if pause {
+                    info!("vm paused, stop audio stream");
+                    if let Err(e) = interface.stop() {
+                        error!("failed to stop audio stream: {:?}", e);
+                    }
+                } else {
+                    info!("vm resumed, start audio stream");
+                    if let Err(e) = interface.start() {
+                        error!("failed to start audio stream: {:?}", e);
+                    }
+                }
+            }
+        });
+        self.vm_pause_notifier = Some(register_vm_pause_notifier(notifier));
+    }
+
+    pub fn unregister_vm_pause_notifier(&mut self) {
+        if let Some(id) = self.vm_pause_notifier.take() {
+            unregister_vm_pause_notifier(id);
+        }
+    }
+}
+
+pub trait IoHandler
+where
+    Self: 'static,
+{
+    fn register_notifier(handler: Arc<Self>, fd: RawFd) -> Vec<EventNotifier> {
+        let cb: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
+
+            if handler.device_broken() {
+                return None;
+            }
+            handler.handle_queue().unwrap_or_else(|e| {
+                error!("Failed to handle virtqueue, error is {:?}.", e);
+            });
+            None
+        });
+
+        let notifiers = vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            fd,
+            None,
+            EventSet::IN,
+            vec![cb],
+        )];
+        notifiers
+    }
+
+    fn handle_elem(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        elem: Element,
+    ) -> Result<()>;
+
+    fn handle_queue(&self) -> Result<()> {
+        let vq = self.get_vq();
+        let sys_mem = vq.sys_mem();
+        let cache = vq.get_cache();
+
+        loop {
+            let elem = vq.pop_elem().with_context(|| "Failed to pop avail ring")?;
+            if elem.desc_num == 0 {
+                break;
+            }
+
+            self.handle_elem(&sys_mem, &cache, elem)?;
+        }
+
+        Ok(())
+    }
+
+    fn device_broken(&self) -> bool;
+
+    fn get_vq(&self) -> &VirtQ;
+}
+
+pub struct CtrlIoHandler {
+    vq: VirtQ,
+    pcm: Arc<Mutex<Pcm>>,
+}
+
+impl IoHandler for CtrlIoHandler {
+    fn handle_elem(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        elem: Element,
+    ) -> Result<()> {
+        let ctrl_hdr: CtrlHdr =
+            read_request(sys_mem, cache, &elem).with_context(|| "Failed to get control header")?;
+        info!("CtrlQueue: {:?}", ctrl_hdr);
+
+        let mut pcm = self.pcm.lock().unwrap();
+        let (code, payload_size) = match u32::from_le(ctrl_hdr.code) {
+            VIRTIO_SND_R_PCM_INFO => pcm.handle_pcm_info(sys_mem, cache, &elem),
+            VIRTIO_SND_R_PCM_SET_PARAMS => pcm.handle_pcm_set_params(sys_mem, cache, &elem),
+            VIRTIO_SND_R_PCM_PREPARE => pcm.handle_pcm_prepare(sys_mem, cache, &elem),
+            VIRTIO_SND_R_PCM_RELEASE => pcm.handle_pcm_release(sys_mem, cache, &elem),
+            VIRTIO_SND_R_PCM_START => pcm.handle_pcm_start(sys_mem, cache, &elem),
+            VIRTIO_SND_R_PCM_STOP => pcm.handle_pcm_stop(sys_mem, cache, &elem),
+            VIRTIO_SND_R_VOL_SET => pcm.handle_vol_set(sys_mem, cache, &elem),
+            _ => {
+                error!("Control command {:#x} not supported", ctrl_hdr.code);
+                (VIRTIO_SND_S_NOT_SUPP, 0)
+            }
+        };
+
+        if code != VIRTIO_SND_S_OK {
+            error!("CtrlQueue: response code {:#x}", code);
+        }
+
+        let resp = SndHdr { code: code.to_le() };
+        elem.iov_from_buf_with_offset(sys_mem, cache, 0, resp.as_bytes())?;
+
+        self.vq
+            .add_used(elem.index, size_of::<SndHdr>() as u32 + payload_size)
+            .with_context(|| format!("Failed to add used ring {}", elem.index))
+    }
+
+    #[inline]
+    fn get_vq(&self) -> &VirtQ {
+        &self.vq
+    }
+
+    #[inline]
+    fn device_broken(&self) -> bool {
+        self.vq.device_broken()
+    }
+}
+
+impl CtrlIoHandler {
+    pub fn new(vq: VirtQ, pcm: Arc<Mutex<Pcm>>) -> Arc<Self> {
+        Arc::new(Self { vq, pcm })
+    }
+}
+
+pub struct TxIoHandler {
+    vq: VirtQ,
+    pcm: Arc<Mutex<Pcm>>,
+}
+
+impl IoHandler for TxIoHandler {
+    fn handle_elem(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        elem: Element,
+    ) -> Result<()> {
+        let hdr: PcmXfer =
+            read_request(sys_mem, cache, &elem).with_context(|| "Failed to get tx PcmXfer")?;
+
+        let stream_id = u32::from_le(hdr.stream_id);
+        let mut pcm = self.pcm.lock().unwrap();
+        let stream = pcm.get_stream_mut(stream_id);
+        stream.io_handler.lock().unwrap().append(elem);
+
+        Ok(())
+    }
+
+    #[inline]
+    fn get_vq(&self) -> &VirtQ {
+        &self.vq
+    }
+
+    #[inline]
+    fn device_broken(&self) -> bool {
+        self.vq.device_broken()
+    }
+}
+
+impl TxIoHandler {
+    pub fn new(vq: VirtQ, pcm: Arc<Mutex<Pcm>>) -> Arc<Self> {
+        Arc::new(Self { vq, pcm })
+    }
+}
+
+pub struct RxIoHandler {
+    vq: VirtQ,
+    pcm: Arc<Mutex<Pcm>>,
+}
+
+impl IoHandler for RxIoHandler {
+    fn handle_elem(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        elem: Element,
+    ) -> Result<()> {
+        let hdr: PcmXfer =
+            read_request(sys_mem, cache, &elem).with_context(|| "Failed to get rx PcmXfer")?;
+
+        let stream_id = u32::from_le(hdr.stream_id);
+        let mut pcm = self.pcm.lock().unwrap();
+        let stream = pcm.get_stream_mut(stream_id);
+        stream.io_handler.lock().unwrap().append(elem);
+
+        Ok(())
+    }
+
+    #[inline]
+    fn get_vq(&self) -> &VirtQ {
+        &self.vq
+    }
+
+    #[inline]
+    fn device_broken(&self) -> bool {
+        self.vq.device_broken()
+    }
+}
+
+impl RxIoHandler {
+    pub fn new(vq: VirtQ, pcm: Arc<Mutex<Pcm>>) -> Arc<Self> {
+        Arc::new(Self { vq, pcm })
+    }
+}
+
+pub struct VirtioSndVolume {
+    vq: VirtQ,
+}
+
+impl VirtioSndVolume {
+    pub fn new(vq: VirtQ) -> Arc<Self> {
+        Arc::new(Self { vq })
+    }
+
+    fn update_guest_volume(&self, vol: u32) -> Result<()> {
+        if self.vq.device_broken() {
+            return Ok(());
+        }
+
+        let sys_mem = self.vq.sys_mem();
+        let cache = self.vq.get_cache();
+
+        let elem = self
+            .vq
+            .pop_elem()
+            .with_context(|| "Failed to pop avail ring for process event queue")?;
+        if elem.desc_num == 0 {
+            return Ok(());
+        }
+
+        let event = SndEvent::new(VIRTIO_SND_EVT_VOLUME_CHANGED, vol);
+        let len = elem.iov_from_buf_with_offset(&sys_mem, &cache, 0, event.as_bytes())?;
+        self.vq
+            .add_used(elem.index, len as u32)
+            .with_context(|| "Failed to add volume change event to event queue")
+    }
+}
+
+impl VolumeListener for VirtioSndVolume {
+    fn notify(&self, host_vol: u32) {
+        let guest_vol = host_vol * VIRTIO_SND_MAX_VOLUME / MAX_VOLUME;
+
+        if let Err(e) = self.update_guest_volume(guest_vol) {
+            error!("Failed to notify the guest volume change, {:?}", e);
+        }
+    }
+}
