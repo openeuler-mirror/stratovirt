@@ -1851,6 +1851,15 @@ impl XhciDevice {
     }
 
     fn alloc_slot_streams(&mut self, slot_id: u32, mask: u32) -> Result<TRBCCode> {
+        let slot = &self.slots[(slot_id - 1) as usize];
+        if slot.usb_port.is_none() {
+            debug!(
+                "Device already detached, skipping hardware stream alloc for slot {}",
+                slot_id
+            );
+            return Ok(TRBCCode::Success);
+        }
+
         let (endpoints, ep_ctxs) = self.mask_to_stream_endpoints(slot_id, mask)?;
         let streams_nr = match self.validate_get_streams_nr(&endpoints, &ep_ctxs) {
             Ok(0) => return Ok(TRBCCode::Success),
@@ -1935,6 +1944,15 @@ impl XhciDevice {
     }
 
     fn free_slot_streams(&mut self, slot_id: u32, mask: u32) -> Result<()> {
+        let slot = &self.slots[(slot_id - 1) as usize];
+        if slot.usb_port.is_none() {
+            debug!(
+                "Device already detached, skipping hardware stream free for slot {}",
+                slot_id
+            );
+            return Ok(());
+        }
+
         let (endpoints, _) = self.mask_to_stream_endpoints(slot_id, mask)?;
         let dev = self.get_usb_dev(slot_id, 0)?;
         let mut locked_dev = dev.lock().unwrap();
