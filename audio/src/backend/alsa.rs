@@ -34,7 +34,7 @@ const DEFAULT_PERIOD_SIZE: u64 = 2204;
 pub struct Alsa {
     pcm: Arc<Mutex<PCM>>,
     direction: AudioStreamDirection,
-    io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+    io_handler: Arc<dyn AudioStreamIo>,
     /// Worker thread handle.
     thread_handle: Option<JoinHandle<()>>,
     /// Flag to signal the worker thread to stop.
@@ -51,7 +51,7 @@ unsafe impl Send for Alsa {}
 impl AudioInterface for Alsa {
     fn new(
         params: AudioStreamParams,
-        io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+        io_handler: Arc<dyn AudioStreamIo>,
         _token_id: Option<Arc<RwLock<u64>>>,
     ) -> Result<Box<Self>>
     where
@@ -162,7 +162,7 @@ impl AudioInterface for Alsa {
                 match direction {
                     AudioStreamDirection::Playback => {
                         // Read data from io_handler and write to PCM
-                        match io_handler.lock().unwrap().read(&mut buffer) {
+                        match io_handler.read(&mut buffer) {
                             Ok(len) if len > 0 => {
                                 if let Err(e) = write_pcm(&pcm, &buffer[..len]) {
                                     log::error!("ALSA playback write error: {:?}", e);
@@ -177,7 +177,7 @@ impl AudioInterface for Alsa {
                         // Read from PCM and push to io_handler
                         match read_pcm(&pcm, &mut buffer) {
                             Ok(len) if len > 0 => {
-                                if let Err(e) = io_handler.lock().unwrap().write(&buffer[..len]) {
+                                if let Err(e) = io_handler.write(&buffer[..len]) {
                                     log::error!("ALSA capture write to io_handler error: {:?}", e);
                                 }
                             }

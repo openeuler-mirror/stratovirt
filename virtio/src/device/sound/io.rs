@@ -11,9 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -46,6 +46,7 @@ impl StreamElem {
         }
     }
 
+    #[inline]
     fn index(&self) -> u16 {
         self.elem.index
     }
@@ -105,16 +106,24 @@ impl StreamElem {
 }
 
 pub struct StreamIoHandler {
-    queue: VecDeque<StreamElem>,
+    queue: Mutex<VecDeque<StreamElem>>,
     pub vq: VirtQ,
-    pub period_bytes: usize,
+    pub period_bytes: AtomicUsize,
 }
 
 impl StreamIoHandler {
-    fn flush(&mut self) -> Result<()> {
+    pub fn set_period_bytes(&self, period_bytes: usize) {
+        self.period_bytes.store(period_bytes, Ordering::Release);
+    }
+
+    fn period_bytes(&self) -> usize {
+        self.period_bytes.load(Ordering::Acquire)
+    }
+
+    fn flush(&self) -> Result<()> {
         let sys_mem = self.vq.sys_mem();
         let cache = self.vq.get_cache();
-        let mut queue = std::mem::take(&mut self.queue);
+        let mut queue = std::mem::take(&mut *self.queue.lock().unwrap());
 
         loop {
             let Some(elem) = queue.pop_front() else {
@@ -128,16 +137,13 @@ impl StreamIoHandler {
         Ok(())
     }
 
-    fn append(&mut self, elem: Element) {
-        self.queue.push_back(StreamElem::new(elem));
+    fn append(&self, elem: Element) {
+        self.queue.lock().unwrap().push_back(StreamElem::new(elem));
     }
 }
 
-impl AudioStreamIo for StreamIoHandler {}
-
-// Used to read from tx queue.
-impl Read for StreamIoHandler {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+impl AudioStreamIo for StreamIoHandler {
+    fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let mut copied = 0;
         let sys_mem = self.vq.sys_mem();
         let cache = self.vq.get_cache();
@@ -147,7 +153,8 @@ impl Read for StreamIoHandler {
                 break;
             }
 
-            let Some(elem) = self.queue.front_mut() else {
+            let mut locked_queue = self.queue.lock().unwrap();
+            let Some(elem) = locked_queue.front_mut() else {
                 break;
             };
 
@@ -156,34 +163,29 @@ impl Read for StreamIoHandler {
 
             if elem.consumed_all() {
                 let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
-                let elem = self.queue.pop_front().unwrap();
-                let len = elem
-                    .write_offset(&sys_mem, &cache, 0, resp.as_bytes())
-                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
-                self.vq
-                    .add_used(elem.index(), len as u32)
-                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+                let elem = locked_queue.pop_front().unwrap();
+                let len = elem.write_offset(&sys_mem, &cache, 0, resp.as_bytes())?;
+                self.vq.add_used(elem.index(), len as u32)?;
             }
         }
 
         Ok(copied)
     }
-}
 
-// Used to write to rx queue.
-impl Write for StreamIoHandler {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut copied = 0;
         let mut left = buf.len();
         let sys_mem = self.vq.sys_mem();
         let cache = self.vq.get_cache();
+        let period_bytes = self.period_bytes();
 
         loop {
             if copied >= buf.len() {
                 break;
             }
 
-            let Some(elem) = self.queue.front_mut() else {
+            let mut locked_queue = self.queue.lock().unwrap();
+            let Some(elem) = locked_queue.front_mut() else {
                 break;
             };
 
@@ -193,45 +195,32 @@ impl Write for StreamIoHandler {
             let avail = max_size.saturating_sub(elem.pos);
             if max_size == 0 || avail == 0 {
                 let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
-                let elem = self.queue.pop_front().unwrap();
-                let len = elem
-                    .write_offset(&sys_mem, &cache, 0, resp.as_bytes())
-                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
-                self.vq
-                    .add_used(elem.index(), len as u32)
-                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+                let elem = locked_queue.pop_front().unwrap();
+                let len = elem.write_offset(&sys_mem, &cache, 0, resp.as_bytes())?;
+                self.vq.add_used(elem.index(), len as u32)?;
                 continue;
             }
 
             let to_copy = left.min(avail);
-            let len = elem
-                .write_offset(
-                    &sys_mem,
-                    &cache,
-                    elem.pos as u64,
-                    &buf[copied..copied + to_copy],
-                )
-                .map_err(|_| std::io::ErrorKind::InvalidInput)?;
+            let len = elem.write_offset(
+                &sys_mem,
+                &cache,
+                elem.pos as u64,
+                &buf[copied..copied + to_copy],
+            )?;
             elem.pos += len;
             copied += len;
             left -= len;
 
-            if elem.pos >= self.period_bytes {
+            if elem.pos >= period_bytes {
                 let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
-                let mut elem = self.queue.pop_front().unwrap();
-                elem.pos += elem
-                    .write_offset(&sys_mem, &cache, elem.pos as u64, resp.as_bytes())
-                    .map_err(|_| std::io::ErrorKind::InvalidInput)?;
-                self.vq
-                    .add_used(elem.index(), elem.pos as u32)
-                    .map_err(|_| std::io::ErrorKind::Other)?;
+                let mut elem = locked_queue.pop_front().unwrap();
+                elem.pos +=
+                    elem.write_offset(&sys_mem, &cache, elem.pos as u64, resp.as_bytes())?;
+                self.vq.add_used(elem.index(), elem.pos as u32)?;
             }
         }
-        Ok(0)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+        Ok(copied)
     }
 }
 
@@ -240,7 +229,7 @@ pub struct Stream {
     pub info: PcmInfo,
     pub params: PcmSetParams,
     pub interface: Arc<Mutex<Option<Box<dyn AudioInterface>>>>,
-    pub io_handler: Arc<Mutex<StreamIoHandler>>,
+    pub io_handler: Arc<StreamIoHandler>,
     vm_pause_notifier: Option<u64>,
 }
 
@@ -259,17 +248,17 @@ impl Stream {
             },
             params: PcmSetParams::default(),
             interface: Arc::new(Mutex::new(None)),
-            io_handler: Arc::new(Mutex::new(StreamIoHandler {
-                queue: VecDeque::new(),
+            io_handler: Arc::new(StreamIoHandler {
+                queue: Mutex::new(VecDeque::new()),
                 vq,
-                period_bytes: 0,
-            })),
+                period_bytes: AtomicUsize::new(0),
+            }),
             vm_pause_notifier: None,
         }
     }
 
     pub fn flush(&self) -> Result<()> {
-        if let Err(e) = self.io_handler.lock().unwrap().flush() {
+        if let Err(e) = self.io_handler.flush() {
             error!("Failed to flush all elements, {:?}", e);
         }
         Ok(())
@@ -436,7 +425,7 @@ impl IoHandler for TxIoHandler {
         let stream_id = u32::from_le(hdr.stream_id);
         let mut pcm = self.pcm.lock().unwrap();
         let stream = pcm.get_stream_mut(stream_id);
-        stream.io_handler.lock().unwrap().append(elem);
+        stream.io_handler.append(elem);
 
         Ok(())
     }
@@ -476,7 +465,7 @@ impl IoHandler for RxIoHandler {
         let stream_id = u32::from_le(hdr.stream_id);
         let mut pcm = self.pcm.lock().unwrap();
         let stream = pcm.get_stream_mut(stream_id);
-        stream.io_handler.lock().unwrap().append(elem);
+        stream.io_handler.append(elem);
 
         Ok(())
     }
