@@ -11,7 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::os::raw::c_void;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -58,7 +58,7 @@ pub struct OhAudio {
     /// Current active scene.
     scene: usize,
     /// IO handler for audio data transfer.
-    io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+    io_handler: Arc<dyn AudioStreamIo>,
     /// Direction of the stream (playback or record).
     direction: AudioStreamDirection,
     /// Current ohaudio status.
@@ -87,7 +87,7 @@ unsafe impl Send for OhAudio {}
 impl AudioInterface for OhAudio {
     fn new(
         params: AudioStreamParams,
-        io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+        io_handler: Arc<dyn AudioStreamIo>,
         token_id: Option<Arc<RwLock<u64>>>,
     ) -> Result<Box<Self>> {
         let (rate, size) = Self::convert_params(&params)?;
@@ -329,7 +329,7 @@ impl OhAudio {
         // SAFETY: 'buffer' pointer should be always valid according to OH Audio C API document.
         let dest = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, length) };
 
-        match ohaudio.io_handler.lock().unwrap().read(dest) {
+        match ohaudio.io_handler.read(dest) {
             Ok(len) => {
                 if len != length {
                     warn!("the data written {} is less than {}", len, length);
@@ -354,7 +354,7 @@ impl OhAudio {
         // SAFETY: 'buffer' pointer should be always valid according to OH Audio C API document.
         let src = unsafe { std::slice::from_raw_parts(buffer as *mut u8, length) };
 
-        if let Err(e) = ohaudio.io_handler.lock().unwrap().write(src) {
+        if let Err(e) = ohaudio.io_handler.write(src) {
             error!("Failed to write pcm data by io handler, {:?}", e);
         }
         0
@@ -437,7 +437,7 @@ impl OhAudio {
 
 fn start_consume_timer(
     status: Arc<RwLock<OhAudioStatus>>,
-    io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+    io_handler: Arc<dyn AudioStreamIo>,
     period_bytes: usize,
     period_ms: u64,
 ) {
@@ -445,7 +445,7 @@ fn start_consume_timer(
         // Check if we are still interrupted
         if *status.read().unwrap() == OhAudioStatus::Intr {
             let mut buffer: Vec<u8> = vec![0; period_bytes];
-            if let Err(e) = io_handler.lock().unwrap().read(&mut buffer) {
+            if let Err(e) = io_handler.read(&mut buffer) {
                 error!("Failed to read playback data: {:?}", e);
             }
             // Continue the timer
@@ -461,7 +461,7 @@ fn start_consume_timer(
 
 fn start_mute_timer(
     status: Arc<RwLock<OhAudioStatus>>,
-    io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+    io_handler: Arc<dyn AudioStreamIo>,
     period_bytes: usize,
     period_ms: u64,
 ) {
@@ -472,7 +472,7 @@ fn start_mute_timer(
             || (audio_status == OhAudioStatus::Started && !get_record_authority())
         {
             let buffer: Vec<u8> = vec![0; period_bytes];
-            if let Err(e) = io_handler.lock().unwrap().write(&buffer) {
+            if let Err(e) = io_handler.write(&buffer) {
                 error!("Failed to read playback data: {:?}", e);
             }
             // Continue the timer
@@ -495,7 +495,7 @@ fn start_mute_timer(
 /// This notifier handles authority changes for capture streams, managing silence
 /// generation when authority is revoked.
 struct OhAudioAuthNotifier {
-    io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+    io_handler: Arc<dyn AudioStreamIo>,
     status: Arc<RwLock<OhAudioStatus>>,
     period_bytes: usize,
     period_ms: u64,

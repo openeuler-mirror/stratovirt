@@ -17,9 +17,8 @@ pub mod volume;
 pub use auth::{get_record_authority, set_record_authority};
 
 use std::{
-    io::{Read, Write},
     str::FromStr,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use anyhow::{Result, bail};
@@ -121,7 +120,7 @@ pub trait AudioInterface: Send {
     /// * `token_id` - Optional token ID for permission control (OHOS specific).
     fn new(
         params: AudioStreamParams,
-        io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+        io_handler: Arc<dyn AudioStreamIo>,
         token_id: Option<Arc<RwLock<u64>>>,
     ) -> Result<Box<Self>>
     where
@@ -139,14 +138,22 @@ pub trait AudioInterface: Send {
     }
 }
 
-/// Trait for stream I/O operations.
+/// Trait for stream I/O operations in Pull mode.
 ///
-/// This trait combines Read and Write for bidirectional audio data transfer.
-/// It's used as a callback interface between the audio backend and the
-/// device:
-/// - `Read::read()` is called by playback backends to get audio data.
-/// - `Write::write()` is called by capture backends to send audio data.
-pub trait AudioStreamIo: Read + Write + Sync + Send {}
+/// We intentionally use `&self` instead of `&mut self` to avoid forcing audio backends
+/// to wrap the handler in an outer `Mutex`. Implementations should use interior
+/// mutability where needed.
+pub trait AudioStreamIo: Sync + Send {
+    /// Pull playback PCM data into `buf`. Returns bytes written into `buf`.
+    ///
+    /// Implementations should be non-blocking; returning 0 indicates no data available.
+    fn read(&self, buf: &mut [u8]) -> Result<usize>;
+
+    /// Push captured PCM data from `buf` into the device. Returns bytes consumed from `buf`.
+    ///
+    /// Implementations should be non-blocking; returning 0 indicates no destination available.
+    fn write(&self, buf: &[u8]) -> Result<usize>;
+}
 
 /// Audio backend type enumeration.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -193,7 +200,7 @@ impl FromStr for AudioBackend {
 pub fn create_audio_interface(
     backend: AudioBackend,
     params: AudioStreamParams,
-    io_handler: Arc<Mutex<dyn AudioStreamIo>>,
+    io_handler: Arc<dyn AudioStreamIo>,
     token_id: Option<Arc<RwLock<u64>>>,
 ) -> Result<Box<dyn AudioInterface>> {
     match backend {
