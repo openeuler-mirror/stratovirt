@@ -33,8 +33,7 @@ use crate::{
 };
 use address_space::{AddressSpace, RegionCache};
 use audio::{
-    create_audio_interface, volume::MAX_VOLUME, AudioBackend, AudioStreamDirection,
-    AudioStreamParams, PcmFmt, PcmRate,
+    create_audio_interface, AudioBackend, AudioStreamDirection, AudioStreamParams, PcmFmt, PcmRate,
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use util::byte_code::ByteCode;
@@ -84,12 +83,11 @@ impl VirtioDevice for Sound {
     gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
-        self.init_config_features()?;
-        Ok(())
+        self.init_config_features()
     }
 
     fn init_config_features(&mut self) -> Result<()> {
-        self.base.device_features = 1 << VIRTIO_F_VERSION_1;
+        self.base.device_features = (1 << VIRTIO_F_VERSION_1) | (1 << VIRTIO_SND_F_CTLS);
         Ok(())
     }
 
@@ -98,6 +96,7 @@ impl VirtioDevice for Sound {
             jacks: VIRTIO_SND_JACK_DEFAULT,
             streams: VIRTIO_SND_STREAM_DEFAULT,
             chmaps: VIRTIO_SND_CHMAP_DEFAULT,
+            controls: VIRTIO_SND_CTL_DEFAULT,
         };
         read_config_default(config.as_bytes(), offset, data)
     }
@@ -114,11 +113,12 @@ impl VirtioDevice for Sound {
     ) -> Result<()> {
         let queues = self.base.queues.clone();
 
+        let ctl = Arc::new(Mutex::new(Ctl::new(self.volume_ctrl.clone())));
+
         let pcm = Arc::new(Mutex::new(Pcm::new(
             VIRTIO_SND_STREAM_DEFAULT,
             self.token_id.clone(),
             self.config.backendtype.clone(),
-            self.volume_ctrl.clone(),
         )));
         let tx_virtq = VirtQ::new(
             self.base.driver_features,
@@ -149,6 +149,7 @@ impl VirtioDevice for Sound {
                     interrupt_cb.clone(),
                 ),
                 pcm.clone(),
+                ctl.clone(),
             ),
             self.config.iothread.clone(),
             queue_evts[VIRTIO_QUEUE_CTRL_IDX].as_raw_fd(),
@@ -156,13 +157,16 @@ impl VirtioDevice for Sound {
         .with_context(|| "Failed to register sound ctrl notifier to MainLoop")?;
 
         // queues[1] is for event and currently only support volume change.
-        let volume_listener = VirtioSndVolume::new(VirtQ::new(
-            self.base.driver_features,
-            mem_space.clone(),
-            queues[VIRTIO_QUEUE_EVENT_IDX].clone(),
-            self.base.broken.clone(),
-            interrupt_cb.clone(),
-        ));
+        let volume_listener = VirtioSndVolume::new(
+            VirtQ::new(
+                self.base.driver_features,
+                mem_space.clone(),
+                queues[VIRTIO_QUEUE_EVENT_IDX].clone(),
+                self.base.broken.clone(),
+                interrupt_cb.clone(),
+            ),
+            ctl,
+        );
         self.volume_listener_id = Some(self.volume_ctrl.register_listener(volume_listener));
 
         // queues[2] is for tx.
@@ -281,11 +285,14 @@ impl VirtQ {
     }
 }
 
+// ============================================================================
+// PCM handler
+// ============================================================================
+
 pub struct Pcm {
     streams: Vec<Stream>,
     token_id: Option<Arc<RwLock<u64>>>,
     backend_type: AudioBackend,
-    volume_ctrl: Arc<dyn VolumeControl>,
 }
 
 impl Pcm {
@@ -293,13 +300,11 @@ impl Pcm {
         streams: u32,
         token_id: Option<Arc<RwLock<u64>>>,
         backend_type: AudioBackend,
-        volume_ctrl: Arc<dyn VolumeControl>,
     ) -> Self {
         Self {
             streams: Vec::with_capacity(streams as usize),
             token_id,
             backend_type,
-            volume_ctrl,
         }
     }
 
@@ -563,34 +568,6 @@ impl Pcm {
         }
         (VIRTIO_SND_S_OK, 0)
     }
-
-    pub fn handle_vol_set(
-        &mut self,
-        mem_space: &Arc<AddressSpace>,
-        cache: &Option<RegionCache>,
-        elem: &Element,
-    ) -> (u32, u32) {
-        let req: PcmSetVol = match read_request(mem_space, cache, elem) {
-            Ok(req) => req,
-            Err(e) => {
-                error!("{:?}", e);
-                return (VIRTIO_SND_S_BAD_MSG, 0);
-            }
-        };
-
-        let vol = u32::from_le(req.vol);
-        // TODO: doesn't mute 0 mean unmute?
-        let mute = u32::from_le(req.mute);
-
-        let normalized_vol = vol * MAX_VOLUME / VIRTIO_SND_MAX_VOLUME;
-        if mute == 0 {
-            self.volume_ctrl.set_volume(0);
-        } else {
-            self.volume_ctrl.set_volume(normalized_vol);
-        }
-
-        (VIRTIO_SND_S_OK, 0)
-    }
 }
 
 fn convert_params(
@@ -624,4 +601,208 @@ fn convert_params(
         direction,
         period_bytes,
     })
+}
+
+// ============================================================================
+// CTL (Control Element) handler
+// ============================================================================
+
+// The structure definition are referenced from include/uapi/linux/virtio_snd.h.
+pub struct CtlElement {
+    pub role: u32,
+    pub ctl_type: u32,
+    pub access: u32,
+    pub count: u32,
+    pub index: u32,
+    pub name: [u8; 44],
+    pub min: u32,
+    pub max: u32,
+    pub step: u32,
+    pub values: [u32; CTL_VAL_INT_SIZE],
+}
+
+impl CtlElement {
+    fn volume(min: u32, max: u32) -> Self {
+        let mut name = [0u8; 44];
+        let vol_name = b"Master Playback Volume";
+        name[..vol_name.len()].copy_from_slice(vol_name);
+
+        Self {
+            role: VIRTIO_SND_CTL_ROLE_VOLUME,
+            ctl_type: VIRTIO_SND_CTL_TYPE_INTEGER,
+            access: (1 << VIRTIO_SND_CTL_ACCESS_READ) | (1 << VIRTIO_SND_CTL_ACCESS_WRITE),
+            count: 2,
+            index: 0,
+            name,
+            min,
+            max,
+            step: 1,
+            values: [0u32; CTL_VAL_INT_SIZE],
+        }
+    }
+
+    fn mute() -> Self {
+        let mut name = [0u8; 44];
+        let mute_name = b"Master Playback Switch";
+        name[..mute_name.len()].copy_from_slice(mute_name);
+
+        let mut values = [0u32; CTL_VAL_INT_SIZE];
+        values[0] = 1;
+
+        Self {
+            role: VIRTIO_SND_CTL_ROLE_MUTE,
+            ctl_type: VIRTIO_SND_CTL_TYPE_BOOLEAN,
+            access: (1 << VIRTIO_SND_CTL_ACCESS_READ) | (1 << VIRTIO_SND_CTL_ACCESS_WRITE),
+            count: 1,
+            index: 0,
+            name,
+            min: 0,
+            max: 1,
+            step: 1,
+            values,
+        }
+    }
+}
+
+pub struct Ctl {
+    elements: Vec<CtlElement>,
+    volume_ctrl: Arc<dyn VolumeControl>,
+    pub range: (u32, u32),
+    pub volume: u32,
+    pub mute: bool,
+}
+
+impl Ctl {
+    pub fn new(volume_ctrl: Arc<dyn VolumeControl>) -> Self {
+        let (min, max) = volume_ctrl.get_volume_range();
+        Self {
+            elements: vec![CtlElement::volume(min, max), CtlElement::mute()],
+            volume_ctrl: volume_ctrl.clone(),
+            range: (min, max),
+            volume: volume_ctrl.get_volume(),
+            mute: false,
+        }
+    }
+
+    pub fn get_volume_ctl_id(&self) -> u16 {
+        // Find the first element with VOLUME role
+        for (i, elem) in self.elements.iter().enumerate() {
+            if elem.role == VIRTIO_SND_CTL_ROLE_VOLUME {
+                return i as u16;
+            }
+        }
+        0
+    }
+
+    fn validate_control_id(&self, control_id: u32) -> Result<()> {
+        if control_id as usize >= self.elements.len() {
+            bail!("Invalid control_id {}", control_id);
+        }
+        Ok(())
+    }
+
+    pub fn update_volume(&mut self, new_vol: u32) {
+        self.volume = new_vol;
+        self.mute = false;
+
+        let id = self.get_volume_ctl_id() as usize;
+        let elem = &mut self.elements[id];
+        elem.values[0] = new_vol;
+        elem.values[1] = new_vol;
+
+        let id = self.get_mute_ctl_id() as usize;
+        let elem = &mut self.elements[id];
+        elem.values[0] = 1;
+    }
+
+    pub fn handle_ctl_info(&self, control_id: u32) -> Result<CtlInfo> {
+        self.validate_control_id(control_id)?;
+        let elem = &self.elements[control_id as usize];
+
+        Ok(CtlInfo {
+            hdr: SoundInfo { hda_fn_nid: 0 },
+            role: elem.role,
+            ctl_type: elem.ctl_type,
+            access: elem.access,
+            count: elem.count,
+            index: elem.index,
+            name: elem.name,
+            value: CtlInfoValue {
+                integer: CtlIntegerRange {
+                    min: elem.min,
+                    max: elem.max,
+                    step: elem.step,
+                },
+            },
+        })
+    }
+
+    pub fn handle_ctl_read(&self, control_id: u32) -> Result<CtlValue> {
+        self.validate_control_id(control_id)?;
+        let elem = &self.elements[control_id as usize];
+
+        let mut result = CtlValue::default();
+        for (i, &v) in elem.values.iter().enumerate() {
+            if i >= CTL_VAL_INT_SIZE {
+                break;
+            }
+            result.integer[i] = v.to_le();
+        }
+
+        Ok(result)
+    }
+
+    pub fn handle_ctl_write(&mut self, control_id: u32, value: &CtlValue) -> Result<()> {
+        self.validate_control_id(control_id)?;
+        let elem = &mut self.elements[control_id as usize];
+
+        // Check write access
+        if (elem.access & (1 << VIRTIO_SND_CTL_ACCESS_WRITE)) == 0 {
+            bail!("Control element {} is not writable", control_id);
+        }
+
+        let new_val = u32::from_le(value.integer[0]);
+
+        match elem.role {
+            VIRTIO_SND_CTL_ROLE_VOLUME => {
+                if new_val < self.range.0 || new_val > self.range.1 {
+                    bail!("volume value {} is out of range {:?}", new_val, self.range);
+                }
+                elem.values[0] = new_val;
+                elem.values[1] = new_val;
+                self.volume = new_val;
+
+                let mute_elem = &self.elements[self.get_mute_ctl_id() as usize];
+                let is_muted = mute_elem.values[0] == 0;
+                if !is_muted {
+                    self.volume_ctrl.set_volume(new_val);
+                }
+            }
+            VIRTIO_SND_CTL_ROLE_MUTE => {
+                elem.values[0] = new_val;
+                elem.values[1] = new_val;
+                if new_val == 0 {
+                    self.mute = true;
+                    self.volume_ctrl.set_volume(0);
+                } else {
+                    self.mute = false;
+                    self.volume_ctrl.set_volume(self.volume);
+                }
+            }
+            _ => {
+                bail!("Write not supported for control role {}", elem.role);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_mute_ctl_id(&self) -> u16 {
+        for (i, elem) in self.elements.iter().enumerate() {
+            if elem.role == VIRTIO_SND_CTL_ROLE_MUTE {
+                return i as u16;
+            }
+        }
+        0
+    }
 }

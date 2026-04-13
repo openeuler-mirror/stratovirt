@@ -17,7 +17,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow, bail};
 use log::{error, info, warn};
 
-use crate::volume::{MAX_VOLUME, VolumeListener};
+use crate::volume::VolumeListener;
 use crate::{
     AudioInterface, AudioStreamDirection, AudioStreamIo, AudioStreamParams, PcmFmt, PcmRate,
     auth::{
@@ -544,27 +544,6 @@ impl OhosVolumeControl {
         ctrl
     }
 
-    /// Convert normalized volume (0-65535) to host volume.
-    fn to_ohos_volume(&self, vol: u32) -> u32 {
-        if vol == 0 {
-            return 0;
-        }
-        let range = self.host_max.saturating_sub(self.host_min);
-        if range == 0 {
-            return 0;
-        }
-        (vol * range / MAX_VOLUME).min(self.host_max)
-    }
-
-    /// Convert host volume to normalized volume (0-65535).
-    fn to_normalized_volume(&self, vol: u32) -> u32 {
-        let range = self.host_max.saturating_sub(self.host_min);
-        if range == 0 {
-            return 0;
-        }
-        vol * MAX_VOLUME / range
-    }
-
     /// Notify all registered notifiers of a volume change.
     fn notify_volume_change(&self, volume: u32) {
         if let Some(listener) = self.listener.read().unwrap().as_ref() {
@@ -574,12 +553,16 @@ impl OhosVolumeControl {
 }
 
 impl VolumeControl for OhosVolumeControl {
+    fn get_volume_range(&self) -> (u32, u32) {
+        (self.host_min, self.host_max)
+    }
+
     fn get_volume(&self) -> u32 {
-        self.to_normalized_volume(get_ohos_volume())
+        get_ohos_volume()
     }
 
     fn set_volume(&self, volume: u32) {
-        set_ohos_volume(self.to_ohos_volume(volume));
+        set_ohos_volume(volume);
     }
 
     fn register_listener(&self, listener: Arc<dyn VolumeListener>) -> u64 {
@@ -593,8 +576,7 @@ impl VolumeControl for OhosVolumeControl {
 }
 
 impl GuestVolumeNotifier for OhosVolumeControl {
-    fn notify(&self, host_vol: u32) {
-        let normalized_vol = self.to_normalized_volume(host_vol);
-        self.notify_volume_change(normalized_vol);
+    fn notify(&self, volume: u32) {
+        self.notify_volume_change(volume);
     }
 }

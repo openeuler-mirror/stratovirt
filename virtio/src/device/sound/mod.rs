@@ -68,7 +68,7 @@ fn read_request<T: ByteCode>(
 
     let len = elem.iov_to_buf_with_offset(sys_mem, cache, 0, req.as_mut_bytes())?;
     if len != size_of::<T>() {
-        bail!("Invalid request size {}, expect {}", len, size_of::<T>());
+        bail!("invalid request size {}, expect {}", len, size_of::<T>());
     }
 
     Ok(req)

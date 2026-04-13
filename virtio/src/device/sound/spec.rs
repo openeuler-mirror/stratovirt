@@ -10,46 +10,93 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#![allow(dead_code)]
+
 use util::byte_code::ByteCode;
 
 pub const VIRTIO_SND_JACK_DEFAULT: u32 = 0;
 pub const VIRTIO_SND_STREAM_DEFAULT: u32 = 2;
 pub const VIRTIO_SND_CHMAP_DEFAULT: u32 = 0;
+pub const VIRTIO_SND_CTL_DEFAULT: u32 = 2;
 
+// Feature bits
+pub const VIRTIO_SND_F_CTLS: u32 = 0;
+
+// PCM request codes
 pub const VIRTIO_SND_R_PCM_INFO: u32 = 0x100;
 pub const VIRTIO_SND_R_PCM_SET_PARAMS: u32 = 0x101;
 pub const VIRTIO_SND_R_PCM_PREPARE: u32 = 0x102;
 pub const VIRTIO_SND_R_PCM_RELEASE: u32 = 0x103;
 pub const VIRTIO_SND_R_PCM_START: u32 = 0x104;
 pub const VIRTIO_SND_R_PCM_STOP: u32 = 0x105;
-pub const VIRTIO_SND_R_VOL_SET: u32 = 0x0300;
 
-pub const VIRTIO_SND_EVT_VOLUME_CHANGED: u32 = 0x1200;
+// CTL request codes
+pub const VIRTIO_SND_R_CTL_INFO: u32 = 0x0300;
+pub const VIRTIO_SND_R_CTL_ENUM_ITEMS: u32 = 0x0301;
+pub const VIRTIO_SND_R_CTL_READ: u32 = 0x0302;
+pub const VIRTIO_SND_R_CTL_WRITE: u32 = 0x0303;
+pub const VIRTIO_SND_R_CTL_TLV_READ: u32 = 0x0304;
+pub const VIRTIO_SND_R_CTL_TLV_WRITE: u32 = 0x0305;
+pub const VIRTIO_SND_R_CTL_TLV_COMMAND: u32 = 0x0306;
 
+// CTL event code
+pub const VIRTIO_SND_EVT_CTL_NOTIFY: u32 = 0x1200;
+
+// Status codes
 pub const VIRTIO_SND_S_OK: u32 = 0x8000;
 pub const VIRTIO_SND_S_BAD_MSG: u32 = 0x8001;
 pub const VIRTIO_SND_S_NOT_SUPP: u32 = 0x8002;
 pub const VIRTIO_SND_S_IO_ERR: u32 = 0x8003;
 
+// Stream direction
 pub const VIRTIO_SND_D_OUTPUT: u8 = 0;
 pub const VIRTIO_SND_D_INPUT: u8 = 1;
 
+// PCM format
 pub const VIRTIO_SND_PCM_FMT_S16: u8 = 5;
 pub const VIRTIO_SND_PCM_FMT_S24: u8 = 11;
 pub const VIRTIO_SND_PCM_FMT_S32: u8 = 17;
 
+// PCM rate
 pub const VIRTIO_SND_PCM_RATE_44100: u8 = 6;
 pub const VIRTIO_SND_PCM_RATE_48000: u8 = 7;
 
+// Queue indices
 pub const VIRTIO_QUEUE_CTRL_IDX: usize = 0;
 pub const VIRTIO_QUEUE_EVENT_IDX: usize = 1;
 pub const VIRTIO_QUEUE_TX_IDX: usize = 2;
 pub const VIRTIO_QUEUE_RX_IDX: usize = 3;
 pub const VIRTIO_QUEUE_MAX: usize = 4;
 
+// CTL element value types
+pub const VIRTIO_SND_CTL_TYPE_BOOLEAN: u32 = 0;
+pub const VIRTIO_SND_CTL_TYPE_INTEGER: u32 = 1;
+pub const VIRTIO_SND_CTL_TYPE_INTEGER64: u32 = 2;
+pub const VIRTIO_SND_CTL_TYPE_ENUMERATED: u32 = 3;
+pub const VIRTIO_SND_CTL_TYPE_BYTES: u32 = 4;
+pub const VIRTIO_SND_CTL_TYPE_IEC958: u32 = 5;
+
+// CTL element access bits
+pub const VIRTIO_SND_CTL_ACCESS_READ: u32 = 0;
+pub const VIRTIO_SND_CTL_ACCESS_WRITE: u32 = 1;
+pub const VIRTIO_SND_CTL_ACCESS_VOLATILE: u32 = 2;
+pub const VIRTIO_SND_CTL_ACCESS_INACTIVE: u32 = 3;
+pub const VIRTIO_SND_CTL_ACCESS_TLV_READ: u32 = 4;
+pub const VIRTIO_SND_CTL_ACCESS_TLV_WRITE: u32 = 5;
+pub const VIRTIO_SND_CTL_ACCESS_TLV_COMMAND: u32 = 6;
+
+// CTL event masks
+pub const VIRTIO_SND_CTL_EVT_MASK_VALUE: u32 = 0;
+pub const VIRTIO_SND_CTL_EVT_MASK_INFO: u32 = 1;
+pub const VIRTIO_SND_CTL_EVT_MASK_TLV: u32 = 2;
+
 pub const VIRTIO_SND_QUEUE_SIZE: u16 = 64;
 
-pub const VIRTIO_SND_MAX_VOLUME: u32 = 65535;
+// CTL element roles
+pub const VIRTIO_SND_CTL_ROLE_UNDEFINED: u32 = 0;
+pub const VIRTIO_SND_CTL_ROLE_VOLUME: u32 = 1;
+pub const VIRTIO_SND_CTL_ROLE_MUTE: u32 = 2;
+pub const VIRTIO_SND_CTL_ROLE_GAIN: u32 = 3;
 
 #[repr(C)]
 #[derive(Clone, Default)]
@@ -69,7 +116,13 @@ impl std::fmt::Debug for CtrlHdr {
             VIRTIO_SND_R_PCM_RELEASE => stringify!(VIRTIO_SND_R_PCM_RELEASE),
             VIRTIO_SND_R_PCM_START => stringify!(VIRTIO_SND_R_PCM_START),
             VIRTIO_SND_R_PCM_STOP => stringify!(VIRTIO_SND_R_PCM_STOP),
-            VIRTIO_SND_R_VOL_SET => stringify!(VIRTIO_SND_R_VOL_SET),
+            VIRTIO_SND_R_CTL_INFO => stringify!(VIRTIO_SND_R_CTL_INFO),
+            VIRTIO_SND_R_CTL_ENUM_ITEMS => stringify!(VIRTIO_SND_R_CTL_ENUM_ITEMS),
+            VIRTIO_SND_R_CTL_READ => stringify!(VIRTIO_SND_R_CTL_READ),
+            VIRTIO_SND_R_CTL_WRITE => stringify!(VIRTIO_SND_R_CTL_WRITE),
+            VIRTIO_SND_R_CTL_TLV_READ => stringify!(VIRTIO_SND_R_CTL_TLV_READ),
+            VIRTIO_SND_R_CTL_TLV_WRITE => stringify!(VIRTIO_SND_R_CTL_TLV_WRITE),
+            VIRTIO_SND_R_CTL_TLV_COMMAND => stringify!(VIRTIO_SND_R_CTL_TLV_COMMAND),
             _ => "unknown control code",
         };
 
@@ -80,7 +133,6 @@ impl std::fmt::Debug for CtrlHdr {
     }
 }
 
-#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Default)]
 pub struct QueryInfo {
@@ -92,14 +144,12 @@ pub struct QueryInfo {
 
 impl ByteCode for QueryInfo {}
 
-#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Default)]
 pub struct SoundInfo {
     pub hda_fn_nid: u32,
 }
 
-#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Default)]
 pub struct PcmInfo {
@@ -165,6 +215,151 @@ impl PcmHdr {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub struct CtlHdr {
+    pub hdr: SndHdr,
+    pub control_id: u32,
+}
+
+impl ByteCode for CtlHdr {}
+
+#[repr(C)]
+#[derive(Clone)]
+pub struct CtlInfo {
+    pub hdr: SoundInfo,
+    pub role: u32,
+    pub ctl_type: u32,
+    pub access: u32,
+    pub count: u32,
+    pub index: u32,
+    pub name: [u8; 44],
+    pub value: CtlInfoValue,
+}
+
+impl Default for CtlInfo {
+    fn default() -> Self {
+        Self {
+            hdr: SoundInfo::default(),
+            role: 0,
+            ctl_type: 0,
+            access: 0,
+            count: 0,
+            index: 0,
+            name: [0u8; 44],
+            value: CtlInfoValue::default(),
+        }
+    }
+}
+
+impl ByteCode for CtlInfo {}
+
+impl CtlInfo {
+    pub fn to_le(&self) -> Self {
+        Self {
+            hdr: SoundInfo {
+                hda_fn_nid: self.hdr.hda_fn_nid.to_le(),
+            },
+            role: self.role.to_le(),
+            ctl_type: self.ctl_type.to_le(),
+            access: self.access.to_le(),
+            count: self.count.to_le(),
+            index: self.index.to_le(),
+            name: self.name,
+            value: CtlInfoValue {
+                integer: CtlIntegerRange {
+                    // SAFETY: it's safe to access 'min' due to previously successful initialization.
+                    min: unsafe { self.value.integer.min.to_le() },
+                    // SAFETY: it's safe to access 'max' due to previously successful initialization.
+                    max: unsafe { self.value.integer.max.to_le() },
+                    // SAFETY: it's safe to access 'step' due to previously successful initialization.
+                    step: unsafe { self.value.integer.step.to_le() },
+                },
+            },
+        }
+    }
+
+    pub fn to_le_bytes(&self) -> Vec<u8> {
+        self.to_le().as_bytes().to_vec()
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Default, Copy)]
+pub struct CtlIntegerRange {
+    pub min: u32,
+    pub max: u32,
+    pub step: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub struct CtlInteger64Range {
+    pub min: u64,
+    pub max: u64,
+    pub step: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub struct CtlEnumerated {
+    pub items: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union CtlInfoValue {
+    pub integer: CtlIntegerRange,
+    pub integer64: CtlInteger64Range,
+    pub enumerated: CtlEnumerated,
+}
+
+impl Default for CtlInfoValue {
+    fn default() -> Self {
+        Self {
+            integer64: CtlInteger64Range::default(),
+        }
+    }
+}
+
+pub const CTL_VAL_INT_SIZE: usize = 128;
+
+#[repr(C)]
+#[derive(Clone)]
+pub struct CtlValue {
+    pub integer: [u32; CTL_VAL_INT_SIZE],
+}
+
+impl Default for CtlValue {
+    fn default() -> Self {
+        Self {
+            integer: [0u32; CTL_VAL_INT_SIZE],
+        }
+    }
+}
+
+impl ByteCode for CtlValue {}
+
+#[repr(C)]
+#[derive(Clone, Default)]
+pub struct CtlEvent {
+    pub hdr: SndHdr,
+    pub control_id: u16,
+    pub mask: u16,
+}
+
+impl ByteCode for CtlEvent {}
+
+impl CtlEvent {
+    pub fn new_le(code: u32, control_id: u16, mask: u16) -> Self {
+        Self {
+            hdr: SndHdr { code: code.to_le() },
+            control_id: control_id.to_le(),
+            mask: mask.to_le(),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 #[repr(C)]
 pub struct SndEvent {
@@ -214,17 +409,6 @@ impl PcmSetParams {
     }
 }
 
-#[allow(dead_code)]
-#[repr(C)]
-#[derive(Clone, Default)]
-pub struct PcmSetVol {
-    pub hdr: SndHdr,
-    pub vol: u32,
-    pub mute: u32,
-}
-
-impl ByteCode for PcmSetVol {}
-
 #[repr(C)]
 #[derive(Clone, Default)]
 pub struct PcmXfer {
@@ -233,13 +417,13 @@ pub struct PcmXfer {
 
 impl ByteCode for PcmXfer {}
 
-#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Default)]
 pub struct VirtioSndConfig {
     pub jacks: u32,
     pub streams: u32,
     pub chmaps: u32,
+    pub controls: u32,
 }
 
 impl ByteCode for VirtioSndConfig {}
