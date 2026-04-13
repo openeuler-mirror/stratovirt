@@ -44,6 +44,13 @@ pub trait VolumeListener: Sync + Send {
 /// let vol = volume_control.get_volume();
 /// ```
 pub trait VolumeControl: Send + Sync {
+    /// Get volume range.
+    ///
+    /// # Returns
+    ///
+    /// Volume range.
+    fn get_volume_range(&self) -> (u32, u32);
+
     /// Get current volume.
     ///
     /// # Returns
@@ -87,6 +94,10 @@ pub trait VolumeControl: Send + Sync {
 pub struct NullVolumeControl;
 
 impl VolumeControl for NullVolumeControl {
+    fn get_volume_range(&self) -> (u32, u32) {
+        (0, 0)
+    }
+
     fn get_volume(&self) -> u32 {
         0
     }
