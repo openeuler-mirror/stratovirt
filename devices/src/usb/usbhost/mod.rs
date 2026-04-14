@@ -34,7 +34,7 @@ use clap::Parser;
 use libc::{c_int, c_void};
 use libusb1_sys::{
     constants::{LIBUSB_ERROR_NO_MEM, LIBUSB_LOG_CB_GLOBAL},
-    libusb_device_handle, libusb_get_iso_packet_buffer_simple, libusb_set_iso_packet_lengths,
+    libusb_device_handle, libusb_get_iso_packet_buffer, libusb_set_iso_packet_lengths,
     libusb_set_log_cb, libusb_transfer,
 };
 use log::{error, info, warn};
@@ -315,12 +315,12 @@ impl IsoTransfer {
             // - `self.packet` is less than the number of packets in this transfer,
             //   ensured by the logic in `copy_data` which updates `self.packet`
             //   and checks against `get_iso_packet_nums`.
-            unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
+            unsafe { libusb_get_iso_packet_buffer(self.host_transfer, self.packet) };
 
         locked_packet.transfer_packet(
             // SAFETY:
-            // - `buffer` was obtained from `libusb_get_iso_packet_buffer_simple`,
-            //   which returns a pointer to valid, writable packet memory owned by libusb.
+            // - `buffer` was obtained from `libusb_get_iso_packet_buffer`, which
+            //   returns a pointer to valid, writable packet memory owned by libusb.
             // - `size` is at most the packet length as computed above,
             //   so the slice will not exceed the buffer boundary.
             // - No other mutable reference to this packet buffer exists while
