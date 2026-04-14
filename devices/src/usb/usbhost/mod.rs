@@ -1036,7 +1036,8 @@ impl UsbHost {
     }
 
     fn find_iso_queue(&self, ep: &UsbEndpoint) -> Option<Arc<Mutex<IsoQueue>>> {
-        self.iso_queues.lock().unwrap().get(&ep.ep_number).cloned()
+        let ep_address = ep.get_address();
+        self.iso_queues.lock().unwrap().get(&ep_address).cloned()
     }
 
     fn create_iso_queue(&mut self, ep: &UsbEndpoint) -> Result<Arc<Mutex<IsoQueue>>> {
@@ -1055,10 +1056,11 @@ impl UsbHost {
             ep,
             cloned_iso_queue,
         )?;
+        let ep_address = ep.get_address();
         self.iso_queues
             .lock()
             .unwrap()
-            .insert(ep.ep_number, iso_queue.clone());
+            .insert(ep_address, iso_queue.clone());
         Ok(iso_queue)
     }
 
