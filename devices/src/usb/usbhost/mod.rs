@@ -15,7 +15,7 @@ mod host_usblib;
 mod ohusb;
 
 use std::{
-    collections::{HashMap, LinkedList},
+    collections::{HashMap, VecDeque},
     ffi::{c_char, CStr},
     os::unix::io::RawFd,
     ptr::NonNull,
@@ -350,9 +350,9 @@ pub struct IsoQueue {
     hostbus: u8,
     hostaddr: u8,
     ep: UsbEndpoint,
-    unused: LinkedList<Arc<Mutex<IsoTransfer>>>,
-    inflight: LinkedList<Arc<Mutex<IsoTransfer>>>,
-    copy: LinkedList<Arc<Mutex<IsoTransfer>>>,
+    unused: VecDeque<Arc<Mutex<IsoTransfer>>>,
+    inflight: VecDeque<Arc<Mutex<IsoTransfer>>>,
+    copy: VecDeque<Arc<Mutex<IsoTransfer>>>,
 }
 
 impl IsoQueue {
@@ -361,9 +361,9 @@ impl IsoQueue {
             hostbus,
             hostaddr,
             ep,
-            unused: LinkedList::new(),
-            inflight: LinkedList::new(),
-            copy: LinkedList::new(),
+            unused: VecDeque::new(),
+            inflight: VecDeque::new(),
+            copy: VecDeque::new(),
         }
     }
 

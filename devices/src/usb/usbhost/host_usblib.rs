@@ -299,15 +299,21 @@ extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
 
     if let Some(iso_queue) = iso_queue.upgrade() {
         let mut locked_iso_queue = iso_queue.lock().unwrap();
-        let iso_transfer = locked_iso_queue.inflight.pop_front().unwrap();
-        if locked_iso_queue.inflight.is_empty() {
-            let queue = &locked_iso_queue;
-            trace::usb_host_iso_stop(queue.hostbus, queue.hostaddr, queue.ep.ep_number);
-        }
-        if locked_iso_queue.ep.in_direction {
-            locked_iso_queue.copy.push_back(iso_transfer);
-        } else {
-            locked_iso_queue.unused.push_back(iso_transfer);
+        let inflight_queue = &mut locked_iso_queue.inflight;
+        let position = inflight_queue
+            .iter()
+            .position(|t| Arc::ptr_eq(t, &iso_transfer));
+        if let Some(idx) = position {
+            let _actual_xfer = inflight_queue.remove(idx);
+            if inflight_queue.is_empty() {
+                let queue = &locked_iso_queue;
+                trace::usb_host_iso_stop(queue.hostbus, queue.hostaddr, queue.ep.ep_number);
+            }
+            if locked_iso_queue.ep.in_direction {
+                locked_iso_queue.copy.push_back(iso_transfer);
+            } else {
+                locked_iso_queue.unused.push_back(iso_transfer);
+            }
         }
     }
 }
