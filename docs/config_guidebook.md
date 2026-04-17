@@ -1163,6 +1163,7 @@ In addition to the required slot information, six optional properties are suppor
 * xres/yres: The size of the login windows.
 * max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resolutions is affected.
 * enable_bar0: Enable a 64M bar0 in virtio-gpu.
+* cursor_size: configure cursor_size*cursor_size for cursor image buffer.
 
 Note:
 1. Only virtio-gpu 2D supported.
