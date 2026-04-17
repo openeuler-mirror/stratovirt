@@ -1168,7 +1168,7 @@ fn scsi_cd_basic_test() {
     expect_result_vec[14] = 0xaa;
     // Byte[15]: Reserved.
     // Bytes[16-19]: Track Start Address.
-    expect_result_vec[17] = 2;
+    expect_result_vec[18] = 0x80;
     let cdb_test_args = CdbTest {
         cdb: read_toc_cdb,
         target,
@@ -1201,7 +1201,7 @@ fn scsi_cd_basic_test() {
     // Byte[6]: Track Number.
     // Byte[7]: Reserved.
     // Bytes[8-11]: Track Start Address(LBA form = 000000h, MSF form = 00:00:02:00).
-    let expect_result_vec = vec![0, 0xa, 1, 1, 0, 0x14, 0xaa, 0, 0, 0x1d, 9, 0x2f];
+    let expect_result_vec = vec![0, 0xa, 1, 1, 0, 0x14, 0xaa, 0, 0, 0x7, 0x12, 0x44];
     let cdb_test_args = CdbTest {
         cdb: read_toc_cdb,
         target,
