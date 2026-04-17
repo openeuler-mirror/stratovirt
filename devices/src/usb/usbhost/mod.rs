@@ -15,7 +15,7 @@ mod host_usblib;
 mod ohusb;
 
 use std::{
-    collections::{HashMap, LinkedList},
+    collections::{HashMap, VecDeque},
     ffi::{c_char, CStr},
     os::unix::io::RawFd,
     ptr::NonNull,
@@ -34,7 +34,7 @@ use clap::Parser;
 use libc::{c_int, c_void};
 use libusb1_sys::{
     constants::{LIBUSB_ERROR_NO_MEM, LIBUSB_LOG_CB_GLOBAL},
-    libusb_device_handle, libusb_get_iso_packet_buffer_simple, libusb_set_iso_packet_lengths,
+    libusb_device_handle, libusb_get_iso_packet_buffer, libusb_set_iso_packet_lengths,
     libusb_set_log_cb, libusb_transfer,
 };
 use log::{error, info, warn};
@@ -315,12 +315,12 @@ impl IsoTransfer {
             // - `self.packet` is less than the number of packets in this transfer,
             //   ensured by the logic in `copy_data` which updates `self.packet`
             //   and checks against `get_iso_packet_nums`.
-            unsafe { libusb_get_iso_packet_buffer_simple(self.host_transfer, self.packet) };
+            unsafe { libusb_get_iso_packet_buffer(self.host_transfer, self.packet) };
 
         locked_packet.transfer_packet(
             // SAFETY:
-            // - `buffer` was obtained from `libusb_get_iso_packet_buffer_simple`,
-            //   which returns a pointer to valid, writable packet memory owned by libusb.
+            // - `buffer` was obtained from `libusb_get_iso_packet_buffer`, which
+            //   returns a pointer to valid, writable packet memory owned by libusb.
             // - `size` is at most the packet length as computed above,
             //   so the slice will not exceed the buffer boundary.
             // - No other mutable reference to this packet buffer exists while
@@ -350,9 +350,9 @@ pub struct IsoQueue {
     hostbus: u8,
     hostaddr: u8,
     ep: UsbEndpoint,
-    unused: LinkedList<Arc<Mutex<IsoTransfer>>>,
-    inflight: LinkedList<Arc<Mutex<IsoTransfer>>>,
-    copy: LinkedList<Arc<Mutex<IsoTransfer>>>,
+    unused: VecDeque<Arc<Mutex<IsoTransfer>>>,
+    inflight: VecDeque<Arc<Mutex<IsoTransfer>>>,
+    copy: VecDeque<Arc<Mutex<IsoTransfer>>>,
 }
 
 impl IsoQueue {
@@ -361,9 +361,9 @@ impl IsoQueue {
             hostbus,
             hostaddr,
             ep,
-            unused: LinkedList::new(),
-            inflight: LinkedList::new(),
-            copy: LinkedList::new(),
+            unused: VecDeque::new(),
+            inflight: VecDeque::new(),
+            copy: VecDeque::new(),
         }
     }
 
@@ -1036,7 +1036,8 @@ impl UsbHost {
     }
 
     fn find_iso_queue(&self, ep: &UsbEndpoint) -> Option<Arc<Mutex<IsoQueue>>> {
-        self.iso_queues.lock().unwrap().get(&ep.ep_number).cloned()
+        let ep_address = ep.get_address();
+        self.iso_queues.lock().unwrap().get(&ep_address).cloned()
     }
 
     fn create_iso_queue(&mut self, ep: &UsbEndpoint) -> Result<Arc<Mutex<IsoQueue>>> {
@@ -1055,10 +1056,11 @@ impl UsbHost {
             ep,
             cloned_iso_queue,
         )?;
+        let ep_address = ep.get_address();
         self.iso_queues
             .lock()
             .unwrap()
-            .insert(ep.ep_number, iso_queue.clone());
+            .insert(ep_address, iso_queue.clone());
         Ok(iso_queue)
     }
 
