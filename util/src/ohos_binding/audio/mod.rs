@@ -514,6 +514,14 @@ impl OhVolume {
         ret as u32
     }
 
+    fn get_ohos_mute(&self) -> bool {
+        // SAFETY:
+        // - `get_mute` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_mute)() }
+    }
+
     fn get_max_volume(&self) -> u32 {
         // SAFETY:
         // - `get_max_volume` is a valid function pointer loaded from the dynamic library.
@@ -600,6 +608,10 @@ pub fn get_ohos_volume_min() -> u32 {
 
 pub fn get_ohos_volume() -> u32 {
     OH_VOLUME_ADAPTER.get_ohos_volume()
+}
+
+pub fn get_ohos_mute() -> bool {
+    OH_VOLUME_ADAPTER.get_ohos_mute()
 }
 
 pub fn set_ohos_volume(vol: u32) -> i32 {

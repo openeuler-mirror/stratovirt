@@ -646,21 +646,28 @@ impl VirtioSndVolume {
         Arc::new(Self { vq, ctl })
     }
 
-    fn update_guest_volume(&self, new_vol: u32) -> Result<()> {
+    fn update_guest_volume(&self, new_vol: u32, new_mute: bool) -> Result<()> {
         if self.vq.device_broken() {
             return Ok(());
         }
 
         let mut ctl = self.ctl.lock().unwrap();
-        if ctl.mute && new_vol == 0 {
+        if ctl.mute == new_mute && ctl.volume == new_vol {
             return Ok(());
         }
 
-        if ctl.volume == new_vol {
-            return Ok(());
-        }
-
-        ctl.update_volume(new_vol);
+        let target_vol = if new_mute {
+            // Special case:
+            // Drop to 0 if at step 1, otherwise hold current volume for state persistence
+            if ctl.volume == 1 {
+                0
+            } else {
+                ctl.volume
+            }
+        } else {
+            new_vol
+        };
+        ctl.update_volume(target_vol, new_mute);
 
         let elem = self
             .vq
@@ -686,8 +693,8 @@ impl VirtioSndVolume {
 }
 
 impl VolumeListener for VirtioSndVolume {
-    fn notify(&self, host_vol: u32) {
-        if let Err(e) = self.update_guest_volume(host_vol) {
+    fn notify(&self, host_vol: u32, host_mute: bool) {
+        if let Err(e) = self.update_guest_volume(host_vol, host_mute) {
             error!("Failed to notify the guest volume change, {:?}", e);
         }
     }

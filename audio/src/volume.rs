@@ -23,7 +23,7 @@ pub const MAX_VOLUME: u32 = 65535;
 /// Implement this trait to receive notifications when the host volume changes.
 /// All volume values are normalized to 0-MAX_VOLUME (0-65535) range.
 pub trait VolumeListener: Sync + Send {
-    fn notify(&self, volume: u32);
+    fn notify(&self, volume: u32, mute: bool);
 }
 
 /// Trait for volume control operations.
@@ -57,6 +57,13 @@ pub trait VolumeControl: Send + Sync {
     ///
     /// Volume value in 0-MAX_VOLUME range (0 = mute, MAX_VOLUME = max).
     fn get_volume(&self) -> u32;
+
+    /// Get current mute.
+    ///
+    /// # Returns
+    ///
+    /// true = mute, false = unmute.
+    fn get_mute(&self) -> bool;
 
     /// Set volume.
     ///
@@ -107,6 +114,10 @@ impl VolumeControl for NullVolumeControl {
 
     fn get_volume(&self) -> u32 {
         0
+    }
+
+    fn get_mute(&self) -> bool {
+        false
     }
 
     fn set_volume(&self, _volume: u32) {}

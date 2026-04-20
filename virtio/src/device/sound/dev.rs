@@ -680,7 +680,7 @@ impl Ctl {
             volume_ctrl: volume_ctrl.clone(),
             range: (min, max),
             volume: volume_ctrl.get_volume(),
-            mute: false,
+            mute: volume_ctrl.get_mute(),
         }
     }
 
@@ -701,9 +701,9 @@ impl Ctl {
         Ok(())
     }
 
-    pub fn update_volume(&mut self, new_vol: u32) {
+    pub fn update_volume(&mut self, new_vol: u32, new_mute: bool) {
         self.volume = new_vol;
-        self.mute = false;
+        self.mute = new_mute;
 
         let id = self.get_volume_ctl_id() as usize;
         let elem = &mut self.elements[id];
@@ -712,7 +712,7 @@ impl Ctl {
 
         let id = self.get_mute_ctl_id() as usize;
         let elem = &mut self.elements[id];
-        elem.values[0] = 1;
+        elem.values[0] = u32::from(!new_mute);
     }
 
     pub fn handle_ctl_info(&self, control_id: u32) -> Result<CtlInfo> {
