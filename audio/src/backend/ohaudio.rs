@@ -545,9 +545,9 @@ impl OhosVolumeControl {
     }
 
     /// Notify all registered notifiers of a volume change.
-    fn notify_volume_change(&self, volume: u32) {
+    fn notify_volume_change(&self, volume: u32, mute: bool) {
         if let Some(listener) = self.listener.read().unwrap().as_ref() {
-            listener.notify(volume);
+            listener.notify(volume, mute);
         }
     }
 }
@@ -559,6 +559,10 @@ impl VolumeControl for OhosVolumeControl {
 
     fn get_volume(&self) -> u32 {
         get_ohos_volume()
+    }
+
+    fn get_mute(&self) -> bool {
+        get_ohos_mute()
     }
 
     fn set_volume(&self, volume: u32) {
@@ -581,6 +585,6 @@ impl VolumeControl for OhosVolumeControl {
 
 impl GuestVolumeNotifier for OhosVolumeControl {
     fn notify(&self, volume: u32) {
-        self.notify_volume_change(volume);
+        self.notify_volume_change(volume, self.get_mute());
     }
 }
