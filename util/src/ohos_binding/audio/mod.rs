@@ -545,6 +545,21 @@ impl OhVolume {
         ret
     }
 
+    fn set_ohos_mute(&self, mute: bool) -> i32 {
+        // SAFETY:
+        // - `set_ohos_mute` is a valid function pointer loaded from the dynamic library.
+        // - `set_ohos_mute` operates only on the audio context owned by `self`, and does not access or
+        //   retain references to Rust-managed memory across the FFI boundary.
+        // - Calls are made sequentially for this `ctx`, ensuring no concurrent mutation or aliasing
+        //   of underlying state occurs.
+        let ret = unsafe { (self.capi.set_mute)(mute) };
+        if ret != 0 {
+            hisysevent::STRATOVIRT_SET_MUTE_FAILED(-ret);
+            error!("Set ohos volume failed, ret is {}", -ret);
+        }
+        ret
+    }
+
     fn notify_volume_change(&self, volume: i32) {
         for (_, notifier) in self.notifiers.read().unwrap().iter() {
             notifier.notify(volume as u32);
@@ -589,6 +604,10 @@ pub fn get_ohos_volume() -> u32 {
 
 pub fn set_ohos_volume(vol: u32) -> i32 {
     OH_VOLUME_ADAPTER.set_ohos_volume(vol as i32)
+}
+
+pub fn set_ohos_mute(mute: bool) -> i32 {
+    OH_VOLUME_ADAPTER.set_ohos_mute(mute)
 }
 
 #[cfg(test)]

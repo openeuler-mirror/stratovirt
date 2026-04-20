@@ -65,6 +65,13 @@ pub trait VolumeControl: Send + Sync {
     /// * `volume` - Volume value in 0-MAX_VOLUME range (0 = mute, MAX_VOLUME = max).
     fn set_volume(&self, volume: u32);
 
+    /// Set mute.
+    ///
+    /// # Arguments
+    ///
+    /// mute = True, unmute = False.
+    fn set_mute(&self, mute: bool);
+
     /// Register a listener to monitor volume changes from host.
     ///
     /// The listener will be called when the host system volume changes.
@@ -103,6 +110,8 @@ impl VolumeControl for NullVolumeControl {
     }
 
     fn set_volume(&self, _volume: u32) {}
+
+    fn set_mute(&self, _mute: bool) {}
 
     fn register_listener(&self, _listener: Arc<dyn VolumeListener>) -> u64 {
         0
