@@ -565,6 +565,10 @@ impl VolumeControl for OhosVolumeControl {
         set_ohos_volume(volume);
     }
 
+    fn set_mute(&self, mute: bool) {
+        set_ohos_mute(mute);
+    }
+
     fn register_listener(&self, listener: Arc<dyn VolumeListener>) -> u64 {
         *self.listener.write().unwrap() = Some(listener);
         0

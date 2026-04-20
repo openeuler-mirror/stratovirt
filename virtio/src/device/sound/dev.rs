@@ -781,13 +781,8 @@ impl Ctl {
             VIRTIO_SND_CTL_ROLE_MUTE => {
                 elem.values[0] = new_val;
                 elem.values[1] = new_val;
-                if new_val == 0 {
-                    self.mute = true;
-                    self.volume_ctrl.set_volume(0);
-                } else {
-                    self.mute = false;
-                    self.volume_ctrl.set_volume(self.volume);
-                }
+                self.mute = new_val == 0;
+                self.volume_ctrl.set_mute(self.mute);
             }
             _ => {
                 bail!("Write not supported for control role {}", elem.role);
