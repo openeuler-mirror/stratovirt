@@ -622,10 +622,14 @@ pub struct CtlElement {
 }
 
 impl CtlElement {
-    fn volume(min: u32, max: u32) -> Self {
+    fn volume(volume: u32, min: u32, max: u32) -> Self {
         let mut name = [0u8; 44];
         let vol_name = b"Master Playback Volume";
         name[..vol_name.len()].copy_from_slice(vol_name);
+
+        let mut values = [0u32; CTL_VAL_INT_SIZE];
+        values[0] = volume;
+        values[1] = volume;
 
         Self {
             role: VIRTIO_SND_CTL_ROLE_VOLUME,
@@ -637,17 +641,17 @@ impl CtlElement {
             min,
             max,
             step: 1,
-            values: [0u32; CTL_VAL_INT_SIZE],
+            values,
         }
     }
 
-    fn mute() -> Self {
+    fn mute(mute: bool) -> Self {
         let mut name = [0u8; 44];
         let mute_name = b"Master Playback Switch";
         name[..mute_name.len()].copy_from_slice(mute_name);
 
         let mut values = [0u32; CTL_VAL_INT_SIZE];
-        values[0] = 1;
+        values[0] = u32::from(!mute);
 
         Self {
             role: VIRTIO_SND_CTL_ROLE_MUTE,
@@ -675,12 +679,14 @@ pub struct Ctl {
 impl Ctl {
     pub fn new(volume_ctrl: Arc<dyn VolumeControl>) -> Self {
         let (min, max) = volume_ctrl.get_volume_range();
+        let volume = volume_ctrl.get_volume();
+        let mute = volume_ctrl.get_mute();
         Self {
-            elements: vec![CtlElement::volume(min, max), CtlElement::mute()],
+            elements: vec![CtlElement::volume(volume, min, max), CtlElement::mute(mute)],
             volume_ctrl: volume_ctrl.clone(),
             range: (min, max),
-            volume: volume_ctrl.get_volume(),
-            mute: volume_ctrl.get_mute(),
+            volume,
+            mute,
         }
     }
 
