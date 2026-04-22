@@ -17,15 +17,16 @@ use std::sync::{
 };
 
 use anyhow::{bail, Context, Result};
-use audio::set_record_authority;
+use audio::auth::{register_authority_notifier, unregister_authority_notifier, AuthorityNotifier};
 use audio::volume::{create_volume_control, VolumeControl};
+use audio::{get_record_authority, set_record_authority};
 use log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::spec::*;
 use super::{
-    read_request, CtrlIoHandler, IoHandler, RxIoHandler, SoundConfig, Stream, TxIoHandler,
-    VirtioSndVolume, SUPPORTED_FORMATS, SUPPORTED_MAX_CHANNELS, SUPPORTED_RATES,
+    read_request, CtrlIoHandler, EventIoHandler, IoHandler, RxIoHandler, SoundConfig, Stream,
+    TxIoHandler, SUPPORTED_FORMATS, SUPPORTED_MAX_CHANNELS, SUPPORTED_RATES,
 };
 use crate::{
     error::*, read_config_default, Element, Queue, VirtioBase, VirtioDevice, VirtioInterrupt,
@@ -45,6 +46,7 @@ pub struct Sound {
     token_id: Option<Arc<RwLock<u64>>>,
     volume_ctrl: Arc<dyn VolumeControl>,
     volume_listener_id: Option<u64>,
+    event_handler: Option<Arc<EventIoHandler>>,
 }
 
 impl Sound {
@@ -65,6 +67,7 @@ impl Sound {
             token_id,
             volume_ctrl,
             volume_listener_id: None,
+            event_handler: None,
         }
     }
 
@@ -156,8 +159,8 @@ impl VirtioDevice for Sound {
         )
         .with_context(|| "Failed to register sound ctrl notifier to MainLoop")?;
 
-        // queues[1] is for event and currently only support volume change.
-        let volume_listener = VirtioSndVolume::new(
+        // queues[1] is for event.
+        let event_handler = EventIoHandler::new(
             VirtQ::new(
                 self.base.driver_features,
                 mem_space.clone(),
@@ -167,7 +170,9 @@ impl VirtioDevice for Sound {
             ),
             ctl,
         );
-        self.volume_listener_id = Some(self.volume_ctrl.register_listener(volume_listener));
+        register_authority_notifier(event_handler.clone());
+        self.volume_listener_id = Some(self.volume_ctrl.register_listener(event_handler.clone()));
+        self.event_handler = Some(event_handler);
 
         // queues[2] is for tx.
         self.register_notifier(
@@ -211,6 +216,11 @@ impl VirtioDevice for Sound {
         if let Some(id) = self.volume_listener_id.take() {
             self.volume_ctrl.unregister_listener(id);
         }
+
+        if let Some(handler) = self.event_handler.take() {
+            unregister_authority_notifier(&(handler as Arc<dyn AuthorityNotifier>));
+        }
+
         unregister_event_helper(
             self.config.iothread.as_ref(),
             &mut self.base.deactivate_evts,
@@ -417,6 +427,13 @@ impl Pcm {
         &mut self.streams[stream_id as usize]
     }
 
+    pub fn check_record_auth(stream: &Stream) -> bool {
+        if stream.info.direction == VIRTIO_SND_D_OUTPUT {
+            return true;
+        }
+        get_record_authority()
+    }
+
     pub fn handle_pcm_prepare(
         &mut self,
         mem_space: &Arc<AddressSpace>,
@@ -492,6 +509,10 @@ impl Pcm {
         }
 
         let stream = self.get_stream_mut(stream_id);
+        if !Self::check_record_auth(stream) {
+            return (VIRTIO_SND_S_IO_ERR, 0);
+        }
+
         stream.register_vm_pause_notifier();
 
         let mut interface = stream.interface.lock().unwrap();
@@ -690,16 +711,6 @@ impl Ctl {
         }
     }
 
-    pub fn get_volume_ctl_id(&self) -> u16 {
-        // Find the first element with VOLUME role
-        for (i, elem) in self.elements.iter().enumerate() {
-            if elem.role == VIRTIO_SND_CTL_ROLE_VOLUME {
-                return i as u16;
-            }
-        }
-        0
-    }
-
     fn validate_control_id(&self, control_id: u32) -> Result<()> {
         if control_id as usize >= self.elements.len() {
             bail!("Invalid control_id {}", control_id);
@@ -711,12 +722,12 @@ impl Ctl {
         self.volume = new_vol;
         self.mute = new_mute;
 
-        let id = self.get_volume_ctl_id() as usize;
+        let id = self.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_VOLUME);
         let elem = &mut self.elements[id];
         elem.values[0] = new_vol;
         elem.values[1] = new_vol;
 
-        let id = self.get_mute_ctl_id() as usize;
+        let id = self.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_MUTE);
         let elem = &mut self.elements[id];
         elem.values[0] = u32::from(!new_mute);
     }
@@ -778,7 +789,7 @@ impl Ctl {
                 elem.values[1] = new_val;
                 self.volume = new_val;
 
-                let mute_elem = &self.elements[self.get_mute_ctl_id() as usize];
+                let mute_elem = &self.elements[self.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_MUTE)];
                 let is_muted = mute_elem.values[0] == 0;
                 if !is_muted {
                     self.volume_ctrl.set_volume(new_val);
@@ -798,10 +809,10 @@ impl Ctl {
         Ok(())
     }
 
-    fn get_mute_ctl_id(&self) -> u16 {
+    pub fn get_ctl_id_by_role(&self, role: u32) -> usize {
         for (i, elem) in self.elements.iter().enumerate() {
-            if elem.role == VIRTIO_SND_CTL_ROLE_MUTE {
-                return i as u16;
+            if elem.role == role {
+                return i;
             }
         }
         0

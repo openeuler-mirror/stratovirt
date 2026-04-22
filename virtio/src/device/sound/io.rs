@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use audio::auth::AuthorityNotifier;
 use audio::volume::VolumeListener;
 use log::{error, info};
 use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
@@ -28,7 +29,7 @@ use super::spec::*;
 use super::{read_request, SUPPORTED_FORMATS, SUPPORTED_MAX_CHANNELS, SUPPORTED_RATES};
 use crate::Element;
 use address_space::{AddressSpace, RegionCache};
-use audio::{AudioInterface, AudioStreamIo};
+use audio::{get_record_authority, AudioInterface, AudioStreamIo};
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 
 struct StreamElem {
@@ -366,6 +367,9 @@ impl IoHandler for CtrlIoHandler {
 
         let mut pcm = self.pcm.lock().unwrap();
         let (code, payload_size) = match u32::from_le(ctrl_hdr.code) {
+            // Jack requests
+            VIRTIO_SND_R_JACK_INFO => self.handle_jack_info(sys_mem, cache, &elem),
+            VIRTIO_SND_R_JACK_REMAP => (VIRTIO_SND_S_NOT_SUPP, 0),
             // PCM requests
             VIRTIO_SND_R_PCM_INFO => pcm.handle_pcm_info(sys_mem, cache, &elem),
             VIRTIO_SND_R_PCM_SET_PARAMS => pcm.handle_pcm_set_params(sys_mem, cache, &elem),
@@ -413,6 +417,66 @@ impl IoHandler for CtrlIoHandler {
 impl CtrlIoHandler {
     pub fn new(vq: VirtQ, pcm: Arc<Mutex<Pcm>>, ctl: Arc<Mutex<Ctl>>) -> Arc<Self> {
         Arc::new(Self { vq, pcm, ctl })
+    }
+
+    fn handle_jack_info(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        elem: &Element,
+    ) -> (u32, u32) {
+        let req: QueryInfo = match read_request(sys_mem, cache, elem) {
+            Ok(req) => req,
+            Err(e) => {
+                error!("{:?}", e);
+                return (VIRTIO_SND_S_BAD_MSG, 0);
+            }
+        };
+
+        let start_id = u32::from_le(req.start_id);
+        if start_id >= VIRTIO_SND_JACK_DEFAULT {
+            error!("invalid jack query info: {:?}", req);
+            return (VIRTIO_SND_S_BAD_MSG, 0);
+        }
+
+        let count = u32::from_le(req.count);
+        let size = u32::from_le(req.size);
+        let len = (count * size) as usize;
+        // Currently we only support one jack info. So count * size should be equal to SndHdr size.
+        if len != size_of::<JackInfo>() {
+            return (VIRTIO_SND_S_BAD_MSG, 0);
+        }
+
+        let info = JackInfo {
+            hdr: SoundInfo { hda_fn_nid: 0 },
+            features: 0,
+            // 31:30: Port Connectivity, 1 means integrated
+            // 23:20: Device Type, 0xa means Mic
+            hda_reg_defconf: 0x40a00000,
+            // bit 5 is 1, means support presence detect.
+            hda_reg_caps: 0x20,
+            connected: u8::from(get_record_authority()),
+            padding: [0u8; 7],
+        }
+        .to_le();
+
+        match elem.iov_from_buf_with_offset(
+            sys_mem,
+            cache,
+            size_of::<SndHdr>() as u64,
+            info.as_bytes(),
+        ) {
+            Ok(ret) => {
+                if ret != len {
+                    return (VIRTIO_SND_S_IO_ERR, 0);
+                }
+                (VIRTIO_SND_S_OK, len as u32)
+            }
+            Err(e) => {
+                error!("{:?}", e);
+                (VIRTIO_SND_S_IO_ERR, 0)
+            }
+        }
     }
 
     fn handle_ctl_info(
@@ -636,21 +700,38 @@ impl RxIoHandler {
     }
 }
 
-pub struct VirtioSndVolume {
+pub struct EventIoHandler {
     vq: VirtQ,
     ctl: Arc<Mutex<Ctl>>,
 }
 
-impl VirtioSndVolume {
+impl EventIoHandler {
     pub fn new(vq: VirtQ, ctl: Arc<Mutex<Ctl>>) -> Arc<Self> {
         Arc::new(Self { vq, ctl })
     }
 
-    fn update_guest_volume(&self, new_vol: u32, new_mute: bool) -> Result<()> {
+    fn event_notify<T: ByteCode + std::fmt::Debug>(&self, event: T) -> Result<()> {
         if self.vq.device_broken() {
             return Ok(());
         }
 
+        let elem = self
+            .vq
+            .pop_elem()
+            .with_context(|| "Failed to pop avail ring for process event queue")?;
+        if elem.desc_num == 0 {
+            return Ok(());
+        }
+
+        let sys_mem = self.vq.sys_mem();
+        let cache = self.vq.get_cache();
+        let len = elem.iov_from_buf_with_offset(&sys_mem, &cache, 0, event.as_bytes())?;
+        self.vq
+            .add_used(elem.index, len as u32)
+            .with_context(|| format!("Failed to add event {:?} to queue", event))
+    }
+
+    fn update_guest_volume(&self, new_vol: u32, new_mute: bool) -> Result<()> {
         let mut ctl = self.ctl.lock().unwrap();
         if ctl.mute == new_mute && ctl.volume == new_vol {
             return Ok(());
@@ -669,33 +750,31 @@ impl VirtioSndVolume {
         };
         ctl.update_volume(target_vol, new_mute);
 
-        let elem = self
-            .vq
-            .pop_elem()
-            .with_context(|| "Failed to pop avail ring for process event queue")?;
-        if elem.desc_num == 0 {
-            return Ok(());
-        }
-
-        let sys_mem = self.vq.sys_mem();
-        let cache = self.vq.get_cache();
         let event = CtlEvent::new_le(
             VIRTIO_SND_EVT_CTL_NOTIFY,
-            ctl.get_volume_ctl_id(),
+            ctl.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_VOLUME) as u16,
             1u16 << VIRTIO_SND_CTL_EVT_MASK_VALUE,
         );
-
-        let len = elem.iov_from_buf_with_offset(&sys_mem, &cache, 0, event.as_bytes())?;
-        self.vq
-            .add_used(elem.index, len as u32)
-            .with_context(|| "Failed to add volume change event to event queue")
+        self.event_notify(event)
     }
 }
 
-impl VolumeListener for VirtioSndVolume {
+impl VolumeListener for EventIoHandler {
     fn notify(&self, host_vol: u32, host_mute: bool) {
         if let Err(e) = self.update_guest_volume(host_vol, host_mute) {
             error!("Failed to notify the guest volume change, {:?}", e);
+        }
+    }
+}
+
+impl AuthorityNotifier for EventIoHandler {
+    fn on_authority_changed(&self, has_authority: bool) {
+        let jack_event = SndEvent::new_je_le(has_authority, 0);
+        if let Err(e) = self.event_notify(jack_event) {
+            error!(
+                "Failed to notify the guest mic authority {}, {:?}",
+                has_authority, e
+            );
         }
     }
 }

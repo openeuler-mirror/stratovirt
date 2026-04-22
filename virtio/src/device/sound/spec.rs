@@ -14,13 +14,24 @@
 
 use util::byte_code::ByteCode;
 
-pub const VIRTIO_SND_JACK_DEFAULT: u32 = 0;
+pub const VIRTIO_SND_JACK_DEFAULT: u32 = 1;
 pub const VIRTIO_SND_STREAM_DEFAULT: u32 = 2;
 pub const VIRTIO_SND_CHMAP_DEFAULT: u32 = 0;
 pub const VIRTIO_SND_CTL_DEFAULT: u32 = 2;
 
 // Feature bits
 pub const VIRTIO_SND_F_CTLS: u32 = 0;
+
+// Jack request codes
+pub const VIRTIO_SND_R_JACK_INFO: u32 = 0x1;
+pub const VIRTIO_SND_R_JACK_REMAP: u32 = 0x2;
+
+// Jack event codes
+pub const VIRTIO_SND_EVT_JACK_CONNECTED: u32 = 0x1000;
+pub const VIRTIO_SND_EVT_JACK_DISCONNECTED: u32 = 0x1001;
+
+// Jack feature bits
+pub const VIRTIO_SND_JACK_F_REMAP: u32 = 0;
 
 // PCM request codes
 pub const VIRTIO_SND_R_PCM_INFO: u32 = 0x100;
@@ -110,6 +121,8 @@ impl std::fmt::Debug for CtrlHdr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let code = u32::from_le(self.code);
         let msg = match code {
+            VIRTIO_SND_R_JACK_INFO => stringify!(VIRTIO_SND_R_JACK_INFO),
+            VIRTIO_SND_R_JACK_REMAP => stringify!(VIRTIO_SND_R_JACK_REMAP),
             VIRTIO_SND_R_PCM_INFO => stringify!(VIRTIO_SND_R_PCM_INFO),
             VIRTIO_SND_R_PCM_SET_PARAMS => stringify!(VIRTIO_SND_R_PCM_SET_PARAMS),
             VIRTIO_SND_R_PCM_PREPARE => stringify!(VIRTIO_SND_R_PCM_PREPARE),
@@ -134,7 +147,7 @@ impl std::fmt::Debug for CtrlHdr {
 }
 
 #[repr(C)]
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct QueryInfo {
     pub hdr: CtrlHdr,
     pub start_id: u32,
@@ -148,6 +161,34 @@ impl ByteCode for QueryInfo {}
 #[derive(Clone, Default)]
 pub struct SoundInfo {
     pub hda_fn_nid: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Default)]
+pub struct JackInfo {
+    pub hdr: SoundInfo,
+    pub features: u32,
+    pub hda_reg_defconf: u32,
+    pub hda_reg_caps: u32,
+    pub connected: u8,
+    pub padding: [u8; 7],
+}
+
+impl ByteCode for JackInfo {}
+
+impl JackInfo {
+    pub fn to_le(&self) -> Self {
+        Self {
+            hdr: SoundInfo {
+                hda_fn_nid: self.hdr.hda_fn_nid.to_le(),
+            },
+            features: self.features.to_le(),
+            hda_reg_defconf: self.hda_reg_defconf.to_le(),
+            hda_reg_caps: self.hda_reg_caps.to_le(),
+            connected: self.connected.to_le(),
+            padding: [0u8; 7],
+        }
+    }
 }
 
 #[repr(C)]
@@ -187,7 +228,7 @@ impl PcmInfo {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Debug)]
 pub struct SndHdr {
     pub code: u32,
 }
@@ -341,7 +382,7 @@ impl Default for CtlValue {
 impl ByteCode for CtlValue {}
 
 #[repr(C)]
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct CtlEvent {
     pub hdr: SndHdr,
     pub control_id: u16,
@@ -360,8 +401,8 @@ impl CtlEvent {
     }
 }
 
-#[derive(Clone, Default)]
 #[repr(C)]
+#[derive(Clone, Default, Debug)]
 pub struct SndEvent {
     pub hdr: SndHdr,
     pub data: u32,
@@ -370,11 +411,21 @@ pub struct SndEvent {
 impl ByteCode for SndEvent {}
 
 impl SndEvent {
-    pub fn new(code: u32, data: u32) -> Self {
+    pub fn new_le(code: u32, data: u32) -> Self {
         Self {
             hdr: SndHdr { code: code.to_le() },
             data: data.to_le(),
         }
+    }
+
+    pub fn new_je_le(has_authority: bool, data: u32) -> Self {
+        let code = if has_authority {
+            VIRTIO_SND_EVT_JACK_CONNECTED
+        } else {
+            VIRTIO_SND_EVT_JACK_DISCONNECTED
+        };
+
+        Self::new_le(code, data)
     }
 }
 
