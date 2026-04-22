@@ -25,7 +25,7 @@ use clap::{ArgAction, Parser};
 use crate::Element;
 use address_space::{AddressSpace, RegionCache};
 use audio::AudioBackend;
-use io::{CtrlIoHandler, IoHandler, RxIoHandler, Stream, TxIoHandler, VirtioSndVolume};
+use io::{CtrlIoHandler, EventIoHandler, IoHandler, RxIoHandler, Stream, TxIoHandler};
 use machine_manager::{
     config::valid_id,
     config::{get_pci_df, parse_bool},
