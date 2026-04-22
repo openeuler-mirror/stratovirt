@@ -55,7 +55,7 @@ pub struct SoundConfig {
     pub iothread: Option<String>,
     #[arg(long)]
     backendtype: AudioBackend,
-    #[arg(long, default_value = "true", action = ArgAction::Append)]
+    #[arg(long, default_value = "on", action = ArgAction::Append, value_parser = parse_bool)]
     pub record_auth: bool,
 }
 
