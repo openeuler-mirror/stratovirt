@@ -685,11 +685,26 @@ impl UsbHost {
     }
 
     fn detach_kernel(&mut self, reset: bool) -> Result<()> {
-        let conf = self.libdev.as_ref().unwrap().active_config_descriptor()?;
+        // set it to default state
+        if reset {
+            self.reset();
+        }
 
-        self.ifs_num = conf.num_interfaces();
+        let num_interface = match self.libdev.as_ref().unwrap().active_config_descriptor() {
+            Ok(conf) => {
+                self.ifs_num = conf.num_interfaces();
+                conf.num_interfaces()
+            }
+            Err(e) => {
+                warn!(
+                    "Current USB host device is in unconfigured state, with calling ret: {:?}",
+                    e
+                );
+                USB_MAX_INTERFACES as u8
+            }
+        };
 
-        for i in 0..self.ifs_num {
+        for i in 0..num_interface {
             if !match self.handle.as_ref().unwrap().kernel_driver_active(i) {
                 Ok(rc) => {
                     if !rc {
@@ -698,7 +713,7 @@ impl UsbHost {
                     rc
                 }
                 Err(e) => {
-                    error!("Failed to kernel driver active: {:?}", e);
+                    error!("Failed to detect kernel driver active status: {:?}", e);
                     false
                 }
             } {
@@ -713,17 +728,12 @@ impl UsbHost {
             self.ifs[i as usize].detached = true;
         }
 
-        // set it to default state
-        if reset {
-            self.reset();
-        }
-
         Ok(())
     }
 
     fn attach_kernel(&mut self) {
         if let Err(e) = self.libdev.as_ref().unwrap().active_config_descriptor() {
-            warn!("Failed to active config descriptor: {:?}.", e);
+            warn!("Failed to get active config descriptor: {:?}.", e);
             return;
         }
         for i in 0..self.ifs_num {
@@ -921,21 +931,19 @@ impl UsbHost {
         trace::usb_host_set_config(self.config.hostbus, self.config.hostaddr, config);
         self.release_interfaces();
 
-        if self.ddesc.is_some() && self.ddesc.as_ref().unwrap().num_configurations() != 1 {
-            if let Err(e) = self
-                .handle
-                .as_mut()
-                .unwrap()
-                .set_active_configuration(config)
-            {
-                error!("Failed to set active configuration: {:?}", e);
-                if e == Error::NoDevice {
-                    packet.status = UsbPacketStatus::NoDev
-                } else {
-                    packet.status = UsbPacketStatus::Stall;
-                }
-                return;
+        if let Err(e) = self
+            .handle
+            .as_mut()
+            .unwrap()
+            .set_active_configuration(config)
+        {
+            error!("Failed to set active configuration: {:?}", e);
+            if e == Error::NoDevice {
+                packet.status = UsbPacketStatus::NoDev
+            } else {
+                packet.status = UsbPacketStatus::Stall;
             }
+            return;
         }
 
         packet.status = self.claim_interfaces();
