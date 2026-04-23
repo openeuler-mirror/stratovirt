@@ -139,15 +139,7 @@ impl AudioInterface for OhAudio {
 
     fn start(&mut self) -> Result<()> {
         if self.direction == AudioStreamDirection::Record && !get_record_authority() {
-            info!("start mute timer for record due to authority");
-            *self.status.write().unwrap() = OhAudioStatus::Started;
-            start_mute_timer(
-                self.status.clone(),
-                self.io_handler.clone(),
-                self.period_bytes,
-                self.period_ms,
-            );
-            return Ok(());
+            bail!("Failed to start record because of ungranted authority");
         }
 
         self.init_ctx()?;
