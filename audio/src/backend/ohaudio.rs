@@ -143,8 +143,7 @@ impl AudioInterface for OhAudio {
         }
 
         self.init_ctx()?;
-        self.start_ctx()
-            .map_err(|e| anyhow::anyhow!("Failed to start: {:?}", e))?;
+        self.start_ctx()?;
 
         if self.direction == AudioStreamDirection::Record {
             self.register_auth_notify();
@@ -223,32 +222,50 @@ impl OhAudio {
         match self.direction {
             AudioStreamDirection::Playback => {
                 let mut context = AudioContext::new(AudioStreamType::Render);
-                context.init(
-                    self.sample_size,
-                    self.sample_rate,
-                    self.channels,
-                    self.get_audio_scene_playback(),
-                    AudioProcessCb::RendererCb(
-                        Some(Self::render_on_write_data),
-                        Some(Self::render_on_interrupt_cb),
-                    ),
-                    ptr,
-                )?;
+                context
+                    .init(
+                        self.sample_size,
+                        self.sample_rate,
+                        self.channels,
+                        self.get_audio_scene_playback(),
+                        AudioProcessCb::RendererCb(
+                            Some(Self::render_on_write_data),
+                            Some(Self::render_on_interrupt_cb),
+                        ),
+                        ptr,
+                    )
+                    .map_err(|e| {
+                        hisysevent::STRATOVIRT_PLAY_INIT_FAILED(e as u32);
+                        anyhow::anyhow!(
+                            "OHAudio {:?} failed to create context: {:?}",
+                            self.direction,
+                            e
+                        )
+                    })?;
                 self.set_ctx(Some(context));
             }
             AudioStreamDirection::Record => {
                 let mut context = AudioContext::new(AudioStreamType::Capturer);
-                context.init(
-                    self.sample_size,
-                    self.sample_rate,
-                    self.channels,
-                    self.get_audio_scene_capture(),
-                    AudioProcessCb::CapturerCb(
-                        Some(Self::capture_on_read_data),
-                        Some(Self::capture_on_interrupt_cb),
-                    ),
-                    ptr,
-                )?;
+                context
+                    .init(
+                        self.sample_size,
+                        self.sample_rate,
+                        self.channels,
+                        self.get_audio_scene_capture(),
+                        AudioProcessCb::CapturerCb(
+                            Some(Self::capture_on_read_data),
+                            Some(Self::capture_on_interrupt_cb),
+                        ),
+                        ptr,
+                    )
+                    .map_err(|e| {
+                        hisysevent::STRATOVIRT_CAPTURE_INIT_FAILED(e as u32);
+                        anyhow::anyhow!(
+                            "OHAudio {:?} failed to create context: {:?}",
+                            self.direction,
+                            e
+                        )
+                    })?;
                 self.set_ctx(Some(context));
             }
         }
@@ -274,9 +291,17 @@ impl OhAudio {
                 Ok(())
             }
             Err(e) => {
-                error!("failed to start oh audio, {:?}", e);
                 *self.status.write().unwrap() = OhAudioStatus::Error;
-                Err(anyhow!("Failed to start audio context"))
+                if self.direction == AudioStreamDirection::Playback {
+                    hisysevent::STRATOVIRT_PLAY_START_FAILED(e as u32);
+                } else {
+                    hisysevent::STRATOVIRT_CAPTURE_START_FAILED(e as u32);
+                }
+                Err(anyhow!(
+                    "OHAudio {:?} failed to start: {:?}",
+                    self.direction,
+                    e
+                ))
             }
         }
     }

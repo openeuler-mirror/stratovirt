@@ -12,7 +12,7 @@ log = "0.4"
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
 trace = { path = "../trace", optional = true }
-hisysevent = { path = "../hisysevent", optional = true }
+hisysevent = { path = "../hisysevent" }
 
 [target.'cfg(target_env = "gnu")'.dependencies]
 alsa = { version = "0.7.0" }
