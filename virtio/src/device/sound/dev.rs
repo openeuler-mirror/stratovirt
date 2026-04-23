@@ -346,13 +346,18 @@ impl Pcm {
 
         let start_id = u32::from_le(req.start_id);
         let count = u32::from_le(req.count);
-        let len = self.streams.len() as u32;
-        if start_id >= len || (start_id + count) > len {
-            error!(
-                "handle_pcm_info: invalid stream id range [{}, {})",
-                start_id,
-                start_id + count
-            );
+        let size = u32::from_le(req.size);
+        let len = count.saturating_mul(size) as usize;
+
+        if len > size_of::<PcmInfo>() * VIRTIO_SND_STREAM_DEFAULT as usize
+            || !len.is_multiple_of(size_of::<PcmInfo>())
+        {
+            error!("invalid pcm query info: len {:?}", req);
+            return (VIRTIO_SND_S_BAD_MSG, 0);
+        }
+
+        if start_id >= VIRTIO_SND_STREAM_DEFAULT || (start_id + count) > VIRTIO_SND_STREAM_DEFAULT {
+            error!("invalid pcm query info: len {:?}", req);
             return (VIRTIO_SND_S_BAD_MSG, 0);
         }
 
