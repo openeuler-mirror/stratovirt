@@ -441,9 +441,9 @@ impl CtrlIoHandler {
 
         let count = u32::from_le(req.count);
         let size = u32::from_le(req.size);
-        let len = (count * size) as usize;
-        // Currently we only support one jack info. So count * size should be equal to SndHdr size.
-        if len != size_of::<JackInfo>() {
+        let len = count.saturating_mul(size) as usize;
+        if len != size_of::<JackInfo>() * VIRTIO_SND_JACK_DEFAULT as usize {
+            error!("invalid jack query info: {:?}", req);
             return (VIRTIO_SND_S_BAD_MSG, 0);
         }
 
@@ -496,8 +496,15 @@ impl CtrlIoHandler {
         let start_id = u32::from_le(req.start_id);
         let count = u32::from_le(req.count);
         let size = u32::from_le(req.size);
-        let mut buf = vec![0u8; (count * size) as usize];
+        let len = count.saturating_mul(size) as usize;
+        if len > size_of::<CtlInfo>() * VIRTIO_SND_CTL_DEFAULT as usize
+            || !len.is_multiple_of(size_of::<CtlInfo>())
+        {
+            error!("invalid ctl query info: {:?}", req);
+            return (VIRTIO_SND_S_BAD_MSG, 0);
+        }
 
+        let mut buf = vec![0u8; len];
         let ctl = self.ctl.lock().unwrap();
         for i in start_id..(start_id + count) {
             let info = match ctl.handle_ctl_info(i) {
