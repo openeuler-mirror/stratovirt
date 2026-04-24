@@ -40,18 +40,19 @@ const D_FMT: u32 = 2;
 const D_INVALID_FMT: u32 = VIRTIO_GPU_FORMAT_INVALID_UNORM;
 const D_WIDTH: u32 = 64;
 const D_HEIGHT: u32 = 64;
-const D_CURSOR_WIDTH: u32 = 64;
-const D_CURSOR_HEIGHT: u32 = 64;
+const D_CURSOR_WIDTH: u32 = 128;
+const D_CURSOR_HEIGHT: u32 = 128;
 const D_BYTE_PER_PIXEL: u32 = 4;
 const D_CURSOR_IMG_SIZE: u32 = D_CURSOR_WIDTH * D_CURSOR_HEIGHT * D_BYTE_PER_PIXEL;
 const D_OFFSET: u64 = 0;
 const D_X_COORD: u32 = 0;
 const D_Y_COORD: u32 = 0;
 const D_INVALID_NR_ENTRIES: u32 = 1 + 16384;
+const VIRTIO_GPU_CURSOR_SIZE: u32 = 128;
 
 #[test]
 fn image_display_fun() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -194,7 +195,12 @@ fn cursor_display_fun() {
     let image_1: Vec<u8> = vec![1_u8; D_CURSOR_IMG_SIZE as usize];
     let image_byte_1 = vec![1_u8; 1];
 
-    let image_size = cal_image_hostmem(D_FMT, D_CURSOR_WIDTH, D_CURSOR_HEIGHT);
+    let image_size = cal_image_hostmem(
+        D_FMT,
+        D_CURSOR_WIDTH,
+        D_CURSOR_HEIGHT,
+        VIRTIO_GPU_CURSOR_SIZE,
+    );
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -255,7 +261,7 @@ fn cursor_display_fun() {
 
 #[test]
 fn resource_create_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -316,7 +322,7 @@ fn resource_create_dfx() {
 
 #[test]
 fn resource_destroy_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -359,7 +365,7 @@ fn resource_destroy_dfx() {
 
 #[test]
 fn resource_attach_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -426,7 +432,7 @@ fn resource_attach_dfx() {
 
 #[test]
 fn resource_detach_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -462,7 +468,7 @@ fn resource_detach_dfx() {
 
 #[test]
 fn resource_transfer_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -539,7 +545,7 @@ fn resource_transfer_dfx() {
 
 #[test]
 fn scanout_set_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -616,7 +622,7 @@ fn scanout_set_dfx() {
 
 #[test]
 fn scanout_flush_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -666,7 +672,12 @@ fn scanout_flush_dfx() {
 
 #[test]
 fn cursor_update_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_CURSOR_WIDTH, D_CURSOR_HEIGHT);
+    let image_size = cal_image_hostmem(
+        D_FMT,
+        D_CURSOR_WIDTH,
+        D_CURSOR_HEIGHT,
+        VIRTIO_GPU_CURSOR_SIZE,
+    );
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -705,7 +716,7 @@ fn cursor_update_dfx() {
 
 #[test]
 fn invalid_cmd_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();
@@ -722,7 +733,7 @@ fn invalid_cmd_dfx() {
 
 #[test]
 fn crash_dfx() {
-    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT);
+    let image_size = cal_image_hostmem(D_FMT, D_WIDTH, D_HEIGHT, VIRTIO_GPU_CURSOR_SIZE);
     let image_size = image_size.0.unwrap() as u64;
 
     let mut gpu_cfg = GpuDevConfig::default();

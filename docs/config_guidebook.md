@@ -1163,6 +1163,7 @@ In addition to the required slot information, six optional properties are suppor
 * xres/yres: The size of the login windows.
 * max_hostmem: The maximum memory that a graphics card can occupy on the host is expressed in byte. You are advised to set not less than 256MiB, otherwise the final supported resolutions is affected.
 * enable_bar0: Enable a 64M bar0 in virtio-gpu.
+* cursor_size: configure cursor_size*cursor_size for cursor image buffer.
 
 Note:
 1. Only virtio-gpu 2D supported.
@@ -1302,6 +1303,32 @@ Sample Configuration：
 Note:
 1. Only support used with OHUI.
 
+### 2.25 virtio-pmem
+The virtio pmem device is a persistent memory (NVDIMM) device that provides a virtio based asynchronous flush mechanism. This avoids the need for a separate page cache in the guest and keeps the page cache only in the host.
+
+Three properties are supported for virtio-pmem.
+* id: unique device id.
+* memdev: memory-backend id.
+* memaddr: the base GPA of the virtio-pmem managed memory region. (optional) If not set, it will be auto-allocated.
+
+For virtio-pmem-pci, two more properties are required.
+* bus: name of bus which to attach.
+* addr: including slot number and function number. the first number represents slot number
+of device and the second one represents function number of it. As virtio pci pmem device is a
+single function device, the function number should be set to zero.
+
+Sample Configuration：
+```shell
+# virtio mmio pmem device
+-device virtio-pmem-device,id=<viomem_id>,memdev=<objmem0>[,memaddr=<68719476736>]
+# virtio pci pmem device
+-device virtio-pmem-pci,id=<viomem_id>,bus=<pcie.0>,addr=<0x4>,memdev=<objmem0>[,memaddr=<68719476736>][,multifunction=on|off]
+```
+
+Note:
+1. Only file backend memdev is supported for now.
+2. Size of memdev must be multiple of 2MB.
+3. memaddr must be aligned to 2MB if set.
 
 ## 3. Trace
 

@@ -40,6 +40,8 @@ pub use device::input::*;
 pub use device::memory::*;
 pub use device::multitouch::*;
 pub use device::net::*;
+#[cfg(feature = "virtio_pmem")]
+pub use device::pmem::{Pmem, PmemState, VirtioPmemDevConfig};
 #[cfg(feature = "virtio_rng")]
 pub use device::rng::{Rng, RngConfig, RngState};
 #[cfg(feature = "virtio_scsi")]
@@ -57,7 +59,7 @@ use std::io::Write;
 use std::mem::size_of;
 use std::os::unix::prelude::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, warn};
@@ -90,6 +92,7 @@ pub const VIRTIO_TYPE_INPUT: u32 = 18;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const VIRTIO_TYPE_MEM: u32 = 24;
 pub const VIRTIO_TYPE_FS: u32 = 26;
+pub const VIRTIO_TYPE_PMEM: u32 = 27;
 
 // The Status of Virtio Device.
 const CONFIG_STATUS_ACKNOWLEDGE: u32 = 0x01;
@@ -945,6 +948,52 @@ pub fn virtio_register_sysbusdevops_type() -> Result<()> {
 
 pub fn virtio_register_pcidevops_type() -> Result<()> {
     register_pcidevops_type::<VirtioPciDevice>()
+}
+
+pub static DEFAULT_PLUGGABLE_ADDR_BASE: OnceLock<Arc<Mutex<PluggableAddrBase>>> = OnceLock::new();
+pub static PLUG_ADDR_BASE: OnceLock<u64> = OnceLock::new();
+pub const INVALID_ADDR: u64 = 0;
+
+#[derive(Copy, Clone, Default)]
+pub struct PluggableAddrBase {
+    addr: u64,
+    auto_alloc: bool,
+}
+
+pub fn alloc_base_addr(maddr_cfg: Option<u64>, region_size: u64, block_size: u64) -> u64 {
+    let addr_base = match PLUG_ADDR_BASE.get() {
+        Some(&addr) => addr,
+        None => {
+            error!("pluggable address base is not initialized");
+            return INVALID_ADDR;
+        }
+    };
+    if block_size == 0 {
+        error!("block size must not be zero");
+        return INVALID_ADDR;
+    }
+
+    let auto_alloc = maddr_cfg.is_none();
+    let pluggable = DEFAULT_PLUGGABLE_ADDR_BASE.get_or_init(|| {
+        Arc::new(Mutex::new(PluggableAddrBase {
+            addr: addr_base,
+            auto_alloc,
+        }))
+    });
+
+    let mut locked_pluggable = pluggable.lock().unwrap();
+    if auto_alloc != locked_pluggable.auto_alloc {
+        error!("inconsistent maddr configuration options");
+        return INVALID_ADDR;
+    }
+
+    let base_addr = match maddr_cfg {
+        Some(maddr) => maddr,
+        None => locked_pluggable.addr.div_ceil(block_size) * block_size,
+    };
+    locked_pluggable.addr = base_addr + region_size;
+
+    base_addr
 }
 
 #[cfg(test)]

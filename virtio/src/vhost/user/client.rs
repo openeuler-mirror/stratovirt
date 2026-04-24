@@ -51,6 +51,7 @@ pub const VHOST_USER_PROTOCOL_F_REPLY_ACK: u8 = 3;
 pub const VHOST_USER_PROTOCOL_F_CONFIG: u8 = 9;
 /// Vhost supports `VHOST_USER_SET_INFLIGHT_FD` and `VHOST_USER_GET_INFLIGHT_FD` msg.
 pub const VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD: u8 = 12;
+pub const VHOST_USER_PROTOCOL_F_RESET_DEVICE: u8 = 13;
 
 struct ClientInternal {
     // Used to send requests to the vhost user backend in userspace.
@@ -1109,18 +1110,28 @@ impl VhostOps for VhostUserClient {
             );
         }
 
-        let hdr = VhostUserMsgHdr::new(
+        let mut hdr = VhostUserMsgHdr::new(
             VhostUserMsgReq::SetVringEnable as u32,
             0,
             size_of::<VhostUserVringState>() as u32,
         );
+        if self.backend_type == VhostBackendType::TypeGpu {
+            hdr.flags |= VhostUserHdrFlag::NeedReply as u32;
+        }
         let payload_opt: Option<&[u8]> = None;
         let vring_state = VhostUserVringState::new(queue_idx as u32, u32::from(status));
         client
             .sock
             .send_msg(Some(&hdr), Some(&vring_state), payload_opt, &[])
             .with_context(|| "Failed to send msg for setting vring enable")?;
-
+        if self.backend_type == VhostBackendType::TypeGpu {
+            let res = client
+                .wait_ack_msg::<u64>(VhostUserMsgReq::SetVringEnable as u32)
+                .with_context(|| "Failed to wait ack msg for set_vring_enable")?;
+            if res != 0 {
+                bail!("Failed to set_vring_enable");
+            }
+        }
         Ok(())
     }
 
@@ -1174,6 +1185,22 @@ impl VhostOps for VhostUserClient {
             .sock
             .send_msg(Some(&hdr), body_opt, payload_opt, &[raw_fd])
             .with_context(|| "Failed to send msg for set socket")?;
+        Ok(())
+    }
+
+    fn reset_device(&self) -> Result<()> {
+        if self.backend_type != VhostBackendType::TypeGpu {
+            return Ok(());
+        }
+        let request = VhostUserMsgReq::ResetDevice as u32;
+        let hdr = VhostUserMsgHdr::new(request, 0, 0);
+        let body_opt: Option<&u32> = None;
+        let payload_opt: Option<&[u8]> = None;
+        let client = self.client.lock().unwrap();
+        client
+            .sock
+            .send_msg(Some(&hdr), body_opt, payload_opt, &[])
+            .with_context(|| "Failed to send msg for reset device")?;
         Ok(())
     }
 }

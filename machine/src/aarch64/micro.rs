@@ -21,7 +21,7 @@ use cpu::CPUTopology;
 use devices::legacy::{PL011, PL031};
 use devices::{Device, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
 use hypervisor::kvm::aarch64::*;
-use machine_manager::config::{MigrateMode, Param, SerialConfig, VmConfig};
+use machine_manager::config::{MachineMemConfig, MigrateMode, Param, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::device_tree::{self, CompileFDT, FdtBuilder};
 use util::gen_base_func;
@@ -36,6 +36,7 @@ pub enum LayoutEntryType {
     GicRedist,
     Uart,
     Rtc,
+    PvTime,
     Mmio,
     Mem,
     HighGicRedist,
@@ -48,6 +49,7 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
     (0x080A_0000, 0x00F6_0000),    // GicRedist (max 123 redistributors)
     (0x0900_0000, 0x0000_1000),    // Uart
     (0x0901_0000, 0x0000_1000),    // Rtc
+    (0x090a_0000, 0x0001_0000),    // PvTime
     (0x0A00_0000, 0x0000_0200),    // Mmio
     (0x4000_0000, 0x80_0000_0000), // Mem
     (256 << 30, 0x200_0000),       // HighGicRedist, (where remaining redistributors locates)
@@ -56,18 +58,30 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
 impl MachineOps for LightMachine {
     gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
-    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+    fn init_machine_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()> {
         let vm_ram = self.get_vm_ram();
         let layout_size = MEM_LAYOUT[LayoutEntryType::Mem as usize].1;
         let ram = Region::init_alias_region(
             vm_ram.clone(),
             0,
-            std::cmp::min(layout_size, mem_size),
+            std::cmp::min(layout_size, mem_config.mem_size),
             "pc_ram",
         );
         sys_mem
             .root()
-            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
+            .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
+        Ok(())
+    }
+
+    fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
+        MEM_LAYOUT[LayoutEntryType::Mem as usize]
+            .0
+            .checked_add(mem_config.mem_size)
+            .unwrap()
     }
 
     fn init_interrupt_controller(&mut self, vcpu_count: u64) -> Result<()> {
@@ -174,7 +188,12 @@ impl MachineOps for LightMachine {
 
         locked_vm.init_interrupt_controller(u64::from(vm_config.machine_config.nr_cpus))?;
 
-        locked_vm.cpu_post_init(&cpu_config)?;
+        locked_vm.cpu_post_init(
+            &cpu_config,
+            MEM_LAYOUT[LayoutEntryType::PvTime as usize].0,
+            MEM_LAYOUT[LayoutEntryType::PvTime as usize].1,
+            vm_config.machine_config.max_cpus,
+        )?;
 
         // Add mmio devices
         locked_vm

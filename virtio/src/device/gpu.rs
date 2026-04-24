@@ -104,6 +104,8 @@ pub struct GpuDevConfig {
     pub max_hostmem: u64,
     #[arg(long, alias = "enable_bar0", default_value="false", action = ArgAction::Append)]
     pub enable_bar0: bool,
+    #[arg(long, alias = "cursor_size", default_value = "128")]
+    pub cursor_size: u32,
 }
 
 impl GpuDevConfig {
@@ -518,6 +520,8 @@ struct GpuIoHandler {
     max_hostmem: u64,
     /// Current usage of host mem.
     used_hostmem: u64,
+    /// Cursor size (width and height), default 128 for Windows VM.
+    cursor_size: u32,
 }
 
 // SAFETY: Logically the GpuIoHandler structure will not be used
@@ -576,7 +580,6 @@ const VIRTIO_GPU_FORMAT_A8B8G8R8_UNORM: u32 = 121;
 const VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM: u32 = 134;
 const VIRTIO_GPU_FORMAT_MONOCHROME: u32 = 500;
 pub const VIRTIO_GPU_FORMAT_INVALID_UNORM: u32 = 135;
-const VIRTIO_GPU_CURSOR_SIZE: usize = 64;
 
 pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
     match format {
@@ -596,20 +599,21 @@ pub fn get_pixman_format(format: u32) -> Result<pixman_format_code_t> {
 
 // update curosr from monochrome source
 // https://learn.microsoft.com/en-us/windows-hardware/drivers/display/drawing-monochrome-pointers
-pub fn set_monochrome_cursor(cursor: &mut [u8], source: &[u8], width: usize, height: usize) {
+pub fn set_monochrome_cursor(mse: &mut DisplayMouse, source: &[u8], width: usize, height: usize) {
     let pixels_num = width * height;
     let mask_value_size = pixels_num / 8;
     let and_mask_value = &source[0..mask_value_size];
     let xor_mask_value = &source[mask_value_size..mask_value_size * 2];
     // Bytes per line
-    let bpl = VIRTIO_GPU_CURSOR_SIZE / 8;
+    let bpl = (mse.width as usize) / 8;
     // Bytes per pixel for cursor img, which expected export in RGBA format
     let bpp = 4;
+    let cursor = &mut mse.data;
 
-    for row in 0..VIRTIO_GPU_CURSOR_SIZE {
+    for row in 0..mse.height as usize {
         for col in 0..bpl {
             for i in 0..8 {
-                let cursor_index = (row * VIRTIO_GPU_CURSOR_SIZE + col * 8 + i) * bpp;
+                let cursor_index = (row * mse.width as usize + col * 8 + i) * bpp;
 
                 if row >= height || col * bpl >= width {
                     cursor[cursor_index] = 0x00;
@@ -650,11 +654,16 @@ pub fn set_monochrome_cursor(cursor: &mut [u8], source: &[u8], width: usize, hei
     }
 }
 
-pub fn cal_image_hostmem(format: u32, width: u32, height: u32) -> (Option<usize>, u32) {
+pub fn cal_image_hostmem(
+    format: u32,
+    width: u32,
+    height: u32,
+    cursor_size: u32,
+) -> (Option<usize>, u32) {
     // Expected monochrome cursor is 8 pixel aligned.
     if format == VIRTIO_GPU_FORMAT_MONOCHROME {
-        if width as usize > VIRTIO_GPU_CURSOR_SIZE
-            || height as usize > VIRTIO_GPU_CURSOR_SIZE
+        if width > cursor_size
+            || height > cursor_size
             || !width.is_multiple_of(8)
             || !height.is_multiple_of(8)
         {
@@ -857,7 +866,7 @@ impl GpuIoHandler {
 
         if res.format == VIRTIO_GPU_FORMAT_MONOCHROME {
             set_monochrome_cursor(
-                &mut mse.data,
+                mse,
                 &res.monochrome_cursor,
                 res.width as usize,
                 res.height as usize,
@@ -897,8 +906,8 @@ impl GpuIoHandler {
         match &mut scanout.mouse {
             None => {
                 let mouse = DisplayMouse::new(
-                    VIRTIO_GPU_CURSOR_SIZE as u32,
-                    VIRTIO_GPU_CURSOR_SIZE as u32,
+                    self.cursor_size,
+                    self.cursor_size,
                     info_cursor.hot_x,
                     info_cursor.hot_y,
                 );
@@ -1058,7 +1067,7 @@ impl GpuIoHandler {
             ..Default::default()
         };
 
-        let (mem, error) = cal_image_hostmem(res.format, res.width, res.height);
+        let (mem, error) = cal_image_hostmem(res.format, res.width, res.height, self.cursor_size);
         if mem.is_none() {
             return self.response_nodata(error, req);
         }
@@ -1868,6 +1877,7 @@ impl VirtioDevice for Gpu {
             scanouts,
             max_hostmem: self.cfg.max_hostmem,
             used_hostmem: 0,
+            cursor_size: self.cfg.cursor_size,
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -1909,6 +1919,7 @@ mod tests {
         assert!(!gpu_cfg.edid);
         assert_eq!(gpu_cfg.max_hostmem, 268435457);
         assert!(gpu_cfg.enable_bar0);
+        assert_eq!(gpu_cfg.cursor_size, 128);
 
         // Test2: Default.
         let gpu_cmd2 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0";
@@ -1920,6 +1931,7 @@ mod tests {
         assert!(gpu_cfg.edid);
         assert_eq!(gpu_cfg.max_hostmem, VIRTIO_GPU_DEFAULT_MAX_HOSTMEM);
         assert!(!gpu_cfg.enable_bar0);
+        assert_eq!(gpu_cfg.cursor_size, 128);
 
         // Test3/4: max_outputs is illegal.
         let gpu_cmd3 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_outputs=17";
@@ -1933,5 +1945,11 @@ mod tests {
         let gpu_cmd5 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,max_hostmem=0";
         let result = GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd5, true, false));
         assert!(result.is_err());
+
+        // Test6: Custom cursor size.
+        let gpu_cmd6 = "virtio-gpu-pci,id=gpu_1,bus=pcie.0,addr=0x4.0x0,cursor_size=64";
+        let gpu_cfg =
+            GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd6, true, false)).unwrap();
+        assert_eq!(gpu_cfg.cursor_size, 64);
     }
 }

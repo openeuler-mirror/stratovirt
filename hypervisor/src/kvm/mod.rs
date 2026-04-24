@@ -539,6 +539,10 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_init_pmu()
     }
 
+    fn init_pvtime(&self, base_ipa: u64) -> Result<()> {
+        self.arch_set_pvtime_gpa(base_ipa)
+    }
+
     fn vcpu_init(&self) -> Result<()> {
         self.arch_vcpu_init()
     }

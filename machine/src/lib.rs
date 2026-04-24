@@ -55,6 +55,11 @@ use address_space::{
     GuestAddress, Region,
 };
 #[cfg(target_arch = "aarch64")]
+use address_space::{register_ram_region, HostMemMapping};
+use boot_loader::{load_linux, BootLoaderConfig};
+#[cfg(target_arch = "x86_64")]
+use boot_loader::{load_smbios_to_memory, ARCH_SMBIOS_BEGIN};
+#[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
 use cpu::{ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuTopology, CPU};
 use devices::legacy::FwCfgOps;
@@ -135,12 +140,14 @@ use virtio::VirtioDeviceQuirk;
 use virtio::{
     balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
     virtio_register_sysbusdevops_type, Balloon, BalloonConfig, BalloonState, Block, BlockState,
-    Input, InputConfig, Multitouch, MultitouchConfig, Serial, SerialPort, VirtioBlkDevConfig,
-    VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState, VirtioPciDevice,
-    VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    Input, InputConfig, MttState, Multitouch, MultitouchConfig, Serial, SerialPort,
+    VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
+    VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
 };
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
+#[cfg(feature = "virtio_pmem")]
+use virtio::{Pmem, PmemState, VirtioPmemDevConfig};
 #[cfg(feature = "virtio_rng")]
 use virtio::{Rng, RngConfig, RngState};
 
@@ -361,11 +368,22 @@ pub trait MachineOps: MachineLifecycle {
 
     fn machine_base_mut(&mut self) -> &mut MachineBase;
 
+    /// Build all SMBIOS tables and entry, link to fwcfg or write to memory.
+    ///
+    /// # Arguments
+    ///
+    /// `fw_cfg` - Optional fwcfg device.
     fn build_smbios(
         &self,
-        fw_cfg: &Arc<Mutex<dyn FwCfgOps>>,
+        fw_cfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
         mem_array: Vec<(u64, u64)>,
     ) -> Result<()> {
+        // aarch64 does not support ACPI without fwcfg.
+        #[cfg(target_arch = "aarch64")]
+        if fw_cfg.is_none() {
+            return Ok(());
+        }
+
         let vm_config = self.get_vm_config();
         let vmcfg_lock = vm_config.lock().unwrap();
 
@@ -375,21 +393,78 @@ pub trait MachineOps: MachineLifecycle {
             &vmcfg_lock.machine_config,
             mem_array,
         );
-        let ep = build_smbios_ep30(table.len() as u32);
 
-        let mut locked_fw_cfg = fw_cfg.lock().unwrap();
-        locked_fw_cfg
-            .add_file_entry(SMBIOS_TABLE_FILE, table)
-            .with_context(|| "Failed to add smbios table file entry")?;
-        locked_fw_cfg
-            .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
-            .with_context(|| "Failed to add smbios anchor file entry")?;
+        let ep = build_smbios_ep30(
+            #[cfg(target_arch = "x86_64")]
+            ARCH_SMBIOS_BEGIN,
+            table.len() as u32,
+        );
+
+        if let Some(fw_cfg) = fw_cfg {
+            let mut locked_fw_cfg = fw_cfg.lock().unwrap();
+            locked_fw_cfg
+                .add_file_entry(SMBIOS_TABLE_FILE, table)
+                .with_context(|| "Failed to add smbios table file entry")?;
+            locked_fw_cfg
+                .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
+                .with_context(|| "Failed to add smbios anchor file entry")?;
+        } else {
+            #[cfg(target_arch = "x86_64")]
+            load_smbios_to_memory(&self.machine_base().sys_mem, table, ep)
+                .with_context(|| "Failed to load SMBIOS to guest memory")?;
+        }
 
         Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig>;
+    fn load_boot_source(
+        &self,
+        fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+        mem_rsdp: bool,
+        gap_range: (u64, u64),
+        ioapic_addr: u32,
+        lapic_addr: u32,
+        ident_tss_range: Option<(u64, u64)>,
+    ) -> Result<CPUBootConfig> {
+        let boot_source = self.machine_base().boot_source.lock().unwrap();
+        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
+
+        let bootloader_config = BootLoaderConfig {
+            kernel: boot_source.kernel_file.clone(),
+            initrd,
+            kernel_cmdline: boot_source.kernel_cmdline.to_string(),
+            cpu_count: self.machine_base().cpu_topo.nrcpus,
+            gap_range,
+            ioapic_addr,
+            lapic_addr,
+            ident_tss_range,
+            // go direct_boot if fwcfg is not present.
+            prot64_mode: fwcfg.is_none(),
+        };
+        let layout = load_linux(
+            &bootloader_config,
+            &self.machine_base().sys_mem,
+            fwcfg,
+            mem_rsdp,
+        )
+        .with_context(|| MachineError::LoadKernErr)?;
+
+        Ok(CPUBootConfig {
+            prot64_mode: fwcfg.is_none(),
+            boot_ip: layout.boot_ip,
+            boot_sp: layout.boot_sp,
+            boot_selector: layout.boot_selector,
+            zero_page: layout.zero_page_addr,
+            code_segment: layout.segments.code_segment,
+            data_segment: layout.segments.data_segment,
+            gdt_base: layout.segments.gdt_base,
+            gdt_size: layout.segments.gdt_limit,
+            idt_base: layout.segments.idt_base,
+            idt_size: layout.segments.idt_limit,
+            pml4_start: layout.boot_pml4_addr,
+        })
+    }
 
     #[cfg(target_arch = "aarch64")]
     fn load_boot_source(
@@ -397,8 +472,6 @@ pub trait MachineOps: MachineLifecycle {
         fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
         mem_start: u64,
     ) -> Result<CPUBootConfig> {
-        use boot_loader::{load_linux, BootLoaderConfig};
-
         let mut boot_source = self.machine_base().boot_source.lock().unwrap();
         let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
 
@@ -429,8 +502,12 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `mem_size` - memory size of VM.
-    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()>;
+    /// * `mem_config` - memory configuration of VM.
+    fn init_machine_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()>;
 
     fn create_machine_ram(&self, mem_config: &MachineMemConfig, thread_num: u8) -> Result<()> {
         let root = self.get_vm_ram();
@@ -475,14 +552,21 @@ pub trait MachineOps: MachineLifecycle {
         let migrate_info = self.get_migrate_info();
         if migrate_info.mode != MigrateMode::File || !migrate_info.mapped {
             self.create_machine_ram(mem_config, nr_cpus)?;
-            self.init_machine_ram(sys_mem, mem_config.mem_size)?;
+            self.init_machine_ram(sys_mem, mem_config)?;
         }
+
+        let plug_base = self.get_plug_addr_base(mem_config);
+        virtio::PLUG_ADDR_BASE
+            .set(plug_base)
+            .expect("Failed to init memory plug base address");
 
         MigrationManager::register_memory_instance(sys_mem.clone());
         register_ram_list();
 
         Ok(())
     }
+
+    fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64;
 
     fn mem_show(&self) {
         self.machine_base().sys_mem.memspace_show();
@@ -587,11 +671,46 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `CPUFeatures` - The features of vcpu.
+    /// * `pvtime_reg_base` - The Memory layout base of pvsteal time.
+    /// * `pvtime_reg_size` - The Memory layout size of pvsteal time.
+    /// * `max_cpus` - The max cpu numbers.
     #[cfg(target_arch = "aarch64")]
-    fn cpu_post_init(&self, vcpu_cfg: &CPUFeatures) -> Result<()> {
-        if vcpu_cfg.pmu {
-            for cpu in self.machine_base().cpus.iter() {
+    fn cpu_post_init(
+        &mut self,
+        vcpu_cfg: &CPUFeatures,
+        pvtime_reg_base: u64,
+        pvtime_reg_size: u64,
+        max_cpus: u8,
+    ) -> Result<()> {
+        use cpu::PVTIME_SIZE_PER_CPU;
+
+        if vcpu_cfg.steal_time {
+            let pvtime_size = PVTIME_SIZE_PER_CPU * max_cpus as u64;
+            if pvtime_size > pvtime_reg_size {
+                bail!("pvtime requires a {pvtime_size} for {max_cpus} cpus, but only {pvtime_reg_size} has been reserved");
+            }
+            let host_mmap = Arc::new(HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                pvtime_reg_size,
+                None,
+                false,
+                true,
+                false,
+            )?);
+            let mem_region = Region::init_ram_region(host_mmap.clone(), "pvtime_ram");
+            self.get_sys_mem()
+                .root()
+                .add_subregion(mem_region, pvtime_reg_base)?;
+            register_ram_region("pvtime".to_string(), host_mmap)?;
+        }
+        for cpu in self.machine_base().cpus.iter() {
+            if vcpu_cfg.pmu {
                 cpu.hypervisor_cpu.init_pmu()?;
+            }
+
+            if vcpu_cfg.steal_time {
+                cpu.hypervisor_cpu.init_pvtime(pvtime_reg_base)?
             }
         }
         Ok(())
@@ -606,6 +725,12 @@ pub trait MachineOps: MachineLifecycle {
 
     /// Add RTC device.
     fn add_rtc_device(&mut self, #[cfg(target_arch = "x86_64")] _mem_size: u64) -> Result<()> {
+        Ok(())
+    }
+
+    /// Add i8042 PS/2 controller device.
+    #[cfg(target_arch = "x86_64")]
+    fn add_i8042_device(&mut self) -> Result<()> {
         Ok(())
     }
 
@@ -790,7 +915,7 @@ pub trait MachineOps: MachineLifecycle {
             })?;
 
         let max_size = vm_config.machine_config.mem_config.max_size;
-        let device = virtio::Memory::new_arc(option.clone(), memoption, max_size)?;
+        let device = virtio::Memory::new_arc(option.clone(), memoption)?;
 
         let current_size = device.lock().unwrap().get_region_size()
             + vm_config.machine_config.mem_config.current_size;
@@ -818,6 +943,55 @@ pub trait MachineOps: MachineLifecycle {
                     .with_context(|| "Failed to add pci mem device")?;
             }
         }
+        Ok(())
+    }
+
+    /// Add virtio pmem device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_pmem")]
+    fn add_virtio_pmem(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let option = VirtioPmemDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let memoption = vm_config
+            .object
+            .mem_object
+            .remove(&option.memdev)
+            .with_context(|| {
+                format!(
+                    "Object for memory-backend-* {} config not found",
+                    option.memdev
+                )
+            })?;
+
+        let pmem = Arc::new(Mutex::new(Pmem::new(option.clone(), memoption)));
+        match option.classtype.as_str() {
+            "virtio-pmem-device" => {
+                check_arg_nonexist!(
+                    ("bus", option.bus),
+                    ("addr", option.addr),
+                    ("multifunction", option.multifunction)
+                );
+                let device = self
+                    .add_virtio_mmio_device(option.id.clone(), pmem.clone())
+                    .with_context(|| "Failed to add virtio mmio pmem device")?;
+                MigrationManager::register_transport_instance(
+                    VirtioMmioState::descriptor(),
+                    device,
+                    &option.id,
+                );
+            }
+            _ => {
+                check_arg_exist!(("bus", option.bus), ("addr", option.addr));
+                let bdf = PciBdf::new(option.bus.clone().unwrap(), option.addr.unwrap());
+                let multi_func = option.multifunction.unwrap_or_default();
+                self.add_virtio_pci_device(&option.id, &bdf, pmem.clone(), multi_func, false)
+                    .with_context(|| "Failed to add virtio pci pmem device")?;
+            }
+        }
+        MigrationManager::register_device_instance(PmemState::descriptor(), pmem, &option.id);
         Ok(())
     }
 
@@ -1048,17 +1222,20 @@ pub trait MachineOps: MachineLifecycle {
                     ("addr", cfg.addr),
                     ("multifunction", cfg.multifunction)
                 );
-                self.add_virtio_mmio_device(cfg.id.clone(), dev)
+                self.add_virtio_mmio_device(cfg.id.clone(), dev.clone())
                     .with_context(|| "Failed to add virtio mmio input device")?;
             }
             _ => {
                 check_arg_exist!(("bus", cfg.bus), ("addr", cfg.addr));
                 let bdf = PciBdf::new(cfg.bus.clone().unwrap(), cfg.addr.unwrap());
                 let multi_func = cfg.multifunction.unwrap_or_default();
-                self.add_virtio_pci_device(&cfg.id, &bdf, dev, multi_func, false)
+                self.add_virtio_pci_device(&cfg.id, &bdf, dev.clone(), multi_func, false)
                     .with_context(|| "Failed to add virtio pci input device")?;
             }
         }
+
+        MigrationManager::register_device_instance(MttState::descriptor(), dev, &cfg.id);
+
         Ok(())
     }
 
@@ -1725,7 +1902,7 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<Arc<Mutex<dyn PciDevOps>>> {
         let (devfn, parent_bus) = self.get_devfn_and_parent_bus(bdf)?;
         let sys_mem = self.get_sys_mem();
-        let pcidev = VirtioPciDevice::new(
+        let virtio_pci_dev = VirtioPciDevice::new(
             id.to_string(),
             devfn,
             sys_mem.clone(),
@@ -1734,11 +1911,10 @@ pub trait MachineOps: MachineLifecycle {
             multi_func,
             need_irqfd,
         );
-        let clone_pcidev = Arc::new(Mutex::new(pcidev.clone()));
-        pcidev
+        let pcidev = virtio_pci_dev
             .realize()
             .with_context(|| "Failed to add virtio pci device")?;
-        Ok(clone_pcidev)
+        Ok(pcidev)
     }
 
     /// Set the parent bus slot on when device attached
@@ -2161,6 +2337,10 @@ pub trait MachineOps: MachineLifecycle {
         )
         .with_context(|| MachineError::AddDevErr("RTC".to_string()))?;
 
+        #[cfg(target_arch = "x86_64")]
+        self.add_i8042_device()
+            .with_context(|| MachineError::AddDevErr("I8042".to_string()))?;
+
         self.add_ged_device()
             .with_context(|| MachineError::AddDevErr("Ged".to_string()))?;
 
@@ -2210,6 +2390,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
+                #[cfg(feature = "virtio_pmem")]
+                ("virtio-pmem-device" | "virtio-pmem-pci", add_virtio_pmem, vm_config, cfg_args),
                 #[cfg(feature = "vfio_device")]
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]

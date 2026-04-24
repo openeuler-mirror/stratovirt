@@ -733,11 +733,9 @@ impl VirtioPciDevice {
                 } else {
                     INVALID_VECTOR_NUM
                 };
-                // It should not check device status when detaching device which
-                // will set vector to INVALID_VECTOR_NUM.
-                let need_check = locked_device.device_status() != 0;
+
                 locked_device
-                    .queue_config_mut(need_check)
+                    .queue_config_mut(false)
                     .map(|config| config.vector = val)?;
             }
             COMMON_Q_DESCLO_REG => locked_device.queue_config_mut(true).map(|config| {
@@ -1585,15 +1583,17 @@ mod tests {
                 .ready
         );
 
-        // Failed to set Queue relevant register if device is no ready
-        virtio_dev
-            .lock()
-            .unwrap()
-            .set_device_status(CONFIG_STATUS_FEATURES_OK | CONFIG_STATUS_DRIVER_OK);
+        // Succeeded to set Queue MSIX Vector even if device is ready
+        virtio_dev.lock().unwrap().set_device_status(
+            CONFIG_STATUS_ACKNOWLEDGE
+                | CONFIG_STATUS_DRIVER
+                | CONFIG_STATUS_FEATURES_OK
+                | CONFIG_STATUS_DRIVER_OK,
+        );
         virtio_dev.lock().unwrap().set_queue_select(1);
         assert!(virtio_pci
             .write_common_config(COMMON_Q_MSIX_REG, 0x4_u32)
-            .is_err());
+            .is_ok());
     }
 
     #[test]

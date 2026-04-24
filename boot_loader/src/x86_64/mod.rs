@@ -36,13 +36,13 @@
 //!                 |  Kernel Cmdline        |
 //!                 |                        |
 //!   0x0009_fc00   +------------------------+
-//!                 |  EBDA - MPtable        |
+//!                 |  EBDA - MPtable  1KB   |
 //!                 |                        |
 //!   0x000a_0000   +------------------------+
 //!                 |  VGA_RAM               |
 //!                 |                        |
 //!   0x000f_0000   +------------------------+
-//!                 |  MB_BIOS               |
+//!                 |  MB_BIOS   64KB        |
 //!                 |                        |
 //!   0x0010_0000   +------------------------+
 //!                 |  Kernel _setup         |
@@ -53,13 +53,14 @@
 //! ```
 
 mod bootparam;
-mod direct_boot;
 mod standard_boot;
+
+pub mod direct_boot;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use kvm_bindings::kvm_segment;
 
 use address_space::AddressSpace;
@@ -76,7 +77,13 @@ const BZIMAGE_BOOT_OFFSET: u64 = 0x0200;
 
 const EBDA_START: u64 = 0x0009_fc00;
 const VGA_RAM_BEGIN: u64 = 0x000a_0000;
-const MB_BIOS_BEGIN: u64 = 0x000f_0000;
+/// Put RSDP table and other ACPI tables, max size is 128KB.
+pub const RSDP_BEGIN: u64 = 0x000d_0000;
+pub const ACPI_MAX_SIZE: u64 = MB_BIOS_BEGIN - RSDP_BEGIN;
+/// Put SMBIOS entry and other tables, max size is 64KB.
+pub const MB_BIOS_BEGIN: u64 = 0x000f_0000;
+pub const SMBIOS_MAX_SIZE: u64 = VMLINUX_RAM_START - MB_BIOS_BEGIN;
+
 pub const VMLINUX_RAM_START: u64 = 0x0010_0000;
 const INITRD_ADDR_MAX: u64 = 0x37ff_ffff;
 
@@ -139,19 +146,11 @@ pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+    mem_rsdp: bool,
 ) -> Result<X86BootLoader> {
     if config.prot64_mode {
-        direct_boot::load_linux(config, sys_mem)
+        direct_boot::load_linux(config, sys_mem, mem_rsdp)
     } else {
-        let fwcfg = fwcfg.with_context(|| "Failed to load linux: No FwCfg provided")?;
-        let mut locked_fwcfg = fwcfg.lock().unwrap();
-        standard_boot::load_linux(config, sys_mem, &mut *locked_fwcfg)?;
-
-        Ok(X86BootLoader {
-            boot_ip: 0xFFF0,
-            boot_sp: 0x8000,
-            boot_selector: 0xF000,
-            ..Default::default()
-        })
+        standard_boot::load_linux(config, sys_mem, fwcfg)
     }
 }

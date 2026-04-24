@@ -146,6 +146,10 @@ impl CPUHypervisorOps for TestCpu {
         Ok(())
     }
 
+    fn init_pvtime(&self, _ipa: u64) -> Result<()> {
+        Ok(())
+    }
+
     fn vcpu_init(&self) -> Result<()> {
         Ok(())
     }

@@ -26,9 +26,9 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::error::VirtioError;
 use crate::{
-    iov_read_object, iov_write_object, read_config_default, report_virtio_error, Queue, VirtioBase,
-    VirtioDevice, VirtioInterrupt, VirtioInterruptType, VIRTIO_F_RING_EVENT_IDX,
-    VIRTIO_F_VERSION_1, VIRTIO_TYPE_MEM,
+    alloc_base_addr, iov_read_object, iov_write_object, read_config_default, report_virtio_error,
+    Queue, VirtioBase, VirtioDevice, VirtioInterrupt, VirtioInterruptType, INVALID_ADDR,
+    VIRTIO_F_RING_EVENT_IDX, VIRTIO_F_VERSION_1, VIRTIO_TYPE_MEM,
 };
 use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
 use log::{error, info, warn};
@@ -68,47 +68,9 @@ const DEFAULT_MEM_BLOCK_SIZE: u64 = 33554432; // 32 MB
 const DEFAULT_MEM_BLOCK_ALIGN_SIZE: u64 = 16384; // 16 KB
 
 const NUMA_NONE: u16 = 4097;
-const INVALID_ADDR: u64 = 0;
 
 type ViomemDeviceTable = HashMap<String, Arc<Mutex<Memory>>>;
 static VIOMEM_DEV_LIST: OnceLock<Arc<Mutex<ViomemDeviceTable>>> = OnceLock::new();
-static DEFAULT_PLUGGABLE_ADDR_BASE: OnceLock<Arc<Mutex<PluggableAddrBase>>> = OnceLock::new();
-
-#[derive(Copy, Clone, Default)]
-struct PluggableAddrBase {
-    addr: u64,
-    auto_alloc: bool,
-}
-
-fn alloc_base_addr(
-    max_size: u64,
-    maddr_cfg: Option<u64>,
-    region_size: u64,
-    block_size: u64,
-) -> u64 {
-    let auto_alloc = maddr_cfg.is_none();
-    let mut pluggable = DEFAULT_PLUGGABLE_ADDR_BASE
-        .get_or_init(|| {
-            Arc::new(Mutex::new(PluggableAddrBase {
-                addr: max_size,
-                auto_alloc,
-            }))
-        })
-        .lock()
-        .unwrap();
-    if auto_alloc != pluggable.auto_alloc {
-        error!("inconsistent maddr configuration options");
-        return INVALID_ADDR;
-    }
-
-    let base_addr = match maddr_cfg {
-        Some(maddr) => maddr,
-        None => pluggable.addr.div_ceil(block_size) * block_size,
-    };
-    pluggable.addr = base_addr + region_size;
-
-    base_addr
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -690,7 +652,7 @@ pub struct Memory {
 }
 
 impl Memory {
-    fn new_internal(option: MemoryConfig, memobj: MemBackendObjConfig, max_size: u64) -> Self {
+    fn new_internal(option: MemoryConfig, memobj: MemBackendObjConfig) -> Self {
         info!("virtio-mem: new MemoryConfig {:?}", option);
         let mut mem = Self {
             base: VirtioBase::new(VIRTIO_TYPE_MEM, QUEUE_NUM_MEM, DEFAULT_VIRTQUEUE_SIZE),
@@ -711,12 +673,7 @@ impl Memory {
             None => DEFAULT_MEM_BLOCK_SIZE,
         };
         config.region_size = mem.backend.lock().unwrap().size;
-        config.addr = alloc_base_addr(
-            max_size,
-            option.memaddr,
-            config.region_size,
-            config.block_size,
-        );
+        config.addr = alloc_base_addr(option.memaddr, config.region_size, config.block_size);
         config.usable_region_size = config.region_size;
         config.node_id = match option.node {
             Some(node) => {
@@ -737,12 +694,8 @@ impl Memory {
         mem
     }
 
-    pub fn new_arc(
-        option: MemoryConfig,
-        memobj: MemBackendObjConfig,
-        max_size: u64,
-    ) -> Result<Arc<Mutex<Self>>> {
-        let mem = Self::new_internal(option, memobj, max_size);
+    pub fn new_arc(option: MemoryConfig, memobj: MemBackendObjConfig) -> Result<Arc<Mutex<Self>>> {
+        let mem = Self::new_internal(option, memobj);
         let id = mem.id.clone();
         let mem_arc = Arc::new(Mutex::new(mem));
         register_viomem_device(id, mem_arc.clone())?;

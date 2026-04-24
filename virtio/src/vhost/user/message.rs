@@ -59,7 +59,8 @@ pub enum VhostUserMsgReq {
     GetInflightFd = 31,
     SetInflightFd = 32,
     SetSocket = 33,
-    MaxCmd = 34,
+    ResetDevice = 34,
+    MaxCmd = 35,
 }
 
 impl From<u32> for VhostUserMsgReq {

@@ -176,11 +176,6 @@ impl<T: Clone + Send + Sync> BlockDriverOps<T> for RawDriver<T> {
         Ok(())
     }
 
-    fn drain_request(&self) {
-        trace::block_drain_request(&self.driver.block_prop.id);
-        self.driver.drain_request();
-    }
-
     fn get_inflight(&self) -> Arc<AtomicU64> {
         self.driver.incomplete.clone()
     }

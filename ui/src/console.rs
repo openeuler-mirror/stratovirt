@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use log::error;
 use once_cell::sync::Lazy;
 
@@ -159,6 +159,10 @@ pub trait DisplayChangeListenerOperations {
     fn dpy_set_major(&self) -> Result<()> {
         Ok(())
     }
+    /// Get button is left-pressing or not.
+    fn dpy_get_left_pressing(&self) -> bool {
+        false
+    }
 }
 
 /// Callback functions registered by graphic hardware.
@@ -167,6 +171,8 @@ pub trait HardWareOperations {
     fn hw_update(&self, _con: Arc<Mutex<DisplayConsole>>) {}
     /// Ui configuration changed.
     fn hw_ui_info(&self, _con: Arc<Mutex<DisplayConsole>>, _width: u32, _height: u32) {}
+    /// Expanded screen changed.
+    fn hw_expanded_screen_info(&self, _con: Arc<Mutex<DisplayConsole>>, _state: u32) {}
 }
 
 /// Listen to the change of image and call the related
@@ -596,6 +602,24 @@ pub fn display_cursor_define(
     Ok(())
 }
 
+/// Get cursor pressing status from display.
+pub fn display_get_cursor_status(console: &Option<Weak<Mutex<DisplayConsole>>>) -> Result<bool> {
+    let con = match console.as_ref().and_then(|c| c.upgrade()) {
+        Some(c) => c,
+        None => {
+            bail!("Failed to find console!")
+        }
+    };
+    let con_id = con.lock().unwrap().con_id;
+    let related_listeners = DISPLAY_STATE.lock().unwrap().get_related_display(con_id)?;
+
+    if let Some(dcl) = related_listeners.first() {
+        let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
+        return Ok((*dcl_opts).dpy_get_left_pressing());
+    }
+    bail!("No display console found!");
+}
+
 /// Set specific screen as the main display screen.
 pub fn display_set_major_screen(dev_name: &str) -> Result<()> {
     let con = match CONSOLES
@@ -623,6 +647,15 @@ pub fn graphic_hardware_update(con_id: Option<usize>) {
         let con_opts = con.lock().unwrap().dev_opts.clone();
         (*con_opts).hw_update(con);
     }
+}
+
+pub fn graphic_hardware_ui_expanded_screen(
+    con: Arc<Mutex<DisplayConsole>>,
+    state: u32,
+) -> Result<()> {
+    let con_opts = con.lock().unwrap().dev_opts.clone();
+    (*con_opts).hw_expanded_screen_info(con.clone(), state);
+    Ok(())
 }
 
 pub fn graphic_hardware_ui_info(

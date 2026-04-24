@@ -40,8 +40,8 @@ use crate::{
 };
 use address_space::{AddressAttr, AddressSpace, GuestAddress, RegionCache};
 use block_backend::{
-    create_block_backend, remove_block_backend, BlockDriverOps, BlockIoErrorCallback,
-    BlockProperty, BlockStatus,
+    create_block_backend, drain_request, remove_block_backend, BlockDriverOps,
+    BlockIoErrorCallback, BlockProperty, BlockStatus,
 };
 use machine_manager::config::{
     get_pci_df, parse_bool, valid_block_device_virtqueue_size, valid_id, ConfigCheck, ConfigError,
@@ -1345,13 +1345,16 @@ impl VirtioDevice for Block {
             &mut self.base.deactivate_evts,
         )?;
         if let Some(block_backend) = self.block_backend.as_ref() {
-            let mut block_backend = block_backend.lock().unwrap();
             // Must drain requests before unregister.
-            block_backend.drain_request();
+            let incomplete = block_backend.lock().unwrap().get_inflight();
+            drain_request(&self.drive_cfg.id, incomplete);
+
+            let mut block_backend = block_backend.lock().unwrap();
             block_backend.unregister_io_event()?;
         }
         self.update_evts.clear();
         self.senders.clear();
+        self.queue_evts.lock().unwrap().clear();
         Ok(())
     }
 

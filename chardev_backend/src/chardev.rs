@@ -16,7 +16,11 @@ use std::io::{ErrorKind, Stdin, Stdout};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    mpsc::{channel, Sender},
+    Arc, Mutex,
+};
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -186,6 +190,34 @@ impl Chardev {
                 ));
                 self.output = Some(file);
             }
+            ChardevType::RedirectToLog { .. } => {
+                let (sender, receiver) = channel::<u8>();
+                self.output = Some(Arc::new(Mutex::new(SenderWrapper(sender))));
+                let res = thread::Builder::new()
+                    .name("Redirect to log".to_string())
+                    .spawn(move || {
+                        let mut buffer = String::new();
+                        loop {
+                            match receiver.recv() {
+                                Ok(ch) => {
+                                    if ch == b'\n' {
+                                        info!("{}", buffer);
+                                        buffer.clear();
+                                    } else {
+                                        buffer.push(ch.into());
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to receive message: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                if let Err(e) = res {
+                    error!("Failed to start Redirect to log thread: {:?}", e);
+                }
+            }
         };
         Ok(())
     }
@@ -283,6 +315,12 @@ impl Chardev {
                 return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
             }
             ChardevType::Socket { .. } => (),
+            ChardevType::RedirectToLog { .. } => {
+                if self.output.is_none() {
+                    bail!("Channel has no sender");
+                }
+                return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
+            }
         }
         if self.output.is_none() {
             return Ok(());
@@ -690,6 +728,7 @@ impl EventNotifierHelper for Chardev {
                 ChardevType::Pty { .. } => get_terminal_notifier(chardev),
                 ChardevType::Socket { .. } => get_socket_notifier(chardev),
                 ChardevType::File { .. } => None,
+                ChardevType::RedirectToLog { .. } => None,
             }
         };
         notifier.map_or(Vec::new(), |value| vec![value])
@@ -716,3 +755,22 @@ impl CommunicatInInterface for Stdin {}
 impl CommunicatOutInterface for SocketStream {}
 impl CommunicatOutInterface for File {}
 impl CommunicatOutInterface for Stdout {}
+impl CommunicatOutInterface for SenderWrapper {}
+
+struct SenderWrapper(Sender<u8>);
+// SAFETY: Send and Sync is auto-implemented for Sender<T>,
+// implementing them for SenderWrapper is safe too.
+unsafe impl std::marker::Send for SenderWrapper {}
+
+impl std::io::Write for SenderWrapper {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        for i in buf {
+            self.0.send(*i).map_err(std::io::Error::other)?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

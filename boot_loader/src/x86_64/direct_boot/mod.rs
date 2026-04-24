@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use log::info;
 
 use self::gdt::setup_gdt;
@@ -25,10 +25,12 @@ use self::mptable::setup_isa_mptable;
 use super::bootparam::{BootParams, RealModeKernelHeader, UNDEFINED_ID};
 use super::{X86BootLoader, X86BootLoaderConfig};
 use super::{
-    BOOT_HDR_START, BOOT_LOADER_SP, BZIMAGE_BOOT_OFFSET, CMDLINE_START, EBDA_START,
-    INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, VMLINUX_STARTUP, ZERO_PAGE_START,
+    ACPI_MAX_SIZE, BOOT_HDR_START, BOOT_LOADER_SP, BZIMAGE_BOOT_OFFSET, CMDLINE_START, EBDA_START,
+    INITRD_ADDR_MAX, PDE_START, PDPTE_START, PML4_START, SMBIOS_MAX_SIZE, VMLINUX_STARTUP,
+    ZERO_PAGE_START,
 };
 use crate::error::BootLoaderError;
+use crate::{ARCH_RSDP_BEGIN, ARCH_SMBIOS_BEGIN};
 use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use util::byte_code::ByteCode;
 
@@ -193,9 +195,14 @@ fn setup_boot_params(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     boot_hdr: &RealModeKernelHeader,
+    mem_rsdp: bool,
 ) -> Result<()> {
     let mut boot_params = BootParams::new(*boot_hdr);
     boot_params.setup_e820_entries(config, sys_mem);
+    if mem_rsdp {
+        boot_params.rsdp_address = ARCH_RSDP_BEGIN;
+    }
+
     sys_mem
         .write_object(
             &boot_params,
@@ -239,6 +246,7 @@ fn setup_kernel_cmdline(
 ///
 /// * `config` - boot source config, contains kernel, initrd and kernel cmdline.
 /// * `sys_mem` - guest memory.
+/// * `mem_rsdp` - whether rsdp in memory.
 ///
 /// # Errors
 ///
@@ -247,6 +255,7 @@ fn setup_kernel_cmdline(
 pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
+    mem_rsdp: bool,
 ) -> Result<X86BootLoader> {
     let kernel_path = config
         .kernel
@@ -265,7 +274,7 @@ pub fn load_linux(
     setup_kernel_cmdline(config, sys_mem, &mut boot_header)
         .with_context(|| "Failed to setup kernel cmdline")?;
 
-    setup_boot_params(config, sys_mem, &boot_header)
+    setup_boot_params(config, sys_mem, &boot_header, mem_rsdp)
         .with_context(|| "Failed to setup boot params")?;
 
     setup_isa_mptable(
@@ -281,6 +290,91 @@ pub fn load_linux(
     boot_loader_layout.segments = setup_gdt(sys_mem).with_context(|| "Failed to setup gdt")?;
 
     Ok(boot_loader_layout)
+}
+
+/// Load ACPI tables to guest memory for direct boot.
+///
+/// # Arguments
+///
+/// * `sys_mem` - guest memory.
+/// * `rsdp_data` - RSDP data.
+/// * `acpi_tables` - ACPI tables data.
+pub fn load_acpi_to_memory(
+    sys_mem: &Arc<AddressSpace>,
+    rsdp_data: Vec<u8>,
+    acpi_tables: Vec<u8>,
+) -> Result<()> {
+    if rsdp_data.len().checked_add(acpi_tables.len()).unwrap() as u64 > ACPI_MAX_SIZE {
+        bail!(
+            "Failed to load ACPI to memory, size exceeds {}",
+            ACPI_MAX_SIZE
+        );
+    }
+
+    sys_mem
+        .write(
+            &mut rsdp_data.as_slice(),
+            GuestAddress(ARCH_RSDP_BEGIN),
+            rsdp_data.len() as u64,
+            AddressAttr::Ram,
+        )
+        .with_context(|| "Failed to write RSDP to guest memory")?;
+
+    sys_mem
+        .write(
+            &mut acpi_tables.as_slice(),
+            GuestAddress(ARCH_RSDP_BEGIN.checked_add(rsdp_data.len() as u64).unwrap()),
+            acpi_tables.len() as u64,
+            AddressAttr::Ram,
+        )
+        .with_context(|| "Failed to write ACPI tables to guest memory")?;
+
+    Ok(())
+}
+
+/// Load SMBIOS tables to guest memory for direct boot.
+///
+/// # Arguments
+///
+/// * `sys_mem` - guest memory.
+/// * `smbios_tables` - SMBIOS tables data.
+/// * `smbios_anchor` - SMBIOS anchor data.
+pub fn load_smbios_to_memory(
+    sys_mem: &Arc<AddressSpace>,
+    smbios_tables: Vec<u8>,
+    smbios_anchor: Vec<u8>,
+) -> Result<()> {
+    let total_len = smbios_tables.len().checked_add(smbios_anchor.len());
+    if total_len.unwrap() as u64 > SMBIOS_MAX_SIZE {
+        bail!(
+            "Failed to load SMBIOS to memory, size exceeds {}",
+            SMBIOS_MAX_SIZE
+        );
+    }
+
+    sys_mem
+        .write(
+            &mut smbios_anchor.as_slice(),
+            GuestAddress(ARCH_SMBIOS_BEGIN),
+            smbios_anchor.len() as u64,
+            AddressAttr::Ram,
+        )
+        .with_context(|| "Failed to write SMBIOS anchor to guest memory")?;
+
+    sys_mem
+        .write(
+            &mut smbios_tables.as_slice(),
+            GuestAddress(
+                ARCH_SMBIOS_BEGIN
+                    .checked_add(smbios_anchor.len() as u64)
+                    .unwrap(),
+            ),
+            smbios_tables.len() as u64,
+            AddressAttr::Ram,
+        )
+        .with_context(|| "Failed to write SMBIOS tables to guest memory")?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -351,7 +445,7 @@ mod test {
             ident_tss_range: None,
         };
         let mut boot_hdr = RealModeKernelHeader::new();
-        assert!(setup_boot_params(&config, &space, &boot_hdr).is_ok());
+        assert!(setup_boot_params(&config, &space, &boot_hdr, false).is_ok());
 
         // test setup_gdt function
         let c_seg = kvm_segment {

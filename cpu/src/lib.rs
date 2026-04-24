@@ -51,6 +51,8 @@ pub use aarch64::CpregListEntry;
 pub use aarch64::PMU_INTR;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::PPI_BASE;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::PVTIME_SIZE_PER_CPU;
 pub use error::CpuError;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
@@ -157,6 +159,8 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn get_hypervisor_type(&self) -> HypervisorType;
 
     fn init_pmu(&self) -> Result<()>;
+
+    fn init_pvtime(&self, _ipa: u64) -> Result<()>;
 
     fn vcpu_init(&self) -> Result<()>;
 

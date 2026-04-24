@@ -181,6 +181,14 @@ impl UsbEndpoint {
             self.max_streams = 0;
         }
     }
+
+    pub fn get_address(&self) -> u8 {
+        let mut addr = self.ep_number;
+        if self.in_direction {
+            addr |= USB_DIRECTION_DEVICE_TO_HOST;
+        }
+        addr
+    }
 }
 
 /// USB device common structure.

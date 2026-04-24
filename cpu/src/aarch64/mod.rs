@@ -45,6 +45,9 @@ const UNINIT_MPIDR: u64 = 0xFFFF_FF00_0000_0000;
 pub const PPI_BASE: u32 = 16;
 pub const PMU_INTR: u32 = 7;
 
+/// See Linux kernel arch/arm64/include/asm/pvclock-abi.h
+pub const PVTIME_SIZE_PER_CPU: u64 = 64;
+
 /// AArch64 CPU booting configure information
 ///
 /// Before jumping into the kernel, primary CPU general-purpose

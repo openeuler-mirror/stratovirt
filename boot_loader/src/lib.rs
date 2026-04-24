@@ -59,7 +59,7 @@
 //!         ident_tss_range: None,
 //!     };
 //!
-//!     let layout = load_linux(&bootloader_config, &guest_mem, None).unwrap();
+//!     let layout = load_linux(&bootloader_config, &guest_mem, None, false).unwrap();
 //!     // Now PE linux kernel and kernel cmdline are loaded to guest memory...
 //! }
 //!
@@ -83,12 +83,15 @@
 //! }
 //! ```
 
+pub mod error;
+
 #[allow(clippy::upper_case_acronyms)]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
-pub mod error;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
+
+pub use error::BootLoaderError;
 
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::load_linux;
@@ -96,11 +99,18 @@ pub use aarch64::load_linux;
 pub use aarch64::AArch64BootLoader as BootLoader;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AArch64BootLoaderConfig as BootLoaderConfig;
-pub use error::BootLoaderError;
 
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::direct_boot::load_acpi_to_memory;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::direct_boot::load_smbios_to_memory;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::load_linux;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86BootLoader as BootLoader;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86BootLoaderConfig as BootLoaderConfig;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::MB_BIOS_BEGIN as ARCH_SMBIOS_BEGIN;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::RSDP_BEGIN as ARCH_RSDP_BEGIN;

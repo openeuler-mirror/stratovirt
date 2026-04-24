@@ -89,6 +89,7 @@ impl ChardevConfig {
             ChardevType::Pty { id } => id,
             ChardevType::Socket { id, .. } => id,
             ChardevType::File { id, .. } => id,
+            ChardevType::RedirectToLog { id } => id,
         }
         .clone()
     }
@@ -138,6 +139,10 @@ pub enum ChardevType {
         id: String,
         #[arg(long, value_parser = valid_path)]
         path: String,
+    },
+    RedirectToLog {
+        #[arg(long, value_parser = valid_id)]
+        id: String,
     },
 }
 

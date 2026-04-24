@@ -79,6 +79,10 @@ impl KvmCpu {
         Ok(())
     }
 
+    pub fn arch_set_pvtime_gpa(&self, _base_ipa: u64) -> Result<()> {
+        bail!("X86 don't support pvsteal time now.");
+    }
+
     pub fn arch_vcpu_init(&self) -> Result<()> {
         Ok(())
     }

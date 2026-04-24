@@ -15,14 +15,14 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 
 use crate::micro_common::syscall::syscall_whitelist;
-use crate::{register_shutdown_event, LightMachine, MachineBase, MachineError, MachineOps};
+use crate::{register_shutdown_event, LightMachine, MachineBase, MachineOps};
 use address_space::{AddressSpace, Region};
-use cpu::{CPUBootConfig, CPUTopology};
-use devices::legacy::{FwCfgOps, Serial, SERIAL_ADDR};
+use cpu::CPUTopology;
+use devices::legacy::{Serial, SERIAL_ADDR};
 use devices::Device;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
-use machine_manager::config::{MigrateMode, SerialConfig, VmConfig};
+use machine_manager::config::{MachineMemConfig, MigrateMode, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::gen_base_func;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
@@ -50,13 +50,17 @@ pub const MEM_LAYOUT: &[(u64, u64)] = &[
 impl MachineOps for LightMachine {
     gen_base_func!(machine_base, machine_base_mut, MachineBase, base);
 
-    fn init_machine_ram(&self, sys_mem: &Arc<AddressSpace>, mem_size: u64) -> Result<()> {
+    fn init_machine_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()> {
         let vm_ram = self.get_vm_ram();
         let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
         let below4g_ram = Region::init_alias_region(
             vm_ram.clone(),
             0,
-            std::cmp::min(below4g_size, mem_size),
+            std::cmp::min(below4g_size, mem_config.mem_size),
             "below4g_ram",
         );
         sys_mem.root().add_subregion(
@@ -64,18 +68,27 @@ impl MachineOps for LightMachine {
             MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
         )?;
 
-        if mem_size > below4g_size {
+        if mem_config.mem_size > below4g_size {
             let above4g_ram = Region::init_alias_region(
                 vm_ram.clone(),
                 below4g_size,
-                mem_size - below4g_size,
+                mem_config.mem_size - below4g_size,
                 "above4g_ram",
             );
             let above4g_start = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
             sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
-
         Ok(())
+    }
+
+    fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
+        let mut plug_base = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        if mem_config.mem_size > below4g_size {
+            let above4g_size = mem_config.mem_size - below4g_size;
+            plug_base = plug_base.checked_add(above4g_size).unwrap();
+        }
+        plug_base
     }
 
     fn init_interrupt_controller(&mut self, _vcpu_count: u64) -> Result<()> {
@@ -87,47 +100,6 @@ impl MachineOps for LightMachine {
         self.base.sysbus.lock().unwrap().irq_manager = irq_manager.line_irq_manager;
 
         Ok(())
-    }
-
-    fn load_boot_source(&self, fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<CPUBootConfig> {
-        use boot_loader::{load_linux, BootLoaderConfig};
-
-        let boot_source = self.base.boot_source.lock().unwrap();
-        let initrd = boot_source.initrd.as_ref().map(|b| b.initrd_file.clone());
-
-        // MEM_LAYOUT is defined statically, will not overflow.
-        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-        let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-        let bootloader_config = BootLoaderConfig {
-            kernel: boot_source.kernel_file.clone(),
-            initrd,
-            kernel_cmdline: boot_source.kernel_cmdline.to_string(),
-            cpu_count: self.base.cpu_topo.nrcpus,
-            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
-            gap_range: (gap_start, gap_end - gap_start),
-            ioapic_addr: MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32,
-            lapic_addr: MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32,
-            ident_tss_range: None,
-            prot64_mode: true,
-        };
-        let layout = load_linux(&bootloader_config, &self.base.sys_mem, fwcfg)
-            .with_context(|| MachineError::LoadKernErr)?;
-
-        Ok(CPUBootConfig {
-            prot64_mode: true,
-            boot_ip: layout.boot_ip,
-            boot_sp: layout.boot_sp,
-            boot_selector: layout.boot_selector,
-            zero_page: layout.zero_page_addr,
-            code_segment: layout.segments.code_segment,
-            data_segment: layout.segments.data_segment,
-            gdt_base: layout.segments.gdt_base,
-            gdt_size: layout.segments.gdt_limit,
-            idt_base: layout.segments.idt_base,
-            idt_size: layout.segments.idt_limit,
-            pml4_start: layout.boot_pml4_addr,
-        })
     }
 
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
@@ -172,7 +144,23 @@ impl MachineOps for LightMachine {
 
         let migrate_info = locked_vm.get_migrate_info();
         let boot_config = if migrate_info.mode == MigrateMode::Unknown {
-            Some(locked_vm.load_boot_source(None)?)
+            // MEM_LAYOUT is defined statically, will not overflow.
+            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
+            let gap_range = (gap_start, gap_end - gap_start);
+            let ioapic_addr = MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32;
+            let lapic_addr = MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32;
+            Some(locked_vm.load_boot_source(
+                None,
+                // No ACPI for LightMachine.
+                false,
+                gap_range,
+                ioapic_addr,
+                lapic_addr,
+                None,
+            )?)
         } else {
             None
         };
