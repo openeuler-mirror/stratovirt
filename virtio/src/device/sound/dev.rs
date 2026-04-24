@@ -352,19 +352,22 @@ impl Pcm {
         if len > size_of::<PcmInfo>() * VIRTIO_SND_STREAM_DEFAULT as usize
             || !len.is_multiple_of(size_of::<PcmInfo>())
         {
-            error!("invalid pcm query info: len {:?}", req);
+            error!("invalid pcm query info: {:?}", req);
             return (VIRTIO_SND_S_BAD_MSG, 0);
         }
 
         if start_id >= VIRTIO_SND_STREAM_DEFAULT || (start_id + count) > VIRTIO_SND_STREAM_DEFAULT {
-            error!("invalid pcm query info: len {:?}", req);
+            error!("invalid pcm query info: {:?}", req);
             return (VIRTIO_SND_S_BAD_MSG, 0);
         }
 
-        let mut info_bytes = Vec::with_capacity(size_of::<PcmInfo>() * count as usize);
-
-        for i in 0..count {
-            let stream = self.get_stream_mut(i + start_id);
+        let mut info_bytes = Vec::with_capacity(len);
+        for stream in self
+            .streams
+            .iter()
+            .skip(start_id as usize)
+            .take(count as usize)
+        {
             info_bytes.extend_from_slice(&stream.info.to_le_bytes());
         }
 
@@ -375,7 +378,7 @@ impl Pcm {
             &info_bytes[..],
         ) {
             error!("{:?}", e);
-            return (VIRTIO_SND_S_IO_ERR, info_bytes.len() as u32);
+            return (VIRTIO_SND_S_IO_ERR, 0);
         }
 
         (VIRTIO_SND_S_OK, info_bytes.len() as u32)
