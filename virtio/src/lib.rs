@@ -32,12 +32,16 @@ pub mod vhost;
 mod queue;
 mod transport;
 
+#[cfg(feature = "virtio_balloon")]
 pub use device::balloon::*;
 pub use device::block::{Block, BlockState, VirtioBlkConfig, VirtioBlkDevConfig};
 #[cfg(feature = "virtio_gpu")]
 pub use device::gpu::*;
+#[cfg(feature = "virtio_input")]
 pub use device::input::*;
+#[cfg(feature = "virtio_mem")]
 pub use device::memory::*;
+#[cfg(feature = "virtio_multitouch")]
 pub use device::multitouch::*;
 pub use device::net::*;
 #[cfg(feature = "virtio_pmem")]
@@ -46,6 +50,7 @@ pub use device::pmem::{Pmem, PmemState, VirtioPmemDevConfig};
 pub use device::rng::{Rng, RngConfig, RngState};
 #[cfg(feature = "virtio_scsi")]
 pub use device::scsi_cntlr as ScsiCntlr;
+#[cfg(feature = "virtio_serial")]
 pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
 #[cfg(feature = "virtio_snd")]
 pub use device::sound::*;
@@ -75,6 +80,8 @@ use machine_manager::config::{ConfigCheck, MAX_SERIAL_VIRTIO_QUEUE, MAX_VIRTIO_Q
 use util::aio::{iov_from_buf_direct, mem_to_buf, Iovec};
 use util::byte_code::ByteCode;
 use util::num_ops::{read_u32, write_u32};
+#[cfg(not(feature = "virtio_balloon"))]
+use util::seccomp::BpfRule;
 use util::AsAny;
 
 /// Check if the bit of features is configured.
@@ -997,6 +1004,29 @@ pub fn alloc_base_addr(maddr_cfg: Option<u64>, region_size: u64, block_size: u64
     locked_pluggable.addr = base_addr + region_size;
 
     base_addr
+}
+
+#[cfg(not(feature = "virtio_balloon"))]
+pub fn qmp_balloon(_target: u64) -> bool {
+    false
+}
+
+#[cfg(not(feature = "virtio_balloon"))]
+pub fn qmp_query_balloon() -> Option<u64> {
+    None
+}
+
+#[cfg(not(feature = "virtio_balloon"))]
+pub fn balloon_allow_list(_syscall_allow_list: &mut [BpfRule]) {}
+
+#[cfg(not(feature = "virtio_mem"))]
+pub fn qmp_set_viomem(_id: &str, _request_size: u64) -> Result<()> {
+    bail!("virtio-mem is not enabled")
+}
+
+#[cfg(not(feature = "virtio_mem"))]
+pub fn qmp_get_viomem(_id: &str) -> Result<serde_json::Value> {
+    bail!("virtio-mem is not enabled")
 }
 
 #[cfg(test)]
