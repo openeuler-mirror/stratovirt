@@ -389,10 +389,15 @@ pub trait DeviceInterface {
             ("iothread", "object"),
             #[cfg(target_arch = "aarch64")]
             ("gpex-pcihost", "pcie-host-bridge"),
+            #[cfg(feature = "usb_base")]
             ("nec-usb-xhci", "base-xhci"),
+            #[cfg(feature = "usb_base")]
             ("usb-tablet", "usb-hid"),
+            #[cfg(feature = "usb_base")]
             ("usb-kbd", "usb-hid"),
+            #[cfg(feature = "usb_consumer")]
             ("usb-consumer", "usb-hid"),
+            #[cfg(feature = "usb_storage")]
             ("usb-storage", "usb-storage-dev"),
             ("virtio-gpu-pci", "virtio-gpu"),
         ];
