@@ -17,19 +17,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use audio::auth::AuthorityNotifier;
-use audio::volume::VolumeListener;
 use log::{error, info};
-use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
-use util::byte_code::ByteCode;
 use vmm_sys_util::epoll::EventSet;
 
-use super::dev::{Ctl, Pcm, VirtQ};
-use super::spec::*;
-use super::{read_request, SUPPORTED_FORMATS, SUPPORTED_MAX_CHANNELS, SUPPORTED_RATES};
+use super::{
+    ctl::Ctl, dev::VirtQ, pcm::Pcm, read_request, spec::*, SUPPORTED_FORMATS,
+    SUPPORTED_MAX_CHANNELS, SUPPORTED_RATES,
+};
 use crate::Element;
 use address_space::{AddressSpace, RegionCache};
-use audio::{get_record_authority, AudioInterface, AudioStreamIo};
+use audio::{
+    auth::AuthorityNotifier, get_record_authority, volume::VolumeListener, AudioInterface,
+    AudioStreamIo,
+};
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
+use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 
 struct StreamElem {
@@ -365,26 +367,24 @@ impl IoHandler for CtrlIoHandler {
             read_request(sys_mem, cache, &elem).with_context(|| "Failed to get control header")?;
         info!("CtrlQueue: {:?}", ctrl_hdr);
 
-        let mut pcm = self.pcm.lock().unwrap();
         let (code, payload_size) = match u32::from_le(ctrl_hdr.code) {
             // Jack requests
-            VIRTIO_SND_R_JACK_INFO => self.handle_jack_info(sys_mem, cache, &elem),
-            VIRTIO_SND_R_JACK_REMAP => (VIRTIO_SND_S_NOT_SUPP, 0),
+            code @ VIRTIO_SND_R_JACK_INFO..=VIRTIO_SND_R_JACK_REMAP => {
+                self.handle_jack(code, sys_mem, cache, &elem)
+            }
             // PCM requests
-            VIRTIO_SND_R_PCM_INFO => pcm.handle_pcm_info(sys_mem, cache, &elem),
-            VIRTIO_SND_R_PCM_SET_PARAMS => pcm.handle_pcm_set_params(sys_mem, cache, &elem),
-            VIRTIO_SND_R_PCM_PREPARE => pcm.handle_pcm_prepare(sys_mem, cache, &elem),
-            VIRTIO_SND_R_PCM_RELEASE => pcm.handle_pcm_release(sys_mem, cache, &elem),
-            VIRTIO_SND_R_PCM_START => pcm.handle_pcm_start(sys_mem, cache, &elem),
-            VIRTIO_SND_R_PCM_STOP => pcm.handle_pcm_stop(sys_mem, cache, &elem),
+            code @ VIRTIO_SND_R_PCM_INFO..=VIRTIO_SND_R_PCM_STOP => self
+                .pcm
+                .lock()
+                .unwrap()
+                .handle_pcm(code, sys_mem, cache, &elem),
             // CTL requests
-            VIRTIO_SND_R_CTL_INFO => self.handle_ctl_info(sys_mem, cache, &elem),
-            VIRTIO_SND_R_CTL_READ => self.handle_ctl_read(sys_mem, cache, &elem),
-            VIRTIO_SND_R_CTL_WRITE => self.handle_ctl_write(sys_mem, cache, &elem),
-            VIRTIO_SND_R_CTL_ENUM_ITEMS
-            | VIRTIO_SND_R_CTL_TLV_READ
-            | VIRTIO_SND_R_CTL_TLV_WRITE
-            | VIRTIO_SND_R_CTL_TLV_COMMAND => (VIRTIO_SND_S_NOT_SUPP, 0),
+            code @ VIRTIO_SND_R_CTL_INFO..=VIRTIO_SND_R_CTL_TLV_COMMAND => self
+                .ctl
+                .lock()
+                .unwrap()
+                .handle_ctl(code, sys_mem, cache, &elem),
+            // unsupported request
             _ => {
                 error!("Control command {:#x} not supported", ctrl_hdr.code);
                 (VIRTIO_SND_S_NOT_SUPP, 0)
@@ -417,6 +417,20 @@ impl IoHandler for CtrlIoHandler {
 impl CtrlIoHandler {
     pub fn new(vq: VirtQ, pcm: Arc<Mutex<Pcm>>, ctl: Arc<Mutex<Ctl>>) -> Arc<Self> {
         Arc::new(Self { vq, pcm, ctl })
+    }
+
+    fn handle_jack(
+        &self,
+        code: u32,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        elem: &Element,
+    ) -> (u32, u32) {
+        match code {
+            VIRTIO_SND_R_JACK_INFO => self.handle_jack_info(sys_mem, cache, elem),
+            VIRTIO_SND_R_JACK_REMAP => (VIRTIO_SND_S_NOT_SUPP, 0),
+            _ => (VIRTIO_SND_S_BAD_MSG, 0),
+        }
     }
 
     fn handle_jack_info(
@@ -477,153 +491,6 @@ impl CtrlIoHandler {
                 (VIRTIO_SND_S_IO_ERR, 0)
             }
         }
-    }
-
-    fn handle_ctl_info(
-        &self,
-        sys_mem: &Arc<AddressSpace>,
-        cache: &Option<RegionCache>,
-        elem: &Element,
-    ) -> (u32, u32) {
-        let req: QueryInfo = match read_request(sys_mem, cache, elem) {
-            Ok(req) => req,
-            Err(e) => {
-                error!("{:?}", e);
-                return (VIRTIO_SND_S_BAD_MSG, 0);
-            }
-        };
-
-        let start_id = u32::from_le(req.start_id);
-        let count = u32::from_le(req.count);
-        let size = u32::from_le(req.size);
-        let len = count.saturating_mul(size) as usize;
-        if len > size_of::<CtlInfo>() * VIRTIO_SND_CTL_DEFAULT as usize
-            || !len.is_multiple_of(size_of::<CtlInfo>())
-        {
-            error!("invalid ctl query info: {:?}", req);
-            return (VIRTIO_SND_S_BAD_MSG, 0);
-        }
-
-        let mut buf = vec![0u8; len];
-        let ctl = self.ctl.lock().unwrap();
-        for i in start_id..(start_id + count) {
-            let info = match ctl.handle_ctl_info(i) {
-                Ok(info) => info,
-                Err(e) => {
-                    error!("CTL_INFO failed: {:?}", e);
-                    return (VIRTIO_SND_S_BAD_MSG, 0);
-                }
-            };
-
-            let info_bytes = info.to_le_bytes();
-            if info_bytes.len() > size as usize {
-                error!(
-                    "CTL_INFO failed: insufficient memory, expect {} actual {}",
-                    info_bytes.len(),
-                    size
-                );
-                return (VIRTIO_SND_S_BAD_MSG, 0);
-            }
-
-            let l = (i * size) as usize;
-            let r = l + info_bytes.len();
-            buf[l..r].copy_from_slice(&info_bytes);
-        }
-
-        match elem.iov_from_buf_with_offset(sys_mem, cache, size_of::<SndHdr>() as u64, &buf[..]) {
-            Ok(len) => {
-                if len != buf.len() {
-                    return (VIRTIO_SND_S_IO_ERR, 0);
-                }
-                (VIRTIO_SND_S_OK, size * count)
-            }
-            Err(e) => {
-                error!("{:?}", e);
-                (VIRTIO_SND_S_IO_ERR, 0)
-            }
-        }
-    }
-
-    fn handle_ctl_read(
-        &self,
-        sys_mem: &Arc<AddressSpace>,
-        cache: &Option<RegionCache>,
-        elem: &Element,
-    ) -> (u32, u32) {
-        let req: CtlHdr = match read_request(sys_mem, cache, elem) {
-            Ok(req) => req,
-            Err(e) => {
-                error!("{:?}", e);
-                return (VIRTIO_SND_S_BAD_MSG, 0);
-            }
-        };
-
-        let control_id = u32::from_le(req.control_id);
-        let ctl = self.ctl.lock().unwrap();
-        let value = match ctl.handle_ctl_read(control_id) {
-            Ok(value) => value,
-            Err(e) => {
-                error!("CTL_READ failed: {:?}", e);
-                return (VIRTIO_SND_S_BAD_MSG, 0);
-            }
-        };
-
-        let value_bytes = value.as_bytes();
-        if let Err(e) =
-            elem.iov_from_buf_with_offset(sys_mem, cache, size_of::<SndHdr>() as u64, value_bytes)
-        {
-            error!("{:?}", e);
-            return (VIRTIO_SND_S_IO_ERR, value_bytes.len() as u32);
-        }
-
-        (VIRTIO_SND_S_OK, value_bytes.len() as u32)
-    }
-
-    fn handle_ctl_write(
-        &self,
-        sys_mem: &Arc<AddressSpace>,
-        cache: &Option<RegionCache>,
-        elem: &Element,
-    ) -> (u32, u32) {
-        // Read CtlHdr + CtlValue from the element
-        let req: CtlHdr = match read_request(sys_mem, cache, elem) {
-            Ok(req) => req,
-            Err(e) => {
-                error!("{:?}", e);
-                return (VIRTIO_SND_S_BAD_MSG, 0);
-            }
-        };
-
-        let control_id = u32::from_le(req.control_id);
-
-        // Read the CtlValue payload after the CtlHdr
-        let mut value = CtlValue::default();
-        let Ok(len) = elem.iov_to_buf_with_offset(
-            sys_mem,
-            cache,
-            size_of::<CtlHdr>() as u64,
-            value.as_mut_bytes(),
-        ) else {
-            error!("CTL_WRITE: failed to read value from virtqueue");
-            return (VIRTIO_SND_S_IO_ERR, 0);
-        };
-
-        if len != size_of::<CtlValue>() {
-            error!(
-                "CTL_WRITE: invalid value size {}, expect {}",
-                len,
-                size_of::<CtlValue>()
-            );
-            return (VIRTIO_SND_S_BAD_MSG, 0);
-        }
-
-        let mut ctl = self.ctl.lock().unwrap();
-        if let Err(e) = ctl.handle_ctl_write(control_id, &value) {
-            error!("CTL_WRITE failed: {:?}", e);
-            return (VIRTIO_SND_S_BAD_MSG, 0);
-        }
-
-        (VIRTIO_SND_S_OK, 0)
     }
 }
 
