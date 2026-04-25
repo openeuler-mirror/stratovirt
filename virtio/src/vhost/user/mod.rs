@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "vhostuser_fs")]
 pub mod fs;
 
 #[cfg(feature = "vhostuser_block")]
@@ -25,6 +26,7 @@ mod sock;
 #[cfg(feature = "vhostuser_block")]
 pub use self::block::{Block, VhostUserBlkDevConfig};
 pub use self::client::*;
+#[cfg(feature = "vhostuser_fs")]
 pub use self::fs::*;
 #[cfg(feature = "vhostuser_gpu")]
 pub use self::gpu::{VhostUserGpu, VhostUserGpuDevConfig};
