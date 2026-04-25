@@ -611,8 +611,9 @@ impl EventIoHandler {
             return Ok(());
         }
 
-        let target_vol = if new_mute {
-            // Special case:
+        // Special case for ohos volume
+        #[cfg(target_env = "ohos")]
+        let new_vol = if new_mute {
             // Drop to 0 if at step 1, otherwise hold current volume for state persistence
             if ctl.volume == 1 {
                 0
@@ -622,7 +623,8 @@ impl EventIoHandler {
         } else {
             new_vol
         };
-        ctl.update_volume(target_vol, new_mute);
+
+        ctl.update_volume(new_vol, new_mute);
 
         let event = CtlEvent::new_le(
             VIRTIO_SND_EVT_CTL_NOTIFY,
