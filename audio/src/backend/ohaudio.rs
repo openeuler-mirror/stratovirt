@@ -20,11 +20,7 @@ use log::{error, info, warn};
 use crate::volume::VolumeListener;
 use crate::{
     AudioInterface, AudioStreamDirection, AudioStreamIo, AudioStreamParams, PcmFmt, PcmRate,
-    auth::{
-        AuthorityNotifier, get_record_authority, register_authority_notifier,
-        unregister_authority_notifier,
-    },
-    volume::VolumeControl,
+    auth::get_record_authority, volume::VolumeControl,
 };
 use machine_manager::event_loop::EventLoop;
 use util::ohos_binding::audio::*;
@@ -75,8 +71,6 @@ pub struct OhAudio {
     sample_rate: u32,
     /// Audio format: number of channels.
     channels: u8,
-    /// Record authority notifier.
-    auth_notifier: Option<Arc<dyn AuthorityNotifier>>,
 }
 
 // SAFETY: It's a kind of implementation of audio backend which is maintained just by
@@ -115,7 +109,6 @@ impl AudioInterface for OhAudio {
             sample_size: size,
             sample_rate: rate,
             channels: params.channels,
-            auth_notifier: None,
         });
 
         if params.direction == AudioStreamDirection::Record {
@@ -144,20 +137,11 @@ impl AudioInterface for OhAudio {
 
         self.init_ctx()?;
         self.start_ctx()?;
-
-        if self.direction == AudioStreamDirection::Record {
-            self.register_auth_notify();
-        }
-
         *self.status.write().unwrap() = OhAudioStatus::Started;
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
-        if let Some(notifier) = self.auth_notifier.take() {
-            unregister_authority_notifier(&notifier);
-        }
-
         self.stop_ctx();
         *self.status.write().unwrap() = OhAudioStatus::Ready;
         Ok(())
@@ -313,23 +297,6 @@ impl OhAudio {
                 ctx.deactivate_audio_session();
             }
         }
-    }
-
-    fn register_auth_notify(&mut self) {
-        let io_handler = self.io_handler.clone();
-        let status = self.status.clone();
-        let period_bytes = self.period_bytes;
-        let period_ms = self.period_ms;
-
-        let notifier = Arc::new(OhAudioAuthNotifier {
-            io_handler,
-            status,
-            period_bytes,
-            period_ms,
-        });
-
-        register_authority_notifier(notifier.clone());
-        self.auth_notifier = Some(notifier);
     }
 
     extern "C" fn render_on_write_data(
@@ -500,36 +467,6 @@ fn start_mute_timer(
 
     if let Some(event_loop) = EventLoop::get_ctx(None) {
         event_loop.timer_add(timer_cb, Duration::from_millis(period_ms));
-    }
-}
-
-// ============================================================================
-// Authority Notifier for Ohaudio
-// ============================================================================
-
-/// Authority notifier for OHAudio capture streams.
-///
-/// This notifier handles authority changes for capture streams, managing silence
-/// generation when authority is revoked.
-struct OhAudioAuthNotifier {
-    io_handler: Arc<dyn AudioStreamIo>,
-    status: Arc<RwLock<OhAudioStatus>>,
-    period_bytes: usize,
-    period_ms: u64,
-}
-
-impl AuthorityNotifier for OhAudioAuthNotifier {
-    fn on_authority_changed(&self, has_authority: bool) {
-        info!("Record authority changed to: {}", has_authority);
-
-        if !has_authority {
-            start_mute_timer(
-                self.status.clone(),
-                self.io_handler.clone(),
-                self.period_bytes,
-                self.period_ms,
-            );
-        }
     }
 }
 
