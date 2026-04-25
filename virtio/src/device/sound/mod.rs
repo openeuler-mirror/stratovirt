@@ -10,8 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+mod ctl;
 mod dev;
 mod io;
+mod pcm;
 mod spec;
 
 pub use dev::Sound;
