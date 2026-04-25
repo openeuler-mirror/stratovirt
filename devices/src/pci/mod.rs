@@ -45,6 +45,7 @@ use crate::misc::ivshmem::Ivshmem;
 #[cfg(feature = "pvpanic")]
 use crate::misc::pvpanic::PvPanicPci;
 use crate::pci::config::{HEADER_TYPE, HEADER_TYPE_MULTIFUNC, MAX_FUNC};
+#[cfg(feature = "usb_base")]
 use crate::usb::xhci::xhci_pci::XhciPciDevice;
 use crate::{
     convert_bus_ref, convert_device_ref, Bus, Device, DeviceBase, MsiIrqManager, PCI_BUS, ROOT_PORT,
@@ -329,7 +330,10 @@ pub fn devices_register_pcidevops_type() -> Result<()> {
     register_pcidevops_type::<RootPort>()?;
     #[cfg(feature = "demo_device")]
     register_pcidevops_type::<DemoDev>()?;
-    register_pcidevops_type::<XhciPciDevice>()
+    #[cfg(feature = "usb_base")]
+    register_pcidevops_type::<XhciPciDevice>()?;
+
+    Ok(())
 }
 
 #[cfg(test)]

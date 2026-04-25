@@ -80,14 +80,19 @@ use devices::sysbus::{devices_register_sysbusdevops_type, to_sysbusdevops, SysBu
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 #[cfg(feature = "usb_consumer")]
 use devices::usb::consumer::{UsbConsumer, UsbConsumerConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
+#[cfg(feature = "usb_storage")]
 use devices::usb::storage::{UsbStorage, UsbStorageConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_uas")]
 use devices::usb::uas::{UsbUas, UsbUasConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
+#[cfg(feature = "usb_base")]
 use devices::usb::UsbDevice;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
@@ -102,12 +107,14 @@ use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
 use machine_manager::config::get_cameradev_by_id;
 #[cfg(feature = "vhostuser_net")]
 use machine_manager::config::get_chardev_socket_path;
+#[cfg(feature = "usb_base")]
+use machine_manager::config::get_class_type;
 use machine_manager::config::{
-    complete_numa_node, get_class_type, get_pci_bdf, get_value_of_parameter, parse_numa_distance,
-    parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig,
-    DriveFile, IncomingConfig, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
-    NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig,
-    FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_pci_bdf, get_value_of_parameter, parse_numa_distance, parse_numa_mem,
+    str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig, DriveFile,
+    IncomingConfig, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode, NumaNodes,
+    PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig, FAST_UNPLUG_ON,
+    MAX_VIRTIO_QUEUE,
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
@@ -1366,6 +1373,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "usb_base")]
     fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
         let vm_config = self.get_vm_config();
         let locked_vmconfig = vm_config.lock().unwrap();
@@ -1380,6 +1388,11 @@ pub trait MachineOps: MachineLifecycle {
         let mut locked_xhci = xhci_pci.xhci.lock().unwrap();
         let port = locked_xhci.find_usb_port_by_id(id);
         Ok(port.is_some())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn check_id_existed_in_xhci(&mut self, _id: &str) -> Result<bool> {
+        Ok(false)
     }
 
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
@@ -2091,6 +2104,7 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `cfg_args` - XHCI Configuration.
+    #[cfg(feature = "usb_base")]
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
         let device_cfg = XhciConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
@@ -2102,6 +2116,11 @@ pub trait MachineOps: MachineLifecycle {
             .realize()
             .with_context(|| "Failed to realize usb xhci device")?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn add_usb_xhci(&mut self, _cfg_args: &str) -> Result<()> {
+        bail!("USB support is disabled")
     }
 
     /// Add scream sound based on ivshmem.
@@ -2193,6 +2212,7 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// * `vm_config` - VM configuration.
     /// * `usb_dev` - Usb device.
+    #[cfg(feature = "usb_base")]
     fn attach_usb_to_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -2211,12 +2231,22 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "usb_base"))]
+    fn attach_usb_to_xhci_controller(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        _usb_dev: Arc<Mutex<dyn Device>>,
+    ) -> Result<()> {
+        bail!("USB support is disabled")
+    }
+
     /// Detach usb device from xhci controller.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `id` - id of the usb device.
+    #[cfg(feature = "usb_base")]
     fn detach_usb_from_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -2235,12 +2265,22 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "usb_base"))]
+    fn detach_usb_from_xhci_controller(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        _id: String,
+    ) -> Result<()> {
+        bail!("USB support is disabled")
+    }
+
     /// Add usb device.
     ///
     /// # Arguments
     ///
     /// * `driver` - USB device class.
     /// * `cfg_args` - USB device Configuration.
+    #[cfg(feature = "usb_base")]
     fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let usb_device = match get_class_type(cfg_args)?.as_str() {
             "usb-kbd" => {
@@ -2289,6 +2329,7 @@ pub trait MachineOps: MachineLifecycle {
                     .realize()
                     .with_context(|| "Failed to realize usb camera device")?
             }
+            #[cfg(feature = "usb_storage")]
             "usb-storage" => {
                 let device_cfg =
                     UsbStorageConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -2363,6 +2404,11 @@ pub trait MachineOps: MachineLifecycle {
 
         self.attach_usb_to_xhci_controller(vm_config, usb_device)?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn add_usb_device(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("USB support is disabled")
     }
 
     /// Add peripheral devices.
