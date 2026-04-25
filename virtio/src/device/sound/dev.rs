@@ -636,69 +636,7 @@ fn convert_params(
 // CTL (Control Element) handler
 // ============================================================================
 
-// The structure definition are referenced from include/uapi/linux/virtio_snd.h.
-pub struct CtlElement {
-    pub role: u32,
-    pub ctl_type: u32,
-    pub access: u32,
-    pub count: u32,
-    pub index: u32,
-    pub name: [u8; 44],
-    pub min: u32,
-    pub max: u32,
-    pub step: u32,
-    pub values: [u32; CTL_VAL_INT_SIZE],
-}
-
-impl CtlElement {
-    fn volume(volume: u32, min: u32, max: u32) -> Self {
-        let mut name = [0u8; 44];
-        let vol_name = b"Master Playback Volume";
-        name[..vol_name.len()].copy_from_slice(vol_name);
-
-        let mut values = [0u32; CTL_VAL_INT_SIZE];
-        values[0] = volume;
-        values[1] = volume;
-
-        Self {
-            role: VIRTIO_SND_CTL_ROLE_VOLUME,
-            ctl_type: VIRTIO_SND_CTL_TYPE_INTEGER,
-            access: (1 << VIRTIO_SND_CTL_ACCESS_READ) | (1 << VIRTIO_SND_CTL_ACCESS_WRITE),
-            count: 2,
-            index: 0,
-            name,
-            min,
-            max,
-            step: 1,
-            values,
-        }
-    }
-
-    fn mute(mute: bool) -> Self {
-        let mut name = [0u8; 44];
-        let mute_name = b"Master Playback Switch";
-        name[..mute_name.len()].copy_from_slice(mute_name);
-
-        let mut values = [0u32; CTL_VAL_INT_SIZE];
-        values[0] = u32::from(!mute);
-
-        Self {
-            role: VIRTIO_SND_CTL_ROLE_MUTE,
-            ctl_type: VIRTIO_SND_CTL_TYPE_BOOLEAN,
-            access: (1 << VIRTIO_SND_CTL_ACCESS_READ) | (1 << VIRTIO_SND_CTL_ACCESS_WRITE),
-            count: 1,
-            index: 0,
-            name,
-            min: 0,
-            max: 1,
-            step: 1,
-            values,
-        }
-    }
-}
-
 pub struct Ctl {
-    elements: Vec<CtlElement>,
     volume_ctrl: Arc<dyn VolumeControl>,
     pub range: (u32, u32),
     pub volume: u32,
@@ -706,22 +644,21 @@ pub struct Ctl {
 }
 
 impl Ctl {
+    const SUPPORTED_CTLS: [u32; VIRTIO_SND_CTL_DEFAULT as usize] =
+        [VIRTIO_SND_CTL_ROLE_VOLUME, VIRTIO_SND_CTL_ROLE_MUTE];
+
     pub fn new(volume_ctrl: Arc<dyn VolumeControl>) -> Self {
-        let (min, max) = volume_ctrl.get_volume_range();
-        let volume = volume_ctrl.get_volume();
-        let mute = volume_ctrl.get_mute();
         Self {
-            elements: vec![CtlElement::volume(volume, min, max), CtlElement::mute(mute)],
-            volume_ctrl: volume_ctrl.clone(),
-            range: (min, max),
-            volume,
-            mute,
+            range: volume_ctrl.get_volume_range(),
+            volume: volume_ctrl.get_volume(),
+            mute: volume_ctrl.get_mute(),
+            volume_ctrl,
         }
     }
 
     fn validate_control_id(&self, control_id: u32) -> Result<()> {
-        if control_id as usize >= self.elements.len() {
-            bail!("Invalid control_id {}", control_id);
+        if control_id >= VIRTIO_SND_CTL_DEFAULT {
+            bail!("invalid control id {}", control_id);
         }
         Ok(())
     }
@@ -729,100 +666,101 @@ impl Ctl {
     pub fn update_volume(&mut self, new_vol: u32, new_mute: bool) {
         self.volume = new_vol;
         self.mute = new_mute;
-
-        let id = self.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_VOLUME);
-        let elem = &mut self.elements[id];
-        elem.values[0] = new_vol;
-        elem.values[1] = new_vol;
-
-        let id = self.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_MUTE);
-        let elem = &mut self.elements[id];
-        elem.values[0] = u32::from(!new_mute);
     }
 
     pub fn handle_ctl_info(&self, control_id: u32) -> Result<CtlInfo> {
         self.validate_control_id(control_id)?;
-        let elem = &self.elements[control_id as usize];
 
-        Ok(CtlInfo {
-            hdr: SoundInfo { hda_fn_nid: 0 },
-            role: elem.role,
-            ctl_type: elem.ctl_type,
-            access: elem.access,
-            count: elem.count,
-            index: elem.index,
-            name: elem.name,
-            value: CtlInfoValue {
-                integer: CtlIntegerRange {
-                    min: elem.min,
-                    max: elem.max,
-                    step: elem.step,
-                },
-            },
-        })
+        match Self::SUPPORTED_CTLS[control_id as usize] {
+            VIRTIO_SND_CTL_ROLE_VOLUME => {
+                let mut name = [0u8; VIRTIO_SND_CTL_INFO_NAME_LEN];
+                let vol_name = b"Master Playback Volume";
+                name[..vol_name.len()].copy_from_slice(vol_name);
+
+                let (min, max) = self.volume_ctrl.get_volume_range();
+
+                Ok(CtlInfo {
+                    hdr: SoundInfo { hda_fn_nid: 0 },
+                    role: VIRTIO_SND_CTL_ROLE_VOLUME,
+                    ctl_type: VIRTIO_SND_CTL_TYPE_INTEGER,
+                    access: (1 << VIRTIO_SND_CTL_ACCESS_READ) | (1 << VIRTIO_SND_CTL_ACCESS_WRITE),
+                    count: 1,
+                    index: 0,
+                    name,
+                    value: CtlInfoValue {
+                        integer: CtlIntegerRange { min, max, step: 1 },
+                    },
+                })
+            }
+            VIRTIO_SND_CTL_ROLE_MUTE => {
+                let mut name = [0u8; VIRTIO_SND_CTL_INFO_NAME_LEN];
+                let mute_name = b"Master Playback Switch";
+                name[..mute_name.len()].copy_from_slice(mute_name);
+
+                Ok(CtlInfo {
+                    hdr: SoundInfo { hda_fn_nid: 0 },
+                    role: VIRTIO_SND_CTL_ROLE_MUTE,
+                    ctl_type: VIRTIO_SND_CTL_TYPE_BOOLEAN,
+                    access: (1 << VIRTIO_SND_CTL_ACCESS_READ) | (1 << VIRTIO_SND_CTL_ACCESS_WRITE),
+                    count: 1,
+                    index: 0,
+                    name,
+                    value: CtlInfoValue {
+                        integer: CtlIntegerRange {
+                            min: 0,
+                            max: 1,
+                            step: 1,
+                        },
+                    },
+                })
+            }
+            _ => unreachable!(),
+        }
     }
 
     pub fn handle_ctl_read(&self, control_id: u32) -> Result<CtlValue> {
         self.validate_control_id(control_id)?;
-        let elem = &self.elements[control_id as usize];
 
         let mut result = CtlValue::default();
-        for (i, &v) in elem.values.iter().enumerate() {
-            if i >= CTL_VAL_INT_SIZE {
-                break;
-            }
-            result.integer[i] = v.to_le();
-        }
+        result.integer[0] = match Self::SUPPORTED_CTLS[control_id as usize] {
+            VIRTIO_SND_CTL_ROLE_VOLUME => self.volume,
+            VIRTIO_SND_CTL_ROLE_MUTE => u32::from(!self.mute),
+            _ => unreachable!(),
+        };
 
         Ok(result)
     }
 
     pub fn handle_ctl_write(&mut self, control_id: u32, value: &CtlValue) -> Result<()> {
         self.validate_control_id(control_id)?;
-        let elem = &mut self.elements[control_id as usize];
 
-        // Check write access
-        if (elem.access & (1 << VIRTIO_SND_CTL_ACCESS_WRITE)) == 0 {
-            bail!("Control element {} is not writable", control_id);
-        }
+        let value = u32::from_le(value.integer[0]);
 
-        let new_val = u32::from_le(value.integer[0]);
-
-        match elem.role {
+        match Self::SUPPORTED_CTLS[control_id as usize] {
             VIRTIO_SND_CTL_ROLE_VOLUME => {
-                if new_val < self.range.0 || new_val > self.range.1 {
-                    bail!("volume value {} is out of range {:?}", new_val, self.range);
+                if value < self.range.0 || value > self.range.1 {
+                    bail!("volume value {} is out of range {:?}", value, self.range);
                 }
-                elem.values[0] = new_val;
-                elem.values[1] = new_val;
-                self.volume = new_val;
 
-                let mute_elem = &self.elements[self.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_MUTE)];
-                let is_muted = mute_elem.values[0] == 0;
-                if !is_muted {
-                    self.volume_ctrl.set_volume(new_val);
+                self.volume = value;
+                if !self.mute {
+                    self.volume_ctrl.set_volume(value);
                 }
             }
             VIRTIO_SND_CTL_ROLE_MUTE => {
-                elem.values[0] = new_val;
-                elem.values[1] = new_val;
-                self.mute = new_val == 0;
+                self.mute = value == 0;
                 self.volume_ctrl.set_mute(self.mute);
             }
-            _ => {
-                bail!("Write not supported for control role {}", elem.role);
-            }
+            _ => unreachable!(),
         }
 
         Ok(())
     }
 
     pub fn get_ctl_id_by_role(&self, role: u32) -> usize {
-        for (i, elem) in self.elements.iter().enumerate() {
-            if elem.role == role {
-                return i;
-            }
-        }
-        0
+        Self::SUPPORTED_CTLS
+            .iter()
+            .position(|r| *r == role)
+            .unwrap_or(0)
     }
 }
