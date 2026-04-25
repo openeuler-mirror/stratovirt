@@ -13,8 +13,10 @@
 use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser};
 
+#[cfg(feature = "trace")]
+use crate::config::add_trace;
 use crate::{
-    config::{add_trace, str_slip_to_clap, ChardevType, MachineType, SocketType, VmConfig},
+    config::{str_slip_to_clap, ChardevType, MachineType, SocketType, VmConfig},
     qmp::qmp_socket::QmpSocketPath,
     temp_cleaner::TempCleaner,
 };
@@ -453,15 +455,19 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .hidden(true)
             .can_no_value(true)
             .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("trace")
+        );
+
+    #[cfg(feature = "trace")]
+    let parser = parser.arg(
+        Arg::with_name("trace")
             .multiple(false)
             .long("trace")
             .value_name("file=<file>|type=<all|events|scopes>")
             .help("specify the trace state to enable")
             .takes_value(true),
-        )
+    );
+
+    let parser = parser
         .arg(
             Arg::with_name("global")
             .multiple(true)
@@ -612,8 +618,11 @@ pub fn create_vmconfig(args: &ArgMatches) -> Result<VmConfig> {
     #[cfg(feature = "usb_camera")]
     add_args_to_config_multi!((args.values_of("cameradev")), vm_cfg, add_camera_backend);
     add_args_to_config_multi!((args.values_of("smbios")), vm_cfg, add_smbios);
-    if let Some(opt) = args.value_of("trace") {
-        add_trace(&opt)?;
+    #[cfg(feature = "trace")]
+    {
+        if let Some(opt) = args.value_of("trace") {
+            add_trace(&opt)?;
+        }
     }
 
     // Check the mini-set for Vm to start is ok

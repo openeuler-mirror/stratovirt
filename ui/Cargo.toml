@@ -16,7 +16,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde-big-array = "0.5.1"
 vmm-sys-util = "0.12.1"
 once_cell = "1.18.0"
-sscanf = "0.4.1"
+sscanf = { version = "0.4.1", optional = true }
 bitintr = "0.3.0"
 gtk = { version = "0.17.1", optional = true }
 gettext-rs = { version = "0.7.0", features = ["gettext-system"], optional = true }
@@ -36,6 +36,6 @@ keycode = []
 pixman = ["util/pixman"]
 console = ["pixman"]
 gtk = ["console", "keycode", "dep:cairo-rs", "dep:gtk", "dep:gettext-rs", "machine_manager/gtk"]
-vnc = ["console", "keycode", "machine_manager/vnc"]
+vnc = ["console", "keycode", "dep:sscanf", "machine_manager/vnc"]
 vnc_auth = ["vnc", "dep:rustls", "dep:rustls-pemfile", "dep:sasl2-sys", "machine_manager/vnc_auth"]
 ohui_srv = ["console", "keycode", "machine_manager/ohui_srv"]
