@@ -78,3 +78,26 @@ panic = "abort"
 panic = "abort"
 lto = true
 debug = true
+opt-level = "s"
+codegen-units = 1
+
+[profile.release.package.cpu]
+opt-level = 3
+
+[profile.release.package.hypervisor]
+opt-level = 3
+
+[profile.release.package.address_space]
+opt-level = 3
+
+[profile.release.package.virtio]
+opt-level = 3
+
+[profile.release.package.block_backend]
+opt-level = 3
+
+[profile.release.package.devices]
+opt-level = 3
+
+[profile.release.package.util]
+opt-level = 3
