@@ -265,6 +265,8 @@ pub struct CtlHdr {
 
 impl ByteCode for CtlHdr {}
 
+pub const VIRTIO_SND_CTL_INFO_NAME_LEN: usize = 44;
+
 #[repr(C)]
 #[derive(Clone)]
 pub struct CtlInfo {
@@ -274,7 +276,7 @@ pub struct CtlInfo {
     pub access: u32,
     pub count: u32,
     pub index: u32,
-    pub name: [u8; 44],
+    pub name: [u8; VIRTIO_SND_CTL_INFO_NAME_LEN],
     pub value: CtlInfoValue,
 }
 
@@ -287,7 +289,7 @@ impl Default for CtlInfo {
             access: 0,
             count: 0,
             index: 0,
-            name: [0u8; 44],
+            name: [0u8; VIRTIO_SND_CTL_INFO_NAME_LEN],
             value: CtlInfoValue::default(),
         }
     }
