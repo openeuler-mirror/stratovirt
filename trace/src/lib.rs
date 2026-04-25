@@ -21,23 +21,25 @@ pub(crate) mod hitrace;
 ))]
 pub mod trace_scope;
 
-use std::{
-    fmt,
-    os::unix::io::RawFd,
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
-};
+#[cfg(feature = "trace")]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{fmt, os::unix::io::RawFd, sync::Arc};
 
+#[cfg(feature = "trace")]
 use anyhow::{Ok, Result};
+#[cfg(feature = "trace")]
 use lazy_static::lazy_static;
+#[cfg(feature = "trace")]
 use log::warn;
+#[cfg(feature = "trace")]
 use regex::Regex;
 use vmm_sys_util::eventfd::EventFd;
 
-use trace_generator::{
-    add_trace_state_to, gen_trace_event_func, gen_trace_scope_func, gen_trace_state,
-};
+#[cfg(feature = "trace")]
+use trace_generator::{add_trace_state_to, gen_trace_state};
+use trace_generator::{gen_trace_event_func, gen_trace_scope_func};
 
+#[cfg(feature = "trace")]
 #[derive(PartialEq, Eq)]
 pub enum TraceType {
     Event,
@@ -45,6 +47,7 @@ pub enum TraceType {
     Unknown,
 }
 
+#[cfg(feature = "trace")]
 struct TraceState {
     name: String,
     trace_type: TraceType,
@@ -52,6 +55,7 @@ struct TraceState {
     set_state: fn(bool),
 }
 
+#[cfg(feature = "trace")]
 impl TraceState {
     fn new(name: String, type_str: &str, get_state: fn() -> bool, set_state: fn(bool)) -> Self {
         let trace_type = match type_str {
@@ -71,11 +75,13 @@ impl TraceState {
     }
 }
 
+#[cfg(feature = "trace")]
 #[derive(Default)]
 struct TraceStateSet {
     state_list: Vec<TraceState>,
 }
 
+#[cfg(feature = "trace")]
 impl TraceStateSet {
     fn add_trace_state(&mut self, state: TraceState) {
         self.state_list.push(state);
@@ -112,8 +118,10 @@ impl TraceStateSet {
     }
 }
 
+#[cfg(feature = "trace")]
 gen_trace_state! {}
 
+#[cfg(feature = "trace")]
 lazy_static! {
     static ref TRACE_STATE_SET: TraceStateSet = {
         let mut set = TraceStateSet::default();
@@ -146,14 +154,17 @@ macro_rules! trace_scope_asyn_start {
     };
 }
 
+#[cfg(feature = "trace")]
 pub fn get_state_by_pattern(pattern: String) -> Result<Vec<(String, bool)>> {
     TRACE_STATE_SET.get_state_by_pattern(pattern)
 }
 
+#[cfg(feature = "trace")]
 pub fn set_state_by_pattern(pattern: String, state: bool) -> Result<()> {
     TRACE_STATE_SET.set_state_by_pattern(pattern, state)
 }
 
+#[cfg(feature = "trace")]
 pub fn enable_state_by_type(trace_type: TraceType) -> Result<()> {
     TRACE_STATE_SET.enable_state_by_type(trace_type)
 }

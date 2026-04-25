@@ -591,6 +591,7 @@ fn qmp_command_exec(
                 qmp_response = controller.lock().unwrap().getfd(arguments.fd_name, if_fd);
                 id
             }
+            #[cfg(feature = "trace")]
             QmpCommand::trace_get_state { arguments, id } => {
                 match trace::get_state_by_pattern(arguments.pattern) {
                     Ok(events) => {
@@ -612,6 +613,7 @@ fn qmp_command_exec(
                 }
                 id
             }
+            #[cfg(feature = "trace")]
             QmpCommand::trace_set_state { arguments, id } => {
                 if trace::set_state_by_pattern(arguments.pattern, arguments.enable).is_err() {
                     qmp_response = Response::create_error_response(

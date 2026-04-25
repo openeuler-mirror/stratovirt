@@ -12,10 +12,15 @@
 
 use anyhow::{Context, Result};
 use log::error;
-use regex::Regex;
 
 use super::{get_class_type, VmConfig};
 use crate::qmp::qmp_schema;
+
+fn device_info_has_id(device_info: &str, dev_id: &str) -> bool {
+    device_info
+        .split(',')
+        .any(|field| field.strip_prefix("id=") == Some(dev_id))
+}
 
 impl VmConfig {
     /// Add config of hot-plugged devices to `VmConfig`.
@@ -125,11 +130,8 @@ impl VmConfig {
     }
 
     pub fn del_device_by_id(&mut self, dev_id: String) {
-        let rex = format!("id={}(,|$)", regex::escape(&dev_id));
-        let re = Regex::new(rex.as_str()).unwrap();
-
         for (index, (_, dev_info)) in self.devices.iter().enumerate() {
-            if re.is_match(dev_info.as_str()) {
+            if device_info_has_id(dev_info, &dev_id) {
                 self.devices.remove(index);
                 return;
             }
