@@ -57,6 +57,16 @@ impl Pcm {
         }
     }
 
+    pub fn push_elem_to_stream(&self, id: usize, elem: Element) -> Option<Element> {
+        if id >= self.streams.len() {
+            // Return back element to the caller to notify guest error.
+            return Some(elem);
+        }
+
+        self.streams[id].io_handler.append(elem);
+        None
+    }
+
     pub fn handle_pcm(
         &mut self,
         code: u32,
@@ -176,11 +186,11 @@ impl Pcm {
             .set_period_bytes(u32::from_le(other.period_bytes) as usize);
     }
 
-    pub fn get_stream_mut(&mut self, stream_id: u32) -> &mut Stream {
+    fn get_stream_mut(&mut self, stream_id: u32) -> &mut Stream {
         &mut self.streams[stream_id as usize]
     }
 
-    pub fn check_record_auth(stream: &Stream) -> bool {
+    fn check_record_auth(stream: &Stream) -> bool {
         if stream.info.direction == VIRTIO_SND_D_OUTPUT {
             return true;
         }

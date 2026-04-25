@@ -140,7 +140,7 @@ impl StreamIoHandler {
         Ok(())
     }
 
-    fn append(&self, elem: Element) {
+    pub fn append(&self, elem: Element) {
         self.queue.lock().unwrap().push_back(StreamElem::new(elem));
     }
 }
@@ -509,10 +509,18 @@ impl IoHandler for TxIoHandler {
         let hdr: PcmXfer =
             read_request(sys_mem, cache, &elem).with_context(|| "Failed to get tx PcmXfer")?;
 
-        let stream_id = u32::from_le(hdr.stream_id);
-        let mut pcm = self.pcm.lock().unwrap();
-        let stream = pcm.get_stream_mut(stream_id);
-        stream.io_handler.append(elem);
+        let stream_id = u32::from_le(hdr.stream_id) as usize;
+        if let Some(elem) = self
+            .pcm
+            .lock()
+            .unwrap()
+            .push_elem_to_stream(stream_id, elem)
+        {
+            error!("invalid stream id {}", stream_id);
+            let resp = PcmStatus::new(VIRTIO_SND_S_BAD_MSG, 0);
+            let len = elem.iov_from_buf_with_offset(sys_mem, cache, 0, resp.as_bytes())?;
+            self.vq.add_used(elem.index, len as u32)?;
+        }
 
         Ok(())
     }
@@ -549,10 +557,18 @@ impl IoHandler for RxIoHandler {
         let hdr: PcmXfer =
             read_request(sys_mem, cache, &elem).with_context(|| "Failed to get rx PcmXfer")?;
 
-        let stream_id = u32::from_le(hdr.stream_id);
-        let mut pcm = self.pcm.lock().unwrap();
-        let stream = pcm.get_stream_mut(stream_id);
-        stream.io_handler.append(elem);
+        let stream_id = u32::from_le(hdr.stream_id) as usize;
+        if let Some(elem) = self
+            .pcm
+            .lock()
+            .unwrap()
+            .push_elem_to_stream(stream_id, elem)
+        {
+            error!("invalid stream id {}", stream_id);
+            let resp = PcmStatus::new(VIRTIO_SND_S_BAD_MSG, 0);
+            let len = elem.iov_from_buf_with_offset(sys_mem, cache, 0, resp.as_bytes())?;
+            self.vq.add_used(elem.index, len as u32)?;
+        }
 
         Ok(())
     }
