@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -27,13 +27,116 @@ use address_space::{
 };
 use util::{num_ops::round_down, unix::host_page_size};
 
+struct SlotAllocator {
+    nr_slots: u32,
+    free_bits: Vec<u64>,
+    active_slots: BTreeMap<u64, MemSlot>,
+}
+
+impl SlotAllocator {
+    fn new(nr_slots: u32) -> Self {
+        let mut free_bits = vec![u64::MAX; nr_slots.div_ceil(64) as usize];
+        let trailing_bits = nr_slots as usize % 64;
+        if trailing_bits != 0 {
+            let valid_mask = (1_u64 << trailing_bits) - 1;
+            if let Some(last) = free_bits.last_mut() {
+                *last = valid_mask;
+            }
+        }
+
+        Self {
+            nr_slots,
+            free_bits,
+            active_slots: BTreeMap::new(),
+        }
+    }
+
+    fn alloc(&mut self, guest_addr: u64, size: u64, host_addr: u64) -> Result<u32> {
+        let range = AddressRange::from((guest_addr, size));
+
+        if let Some((_, prev)) = self.active_slots.range(..=guest_addr).next_back() {
+            if AddressRange::from((prev.guest_addr, prev.size))
+                .find_intersection(range)
+                .is_some()
+            {
+                return Err(anyhow!(HypervisorError::KvmSlotOverlap {
+                    add: (guest_addr, size),
+                    exist: (prev.guest_addr, prev.size)
+                }));
+            }
+        }
+
+        if let Some((_, next)) = self.active_slots.range(guest_addr..).next() {
+            if AddressRange::from((next.guest_addr, next.size))
+                .find_intersection(range)
+                .is_some()
+            {
+                return Err(anyhow!(HypervisorError::KvmSlotOverlap {
+                    add: (guest_addr, size),
+                    exist: (next.guest_addr, next.size)
+                }));
+            }
+        }
+
+        let slot_id = self
+            .alloc_slot_id()
+            .ok_or_else(|| anyhow!(HypervisorError::NoAvailKvmSlot(self.nr_slots as usize)))?;
+        let entry = MemSlot {
+            index: slot_id,
+            guest_addr,
+            size,
+            host_addr,
+        };
+        self.active_slots.insert(guest_addr, entry);
+
+        Ok(slot_id)
+    }
+
+    fn remove(&mut self, guest_addr: u64, size: u64) -> Result<MemSlot> {
+        let entry = self
+            .active_slots
+            .remove(&guest_addr)
+            .ok_or_else(|| anyhow!(HypervisorError::NoMatchedKvmSlot(guest_addr, size)))?;
+
+        if entry.size != size {
+            self.active_slots.insert(guest_addr, entry);
+            return Err(anyhow!(HypervisorError::NoMatchedKvmSlot(guest_addr, size)));
+        }
+
+        self.free_slot_id(entry.index);
+        Ok(entry)
+    }
+
+    fn alloc_slot_id(&mut self) -> Option<u32> {
+        for (word_idx, word) in self.free_bits.iter_mut().enumerate() {
+            if *word == 0 {
+                continue;
+            }
+
+            let bit_idx = word.trailing_zeros() as usize;
+            *word &= !(1_u64 << bit_idx);
+            return Some((word_idx * 64 + bit_idx) as u32);
+        }
+
+        None
+    }
+
+    fn free_slot_id(&mut self, slot_id: u32) {
+        debug_assert!(slot_id < self.nr_slots);
+        let slot_idx = slot_id as usize;
+        let word_idx = slot_idx / 64;
+        let bit_idx = slot_idx % 64;
+        self.free_bits[word_idx] |= 1_u64 << bit_idx;
+    }
+}
+
 #[derive(Clone)]
 pub struct KvmMemoryListener {
     vm_fd: Option<Arc<VmFd>>,
     /// Id of AddressSpace.
     as_id: Arc<AtomicU32>,
     /// Record all MemSlots.
-    slots: Arc<Mutex<Vec<MemSlot>>>,
+    slots: Arc<Mutex<SlotAllocator>>,
     /// Memory slot registered in kvm.
     kvm_memslots: Arc<Mutex<HashMap<u32, KvmMemSlot>>>,
     /// Whether enabled as a memory listener.
@@ -54,7 +157,7 @@ impl KvmMemoryListener {
         KvmMemoryListener {
             vm_fd,
             as_id: Arc::new(AtomicU32::new(0)),
-            slots: Arc::new(Mutex::new(vec![MemSlot::default(); nr_slots as usize])),
+            slots: Arc::new(Mutex::new(SlotAllocator::new(nr_slots))),
             kvm_memslots,
             enabled: false,
         }
@@ -74,34 +177,10 @@ impl KvmMemoryListener {
     /// * No available Kvm slot.
     /// * Given memory slot overlap with existed one.
     fn get_free_slot(&self, guest_addr: u64, size: u64, host_addr: u64) -> Result<u32> {
-        let mut slots = self.slots.lock().unwrap();
-
-        // check if the given address range overlaps with exist ones
-        let range = AddressRange::from((guest_addr, size));
-        slots.iter().try_for_each::<_, Result<()>>(|s| {
-            if AddressRange::from((s.guest_addr, s.size))
-                .find_intersection(range)
-                .is_some()
-            {
-                return Err(anyhow!(HypervisorError::KvmSlotOverlap {
-                    add: (guest_addr, size),
-                    exist: (s.guest_addr, s.size)
-                }));
-            }
-            Ok(())
-        })?;
-
-        for (index, slot) in slots.iter_mut().enumerate() {
-            if slot.size == 0 {
-                slot.index = u32::try_from(index)?;
-                slot.guest_addr = guest_addr;
-                slot.size = size;
-                slot.host_addr = host_addr;
-                return Ok(slot.index);
-            }
-        }
-
-        Err(anyhow!(HypervisorError::NoAvailKvmSlot(slots.len())))
+        self.slots
+            .lock()
+            .unwrap()
+            .alloc(guest_addr, size, host_addr)
     }
 
     /// Delete a slot after finding it according to the given arguments.
@@ -116,15 +195,7 @@ impl KvmMemoryListener {
     ///
     /// Return Error if no Kem slot matched.
     fn delete_slot(&self, addr: u64, size: u64) -> Result<MemSlot> {
-        let mut slots = self.slots.lock().unwrap();
-        for slot in slots.iter_mut() {
-            if slot.guest_addr == addr && slot.size == size {
-                // set slot size to zero, so it can be reused later
-                slot.size = 0;
-                return Ok(*slot);
-            }
-        }
-        Err(anyhow!(HypervisorError::NoMatchedKvmSlot(addr, size)))
+        self.slots.lock().unwrap().remove(addr, size)
     }
 
     /// Align a piece of memory segment according to `alignment`,
@@ -649,6 +720,37 @@ mod test {
         assert!(kml.delete_slot(150, 100).is_err());
         assert!(kml.delete_slot(700, 100).is_err());
         assert_eq!(kml.get_free_slot(200, 100, host_addr).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_slot_allocator_tail_bits() {
+        let mut allocator = SlotAllocator::new(34);
+
+        for slot_id in 0..34 {
+            assert_eq!(allocator.alloc_slot_id(), Some(slot_id));
+        }
+
+        assert_eq!(allocator.alloc_slot_id(), None);
+        assert_eq!(allocator.free_bits.len(), 1);
+        assert_eq!(allocator.free_bits[0], 0);
+    }
+
+    #[test]
+    fn test_slot_allocator_reuse_freed_slot() {
+        let mut allocator = SlotAllocator::new(70);
+
+        assert_eq!(allocator.alloc_slot_id(), Some(0));
+        assert_eq!(allocator.alloc_slot_id(), Some(1));
+        assert_eq!(allocator.alloc_slot_id(), Some(2));
+
+        allocator.free_slot_id(1);
+        assert_eq!(allocator.alloc_slot_id(), Some(1));
+
+        for slot_id in 3..70 {
+            assert_eq!(allocator.alloc_slot_id(), Some(slot_id));
+        }
+
+        assert_eq!(allocator.alloc_slot_id(), None);
     }
 
     #[test]
