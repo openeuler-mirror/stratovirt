@@ -11,9 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::VecDeque;
+use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -36,16 +36,25 @@ use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOpera
 
 struct StreamElem {
     elem: Element,
-    buf: Option<Vec<u8>>,
+    vq: Arc<VirtQ>,
     pos: usize,
+    in_size: usize,
+    out_size: usize,
 }
 
 impl StreamElem {
-    fn new(elem: Element) -> Self {
+    fn new(elem: Element, vq: Arc<VirtQ>) -> Self {
+        let in_size =
+            (Element::iovec_size(&elem.in_iovec) as usize).saturating_sub(size_of::<PcmStatus>());
+        let out_size =
+            (Element::iovec_size(&elem.out_iovec) as usize).saturating_sub(size_of::<PcmXfer>());
+
         Self {
             elem,
-            buf: None,
+            vq,
             pos: 0,
+            in_size,
+            out_size,
         }
     }
 
@@ -54,78 +63,101 @@ impl StreamElem {
         self.elem.index
     }
 
-    fn in_avail(&self) -> usize {
-        Element::iovec_size(&self.elem.in_iovec) as usize
+    fn write_with_offset(&self, offset: u64, buf: &[u8]) -> Result<usize> {
+        let sys_mem = self.vq.sys_mem();
+        let cache = self.vq.get_cache();
+
+        self.elem
+            .iov_from_buf_with_offset(sys_mem, &cache, offset, buf)
+    }
+
+    fn read_with_offset(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        let sys_mem = self.vq.sys_mem();
+        let cache = self.vq.get_cache();
+
+        self.elem
+            .iov_to_buf_with_offset(sys_mem, &cache, offset, buf)
     }
 
     #[inline]
-    fn write_offset(
-        &self,
-        sys_mem: &Arc<AddressSpace>,
-        cache: &Option<RegionCache>,
-        offset: u64,
-        buf: &[u8],
-    ) -> Result<usize> {
-        self.elem
-            .iov_from_buf_with_offset(sys_mem, cache, offset, buf)
-    }
-
-    fn populate(&mut self, sys_mem: &Arc<AddressSpace>, cache: &Option<RegionCache>) {
-        if self.buf.is_none() {
-            let size = Element::iovec_size(&self.elem.out_iovec) as usize - size_of::<PcmXfer>();
-            let mut buf = vec![0u8; size];
-            let len = self
-                .elem
-                .iov_to_buf_with_offset(sys_mem, cache, size_of::<PcmXfer>() as u64, &mut buf)
-                .unwrap();
-            assert!(len == buf.len());
-            self.buf = Some(buf);
-            self.pos = 0;
-        }
-    }
-
-    fn copy_to_buf(&mut self, dst: &mut [u8]) -> usize {
-        if self.buf.is_none() {
-            return 0;
-        }
-        let start = self.pos;
-        let buf = self.buf.as_ref().unwrap();
-        let left = buf.len() - start;
-        let to_copy = dst.len().min(left);
-        let end = start + to_copy;
-
-        dst[..to_copy].copy_from_slice(&buf[start..end]);
-        self.pos = end;
-        to_copy
-    }
-
     fn consumed_all(&self) -> bool {
-        if let Some(buf) = self.buf.as_ref() {
-            buf.len() == self.pos
-        } else {
-            true
+        self.pos == self.out_size
+    }
+
+    #[inline]
+    fn filled_all(&self) -> bool {
+        self.pos == self.in_size
+    }
+}
+
+impl Read for StreamElem {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let rbytes = self.out_size.saturating_sub(self.pos).min(buf.len());
+        if rbytes == 0 {
+            return Ok(0);
         }
+
+        let offset = size_of::<PcmXfer>() + self.pos;
+        let len = self
+            .read_with_offset(offset as u64, &mut buf[..rbytes])
+            .map_err(std::io::Error::other)?;
+
+        self.pos += len;
+        if self.pos >= self.out_size {
+            let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
+
+            let len = self
+                .write_with_offset(0, resp.as_bytes())
+                .map_err(std::io::Error::other)?;
+
+            self.vq
+                .add_used(self.elem.index, len as u32)
+                .map_err(std::io::Error::other)?;
+        }
+
+        Ok(len)
+    }
+}
+
+impl Write for StreamElem {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let wbytes = self.in_size.saturating_sub(self.pos).min(buf.len());
+        if wbytes == 0 {
+            return Ok(0);
+        }
+
+        let len = self
+            .write_with_offset(self.pos as u64, &buf[..wbytes])
+            .map_err(std::io::Error::other)?;
+
+        self.pos += len;
+        if self.pos >= self.in_size {
+            let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
+
+            let len = self
+                .write_with_offset(self.pos as u64, resp.as_bytes())
+                .map_err(std::io::Error::other)?;
+
+            self.vq
+                .add_used(self.elem.index, (self.pos + len) as u32)
+                .map_err(std::io::Error::other)?;
+        }
+
+        Ok(len)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
 pub struct StreamIoHandler {
     queue: Mutex<VecDeque<StreamElem>>,
-    pub vq: VirtQ,
-    pub period_bytes: AtomicUsize,
+    vq: Arc<VirtQ>,
 }
 
 impl StreamIoHandler {
-    pub fn set_period_bytes(&self, period_bytes: usize) {
-        self.period_bytes.store(period_bytes, Ordering::Release);
-    }
-
-    fn period_bytes(&self) -> usize {
-        self.period_bytes.load(Ordering::Acquire)
-    }
-
     fn flush(&self) -> Result<()> {
-        let sys_mem = self.vq.sys_mem();
-        let cache = self.vq.get_cache();
         let mut queue = std::mem::take(&mut *self.queue.lock().unwrap());
 
         loop {
@@ -134,22 +166,23 @@ impl StreamIoHandler {
             };
 
             let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
-            let len = elem.write_offset(&sys_mem, &cache, 0, resp.as_bytes())?;
-            self.vq.add_used(elem.index(), len as u32)?;
+            let len = elem.write_with_offset(0, resp.as_bytes())?;
+            elem.vq.add_used(elem.index(), len as u32)?;
         }
         Ok(())
     }
 
     pub fn append(&self, elem: Element) {
-        self.queue.lock().unwrap().push_back(StreamElem::new(elem));
+        self.queue
+            .lock()
+            .unwrap()
+            .push_back(StreamElem::new(elem, self.vq.clone()));
     }
 }
 
 impl AudioStreamIo for StreamIoHandler {
     fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let mut copied = 0;
-        let sys_mem = self.vq.sys_mem();
-        let cache = self.vq.get_cache();
 
         loop {
             if copied >= buf.len() {
@@ -161,26 +194,22 @@ impl AudioStreamIo for StreamIoHandler {
                 break;
             };
 
-            elem.populate(&sys_mem, &cache);
-            copied += elem.copy_to_buf(&mut buf[copied..]);
+            copied += elem.read(&mut buf[copied..])?;
 
             if elem.consumed_all() {
-                let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
-                let elem = locked_queue.pop_front().unwrap();
-                let len = elem.write_offset(&sys_mem, &cache, 0, resp.as_bytes())?;
-                self.vq.add_used(elem.index(), len as u32)?;
+                locked_queue.pop_front();
             }
         }
 
-        Ok(copied)
+        if copied < buf.len() {
+            buf[copied..].fill(0);
+        }
+
+        Ok(buf.len())
     }
 
     fn write(&self, buf: &[u8]) -> Result<usize> {
         let mut copied = 0;
-        let mut left = buf.len();
-        let sys_mem = self.vq.sys_mem();
-        let cache = self.vq.get_cache();
-        let period_bytes = self.period_bytes();
 
         loop {
             if copied >= buf.len() {
@@ -192,37 +221,13 @@ impl AudioStreamIo for StreamIoHandler {
                 break;
             };
 
-            // We have to take care about the size of in buffer to guarantee there's enough space
-            // to save PCM data blob and PcmStatus.
-            let max_size = elem.in_avail().saturating_sub(size_of::<PcmStatus>());
-            let avail = max_size.saturating_sub(elem.pos);
-            if max_size == 0 || avail == 0 {
-                let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
-                let elem = locked_queue.pop_front().unwrap();
-                let len = elem.write_offset(&sys_mem, &cache, 0, resp.as_bytes())?;
-                self.vq.add_used(elem.index(), len as u32)?;
-                continue;
-            }
+            copied += elem.write(&buf[copied..])?;
 
-            let to_copy = left.min(avail);
-            let len = elem.write_offset(
-                &sys_mem,
-                &cache,
-                elem.pos as u64,
-                &buf[copied..copied + to_copy],
-            )?;
-            elem.pos += len;
-            copied += len;
-            left -= len;
-
-            if elem.pos >= period_bytes {
-                let resp = PcmStatus::new(VIRTIO_SND_S_OK, 0);
-                let mut elem = locked_queue.pop_front().unwrap();
-                elem.pos +=
-                    elem.write_offset(&sys_mem, &cache, elem.pos as u64, resp.as_bytes())?;
-                self.vq.add_used(elem.index(), elem.pos as u32)?;
+            if elem.filled_all() {
+                locked_queue.pop_front();
             }
         }
+
         Ok(copied)
     }
 }
@@ -253,8 +258,7 @@ impl Stream {
             interface: Arc::new(Mutex::new(None)),
             io_handler: Arc::new(StreamIoHandler {
                 queue: Mutex::new(VecDeque::new()),
-                vq,
-                period_bytes: AtomicUsize::new(0),
+                vq: Arc::new(vq),
             }),
             vm_pause_notifier: None,
         }
@@ -339,7 +343,7 @@ where
                 break;
             }
 
-            self.handle_elem(&sys_mem, &cache, elem)?;
+            self.handle_elem(sys_mem, &cache, elem)?;
         }
 
         Ok(())
@@ -617,7 +621,7 @@ impl EventIoHandler {
 
         let sys_mem = self.vq.sys_mem();
         let cache = self.vq.get_cache();
-        let len = elem.iov_from_buf_with_offset(&sys_mem, &cache, 0, event.as_bytes())?;
+        let len = elem.iov_from_buf_with_offset(sys_mem, &cache, 0, event.as_bytes())?;
         self.vq
             .add_used(elem.index, len as u32)
             .with_context(|| format!("Failed to add event {:?} to queue", event))

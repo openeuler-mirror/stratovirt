@@ -277,8 +277,8 @@ impl VirtQ {
     }
 
     #[inline]
-    pub fn sys_mem(&self) -> Arc<AddressSpace> {
-        self.mem_space.clone()
+    pub fn sys_mem(&self) -> &Arc<AddressSpace> {
+        &self.mem_space
     }
 
     #[inline]
