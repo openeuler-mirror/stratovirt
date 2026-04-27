@@ -181,9 +181,6 @@ impl Pcm {
 
         assert!(id < self.streams.len());
         self.streams[id].params = PcmSetParams::from_le(other);
-        self.streams[id]
-            .io_handler
-            .set_period_bytes(u32::from_le(other.period_bytes) as usize);
     }
 
     fn get_stream_mut(&mut self, stream_id: u32) -> &mut Stream {
