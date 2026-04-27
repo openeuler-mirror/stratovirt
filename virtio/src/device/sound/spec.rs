@@ -139,7 +139,7 @@ impl std::fmt::Debug for CtrlHdr {
             _ => "unknown control code",
         };
 
-        f.debug_struct("CtrlHdr")
+        f.debug_struct(stringify!(CtrlHdr))
             .field("code", &code)
             .field("message", &msg)
             .finish()
@@ -237,7 +237,7 @@ impl ByteCode for SndHdr {}
 
 #[allow(dead_code)]
 #[repr(C)]
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Debug)]
 pub struct PcmHdr {
     pub hdr: SndHdr,
     pub stream_id: u32,
@@ -446,6 +446,33 @@ pub struct PcmSetParams {
 }
 
 impl ByteCode for PcmSetParams {}
+
+impl std::fmt::Debug for PcmSetParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let format = match self.format {
+            VIRTIO_SND_PCM_FMT_S16 => "s16",
+            VIRTIO_SND_PCM_FMT_S24 => "s24",
+            VIRTIO_SND_PCM_FMT_S32 => "s32",
+            _ => "unsupported fmt",
+        };
+
+        let rate = match self.rate {
+            VIRTIO_SND_PCM_RATE_44100 => "44100",
+            VIRTIO_SND_PCM_RATE_48000 => "48000",
+            _ => "unsupported rate",
+        };
+
+        f.debug_struct(stringify!(PcmSetParams))
+            .field("hdr", &self.hdr)
+            .field("buffer_bytes", &self.buffer_bytes)
+            .field("period_bytes", &self.period_bytes)
+            .field("features", &self.features)
+            .field("channels", &self.channels)
+            .field("format", &format)
+            .field("rate", &rate)
+            .finish()
+    }
+}
 
 impl PcmSetParams {
     pub fn from_le(other: &Self) -> Self {
