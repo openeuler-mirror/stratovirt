@@ -365,7 +365,6 @@ impl IoHandler for CtrlIoHandler {
     ) -> Result<()> {
         let ctrl_hdr: CtrlHdr =
             read_request(sys_mem, cache, &elem).with_context(|| "Failed to get control header")?;
-        info!("CtrlQueue: {:?}", ctrl_hdr);
 
         let (code, payload_size) = match u32::from_le(ctrl_hdr.code) {
             // Jack requests
@@ -392,7 +391,10 @@ impl IoHandler for CtrlIoHandler {
         };
 
         if code != VIRTIO_SND_S_OK {
-            error!("CtrlQueue: response err code {:#x}", code);
+            error!(
+                "CtrlQueue: request {:?}, response err code {:#x}",
+                ctrl_hdr, code
+            );
         }
 
         let resp = SndHdr { code: code.to_le() };

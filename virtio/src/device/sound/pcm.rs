@@ -235,7 +235,6 @@ impl Pcm {
         ) else {
             return (VIRTIO_SND_S_IO_ERR, 0);
         };
-        info!("handle_pcm_prepare: {:?}", params);
 
         let result = create_audio_interface(backend_type, params, io_handler, token_id);
 
@@ -285,6 +284,9 @@ impl Pcm {
                 return (VIRTIO_SND_S_IO_ERR, 0);
             }
         }
+
+        info!("stream started: {:?}.", stream.params);
+
         (VIRTIO_SND_S_OK, 0)
     }
 
@@ -318,6 +320,9 @@ impl Pcm {
                 return (VIRTIO_SND_S_IO_ERR, 0);
             }
         }
+
+        info!("stream stopped: {:?}", stream.params);
+
         (VIRTIO_SND_S_OK, 0)
     }
 

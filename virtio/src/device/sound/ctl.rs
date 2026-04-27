@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
-use log::error;
+use log::{error, info};
 
 use super::{read_request, spec::*};
 use crate::Element;
@@ -44,6 +44,10 @@ impl Ctl {
     pub fn update_volume(&mut self, new_vol: u32, new_mute: bool) {
         self.volume = new_vol;
         self.mute = new_mute;
+        info!(
+            "volume(host -> guest): {}, mute: {}",
+            self.volume, self.mute
+        );
     }
 
     pub fn get_ctl_id_by_role(&self, role: u32) -> usize {
@@ -300,11 +304,13 @@ impl Ctl {
                 self.volume = value;
                 if !self.mute {
                     self.volume_ctrl.set_volume(value);
+                    info!("volume(guest -> host): {}", value);
                 }
             }
             VIRTIO_SND_CTL_ROLE_MUTE => {
                 self.mute = value == 0;
                 self.volume_ctrl.set_mute(self.mute);
+                info!("mute(guest -> host): {}", self.mute);
             }
             _ => unreachable!(),
         }
