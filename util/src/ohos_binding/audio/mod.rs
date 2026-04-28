@@ -14,6 +14,7 @@ pub mod sys;
 
 use std::os::raw::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use log::error;
@@ -477,7 +478,8 @@ pub trait GuestVolumeNotifier: Send + Sync {
 
 struct OhVolume {
     capi: Arc<VolumeFuncTable>,
-    notifiers: RwLock<Vec<Arc<dyn GuestVolumeNotifier>>>,
+    notifiers: RwLock<Vec<(u64, Arc<dyn GuestVolumeNotifier>)>>,
+    next_id: AtomicU64,
 }
 
 impl OhVolume {
@@ -494,6 +496,7 @@ impl OhVolume {
         Self {
             capi,
             notifiers: RwLock::new(Vec::new()),
+            next_id: AtomicU64::new(0),
         }
     }
 
@@ -543,13 +546,19 @@ impl OhVolume {
     }
 
     fn notify_volume_change(&self, volume: i32) {
-        for notifier in self.notifiers.read().unwrap().iter() {
+        for (_, notifier) in self.notifiers.read().unwrap().iter() {
             notifier.notify(volume as u32);
         }
     }
 
-    fn register_guest_notifier(&self, notifier: Arc<dyn GuestVolumeNotifier>) {
-        self.notifiers.write().unwrap().push(notifier);
+    fn register_guest_notifier(&self, notifier: Arc<dyn GuestVolumeNotifier>) -> u64 {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.notifiers.write().unwrap().push((id, notifier));
+        id
+    }
+
+    fn unregister_guest_notifier(&self, id: u64) {
+        self.notifiers.write().unwrap().retain(|e| e.0 != id);
     }
 }
 
@@ -558,8 +567,12 @@ unsafe extern "C" fn on_ohos_volume_changed(volume: i32) {
     OH_VOLUME_ADAPTER.notify_volume_change(volume);
 }
 
-pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) {
-    OH_VOLUME_ADAPTER.register_guest_notifier(notifier);
+pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) -> u64 {
+    OH_VOLUME_ADAPTER.register_guest_notifier(notifier)
+}
+
+pub fn unregister_guest_volume_notifier(id: u64) {
+    OH_VOLUME_ADAPTER.unregister_guest_notifier(id);
 }
 
 pub fn get_ohos_volume_max() -> u32 {
