@@ -1330,6 +1330,54 @@ Note:
 2. Size of memdev must be multiple of 2MB.
 3. memaddr must be aligned to 2MB if set.
 
+### 2.26 Virtio-sound
+
+Virtio-sound is a virtual sound device that provides audio playback and capture capabilities for VMs. It supports multiple audio backends including OHAudio (OpenHarmony), ALSA (Linux), and a null backend for testing.
+
+The following properties are supported for virtio-sound device:
+
+* id: unique device id in StratoVirt.
+* backendtype: the audio backend type. Supported values are `ohaudio` (OpenHarmony), `alsa` (Linux), and `null` (no actual audio output). Default is `null`.
+* record_auth: whether to enable record authority control. When set to `on`, the device will check for microphone permission before allowing capture. Default is `on`. (optional)
+
+For virtio-sound-pci, four more properties are required:
+* bus: name of bus which to attach.
+* addr: including slot number and function number. The first number represents slot number of device and the second one represents function number of it.
+* multifunction: whether to open multi-function for device. (optional) If not set, default is false.
+* iothread: indicate which iothread will be used. (optional) If not set, the main thread will be used.
+
+The virtio-sound device supports the following audio formats:
+* Sample rates: 44100 Hz, 48000 Hz
+* Sample formats: S16, S24, S32
+* Channels: 1-2 (stereo)
+
+```shell
+# virtio mmio sound device with null backend (for testing)
+-device virtio-sound-device,id=snd0,backendtype=null
+
+# virtio mmio sound device with ALSA backend (Linux)
+-device virtio-sound-device,id=snd0,backendtype=alsa
+
+# virtio mmio sound device with OHAudio backend (OpenHarmony)
+-device virtio-sound-device,id=snd0,backendtype=ohaudio
+
+# virtio pci sound device
+-device virtio-sound-pci,id=snd0,bus=pcie.0,addr=0x4,backendtype=alsa
+
+# virtio pci sound device with iothread
+-object iothread,id=iothread1
+-device virtio-sound-pci,id=snd0,bus=pcie.0,addr=0x4,backendtype=alsa,iothread=iothread1
+
+# Disable record authority check
+-device virtio-sound-device,id=snd0,backendtype=alsa,record_auth=off
+```
+
+Note:
+1. The `ohaudio` backend is only available on OpenHarmony platform.
+2. The `alsa` backend is only available on Linux platform.
+3. The `null` backend is available on all platforms and can be used for testing without actual audio hardware.
+4. For best performance, it is recommended to use a dedicated iothread for the sound device.
+
 ## 3. Trace
 
 Users can specify a configuration file which lists the traces that needs to be enabled, or specify the trace type that needs to be enabled. Setting both file and type is also allowed, so that traces with the specified type and traces listed in the file will all be enabled.
