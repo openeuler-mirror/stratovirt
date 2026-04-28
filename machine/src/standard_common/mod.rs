@@ -49,12 +49,12 @@ use address_space::{
     AddressAttr, AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd,
     RegionOps,
 };
+#[cfg(any(feature = "scream", feature = "virtio_snd"))]
+use audio::auth::set_record_authority;
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 #[cfg(target_arch = "x86_64")]
 use devices::acpi::cpu_controller::CpuController;
 use devices::legacy::FwCfgOps;
-#[cfg(feature = "scream")]
-use devices::misc::scream::set_record_authority;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::{PciBus, PciHost};
 use devices::Device;
@@ -1753,7 +1753,7 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    #[cfg(feature = "scream")]
+    #[cfg(any(feature = "scream", feature = "virtio_snd"))]
     fn switch_audio_record(&self, authorized: String) -> Response {
         match authorized.as_str() {
             "on" => set_record_authority(true),
