@@ -491,7 +491,7 @@ impl OhVolume {
         let ret = unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
         if ret != 0 {
             hisysevent::STRATOVIRT_SET_VOLUME_CB_FAILED(-ret);
-            error!("register_volume_change failed, ret is {}", -ret);
+            error!("Register volume change failed, ret is {}", -ret);
         }
         Self {
             capi,
@@ -508,7 +508,7 @@ impl OhVolume {
         let ret = unsafe { (self.capi.get_volume)() };
         if ret < 0 {
             hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
-            error!("get_ohos_volume failed, ret is {}", -ret);
+            error!("Get ohos volume failed, ret is {}", -ret);
             return 0;
         }
         ret as u32
@@ -527,7 +527,13 @@ impl OhVolume {
         // - `get_max_volume` is a valid function pointer loaded from the dynamic library.
         // - It takes no parameters and does not dereference any Rust-owned memory.
         // - We call related API sequentially for specified ctx.
-        unsafe { (self.capi.get_max_volume)() as u32 }
+        let ret = unsafe { (self.capi.get_max_volume)() };
+        if ret < 0 {
+            hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
+            error!("Get ohos max volume failed, ret is {}", -ret);
+            return 0;
+        }
+        ret as u32
     }
 
     fn get_min_volume(&self) -> u32 {
@@ -535,7 +541,13 @@ impl OhVolume {
         // - `get_min_volume` is a valid function pointer loaded from the dynamic library.
         // - It takes no parameters and does not dereference any Rust-owned memory.
         // - We call related API sequentially for specified ctx.
-        unsafe { (self.capi.get_min_volume)() as u32 }
+        let ret = unsafe { (self.capi.get_min_volume)() };
+        if ret < 0 {
+            hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
+            error!("Get ohos min volume failed, ret is {}", -ret);
+            return 0;
+        }
+        ret as u32
     }
 
     fn set_ohos_volume(&self, volume: i32) -> i32 {
@@ -548,7 +560,7 @@ impl OhVolume {
         let ret = unsafe { (self.capi.set_volume)(volume) };
         if ret != 0 {
             hisysevent::STRATOVIRT_SET_VOLUME_FAILED(-ret);
-            error!("set_ohos_volume failed, ret is {}", -ret);
+            error!("Set ohos volume failed, ret is {}", -ret);
         }
         ret
     }
