@@ -14,6 +14,7 @@ pub mod sys;
 
 use std::os::raw::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use log::error;
@@ -477,7 +478,8 @@ pub trait GuestVolumeNotifier: Send + Sync {
 
 struct OhVolume {
     capi: Arc<VolumeFuncTable>,
-    notifiers: RwLock<Vec<Arc<dyn GuestVolumeNotifier>>>,
+    notifiers: RwLock<Vec<(u64, Arc<dyn GuestVolumeNotifier>)>>,
+    next_id: AtomicU64,
 }
 
 impl OhVolume {
@@ -489,11 +491,12 @@ impl OhVolume {
         let ret = unsafe { (*capi.register_volume_change)(on_ohos_volume_changed) };
         if ret != 0 {
             hisysevent::STRATOVIRT_SET_VOLUME_CB_FAILED(-ret);
-            error!("register_volume_change failed, ret is {}", -ret);
+            error!("Register volume change failed, ret is {}", -ret);
         }
         Self {
             capi,
             notifiers: RwLock::new(Vec::new()),
+            next_id: AtomicU64::new(0),
         }
     }
 
@@ -505,10 +508,18 @@ impl OhVolume {
         let ret = unsafe { (self.capi.get_volume)() };
         if ret < 0 {
             hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
-            error!("get_ohos_volume failed, ret is {}", -ret);
+            error!("Get ohos volume failed, ret is {}", -ret);
             return 0;
         }
         ret as u32
+    }
+
+    fn get_ohos_mute(&self) -> bool {
+        // SAFETY:
+        // - `get_mute` is a valid function pointer loaded from the dynamic library.
+        // - It takes no parameters and does not dereference any Rust-owned memory.
+        // - We call related API sequentially for specified ctx.
+        unsafe { (self.capi.get_mute)() }
     }
 
     fn get_max_volume(&self) -> u32 {
@@ -516,7 +527,13 @@ impl OhVolume {
         // - `get_max_volume` is a valid function pointer loaded from the dynamic library.
         // - It takes no parameters and does not dereference any Rust-owned memory.
         // - We call related API sequentially for specified ctx.
-        unsafe { (self.capi.get_max_volume)() as u32 }
+        let ret = unsafe { (self.capi.get_max_volume)() };
+        if ret < 0 {
+            hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
+            error!("Get ohos max volume failed, ret is {}", -ret);
+            return 0;
+        }
+        ret as u32
     }
 
     fn get_min_volume(&self) -> u32 {
@@ -524,7 +541,13 @@ impl OhVolume {
         // - `get_min_volume` is a valid function pointer loaded from the dynamic library.
         // - It takes no parameters and does not dereference any Rust-owned memory.
         // - We call related API sequentially for specified ctx.
-        unsafe { (self.capi.get_min_volume)() as u32 }
+        let ret = unsafe { (self.capi.get_min_volume)() };
+        if ret < 0 {
+            hisysevent::STRATOVIRT_GET_VOLUME_FAILED(-ret);
+            error!("Get ohos min volume failed, ret is {}", -ret);
+            return 0;
+        }
+        ret as u32
     }
 
     fn set_ohos_volume(&self, volume: i32) -> i32 {
@@ -537,19 +560,40 @@ impl OhVolume {
         let ret = unsafe { (self.capi.set_volume)(volume) };
         if ret != 0 {
             hisysevent::STRATOVIRT_SET_VOLUME_FAILED(-ret);
-            error!("set_ohos_volume failed, ret is {}", -ret);
+            error!("Set ohos volume failed, ret is {}", -ret);
+        }
+        ret
+    }
+
+    fn set_ohos_mute(&self, mute: bool) -> i32 {
+        // SAFETY:
+        // - `set_ohos_mute` is a valid function pointer loaded from the dynamic library.
+        // - `set_ohos_mute` operates only on the audio context owned by `self`, and does not access or
+        //   retain references to Rust-managed memory across the FFI boundary.
+        // - Calls are made sequentially for this `ctx`, ensuring no concurrent mutation or aliasing
+        //   of underlying state occurs.
+        let ret = unsafe { (self.capi.set_mute)(mute) };
+        if ret != 0 {
+            hisysevent::STRATOVIRT_SET_MUTE_FAILED(-ret);
+            error!("Set ohos volume failed, ret is {}", -ret);
         }
         ret
     }
 
     fn notify_volume_change(&self, volume: i32) {
-        for notifier in self.notifiers.read().unwrap().iter() {
+        for (_, notifier) in self.notifiers.read().unwrap().iter() {
             notifier.notify(volume as u32);
         }
     }
 
-    fn register_guest_notifier(&self, notifier: Arc<dyn GuestVolumeNotifier>) {
-        self.notifiers.write().unwrap().push(notifier);
+    fn register_guest_notifier(&self, notifier: Arc<dyn GuestVolumeNotifier>) -> u64 {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.notifiers.write().unwrap().push((id, notifier));
+        id
+    }
+
+    fn unregister_guest_notifier(&self, id: u64) {
+        self.notifiers.write().unwrap().retain(|e| e.0 != id);
     }
 }
 
@@ -558,8 +602,12 @@ unsafe extern "C" fn on_ohos_volume_changed(volume: i32) {
     OH_VOLUME_ADAPTER.notify_volume_change(volume);
 }
 
-pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) {
-    OH_VOLUME_ADAPTER.register_guest_notifier(notifier);
+pub fn register_guest_volume_notifier(notifier: Arc<dyn GuestVolumeNotifier>) -> u64 {
+    OH_VOLUME_ADAPTER.register_guest_notifier(notifier)
+}
+
+pub fn unregister_guest_volume_notifier(id: u64) {
+    OH_VOLUME_ADAPTER.unregister_guest_notifier(id);
 }
 
 pub fn get_ohos_volume_max() -> u32 {
@@ -574,8 +622,16 @@ pub fn get_ohos_volume() -> u32 {
     OH_VOLUME_ADAPTER.get_ohos_volume()
 }
 
+pub fn get_ohos_mute() -> bool {
+    OH_VOLUME_ADAPTER.get_ohos_mute()
+}
+
 pub fn set_ohos_volume(vol: u32) -> i32 {
     OH_VOLUME_ADAPTER.set_ohos_volume(vol as i32)
+}
+
+pub fn set_ohos_mute(mute: bool) -> i32 {
+    OH_VOLUME_ADAPTER.set_ohos_mute(mute)
 }
 
 #[cfg(test)]

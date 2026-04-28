@@ -1,0 +1,21 @@
+[package]
+name = "audio"
+version = "2.5.0"
+authors = ["Huawei StratoVirt Team"]
+edition = "2024"
+license = "Mulan PSL v2"
+description = "Audio interface abstraction and backends for StratoVirt"
+
+[dependencies]
+anyhow = "1.0"
+log = "0.4"
+machine_manager = { path = "../machine_manager" }
+util = { path = "../util" }
+trace = { path = "../trace", optional = true }
+hisysevent = { path = "../hisysevent" }
+
+[target.'cfg(target_env = "gnu")'.dependencies]
+alsa = { version = "0.7.0" }
+
+[features]
+default = []

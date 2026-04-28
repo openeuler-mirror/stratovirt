@@ -47,6 +47,8 @@ pub use device::rng::{Rng, RngConfig, RngState};
 #[cfg(feature = "virtio_scsi")]
 pub use device::scsi_cntlr as ScsiCntlr;
 pub use device::serial::{find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState};
+#[cfg(feature = "virtio_snd")]
+pub use device::sound::*;
 pub use error::VirtioError;
 pub use queue::*;
 pub use transport::virtio_mmio::{VirtioMmioDevice, VirtioMmioState};
@@ -91,6 +93,7 @@ pub const VIRTIO_TYPE_GPU: u32 = 16;
 pub const VIRTIO_TYPE_INPUT: u32 = 18;
 pub const VIRTIO_TYPE_VSOCK: u32 = 19;
 pub const VIRTIO_TYPE_MEM: u32 = 24;
+pub const VIRTIO_TYPE_SOUND: u32 = 25;
 pub const VIRTIO_TYPE_FS: u32 = 26;
 pub const VIRTIO_TYPE_PMEM: u32 = 27;
 

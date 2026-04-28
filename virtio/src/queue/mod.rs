@@ -20,8 +20,9 @@ use anyhow::{bail, Result};
 use vmm_sys_util::eventfd::EventFd;
 
 use address_space::{AddressSpace, GuestAddress, RegionCache};
-use machine_manager::config::DEFAULT_VIRTQUEUE_SIZE;
 use util::loop_context::create_new_eventfd;
+
+use crate::gpa_hva_iovec_map;
 
 /// Split Virtqueue.
 pub const QUEUE_TYPE_SPLIT_VRING: u16 = 1;
@@ -79,12 +80,12 @@ impl Element {
     /// # Arguments
     ///
     /// * `index` - The index of descriptor in the virqueue descriptor table.
-    fn new(index: u16) -> Self {
+    fn with_capacity(index: u16, len: usize) -> Self {
         Element {
             index,
             desc_num: 0,
-            out_iovec: Vec::with_capacity(DEFAULT_VIRTQUEUE_SIZE.into()),
-            in_iovec: Vec::with_capacity(DEFAULT_VIRTQUEUE_SIZE.into()),
+            out_iovec: Vec::with_capacity(len),
+            in_iovec: Vec::with_capacity(len),
         }
     }
 
@@ -96,6 +97,64 @@ impl Element {
             size += u64::from(elem.len);
         }
         size
+    }
+
+    pub fn iov_from_buf_with_offset(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        mut offset: u64,
+        buf: &[u8],
+    ) -> Result<usize> {
+        let (_, iovec) = gpa_hva_iovec_map(&self.in_iovec, sys_mem, cache)?;
+        let mut copied = 0;
+
+        for e in &iovec {
+            if offset >= e.iov_len {
+                offset -= e.iov_len;
+                continue;
+            }
+
+            // SAFETY: elem.in_iov has been checked in pop_avail()
+            // and Iovec is translated from it, so it's safe.
+            copied += unsafe { e.write_offset(&buf[copied..], offset)? };
+            offset = 0;
+
+            if copied >= buf.len() {
+                break;
+            }
+        }
+
+        Ok(copied)
+    }
+
+    pub fn iov_to_buf_with_offset(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        cache: &Option<RegionCache>,
+        mut offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize> {
+        let (_, iovec) = gpa_hva_iovec_map(&self.out_iovec, sys_mem, cache)?;
+        let mut copied = 0;
+
+        for e in &iovec {
+            if offset >= e.iov_len {
+                offset -= e.iov_len;
+                continue;
+            }
+
+            // SAFETY: elem.out_iov has been checked in pop_avail()
+            // and Iovec is translated from it, so it's safe.
+            copied += unsafe { e.read_offset(&mut buf[copied..], offset)? };
+            offset = 0;
+
+            if copied >= buf.len() {
+                break;
+            }
+        }
+
+        Ok(copied)
     }
 }
 

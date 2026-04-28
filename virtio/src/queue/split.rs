@@ -893,7 +893,7 @@ impl VringOps for SplitVring {
     }
 
     fn pop_avail(&mut self, sys_mem: &Arc<AddressSpace>, features: u64) -> Result<Element> {
-        let mut element = Element::new(0);
+        let mut element = Element::with_capacity(0, self.actual_size() as usize);
         if !self.is_enabled() || self.avail_ring_len()? == 0 {
             return Ok(element);
         }
@@ -1024,7 +1024,7 @@ impl VringOps for SplitVring {
         while (end_idx - avail_idx).0 > 0 {
             let desc_info = self.get_desc_info(sys_mem, avail_idx, 0)?;
 
-            let mut elem = Element::new(0);
+            let mut elem = Element::with_capacity(0, self.actual_size() as usize);
             SplitVringDesc::get_element(sys_mem, &desc_info, &mut self.cache, &mut elem).with_context(
                 || {
                     format!(
