@@ -15,6 +15,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 acpi = { path = "../acpi" }
 address_space = { path = "../address_space" }
+audio = { path = "../audio", optional = true }
 boot_loader = { path = "../boot_loader" }
 cpu = { path = "../cpu" }
 devices = { path = "../devices" }
@@ -35,7 +36,7 @@ hisysevent = { path = "../hisysevent" }
 [features]
 default = []
 boot_time = ["cpu/boot_time", "hypervisor/boot_time"]
-scream = ["devices/scream", "machine_manager/scream"]
+scream = ["devices/scream", "machine_manager/scream", "dep:audio"]
 scream_alsa = ["scream", "devices/scream_alsa", "machine_manager/scream_alsa"]
 scream_pulseaudio = ["scream", "devices/scream_pulseaudio","machine_manager/scream_pulseaudio"]
 scream_ohaudio = ["scream", "devices/scream_ohaudio", "machine_manager/scream_ohaudio"]
@@ -58,6 +59,7 @@ usb_consumer = ["devices/usb_consumer"]
 virtio_rng = ["virtio/virtio_rng"]
 virtio_scsi = ["virtio/virtio_scsi"]
 virtio_pmem = ["virtio/virtio_pmem"]
+virtio_snd = ["virtio/virtio_snd"]
 vhost_vsock = ["virtio/vhost_vsock"]
 vhostuser_block = ["virtio/vhostuser_block"]
 vhostuser_gpu = ["virtio/vhostuser_gpu"]
