@@ -136,6 +136,32 @@ impl Iovec {
     pub fn is_none(&self) -> bool {
         self.iov_base == 0 && self.iov_len == 0
     }
+
+    /// # Safety
+    ///
+    /// The caller must guarantee validation of [base, base + len).
+    pub unsafe fn read_offset(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+        if offset >= self.iov_len {
+            return Ok(0);
+        }
+
+        let len = buf.len().min((self.iov_len - offset) as usize);
+        mem_to_buf(&mut buf[..len], self.iov_base + offset)?;
+        Ok(len)
+    }
+
+    /// # Safety
+    ///
+    /// The caller must guarantee validation of [base, base + len).
+    pub unsafe fn write_offset(&self, buf: &[u8], offset: u64) -> Result<usize> {
+        if offset >= self.iov_len {
+            return Ok(0);
+        }
+
+        let len = buf.len().min((self.iov_len - offset) as usize);
+        mem_from_buf(&buf[..len], self.iov_base + offset)?;
+        Ok(len)
+    }
 }
 
 pub fn get_iov_size(iovecs: &[Iovec]) -> u64 {
