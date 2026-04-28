@@ -150,6 +150,8 @@ use virtio::{Gpu, GpuDevConfig};
 use virtio::{Pmem, PmemState, VirtioPmemDevConfig};
 #[cfg(feature = "virtio_rng")]
 use virtio::{Rng, RngConfig, RngState};
+#[cfg(feature = "virtio_snd")]
+use virtio::{Sound, SoundConfig};
 
 #[cfg(feature = "windows_emu_pid")]
 const WINDOWS_EMU_PID_DEFAULT_INTERVAL: u64 = 4000;
@@ -992,6 +994,44 @@ pub trait MachineOps: MachineLifecycle {
             }
         }
         MigrationManager::register_device_instance(PmemState::descriptor(), pmem, &option.id);
+        Ok(())
+    }
+
+    /// Add virtio sound device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    /// * `token_id` - Used for OHOS audio.
+    #[cfg(feature = "virtio_snd")]
+    fn add_virtio_sound(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        cfg_args: &str,
+        token_id: Option<Arc<RwLock<u64>>>,
+    ) -> Result<()> {
+        let config = SoundConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let sound = Arc::new(Mutex::new(Sound::new(config.clone(), token_id)));
+
+        match config.classtype.as_str() {
+            "virtio-sound-device" => {
+                check_arg_nonexist!(
+                    ("bus", config.bus),
+                    ("addr", config.addr),
+                    ("multifunction", config.multifunction)
+                );
+                self.add_virtio_mmio_device(config.id.clone(), sound)?;
+            }
+            _ => {
+                check_arg_exist!(("bus", config.bus), ("addr", config.addr));
+                let bdf = PciBdf::new(config.bus.unwrap(), config.addr.unwrap());
+                let multi_func = config.multifunction.unwrap_or_default();
+                self.add_virtio_pci_device(&config.id, &bdf, sound, multi_func, false)
+                    .with_context(|| "Failed to add virtio pci sound device")?;
+            }
+        }
+
         Ok(())
     }
 
@@ -2361,7 +2401,7 @@ pub trait MachineOps: MachineLifecycle {
             let id = get_value_of_parameter("id", cfg_args)?;
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
-            #[cfg(feature = "scream")]
+            #[cfg(any(feature = "scream", feature = "virtio_snd"))]
             let token_id = self.get_token_id();
 
             create_device_add_matches!(
@@ -2392,6 +2432,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 #[cfg(feature = "virtio_pmem")]
                 ("virtio-pmem-device" | "virtio-pmem-pci", add_virtio_pmem, vm_config, cfg_args),
+                #[cfg(feature = "virtio_snd")]
+                ("virtio-sound-device" | "virtio-sound-pci", add_virtio_sound, vm_config, cfg_args, token_id),
                 #[cfg(feature = "vfio_device")]
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]
