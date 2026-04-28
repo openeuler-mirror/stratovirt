@@ -28,7 +28,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use core::time;
 use log::{error, info, warn};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "scream_alsa")]
@@ -38,6 +37,8 @@ use super::ivshmem::Ivshmem;
 use crate::pci::{le_read_u32, le_write_u32};
 use crate::{Bus, Device};
 use address_space::{GuestAddress, HostMemMapping, Region};
+use audio::auth::{register_authority_notifier, AuthorityNotifier};
+use audio::{get_record_authority, set_record_authority};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::notifier::register_vm_pause_notifier;
 use machine_manager::state_query::register_state_query_callback;
@@ -107,26 +108,6 @@ pub enum AudioStatus {
     IntrResume,
 }
 
-type AuthorityNotify = dyn Fn() + Send + Sync;
-
-#[derive(Clone)]
-pub struct AuthorityInformation {
-    state: bool,
-    notify: Option<Arc<AuthorityNotify>>,
-}
-
-impl AuthorityInformation {
-    const fn default() -> AuthorityInformation {
-        AuthorityInformation {
-            state: true,
-            notify: None,
-        }
-    }
-}
-
-type AuthInfo = RwLock<AuthorityInformation>;
-static AUTH_INFO: Lazy<AuthInfo> = Lazy::new(|| RwLock::new(AuthorityInformation::default()));
-
 /// The scream device defines the audio directions.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ScreamDirection {
@@ -151,21 +132,6 @@ pub struct ShmemStreamHeader {
     start_time_ns: i64,
     /// Audio stream format.
     pub fmt: ShmemStreamFmt,
-}
-
-pub fn set_record_authority(auth: bool) {
-    AUTH_INFO.write().unwrap().state = auth;
-    if let Some(auth_notify) = &AUTH_INFO.read().unwrap().notify {
-        auth_notify();
-    }
-}
-
-pub fn set_authority_notify(notify: Option<Arc<AuthorityNotify>>) {
-    AUTH_INFO.write().unwrap().notify = notify;
-}
-
-pub fn get_record_authority() -> bool {
-    AUTH_INFO.read().unwrap().state
 }
 
 impl ShmemStreamHeader {
@@ -648,6 +614,7 @@ pub struct Scream {
     play_cond: Arc<ScreamCond>,
     capt_cond: Arc<ScreamCond>,
     audio_ext: Option<Arc<dyn AudioExtension>>,
+    auth_notifier: Option<Arc<dyn AuthorityNotifier>>,
 }
 
 impl Scream {
@@ -674,6 +641,7 @@ impl Scream {
             play_cond: ScreamCond::new(),
             capt_cond: ScreamCond::new(),
             audio_ext: None,
+            auth_notifier: None,
         })
     }
 
@@ -814,19 +782,15 @@ impl Scream {
             IVSHMEM_VECTORS_NR,
         );
         let ivshmem = ivshmem.realize()?;
-        let ivshmem_cloned = ivshmem.clone();
 
         let play_cond = self.play_cond.clone();
         let capt_cond = self.capt_cond.clone();
-        self.audio_ext = Some(self.set_ivshmem_ops(ivshmem, play_cond.clone(), capt_cond.clone()));
+        self.audio_ext =
+            Some(self.set_ivshmem_ops(ivshmem.clone(), play_cond.clone(), capt_cond.clone()));
 
-        let author_notify = Arc::new(move || {
-            ivshmem_cloned
-                .lock()
-                .unwrap()
-                .trigger_msix(IVSHMEM_STATUS_CHANGE_VECTOR);
-        });
-        set_authority_notify(Some(author_notify));
+        let auth_notifier = Arc::new(ScreamAuthNotifier { ivshmem });
+        register_authority_notifier(auth_notifier.clone());
+        self.auth_notifier = Some(auth_notifier);
 
         let play_thread_handle = self.start_play_thread_fn(play_cond.clone())?;
         let capt_thread_handle = self.start_record_thread_fn(capt_cond.clone())?;
@@ -988,6 +952,19 @@ pub trait AudioExtension: Send + Sync {
 struct AudioExtensionDummy;
 impl AudioExtension for AudioExtensionDummy {}
 
+struct ScreamAuthNotifier {
+    ivshmem: Arc<Mutex<Ivshmem>>,
+}
+
+impl AuthorityNotifier for ScreamAuthNotifier {
+    fn on_authority_changed(&self, _has_authority: bool) {
+        self.ivshmem
+            .lock()
+            .unwrap()
+            .trigger_msix(IVSHMEM_STATUS_CHANGE_VECTOR);
+    }
+}
+
 /// Migration support of Scream device.
 #[derive(Clone, DescSerde, Serialize, Deserialize)]
 #[desc_version(current_version = "0.1.0")]
@@ -1027,8 +1004,10 @@ impl MigrationHook for Scream {
             ext.notify_guest_sync();
         }
         // Synchronize record authorization.
-        let auth = get_record_authority();
-        set_record_authority(auth);
+        if let Some(notifier) = self.auth_notifier.as_ref() {
+            let auth = get_record_authority();
+            notifier.on_authority_changed(auth);
+        }
         Ok(())
     }
 }

@@ -437,6 +437,7 @@ dependencies = [
  "address_space",
  "alsa",
  "anyhow",
+ "audio",
  "block_backend",
  "bytemuck",
  "byteorder",
