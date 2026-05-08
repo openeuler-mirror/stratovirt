@@ -59,7 +59,6 @@ pub enum XhciAsyncCmd {
         parent_dev: Arc<Mutex<dyn Device + 'static>>,
         vm_config: Arc<Mutex<VmConfig>>,
     },
-    Exit,
 }
 
 pub struct AsyncCmdHandler {
@@ -75,40 +74,32 @@ impl AsyncCmdHandler {
     fn run_thread(handler: Self) -> Result<JoinHandle<()>> {
         Builder::new()
             .name("xhci async worker".to_string())
-            .spawn(move || loop {
-                let cmd = match handler.reader.recv() {
-                    Ok(cmd) => cmd,
-                    Err(e) => {
-                        error!("failed to receive command, {:?}", e);
-                        continue;
+            .spawn(move || {
+                for cmd in &handler.reader {
+                    if let Err(e) = match cmd {
+                        XhciAsyncCmd::PortReset {
+                            xhci,
+                            port_id,
+                            warm,
+                        } => handler
+                            .handle_port_reset(xhci, port_id, warm)
+                            .with_context(|| "failed to hand port reset"),
+
+                        XhciAsyncCmd::DeviceDetach { xhci, port } => handler
+                            .handle_device_detach(xhci, port)
+                            .with_context(|| "failed to handle device detach"),
+
+                        #[cfg(feature = "usb_host")]
+                        XhciAsyncCmd::UsbHostAdd {
+                            config,
+                            parent_dev,
+                            vm_config,
+                        } => handler
+                            .handle_usbhost_device_attach(config, parent_dev, vm_config)
+                            .with_context(|| "failed to handle usbhost device attach"),
+                    } {
+                        error!("{:?}", e);
                     }
-                };
-
-                if let Err(e) = match cmd {
-                    XhciAsyncCmd::PortReset {
-                        xhci,
-                        port_id,
-                        warm,
-                    } => handler
-                        .handle_port_reset(xhci, port_id, warm)
-                        .with_context(|| "failed to hand port reset"),
-
-                    XhciAsyncCmd::DeviceDetach { xhci, port } => handler
-                        .handle_device_detach(xhci, port)
-                        .with_context(|| "failed to handle device detach"),
-
-                    #[cfg(feature = "usb_host")]
-                    XhciAsyncCmd::UsbHostAdd {
-                        config,
-                        parent_dev,
-                        vm_config,
-                    } => handler
-                        .handle_usbhost_device_attach(config, parent_dev, vm_config)
-                        .with_context(|| "failed to handle usbhost device attach"),
-
-                    XhciAsyncCmd::Exit => break,
-                } {
-                    error!("{:?}", e);
                 }
             })
             .with_context(|| "failed to start xhci async thread")
