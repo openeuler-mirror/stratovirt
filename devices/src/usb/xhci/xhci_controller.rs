@@ -15,7 +15,6 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, Weak};
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -1180,7 +1179,6 @@ pub struct XhciDevice {
     pub mem_space: Arc<AddressSpace>,
     pub enable_streams: bool,
     pub async_cmd_tx: Sender<XhciAsyncCmd>,
-    async_thread_handle: Option<JoinHandle<()>>,
     /// Runtime Register.
     mfindex_start: Duration,
     mfwrap_timer_id: Option<u64>,
@@ -1248,11 +1246,8 @@ impl XhciDevice {
 
         let (cmd_tx, cmd_rx) = channel::<XhciAsyncCmd>();
 
-        let async_thread_handle = match AsyncCmdHandler::init(cmd_rx) {
-            Ok(handle) => Some(handle),
-            Err(e) => {
-                panic!("failed to create async, {:?}", e);
-            }
+        if let Err(e) = AsyncCmdHandler::init(cmd_rx) {
+            panic!("failed to create async, {:?}", e);
         };
 
         let xhci = XhciDevice {
@@ -1267,7 +1262,6 @@ impl XhciDevice {
             mem_space: mem_space.clone(),
             enable_streams: streams,
             async_cmd_tx: cmd_tx,
-            async_thread_handle,
             mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
             mfwrap_timer_id: None,
             bme: bme.clone(),
@@ -3006,22 +3000,6 @@ impl XhciDevice {
                     intr.lock().unwrap().set_snapshot_state(saved_state);
                 }
             }
-        }
-    }
-}
-
-impl Drop for XhciDevice {
-    fn drop(&mut self) {
-        if let Err(e) = self.async_cmd_tx.send(XhciAsyncCmd::Exit) {
-            error!("failed to send exit command to xhci async thread, {:?}", e);
-            return;
-        }
-
-        let Some(handle) = self.async_thread_handle.take() else {
-            return;
-        };
-        if let Err(e) = handle.join() {
-            error!("failed to join xhci async thread, {:?}", e);
         }
     }
 }
