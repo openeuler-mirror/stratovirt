@@ -75,44 +75,70 @@ use devices::pci::{
 };
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
-use devices::sysbus::{devices_register_sysbusdevops_type, to_sysbusdevops, SysBus, SysBusDevType};
+use devices::sysbus::{devices_register_sysbusdevops_type, SysBus};
+#[cfg(feature = "virtio_serial")]
+use devices::sysbus::{to_sysbusdevops, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 #[cfg(feature = "usb_consumer")]
 use devices::usb::consumer::{UsbConsumer, UsbConsumerConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
+#[cfg(feature = "usb_storage")]
 use devices::usb::storage::{UsbStorage, UsbStorageConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_uas")]
 use devices::usb::uas::{UsbUas, UsbUasConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::{UsbHost, UsbHostConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
+#[cfg(feature = "usb_base")]
 use devices::usb::UsbDevice;
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use devices::{convert_bus_ref, Bus, Device, PCI_BUS, SYS_BUS_DEVICE};
+#[cfg(feature = "virtio_serial")]
+use devices::SYS_BUS_DEVICE;
+use devices::{convert_bus_ref, Bus, Device, PCI_BUS};
 #[cfg(feature = "virtio_scsi")]
 use devices::{
     ScsiBus::get_scsi_key,
     ScsiDisk::{ScsiDevConfig, ScsiDevice},
 };
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
+use machine_manager::check_arg_exist;
+#[cfg(any(
+    feature = "vhost_vsock",
+    feature = "virtio_balloon",
+    feature = "virtio_mem",
+    feature = "virtio_pmem",
+    feature = "virtio_serial",
+    feature = "virtio_input",
+    feature = "virtio_multitouch",
+    feature = "vhostuser_fs",
+    feature = "vhostuser_gpu"
+))]
+use machine_manager::check_arg_nonexist;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
 #[cfg(feature = "vhostuser_net")]
 use machine_manager::config::get_chardev_socket_path;
+#[cfg(feature = "usb_base")]
+use machine_manager::config::get_class_type;
+#[cfg(any(feature = "virtio_gpu", feature = "virtio_serial"))]
+use machine_manager::config::ConfigCheck;
 use machine_manager::config::{
-    complete_numa_node, get_class_type, get_pci_bdf, get_value_of_parameter, parse_numa_distance,
-    parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig,
-    DriveFile, IncomingConfig, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
-    NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig,
-    FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_pci_bdf, get_value_of_parameter, parse_numa_distance, parse_numa_mem,
+    str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, IncomingConfig,
+    MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf,
+    SerialConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
+#[cfg(feature = "virtio_serial")]
+use machine_manager::config::{VirtioSerialInfo, VirtioSerialPortCfg};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
 use machine_manager::notifier::pause_notify;
-use machine_manager::{check_arg_exist, check_arg_nonexist};
 use migration::{MigrateOps, MigrationManager, MigrationStatus};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -124,6 +150,10 @@ use util::loop_context::{
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 #[cfg(feature = "vfio_device")]
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
+#[cfg(feature = "vhostuser_fs")]
+use virtio::vhost;
+#[cfg(feature = "virtio_mem")]
+use virtio::MemoryConfig;
 #[cfg(feature = "virtio_scsi")]
 use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
 #[cfg(any(feature = "vhost_vsock", feature = "vhost_net"))]
@@ -134,18 +164,33 @@ use virtio::VhostKern;
     feature = "vhostuser_gpu"
 ))]
 use virtio::VhostUser;
+#[cfg(feature = "vhostuser_fs")]
 use virtio::VhostUser::FsState;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
+#[cfg(any(
+    feature = "vhost_vsock",
+    feature = "virtio_pmem",
+    feature = "virtio_serial"
+))]
+use virtio::VirtioMmioState;
 use virtio::{
-    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, BalloonState, Block, BlockState,
-    Input, InputConfig, MttState, Multitouch, MultitouchConfig, Serial, SerialPort,
-    VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
-    VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    balloon_allow_list, virtio_register_pcidevops_type, virtio_register_sysbusdevops_type, Block,
+    BlockState, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioNetState,
+    VirtioPciDevice,
 };
+#[cfg(feature = "virtio_serial")]
+use virtio::{
+    find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+};
+#[cfg(feature = "virtio_balloon")]
+use virtio::{Balloon, BalloonConfig, BalloonState};
 #[cfg(feature = "virtio_gpu")]
 use virtio::{Gpu, GpuDevConfig};
+#[cfg(feature = "virtio_input")]
+use virtio::{Input, InputConfig};
+#[cfg(feature = "virtio_multitouch")]
+use virtio::{MttState, Multitouch, MultitouchConfig};
 #[cfg(feature = "virtio_pmem")]
 use virtio::{Pmem, PmemState, VirtioPmemDevConfig};
 #[cfg(feature = "virtio_rng")]
@@ -864,6 +909,7 @@ pub trait MachineOps: MachineLifecycle {
         bail!("Virtio mmio device Not supported!");
     }
 
+    #[cfg(feature = "virtio_balloon")]
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         if vm_config.dev_name.contains_key("balloon") {
             bail!("Only one balloon device is supported for each vm.");
@@ -897,14 +943,20 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_balloon"))]
+    fn add_virtio_balloon(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-balloon is not enabled")
+    }
+
     /// Add virtio memory device.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_mem")]
     fn add_virtio_mem(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let option = virtio::MemoryConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let option = MemoryConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let memoption = vm_config
             .object
             .mem_object
@@ -946,6 +998,11 @@ pub trait MachineOps: MachineLifecycle {
             }
         }
         Ok(())
+    }
+
+    #[cfg(not(feature = "virtio_mem"))]
+    fn add_virtio_mem(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-mem is not enabled")
     }
 
     /// Add virtio pmem device.
@@ -1041,6 +1098,7 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_serial")]
     fn add_virtio_serial(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         if vm_config.virtio_serial.is_some() {
             bail!("Only one virtio serial device is supported");
@@ -1085,12 +1143,18 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_serial"))]
+    fn add_virtio_serial(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-serial is not enabled")
+    }
+
     /// Add virtio serial port.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_serial")]
     fn add_virtio_serial_port(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let serial_cfg = vm_config
             .virtio_serial
@@ -1174,6 +1238,11 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_serial"))]
+    fn add_virtio_serial_port(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-serial is not enabled")
+    }
+
     /// Add virtio-rng device.
     ///
     /// # Arguments
@@ -1223,6 +1292,7 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `cfg_args` - Device configuration arguments.
+    #[cfg(feature = "virtio_input")]
     fn add_virtio_input(&mut self, cfg_args: &str) -> Result<()> {
         let cfg = InputConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let dev = Arc::new(Mutex::new(Input::new(cfg.clone())?));
@@ -1247,11 +1317,17 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_input"))]
+    fn add_virtio_input(&mut self, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-input is not enabled")
+    }
+
     /// Add virtio-multitouch input device
     ///
     /// # Arguments
     ///
     /// * `cfg_args` - Device configuration arguments.
+    #[cfg(feature = "virtio_multitouch")]
     fn add_virtio_multitouch(&mut self, cfg_args: &str) -> Result<()> {
         let cfg = MultitouchConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let dev = Arc::new(Mutex::new(Multitouch::new(cfg.clone())));
@@ -1279,12 +1355,18 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_multitouch"))]
+    fn add_virtio_multitouch(&mut self, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-multitouch is not enabled")
+    }
+
     /// Add virtioFs device.
     ///
     /// # Arguments
     ///
     /// * 'vm_config' - VM configuration.
     /// * 'cfg_args' - Device configuration arguments.
+    #[cfg(feature = "vhostuser_fs")]
     fn add_virtio_fs(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let dev_cfg =
             vhost::user::FsConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -1338,6 +1420,11 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "vhostuser_fs"))]
+    fn add_virtio_fs(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("vhost-user-fs is not enabled")
+    }
+
     fn get_sysbus_devices(&self) -> BTreeMap<u64, Arc<Mutex<dyn Device>>> {
         self.machine_base().sysbus.lock().unwrap().child_devices()
     }
@@ -1366,6 +1453,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "usb_base")]
     fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
         let vm_config = self.get_vm_config();
         let locked_vmconfig = vm_config.lock().unwrap();
@@ -1380,6 +1468,11 @@ pub trait MachineOps: MachineLifecycle {
         let mut locked_xhci = xhci_pci.xhci.lock().unwrap();
         let port = locked_xhci.find_usb_port_by_id(id);
         Ok(port.is_some())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn check_id_existed_in_xhci(&mut self, _id: &str) -> Result<bool> {
+        Ok(false)
     }
 
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
@@ -2091,6 +2184,7 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `cfg_args` - XHCI Configuration.
+    #[cfg(feature = "usb_base")]
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
         let device_cfg = XhciConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
@@ -2102,6 +2196,11 @@ pub trait MachineOps: MachineLifecycle {
             .realize()
             .with_context(|| "Failed to realize usb xhci device")?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn add_usb_xhci(&mut self, _cfg_args: &str) -> Result<()> {
+        bail!("USB support is disabled")
     }
 
     /// Add scream sound based on ivshmem.
@@ -2193,6 +2292,7 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// * `vm_config` - VM configuration.
     /// * `usb_dev` - Usb device.
+    #[cfg(feature = "usb_base")]
     fn attach_usb_to_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -2211,12 +2311,22 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "usb_base"))]
+    fn attach_usb_to_xhci_controller(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        _usb_dev: Arc<Mutex<dyn Device>>,
+    ) -> Result<()> {
+        bail!("USB support is disabled")
+    }
+
     /// Detach usb device from xhci controller.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `id` - id of the usb device.
+    #[cfg(feature = "usb_base")]
     fn detach_usb_from_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -2235,12 +2345,22 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "usb_base"))]
+    fn detach_usb_from_xhci_controller(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        _id: String,
+    ) -> Result<()> {
+        bail!("USB support is disabled")
+    }
+
     /// Add usb device.
     ///
     /// # Arguments
     ///
     /// * `driver` - USB device class.
     /// * `cfg_args` - USB device Configuration.
+    #[cfg(feature = "usb_base")]
     fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let usb_device = match get_class_type(cfg_args)?.as_str() {
             "usb-kbd" => {
@@ -2289,6 +2409,7 @@ pub trait MachineOps: MachineLifecycle {
                     .realize()
                     .with_context(|| "Failed to realize usb camera device")?
             }
+            #[cfg(feature = "usb_storage")]
             "usb-storage" => {
                 let device_cfg =
                     UsbStorageConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -2363,6 +2484,11 @@ pub trait MachineOps: MachineLifecycle {
 
         self.attach_usb_to_xhci_controller(vm_config, usb_device)?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn add_usb_device(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("USB support is disabled")
     }
 
     /// Add peripheral devices.

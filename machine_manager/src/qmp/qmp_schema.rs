@@ -54,13 +54,14 @@ impl QmpErrorClass {
 }
 
 macro_rules! define_qmp_command_enum {
-    ($($command:ident($name:expr, $args_type:ty $(, $serde_default:ident)?)),*) => {
+    ($($(#[$command_attr:meta])* $command:ident($name:expr, $args_type:ty $(, $serde_default:ident)?)),* $(,)?) => {
         /// A enum to store all command struct
         #[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
         #[serde(tag = "execute")]
         #[serde(deny_unknown_fields)]
         pub enum QmpCommand {
             $(
+                $(#[$command_attr])*
                 #[serde(rename = $name)]
                 #[strum(serialize = $name)]
                 $command {
@@ -140,7 +141,9 @@ define_qmp_command_enum!(
     blockdev_snapshot_internal_sync("blockdev-snapshot-internal-sync", blockdev_snapshot_internal),
     blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal),
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg),
+    #[cfg(feature = "trace")]
     trace_get_state("trace-get-state", trace_get_state),
+    #[cfg(feature = "trace")]
     trace_set_state("trace-set-state", trace_set_state),
     query_ohui_status("query-ohui-status", OhuiStatus, default),
     query_workloads("query-workloads", query_workloads),
@@ -2136,14 +2139,17 @@ pub struct DeviceDeleted {
 ///      "arguments": { "name": "event_name" } }
 /// <- { "return": [ { "name": "event_name", "state": "disabled" } ] }
 /// ```
+#[cfg(feature = "trace")]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct trace_get_state {
     #[serde(rename = "name")]
     pub pattern: String,
 }
+#[cfg(feature = "trace")]
 pub type TraceGetArgument = trace_get_state;
 
+#[cfg(feature = "trace")]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct TraceInfo {
     pub name: String,
@@ -2165,6 +2171,7 @@ pub struct TraceInfo {
 ///                     "enable": true } }
 /// <- { "return": {} }
 /// ```
+#[cfg(feature = "trace")]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct trace_set_state {
@@ -2173,6 +2180,7 @@ pub struct trace_set_state {
     #[serde(rename = "enable")]
     pub enable: bool,
 }
+#[cfg(feature = "trace")]
 pub type TraceSetArgument = trace_set_state;
 
 /// query_workloads

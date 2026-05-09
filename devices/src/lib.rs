@@ -26,6 +26,7 @@ pub mod pci;
 pub mod scsi;
 pub mod smbios;
 pub mod sysbus;
+#[cfg(feature = "usb_base")]
 pub mod usb;
 
 #[cfg(target_arch = "aarch64")]

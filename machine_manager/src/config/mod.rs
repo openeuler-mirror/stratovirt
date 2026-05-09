@@ -60,6 +60,7 @@ pub use vnc::*;
 
 use std::collections::HashMap;
 use std::fs::{canonicalize, File};
+#[cfg(feature = "trace")]
 use std::io::Read;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -71,6 +72,7 @@ use clap::Parser;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "trace")]
 use trace::{enable_state_by_type, set_state_by_pattern, TraceType};
 #[cfg(target_arch = "aarch64")]
 use util::device_tree::{self, FdtBuilder};
@@ -453,6 +455,7 @@ pub fn parse_bool(s: &str) -> Result<bool> {
     }
 }
 
+#[cfg(feature = "trace")]
 fn enable_trace_state_from_file(path: &str) -> Result<()> {
     let mut file = File::open(path).with_context(|| format!("Failed to open {}", path))?;
     let mut buf = String::new();
@@ -472,6 +475,7 @@ fn enable_trace_state_from_file(path: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "trace")]
 fn enable_trace_state_from_type(type_str: &str) -> Result<()> {
     match type_str {
         "events" => enable_state_by_type(TraceType::Event)?,
@@ -486,6 +490,7 @@ fn enable_trace_state_from_type(type_str: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "trace")]
 #[derive(Parser)]
 #[command(no_binary_name(true))]
 struct TraceConfig {
@@ -495,6 +500,7 @@ struct TraceConfig {
     type_str: Option<String>,
 }
 
+#[cfg(feature = "trace")]
 pub fn add_trace(opt: &str) -> Result<()> {
     let trace_cfg = TraceConfig::try_parse_from(str_slip_to_clap(opt, false, false))?;
     if trace_cfg.type_str.is_none() && trace_cfg.file.is_none() {
@@ -776,6 +782,7 @@ pub fn parse_size(s: &str) -> Result<u64> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "trace")]
     #[test]
     fn test_add_trace() {
         assert!(std::fs::File::create("/tmp/trace_file").is_ok());
