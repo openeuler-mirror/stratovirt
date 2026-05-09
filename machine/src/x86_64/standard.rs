@@ -584,7 +584,7 @@ impl MachineOps for StdMachine {
 
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
         let migrate = locked_vm.get_migrate_info();
-        let boot_config = if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
+        let boot_config = {
             let (gap_range, ioapic_addr, lapic_addr, ident_tss_range) = Self::boot_source_layout();
             Some(locked_vm.load_boot_source(
                 fwcfg.as_ref(),
@@ -595,8 +595,6 @@ impl MachineOps for StdMachine {
                 lapic_addr,
                 ident_tss_range,
             )?)
-        } else {
-            None
         };
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,

@@ -107,6 +107,7 @@ fn load_kernel_image(
     kernel_path: &std::path::Path,
     sys_mem: &Arc<AddressSpace>,
     boot_layout: &mut X86BootLoader,
+    write_guest_mem: bool,
 ) -> Result<RealModeKernelHeader> {
     let mut kernel_image =
         File::open(kernel_path).with_context(|| BootLoaderError::BootLoaderOpenKernel)?;
@@ -125,8 +126,10 @@ fn load_kernel_image(
         )
     };
 
-    load_image(&mut kernel_image, vmlinux_start, sys_mem)
-        .with_context(|| "Failed to load image")?;
+    if write_guest_mem {
+        load_image(&mut kernel_image, vmlinux_start, sys_mem)
+            .with_context(|| "Failed to load image")?;
+    }
 
     boot_layout.boot_ip = kernel_start;
 
@@ -137,6 +140,7 @@ fn load_initrd(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     header: &mut RealModeKernelHeader,
+    write_guest_mem: bool,
 ) -> Result<()> {
     if config.initrd.is_none() {
         info!("No initrd image file.");
@@ -153,7 +157,10 @@ fn load_initrd(
     let initrd_size = initrd_image.metadata().unwrap().len();
     let initrd_addr = (initrd_addr_max - initrd_size) & !0xfff_u64;
 
-    load_image(&mut initrd_image, initrd_addr, sys_mem).with_context(|| "Failed to load image")?;
+    if write_guest_mem {
+        load_image(&mut initrd_image, initrd_addr, sys_mem)
+            .with_context(|| "Failed to load image")?;
+    }
 
     header.set_ramdisk(initrd_addr as u32, initrd_size as u32);
 
@@ -161,11 +168,15 @@ fn load_initrd(
 }
 
 /// Initial pagetables.
-fn setup_page_table(sys_mem: &Arc<AddressSpace>) -> Result<u64> {
+fn setup_page_table(sys_mem: &Arc<AddressSpace>, write_guest_mem: bool) -> Result<u64> {
     // Puts PML4 right after zero page but aligned to 4k.
     let boot_pml4_addr = PML4_START;
     let boot_pdpte_addr = PDPTE_START;
     let boot_pde_addr = PDE_START;
+
+    if !write_guest_mem {
+        return Ok(boot_pml4_addr);
+    }
 
     // Entry covering VA [0..512GB)
     let pdpte = boot_pdpte_addr | 0x03;
@@ -196,6 +207,7 @@ fn setup_boot_params(
     sys_mem: &Arc<AddressSpace>,
     boot_hdr: &RealModeKernelHeader,
     mem_rsdp: bool,
+    write_guest_mem: bool,
 ) -> Result<()> {
     let mut boot_params = BootParams::new(*boot_hdr);
     boot_params.setup_e820_entries(config, sys_mem);
@@ -203,13 +215,15 @@ fn setup_boot_params(
         boot_params.rsdp_address = ARCH_RSDP_BEGIN;
     }
 
-    sys_mem
-        .write_object(
-            &boot_params,
-            GuestAddress(ZERO_PAGE_START),
-            AddressAttr::Ram,
-        )
-        .with_context(|| format!("Failed to load zero page to 0x{:x}", ZERO_PAGE_START))?;
+    if write_guest_mem {
+        sys_mem
+            .write_object(
+                &boot_params,
+                GuestAddress(ZERO_PAGE_START),
+                AddressAttr::Ram,
+            )
+            .with_context(|| format!("Failed to load zero page to 0x{:x}", ZERO_PAGE_START))?;
+    }
 
     Ok(())
 }
@@ -218,16 +232,19 @@ fn setup_kernel_cmdline(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     boot_hdr: &mut RealModeKernelHeader,
+    write_guest_mem: bool,
 ) -> Result<()> {
     let cmdline_len = config.kernel_cmdline.len() as u32;
     boot_hdr.set_cmdline(CMDLINE_START as u32, cmdline_len);
 
-    sys_mem.write(
-        &mut config.kernel_cmdline.as_bytes(),
-        GuestAddress(CMDLINE_START),
-        u64::from(cmdline_len),
-        AddressAttr::Ram,
-    )?;
+    if write_guest_mem {
+        sys_mem.write(
+            &mut config.kernel_cmdline.as_bytes(),
+            GuestAddress(CMDLINE_START),
+            u64::from(cmdline_len),
+            AddressAttr::Ram,
+        )?;
+    }
 
     Ok(())
 }
@@ -256,6 +273,7 @@ pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     mem_rsdp: bool,
+    write_guest_mem: bool,
 ) -> Result<X86BootLoader> {
     let kernel_path = config
         .kernel
@@ -266,28 +284,36 @@ pub fn load_linux(
         zero_page_addr: ZERO_PAGE_START,
         ..Default::default()
     };
-    let mut boot_header = load_kernel_image(kernel_path, sys_mem, &mut boot_loader_layout)?;
-
-    load_initrd(config, sys_mem, &mut boot_header)
-        .with_context(|| "Failed to load initrd to vm memory")?;
-
-    setup_kernel_cmdline(config, sys_mem, &mut boot_header)
-        .with_context(|| "Failed to setup kernel cmdline")?;
-
-    setup_boot_params(config, sys_mem, &boot_header, mem_rsdp)
-        .with_context(|| "Failed to setup boot params")?;
-
-    setup_isa_mptable(
+    let mut boot_header = load_kernel_image(
+        kernel_path,
         sys_mem,
-        EBDA_START,
-        config.cpu_count,
-        config.ioapic_addr,
-        config.lapic_addr,
+        &mut boot_loader_layout,
+        write_guest_mem,
     )?;
 
+    load_initrd(config, sys_mem, &mut boot_header, write_guest_mem)
+        .with_context(|| "Failed to load initrd to vm memory")?;
+
+    setup_kernel_cmdline(config, sys_mem, &mut boot_header, write_guest_mem)
+        .with_context(|| "Failed to setup kernel cmdline")?;
+
+    setup_boot_params(config, sys_mem, &boot_header, mem_rsdp, write_guest_mem)
+        .with_context(|| "Failed to setup boot params")?;
+
+    if write_guest_mem {
+        setup_isa_mptable(
+            sys_mem,
+            EBDA_START,
+            config.cpu_count,
+            config.ioapic_addr,
+            config.lapic_addr,
+        )?;
+    }
+
     boot_loader_layout.boot_pml4_addr =
-        setup_page_table(sys_mem).with_context(|| "Failed to setup page table")?;
-    boot_loader_layout.segments = setup_gdt(sys_mem).with_context(|| "Failed to setup gdt")?;
+        setup_page_table(sys_mem, write_guest_mem).with_context(|| "Failed to setup page table")?;
+    boot_loader_layout.segments =
+        setup_gdt(sys_mem, write_guest_mem).with_context(|| "Failed to setup gdt")?;
 
     Ok(boot_loader_layout)
 }
@@ -407,7 +433,7 @@ mod test {
         let region_a = Region::init_ram_region(ram1.clone(), "region_a");
         root.add_subregion(region_a, ram1.start_address().raw_value())
             .unwrap();
-        assert_eq!(setup_page_table(&space).unwrap(), 0x0000_9000);
+        assert_eq!(setup_page_table(&space, true).unwrap(), 0x0000_9000);
         assert_eq!(
             space
                 .read_object::<u64>(GuestAddress(0x0000_9000), AddressAttr::Ram)
@@ -445,7 +471,7 @@ mod test {
             ident_tss_range: None,
         };
         let mut boot_hdr = RealModeKernelHeader::new();
-        assert!(setup_boot_params(&config, &space, &boot_hdr, false).is_ok());
+        assert!(setup_boot_params(&config, &space, &boot_hdr, false, true).is_ok());
 
         // test setup_gdt function
         let c_seg = kvm_segment {
@@ -479,7 +505,7 @@ mod test {
             padding: 0,
         };
 
-        let boot_gdt_seg = setup_gdt(&space).unwrap();
+        let boot_gdt_seg = setup_gdt(&space, true).unwrap();
 
         assert_eq!(boot_gdt_seg.code_segment, c_seg);
         assert_eq!(boot_gdt_seg.data_segment, d_seg);
@@ -503,7 +529,7 @@ mod test {
         // test setup_kernel_cmdline function
         let cmd_len: u64 = config.kernel_cmdline.len() as u64;
         let mut read_buffer: [u8; 30] = [0; 30];
-        assert!(setup_kernel_cmdline(&config, &space, &mut boot_hdr).is_ok());
+        assert!(setup_kernel_cmdline(&config, &space, &mut boot_hdr, true).is_ok());
         space
             .read(
                 &mut read_buffer.as_mut(),

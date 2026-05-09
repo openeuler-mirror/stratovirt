@@ -418,6 +418,10 @@ pub trait MachineOps: MachineLifecycle {
 
     fn machine_base_mut(&mut self) -> &mut MachineBase;
 
+    fn is_migrating(&self) -> bool {
+        self.get_migrate_info().mode != MigrateMode::Unknown
+    }
+
     /// Build all SMBIOS tables and entry, link to fwcfg or write to memory.
     ///
     /// # Arguments
@@ -444,6 +448,8 @@ pub trait MachineOps: MachineLifecycle {
             mem_array,
         );
 
+        drop(vmcfg_lock);
+
         let ep = build_smbios_ep30(
             #[cfg(target_arch = "x86_64")]
             ARCH_SMBIOS_BEGIN,
@@ -458,7 +464,7 @@ pub trait MachineOps: MachineLifecycle {
             locked_fw_cfg
                 .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
                 .with_context(|| "Failed to add smbios anchor file entry")?;
-        } else {
+        } else if !self.is_migrating() {
             #[cfg(target_arch = "x86_64")]
             load_smbios_to_memory(&self.machine_base().sys_mem, table, ep)
                 .with_context(|| "Failed to load SMBIOS to guest memory")?;
@@ -492,11 +498,13 @@ pub trait MachineOps: MachineLifecycle {
             // go direct_boot if fwcfg is not present.
             prot64_mode: fwcfg.is_none(),
         };
+        let write_guest_mem = !self.is_migrating();
         let layout = load_linux(
             &bootloader_config,
             &self.machine_base().sys_mem,
             fwcfg,
             mem_rsdp,
+            write_guest_mem,
         )
         .with_context(|| MachineError::LoadKernErr)?;
 
@@ -530,8 +538,14 @@ pub trait MachineOps: MachineLifecycle {
             initrd,
             mem_start,
         };
-        let layout = load_linux(&bootloader_config, &self.machine_base().sys_mem, fwcfg)
-            .with_context(|| MachineError::LoadKernErr)?;
+        let write_guest_mem = !self.is_migrating();
+        let layout = load_linux(
+            &bootloader_config,
+            &self.machine_base().sys_mem,
+            fwcfg,
+            write_guest_mem,
+        )
+        .with_context(|| MachineError::LoadKernErr)?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
             rd.initrd_size = layout.initrd_size;
