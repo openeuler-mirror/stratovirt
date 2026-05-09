@@ -22,7 +22,7 @@ use devices::legacy::{Serial, SERIAL_ADDR};
 use devices::Device;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
-use machine_manager::config::{MachineMemConfig, MigrateMode, SerialConfig, VmConfig};
+use machine_manager::config::{MachineMemConfig, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::gen_base_func;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
@@ -164,8 +164,7 @@ impl MachineOps for LightMachine {
         locked_vm.add_devices(vm_config)?;
         trace::replaceable_info(&locked_vm.replaceable_info);
 
-        let migrate_info = locked_vm.get_migrate_info();
-        let boot_config = if migrate_info.mode == MigrateMode::Unknown {
+        let boot_config = {
             // MEM_LAYOUT is defined statically, will not overflow.
             let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
@@ -183,8 +182,6 @@ impl MachineOps for LightMachine {
                 lapic_addr,
                 None,
             )?)
-        } else {
-            None
         };
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(

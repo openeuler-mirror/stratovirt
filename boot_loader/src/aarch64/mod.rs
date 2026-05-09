@@ -54,6 +54,7 @@ fn load_kernel(
     kernel_start: u64,
     kernel_path: &Path,
     sys_mem: &Arc<AddressSpace>,
+    write_guest_mem: bool,
 ) -> Result<u64> {
     let mut kernel_image =
         File::open(kernel_path).with_context(|| BootLoaderError::BootLoaderOpenKernel)?;
@@ -85,14 +86,16 @@ fn load_kernel(
                 kernel_size
             )));
         }
-        sys_mem
-            .write(
-                &mut kernel_image,
-                GuestAddress(kernel_start),
-                kernel_size,
-                AddressAttr::Ram,
-            )
-            .with_context(|| "Fail to write kernel to guest memory")?;
+        if write_guest_mem {
+            sys_mem
+                .write(
+                    &mut kernel_image,
+                    GuestAddress(kernel_start),
+                    kernel_size,
+                    AddressAttr::Ram,
+                )
+                .with_context(|| "Fail to write kernel to guest memory")?;
+        }
     }
     Ok(kernel_end)
 }
@@ -102,6 +105,7 @@ fn load_initrd(
     initrd_path: &Path,
     sys_mem: &Arc<AddressSpace>,
     kernel_end: u64,
+    write_guest_mem: bool,
 ) -> Result<(u64, u64)> {
     let mut initrd_image =
         File::open(initrd_path).with_context(|| BootLoaderError::BootLoaderOpenInitrd)?;
@@ -133,7 +137,7 @@ fn load_initrd(
         lock_dev
             .add_data_entry(FwCfgEntryType::InitrdData, initrd_data)
             .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdData".to_string()))?;
-    } else {
+    } else if write_guest_mem {
         sys_mem
             .write(
                 &mut initrd_image,
@@ -168,6 +172,7 @@ pub fn load_linux(
     config: &AArch64BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+    write_guest_mem: bool,
 ) -> Result<AArch64BootLoader> {
     // The memory layout is as follow:
     // 1. dtb address: memory start
@@ -203,14 +208,21 @@ pub fn load_linux(
         kernel_start,
         config.kernel.as_ref().unwrap(),
         sys_mem,
+        write_guest_mem,
     )
     .with_context(|| "Fail to load kernel")?;
 
     let mut initrd_start = 0_u64;
     let mut initrd_size = 0_u64;
     if config.initrd.is_some() {
-        let initrd_tuple = load_initrd(fwcfg, config.initrd.as_ref().unwrap(), sys_mem, kernel_end)
-            .with_context(|| "Fail to load initrd")?;
+        let initrd_tuple = load_initrd(
+            fwcfg,
+            config.initrd.as_ref().unwrap(),
+            sys_mem,
+            kernel_end,
+            write_guest_mem,
+        )
+        .with_context(|| "Fail to load initrd")?;
         initrd_start = initrd_tuple.0;
         initrd_size = initrd_tuple.1;
     } else {

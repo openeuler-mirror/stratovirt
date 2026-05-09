@@ -61,8 +61,7 @@ use machine_manager::config::str_slip_to_clap;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    BootIndexInfo, DriveConfig, MachineMemConfig, MigrateMode, NumaNode, Param, SerialConfig,
-    VmConfig,
+    BootIndexInfo, DriveConfig, MachineMemConfig, NumaNode, Param, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{MachineLifecycle, VmState};
@@ -605,16 +604,10 @@ impl MachineOps for StdMachine {
             .with_context(|| MachineError::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
-        let migrate = locked_vm.get_migrate_info();
-        let boot_config =
-            if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
-                Some(locked_vm.load_boot_source(
-                    fwcfg.as_ref(),
-                    MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-                )?)
-            } else {
-                None
-            };
+        let boot_config = Some(
+            locked_vm
+                .load_boot_source(fwcfg.as_ref(), MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?,
+        );
         let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
@@ -651,16 +644,18 @@ impl MachineOps for StdMachine {
                 .with_context(|| MachineError::GenFdtErr)?;
             let fdt_vec = fdt_helper.finish()?;
             locked_vm.dtb_vec = fdt_vec.clone();
-            locked_vm
-                .base
-                .sys_mem
-                .write(
-                    &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr),
-                    fdt_vec.len() as u64,
-                    AddressAttr::Ram,
-                )
-                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+            if !locked_vm.is_migrating() {
+                locked_vm
+                    .base
+                    .sys_mem
+                    .write(
+                        &mut fdt_vec.as_slice(),
+                        GuestAddress(boot_cfg.fdt_addr),
+                        fdt_vec.len() as u64,
+                        AddressAttr::Ram,
+                    )
+                    .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+            }
         }
 
         let mut mem_array = Vec::new();

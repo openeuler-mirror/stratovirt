@@ -110,7 +110,7 @@ fn write_idt_value(val: u64, guest_mem: &Arc<AddressSpace>) -> Result<()> {
     Ok(())
 }
 
-pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
+pub fn setup_gdt(guest_mem: &Arc<AddressSpace>, write_guest_mem: bool) -> Result<BootGdtSegment> {
     let gdt_table: [u64; BOOT_GDT_MAX] = [
         GdtEntry::new(0, 0, 0).into(),            // NULL
         GdtEntry::new(0, 0, 0).into(),            // NULL
@@ -123,8 +123,10 @@ pub fn setup_gdt(guest_mem: &Arc<AddressSpace>) -> Result<BootGdtSegment> {
     let mut data_seg: kvm_segment = GdtEntry(gdt_table[GDT_ENTRY_BOOT_DS as usize]).into();
     data_seg.selector = u16::from(GDT_ENTRY_BOOT_DS) * 8;
 
-    write_gdt_table(&gdt_table[..], guest_mem)?;
-    write_idt_value(0, guest_mem)?;
+    if write_guest_mem {
+        write_gdt_table(&gdt_table[..], guest_mem)?;
+        write_idt_value(0, guest_mem)?;
+    }
 
     Ok(BootGdtSegment {
         code_segment: code_seg,

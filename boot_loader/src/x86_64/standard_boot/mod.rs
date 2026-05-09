@@ -232,6 +232,7 @@ pub fn load_linux(
     config: &X86BootLoaderConfig,
     sys_mem: &Arc<AddressSpace>,
     fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+    _write_guest_mem: bool,
 ) -> Result<X86BootLoader> {
     let fwcfg = fwcfg.with_context(|| "Failed to load linux: No FwCfg provided")?;
     let fwcfg = &mut *fwcfg.lock().unwrap();
