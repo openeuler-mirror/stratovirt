@@ -201,6 +201,23 @@ impl StdMachine {
             }
         }
 
+        // Must reload boot resource for direct kernel boot.
+        if locked_vm.get_fwcfg_dev().is_none() {
+            locked_vm
+                .load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
+                .with_context(|| "Fail to reload direct boot resources")?;
+            let vm_config = locked_vm.base.vm_config.lock().unwrap();
+            let mem_size = vm_config.machine_config.mem_config.mem_size;
+            drop(vm_config);
+            let mem_array = vec![(MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size)];
+            locked_vm
+                .build_smbios(None, mem_array)
+                .with_context(|| "Failed to rebuild SMBIOS")?;
+            locked_vm
+                .build_acpi_tables(None)
+                .with_context(|| "Failed to rebuild ACPI tables")?;
+        }
+
         locked_vm
             .base
             .sys_mem
