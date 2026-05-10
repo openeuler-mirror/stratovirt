@@ -15,7 +15,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
@@ -70,6 +70,247 @@ pub struct AddressSpaceState {
     total_region_size: u64,
     ram_region_state: Vec<RamRegionState>,
     alias_region_state: Vec<AliasRegionState>,
+}
+
+fn build_mapped_ram_regions(
+    machine_ram: &Region,
+    ram_states: &[RamRegionState],
+    memfile_arc: &Arc<File>,
+    first_region_offset: u64,
+) -> Result<()> {
+    for ram_state in ram_states.iter() {
+        let file_backend = FileBackend {
+            file: memfile_arc.clone(),
+            offset: ram_state.offset + first_region_offset,
+            page_size: host_page_size(),
+        };
+        let host_mmap = Arc::new(
+            HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                ram_state.size,
+                Some(file_backend),
+                false,
+                false,
+                false,
+            )
+            .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?,
+        );
+
+        machine_ram
+            .add_subregion_not_update(
+                Region::init_ram_region(host_mmap, &ram_state.name),
+                ram_state.offset,
+            )
+            .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
+    }
+
+    Ok(())
+}
+
+fn build_alias_regions(
+    root: &Region,
+    machine_ram: &Arc<Region>,
+    alias_states: &[AliasRegionState],
+) -> Result<()> {
+    for alias_state in alias_states.iter() {
+        let ram = Region::init_alias_region(
+            machine_ram.clone(),
+            alias_state.alias_offset,
+            alias_state.size,
+            &alias_state.name,
+        );
+        root.add_subregion(ram, alias_state.offset)?;
+    }
+
+    Ok(())
+}
+
+fn validate_ram_regions(
+    snapshot_machine_ram: &Region,
+    expected_ram_states: &[RamRegionState],
+) -> Result<()> {
+    let snapshot_regions = snapshot_machine_ram.subregions();
+    if snapshot_regions.len() != expected_ram_states.len() {
+        bail!(
+            "Mapped ram region count mismatch: snapshot {}, expected {}",
+            snapshot_regions.len(),
+            expected_ram_states.len()
+        );
+    }
+
+    for expected_ram_state in expected_ram_states.iter() {
+        let snapshot_region = snapshot_regions
+            .iter()
+            .find(|region| region.name == expected_ram_state.name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Expected ram region {} is missing from snapshot layout",
+                    expected_ram_state.name
+                )
+            })?;
+
+        if snapshot_region.size() != expected_ram_state.size {
+            bail!(
+                "Mapped ram region {} size mismatch: snapshot {}, expected {}",
+                expected_ram_state.name,
+                snapshot_region.size(),
+                expected_ram_state.size
+            );
+        }
+        if snapshot_region.offset().raw_value() != expected_ram_state.offset {
+            bail!(
+                "Mapped ram region {} offset mismatch: snapshot {}, expected {}",
+                expected_ram_state.name,
+                snapshot_region.offset().raw_value(),
+                expected_ram_state.offset
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_alias_regions(
+    snapshot_root: &Region,
+    expected_alias_states: &[AliasRegionState],
+) -> Result<()> {
+    let snapshot_root_subregions = snapshot_root.subregions();
+    let snapshot_alias_count = snapshot_root_subregions
+        .iter()
+        .filter(|region| region.alias_name().is_some())
+        .count();
+    if snapshot_alias_count != expected_alias_states.len() {
+        bail!(
+            "Mapped alias region count mismatch: snapshot {}, expected {}",
+            snapshot_alias_count,
+            expected_alias_states.len()
+        );
+    }
+
+    for expected_alias_state in expected_alias_states.iter() {
+        let snapshot_region = snapshot_root_subregions
+            .iter()
+            .find(|region| region.name == expected_alias_state.name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Expected alias region {} is missing from snapshot layout",
+                    expected_alias_state.name
+                )
+            })?;
+        if snapshot_region.alias_name().is_none() {
+            bail!(
+                "Snapshot region {} is no longer an alias region",
+                expected_alias_state.name
+            );
+        }
+        if snapshot_region.alias_offset() != expected_alias_state.alias_offset {
+            bail!(
+                "Mapped alias region {} alias offset mismatch: snapshot {}, expected {}",
+                expected_alias_state.name,
+                snapshot_region.alias_offset(),
+                expected_alias_state.alias_offset
+            );
+        }
+        if snapshot_region.offset().raw_value() != expected_alias_state.offset {
+            bail!(
+                "Mapped alias region {} offset mismatch: snapshot {}, expected {}",
+                expected_alias_state.name,
+                snapshot_region.offset().raw_value(),
+                expected_alias_state.offset
+            );
+        }
+        if snapshot_region.size() != expected_alias_state.size {
+            bail!(
+                "Mapped alias region {} size mismatch: snapshot {}, expected {}",
+                expected_alias_state.name,
+                snapshot_region.size(),
+                expected_alias_state.size
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn read_address_space_state(memory: &mut File) -> Result<AddressSpaceState> {
+    let data_slice = read_state_slice(memory)
+        .with_context(|| "Failed to read state slice while restoring state")?;
+    serde_json::from_slice(&data_slice).with_context(|| MigrationError::FromBytesError("MEMORY"))
+}
+
+impl AddressSpace {
+    pub fn build_mapped_ram_from_snapshot(&self, memory: &mut File) -> Result<()> {
+        let address_space_state = read_address_space_state(memory)?;
+        let first_region_offset = memory.stream_position()?;
+        let cloned_file = match memory.try_clone() {
+            Ok(file) => file,
+            Err(e) => bail!("Failed to clone memory file: {:?}", e),
+        };
+        let memfile_arc = Arc::new(cloned_file);
+
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+        if !machine_ram.subregions().is_empty() {
+            bail!("Mapped ram layout has already been initialized");
+        }
+
+        build_mapped_ram_regions(
+            machine_ram,
+            &address_space_state.ram_region_state,
+            &memfile_arc,
+            first_region_offset,
+        )?;
+        build_alias_regions(
+            self.root(),
+            machine_ram,
+            &address_space_state.alias_region_state,
+        )?;
+
+        Ok(())
+    }
+
+    pub fn validate_mapped_ram_from_snapshot(
+        &self,
+        expected_ram_states: &[RamRegionState],
+        expected_alias_states: &[AliasRegionState],
+    ) -> Result<()> {
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+        if machine_ram.subregions().is_empty() {
+            bail!("Mapped ram layout has not been initialized");
+        }
+
+        validate_ram_regions(machine_ram, expected_ram_states)?;
+        validate_alias_regions(self.root(), expected_alias_states)?;
+
+        Ok(())
+    }
+
+    pub fn skip_mapped_ram_from_snapshot(&self, memory: &mut File) -> Result<()> {
+        let address_space_state = read_address_space_state(memory)?;
+        let first_region_offset = memory.stream_position()?;
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+        if machine_ram.subregions().is_empty() {
+            bail!("Mapped ram layout has not been initialized");
+        }
+
+        let region_data_end = first_region_offset
+            .checked_add(address_space_state.total_region_size)
+            .with_context(|| {
+                format!(
+                    "Restore memory add overflow: {} + {}",
+                    first_region_offset, address_space_state.total_region_size
+                )
+            })?;
+        memory.seek(SeekFrom::Start(region_data_end))?;
+
+        Ok(())
+    }
 }
 
 impl StateTransfer for AddressSpace {
@@ -130,69 +371,10 @@ impl MigrationHook for AddressSpace {
     }
 
     fn restore_memory(&self, memory: &mut File, mapped: bool) -> Result<()> {
-        let data_slice = read_state_slice(memory)
-            .with_context(|| "Failed to read state slice while restoring state")?;
-        let address_space_state: AddressSpaceState = serde_json::from_slice(&data_slice)
-            .with_context(|| MigrationError::FromBytesError("MEMORY"))?;
-
         if mapped {
-            // Get the start pos for saved ram region.
-            let first_region_offset = memory.stream_position()?;
-            let cloned_file = match memory.try_clone() {
-                Ok(file) => file,
-                Err(e) => bail!("Failed to clone memory file: {:?}", e),
-            };
-            let memfile_arc = Arc::new(cloned_file);
-
-            if let Some(machine_ram) = self.get_machine_ram() {
-                let mut offset = 0_u64;
-                for ram_state in address_space_state.ram_region_state.iter() {
-                    let file_backend = FileBackend {
-                        file: memfile_arc.clone(),
-                        offset: ram_state.offset + first_region_offset,
-                        page_size: host_page_size(),
-                    };
-                    let host_mmap = Arc::new(
-                        HostMemMapping::new(
-                            GuestAddress(0),
-                            None,
-                            ram_state.size,
-                            Some(file_backend),
-                            false,
-                            false,
-                            false,
-                        )
-                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?,
-                    );
-
-                    machine_ram
-                        .add_subregion_not_update(
-                            Region::init_ram_region(host_mmap.clone(), &ram_state.name),
-                            offset,
-                        )
-                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
-                    offset += ram_state.size;
-                }
-                for alias_state in address_space_state.alias_region_state.iter() {
-                    let ram = Region::init_alias_region(
-                        machine_ram.clone(),
-                        alias_state.alias_offset,
-                        alias_state.size,
-                        &alias_state.name,
-                    );
-                    self.root().add_subregion(ram, alias_state.offset)?;
-                }
-            }
-            let region_data_end = first_region_offset
-                .checked_add(address_space_state.total_region_size)
-                .with_context(|| {
-                    format!(
-                        "Restore memory add overflow: {} + {}",
-                        first_region_offset, address_space_state.total_region_size
-                    )
-                })?;
-            memory.seek(SeekFrom::Start(region_data_end))?;
+            self.skip_mapped_ram_from_snapshot(memory)?;
         } else if let Some(machine_ram) = self.get_machine_ram() {
+            let _ = read_address_space_state(memory)?;
             for region in machine_ram.subregions().iter() {
                 if let Some(base_addr) = region.start_addr() {
                     region

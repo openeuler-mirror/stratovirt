@@ -39,7 +39,7 @@ pub const OHUI_SNAPSHOT_ID: &str = "ohui";
 pub const POWER_SNAPSHOT_ID: &str = "power";
 
 /// The suffix used for snapshot memory storage.
-const MEMORY_PATH_SUFFIX: &str = "memory";
+pub const MEMORY_PATH_SUFFIX: &str = "memory";
 /// The suffix used for snapshot device state storage.
 const DEVICE_PATH_SUFFIX: &str = "state";
 

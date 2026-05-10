@@ -35,6 +35,7 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
 #[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
 use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
 #[cfg(feature = "usb_host")]
@@ -52,7 +53,7 @@ use vmm_sys_util::eventfd::EventFd;
 use address_space::FileBackend;
 use address_space::{
     create_backend_mem, create_default_mem, register_ram_list, AddressAttr, AddressSpace,
-    GuestAddress, Region,
+    AliasRegionState, GuestAddress, RamRegionState, Region, DEFAULT_RAM_REGION_NAME,
 };
 #[cfg(target_arch = "aarch64")]
 use address_space::{register_ram_region, HostMemMapping};
@@ -139,6 +140,8 @@ use machine_manager::config::{VirtioSerialInfo, VirtioSerialPortCfg};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
 use machine_manager::notifier::pause_notify;
+use migration::protocol::FileFormat;
+use migration::snapshot::MEMORY_PATH_SUFFIX;
 use migration::{MigrateOps, MigrationManager, MigrationStatus};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
@@ -582,6 +585,92 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    fn expected_ram_region_states(
+        &self,
+        mem_config: &MachineMemConfig,
+    ) -> Result<Vec<RamRegionState>> {
+        let numa_nodes = self.get_numa_nodes();
+
+        if numa_nodes.is_none() || mem_config.membackend_objs.is_none() {
+            return Ok(vec![RamRegionState {
+                name: DEFAULT_RAM_REGION_NAME.to_string(),
+                offset: 0,
+                size: mem_config.mem_size,
+            }]);
+        }
+
+        let mb_objs = mem_config.membackend_objs.as_ref().unwrap();
+        let mut ram_states = Vec::new();
+        let mut offset = 0_u64;
+        for node in numa_nodes.as_ref().unwrap().iter() {
+            for mb_obj in mb_objs.iter() {
+                if mb_obj.id.eq(&node.1.mem_dev) {
+                    ram_states.push(RamRegionState {
+                        name: mb_obj.id.clone(),
+                        offset,
+                        size: mb_obj.size,
+                    });
+                    offset = offset
+                        .checked_add(mb_obj.size)
+                        .with_context(|| "total mem backend size overflow")?;
+                    break;
+                }
+            }
+        }
+
+        Ok(ram_states)
+    }
+
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState>;
+
+    fn restore_mapped_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()> {
+        let migrate_info = self.get_migrate_info();
+        let mut snapshot_path = PathBuf::from(&migrate_info.uri);
+        if !snapshot_path.is_dir() {
+            bail!("Invalid snapshot path {}", migrate_info.uri);
+        }
+
+        snapshot_path.push(MEMORY_PATH_SUFFIX);
+        let mut memory_file =
+            File::open(&snapshot_path).with_context(|| "Failed to open memory snapshot file")?;
+        let memory_header = MigrationManager::restore_header(&mut memory_file)?;
+        memory_header.check_header()?;
+        if memory_header.format != FileFormat::MemoryFull {
+            bail!("Invalid memory snapshot file");
+        }
+
+        sys_mem
+            .build_mapped_ram_from_snapshot(&mut memory_file)
+            .with_context(|| "Failed to restore mapped guest memory layout")?;
+        let expected_ram_states = self.expected_ram_region_states(mem_config)?;
+        let expected_alias_states = self.expected_alias_region_states(mem_config);
+        sys_mem
+            .validate_mapped_ram_from_snapshot(&expected_ram_states, &expected_alias_states)
+            .with_context(|| "Mapped guest memory layout does not match VM startup config")?;
+
+        let restored_mem_size =
+            self.get_vm_ram()
+                .subregions()
+                .iter()
+                .try_fold(0_u64, |size, region| {
+                    size.checked_add(region.size())
+                        .with_context(|| "Restored guest memory size overflow")
+                })?;
+        if restored_mem_size != mem_config.mem_size {
+            bail!(
+                "Snapshot memory size {} does not match configured guest memory size {}",
+                restored_mem_size,
+                mem_config.mem_size
+            );
+        }
+
+        Ok(())
+    }
+
     /// Init I/O & memory address space and mmap guest memory.
     ///
     /// # Arguments
@@ -597,7 +686,9 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<()> {
         trace::trace_scope_start!(init_memory);
         let migrate_info = self.get_migrate_info();
-        if migrate_info.mode != MigrateMode::File || !migrate_info.mapped {
+        if migrate_info.mode == MigrateMode::File && migrate_info.mapped {
+            self.restore_mapped_ram(sys_mem, mem_config)?;
+        } else {
             self.create_machine_ram(mem_config, nr_cpus)?;
             self.init_machine_ram(sys_mem, mem_config)?;
         }

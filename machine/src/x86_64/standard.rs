@@ -27,7 +27,7 @@ use acpi::{
     AmlBuilder, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder, TableLoader,
     IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
 };
-use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+use address_space::{AddressSpace, AliasRegionState, GuestAddress, HostMemMapping, Region};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::acpi::cpu_controller::{CpuConfig, CpuController};
 use devices::acpi::ged::{Ged, GedEvent};
@@ -458,6 +458,28 @@ impl MachineOps for StdMachine {
             sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
         Ok(())
+    }
+
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState> {
+        let mut alias_states = Vec::new();
+        let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        alias_states.push(AliasRegionState {
+            name: "below4g_ram".to_string(),
+            alias_offset: 0,
+            offset: MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+            size: std::cmp::min(below4g_size, mem_config.mem_size),
+        });
+
+        if mem_config.mem_size > below4g_size {
+            alias_states.push(AliasRegionState {
+                name: "above4g_ram".to_string(),
+                alias_offset: below4g_size,
+                offset: MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                size: mem_config.mem_size - below4g_size,
+            });
+        }
+
+        alias_states
     }
 
     fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
