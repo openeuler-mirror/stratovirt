@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::{micro_common::syscall::syscall_whitelist, MachineBase, MachineError};
 use crate::{register_shutdown_event, LightMachine, MachineOps};
-use address_space::{AddressAttr, AddressSpace, GuestAddress, Region};
+use address_space::{AddressAttr, AddressSpace, AliasRegionState, GuestAddress, Region};
 use cpu::CPUTopology;
 use devices::legacy::{PL011, PL031};
 use devices::{Device, ICGICConfig, ICGICv2Config, ICGICv3Config, GIC_IRQ_MAX};
@@ -75,6 +75,18 @@ impl MachineOps for LightMachine {
             .root()
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
         Ok(())
+    }
+
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState> {
+        vec![AliasRegionState {
+            name: "pc_ram".to_string(),
+            alias_offset: 0,
+            offset: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+            size: std::cmp::min(
+                MEM_LAYOUT[LayoutEntryType::Mem as usize].1,
+                mem_config.mem_size,
+            ),
+        }]
     }
 
     fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {

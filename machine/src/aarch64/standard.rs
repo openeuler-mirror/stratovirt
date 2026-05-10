@@ -39,7 +39,7 @@ use acpi::{
 };
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
-use address_space::{AddressAttr, AddressSpace, GuestAddress, Region};
+use address_space::{AddressAttr, AddressSpace, AliasRegionState, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
@@ -440,6 +440,18 @@ impl MachineOps for StdMachine {
             .root()
             .add_subregion(ram, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?;
         Ok(())
+    }
+
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState> {
+        vec![AliasRegionState {
+            name: "pc_ram".to_string(),
+            alias_offset: 0,
+            offset: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+            size: std::cmp::min(
+                MEM_LAYOUT[LayoutEntryType::Mem as usize].1,
+                mem_config.mem_size,
+            ),
+        }]
     }
 
     fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {

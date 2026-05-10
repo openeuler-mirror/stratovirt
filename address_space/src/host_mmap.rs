@@ -23,7 +23,7 @@ use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
 use nix::sys::statfs::fstatfs;
 use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
-use crate::{AddressRange, GuestAddress, Region};
+use crate::{AddressRange, GuestAddress, Region, DEFAULT_RAM_REGION_NAME};
 use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemBackendObjConfig};
 use util::unix::{do_mmap, host_page_size, mbind};
 
@@ -285,7 +285,7 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
         // SAFETY: The host_addr and size is valid when defining block.
         unsafe { mem_prealloc(block.host_address(), mem_config.mem_size, thread_num) };
     }
-    let region = Region::init_ram_region(block, "DefaultRam");
+    let region = Region::init_ram_region(block, DEFAULT_RAM_REGION_NAME);
 
     Ok(region)
 }

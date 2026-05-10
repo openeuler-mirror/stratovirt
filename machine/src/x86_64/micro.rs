@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::micro_common::syscall::syscall_whitelist;
 use crate::{register_shutdown_event, LightMachine, MachineBase, MachineOps};
-use address_space::{AddressSpace, Region};
+use address_space::{AddressSpace, AliasRegionState, Region};
 use cpu::CPUTopology;
 use devices::legacy::{Serial, SERIAL_ADDR};
 use devices::Device;
@@ -79,6 +79,28 @@ impl MachineOps for LightMachine {
             sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
         Ok(())
+    }
+
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState> {
+        let mut alias_states = Vec::new();
+        let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        alias_states.push(AliasRegionState {
+            name: "below4g_ram".to_string(),
+            alias_offset: 0,
+            offset: MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+            size: std::cmp::min(below4g_size, mem_config.mem_size),
+        });
+
+        if mem_config.mem_size > below4g_size {
+            alias_states.push(AliasRegionState {
+                name: "above4g_ram".to_string(),
+                alias_offset: below4g_size,
+                offset: MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                size: mem_config.mem_size - below4g_size,
+            });
+        }
+
+        alias_states
     }
 
     fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
