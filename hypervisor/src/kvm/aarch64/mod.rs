@@ -479,7 +479,8 @@ impl KvmCpu {
 
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
         cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
-        self.arch_vcpu_init()
+        self.arch_vcpu_init()?;
+        self.arch_put_register(cpu)
     }
 
     pub fn arch_get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {

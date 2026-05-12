@@ -97,7 +97,9 @@ pub use host_mmap::{create_backend_mem, create_default_mem, FileBackend, HostMem
 pub use listener::{Listener, ListenerReqType, MemSlot};
 pub use ramlist::{register_ram_list, register_ram_region, unregister_ram_region};
 pub use region::{FlatRange, Region, RegionIoEventFd, RegionType};
-pub use state::RamRegionState;
+pub use state::{AliasRegionState, RamRegionState};
+
+pub const DEFAULT_RAM_REGION_NAME: &str = "DefaultRam";
 
 /// Read data from Region to argument `data`,
 /// return `true` if read successfully, or return `false`.

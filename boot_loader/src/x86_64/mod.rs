@@ -147,10 +147,11 @@ pub fn load_linux(
     sys_mem: &Arc<AddressSpace>,
     fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
     mem_rsdp: bool,
+    write_guest_mem: bool,
 ) -> Result<X86BootLoader> {
     if config.prot64_mode {
-        direct_boot::load_linux(config, sys_mem, mem_rsdp)
+        direct_boot::load_linux(config, sys_mem, mem_rsdp, write_guest_mem)
     } else {
-        standard_boot::load_linux(config, sys_mem, fwcfg)
+        standard_boot::load_linux(config, sys_mem, fwcfg, write_guest_mem)
     }
 }

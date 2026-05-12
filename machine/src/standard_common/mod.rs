@@ -235,7 +235,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             locked_fw_cfg
                 .add_file_entry(ACPI_TABLE_FILE, acpi_tables)
                 .with_context(|| "Failed to add ACPI-tables file entry")?;
-        } else {
+        } else if !self.is_migrating() {
             #[cfg(target_arch = "x86_64")]
             load_acpi_to_memory(&self.machine_base().sys_mem, rsdp_data, acpi_tables)
                 .with_context(|| "Failed to load ACPI to guest memory")?;
