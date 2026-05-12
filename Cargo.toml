@@ -16,6 +16,9 @@ util = { path = "util" }
 trace = { path = "trace" }
 hisysevent = { path = "hisysevent" }
 
+[target.'cfg(target_env = "ohos")'.dependencies]
+machine = { path = "machine", features = ["usb_storage", "virtio_balloon", "virtio_mem", "virtio_serial", "virtio_input", "virtio_multitouch", "vhostuser_fs"] }
+
 [workspace]
 members = [
     "ozone",
