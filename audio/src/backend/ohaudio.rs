@@ -148,6 +148,13 @@ impl AudioInterface for OhAudio {
         info!("OHAudio {:?} stop", self.direction);
         Ok(())
     }
+
+    fn release(&mut self) -> Result<()> {
+        if *self.status.read().unwrap() == OhAudioStatus::Started {
+            self.stop()?;
+        }
+        Ok(())
+    }
 }
 
 impl OhAudio {
