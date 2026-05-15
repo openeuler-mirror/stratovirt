@@ -41,7 +41,9 @@ use audio::auth::{register_authority_notifier, AuthorityNotifier};
 use audio::{get_record_authority, set_record_authority};
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::notifier::register_vm_pause_notifier;
-use machine_manager::state_query::register_state_query_callback;
+use machine_manager::state_query::{
+    register_state_query_callback, KEYWORD_AUDIO_PLAY, KEYWORD_AUDIO_RECORD,
+};
 use machine_manager::temp_cleaner::TempCleaner;
 use machine_manager::{
     event, qmp::qmp_channel::QmpChannel, qmp::qmp_schema::AudioState,
@@ -676,7 +678,7 @@ impl Scream {
         let shmem_size = self.size;
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
         self.interface_resource.push(interface.clone());
-        self.register_state_query("scream-play".to_string(), cond.clone());
+        self.register_state_query(KEYWORD_AUDIO_PLAY.to_string(), cond.clone());
         self.register_silent_data_detect(hva, cond.clone());
 
         thread::Builder::new()
@@ -717,7 +719,7 @@ impl Scream {
         let interface = self.interface_init("ScreamCapt", ScreamDirection::Record);
         let _ti = self.token_id.clone();
         self.interface_resource.push(interface.clone());
-        self.register_state_query("scream-record".to_string(), cond.clone());
+        self.register_state_query(KEYWORD_AUDIO_RECORD.to_string(), cond.clone());
         thread::Builder::new()
             .name("scream audio capt worker".to_string())
             .spawn(move || {

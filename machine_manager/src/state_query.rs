@@ -22,6 +22,9 @@ static STATE_QUERY_MANAGER: Lazy<RwLock<StateQueryManager>> =
 pub type StateQueryCallback = dyn Fn() -> String + Send + Sync;
 pub type CheckStatusCallback = dyn Fn() -> bool + Send + Sync;
 
+pub const KEYWORD_AUDIO_PLAY: &str = "AudioPlay";
+pub const KEYWORD_AUDIO_RECORD: &str = "AudioRecord";
+
 struct StateQueryManager {
     query_callbacks: HashMap<String, Arc<StateQueryCallback>>,
     detect_silent_audio_cbs: HashMap<String, Arc<CheckStatusCallback>>,

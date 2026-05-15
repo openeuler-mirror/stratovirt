@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{atomic::Ordering, Arc, RwLock};
 
 use anyhow::{bail, Result};
 use log::{error, info, warn};
@@ -272,7 +272,7 @@ impl Pcm {
             }
         }
 
-        stream.active = true;
+        stream.active.store(true, Ordering::Relaxed);
         info!("stream started: {:?}.", stream.params);
 
         (VIRTIO_SND_S_OK, 0)
@@ -307,7 +307,7 @@ impl Pcm {
             }
         }
 
-        stream.active = false;
+        stream.active.store(false, Ordering::Relaxed);
         info!("stream stopped: {:?}", stream.params);
 
         (VIRTIO_SND_S_OK, 0)
