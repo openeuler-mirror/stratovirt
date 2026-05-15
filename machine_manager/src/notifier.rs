@@ -21,10 +21,10 @@ static NOTIFIER_MANAGER: Lazy<RwLock<NotifierManager>> =
     Lazy::new(|| RwLock::new(NotifierManager::new()));
 static VM_PAUSED: AtomicBool = AtomicBool::new(false);
 
-pub type PauseNOtifyCallback = dyn Fn(bool) + Send + Sync;
+pub type PauseNotifyCallback = dyn Fn(bool) + Send + Sync;
 
 struct NotifierManager {
-    pause_notifiers: BTreeMap<u64, Arc<PauseNOtifyCallback>>,
+    pause_notifiers: BTreeMap<u64, Arc<PauseNotifyCallback>>,
     next_id: u64,
 }
 
@@ -36,7 +36,7 @@ impl NotifierManager {
         }
     }
 
-    fn register_pause_notifier(&mut self, notifier: Arc<PauseNOtifyCallback>) -> u64 {
+    fn register_pause_notifier(&mut self, notifier: Arc<PauseNotifyCallback>) -> u64 {
         let id = self.next_id;
         self.pause_notifiers.insert(id, notifier);
         self.next_id += 1;
@@ -56,7 +56,7 @@ impl NotifierManager {
     }
 }
 
-pub fn register_vm_pause_notifier(notifier: Arc<PauseNOtifyCallback>) -> u64 {
+pub fn register_vm_pause_notifier(notifier: Arc<PauseNotifyCallback>) -> u64 {
     NOTIFIER_MANAGER
         .write()
         .unwrap()
