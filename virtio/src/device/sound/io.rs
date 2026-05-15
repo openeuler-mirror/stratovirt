@@ -741,10 +741,10 @@ impl VmPauseCtrlHandler {
 
         let cloned_handler = handler.clone();
         let timer_cb = Box::new(move || {
-            let mut locked_pcm = cloned_handler.pcm.lock().unwrap();
-            let streams = locked_pcm.get_streams_mut();
+            let locked_pcm = cloned_handler.pcm.lock().unwrap();
+            let streams = locked_pcm.get_streams();
 
-            for (id, stream) in streams.iter_mut().enumerate() {
+            for (id, stream) in streams.iter().enumerate() {
                 if !stream.active.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -794,10 +794,10 @@ impl IoHandler for VmPauseCtrlHandler {
                 return None;
             }
 
-            let mut locked_pcm = handler.pcm.lock().unwrap();
-            let streams = locked_pcm.get_streams_mut();
+            let locked_pcm = handler.pcm.lock().unwrap();
+            let streams = locked_pcm.get_streams();
 
-            for (id, stream) in streams.iter_mut().enumerate() {
+            for (id, stream) in streams.iter().enumerate() {
                 if !stream.active.load(Ordering::Relaxed) {
                     continue;
                 }
