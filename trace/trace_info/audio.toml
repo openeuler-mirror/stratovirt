@@ -1,0 +1,77 @@
+[[events]]
+name = "setup_alsa_hwp"
+args = "dir: &dyn fmt::Debug, hwp: &dyn fmt::Debug"
+message = "direction {:?} setup hardware parameters: {:?}"
+enabled = true
+
+[[events]]
+name = "setup_alsa_swp"
+args = "dir: &dyn fmt::Debug, swp: &dyn fmt::Debug"
+message = "direction {:?} setup software parameters: {:?}"
+enabled = true
+
+[[events]]
+name = "alsa_start"
+args = "dir: &dyn fmt::Debug"
+message = "ALSA {:?} start"
+enabled = true
+
+[[events]]
+name = "alsa_stop"
+args = "dir: &dyn fmt::Debug"
+message = "ALSA {:?} stop"
+enabled = true
+
+[[events]]
+name = "alsa_write_pcm"
+args = "len: usize"
+message = "ALSA write pcm data {} bytes"
+enabled = true
+
+[[events]]
+name = "alsa_read_pcm"
+args = "len: usize"
+message = "ALSA read pcm data {} bytes"
+enabled = true
+
+[[scopes]]
+name = "alsa_render_process"
+args = "len: usize"
+message = "ALSA expect to render {} bytes"
+enabled = true
+
+[[scopes]]
+name = "alsa_capture_process"
+args = "len: usize"
+message = "ALSA expect to capture {} bytes"
+enabled = true
+
+[[events]]
+name = "ohaudio_start"
+args = "dir: &dyn fmt::Debug, scene: usize"
+message = "OHAudio {:?} start scene {}"
+enabled = true
+
+[[events]]
+name = "ohaudio_stop"
+args = "dir: &dyn fmt::Debug"
+message = "OHAudio {:?} stop"
+enabled = true
+
+[[events]]
+name = "ohaudio_release"
+args = "dir: &dyn fmt::Debug"
+message = "OHAudio {:?} release"
+enabled = true
+
+[[scopes]]
+name = "ohaudio_render_on_write_cb"
+args = "len: i32"
+message = "OHAudio expect to render {} bytes"
+enabled = true
+
+[[scopes]]
+name = "ohaudio_capture_on_read_cb"
+args = "len: i32"
+message = "OHAudio expect to capture {} bytes"
+enabled = true

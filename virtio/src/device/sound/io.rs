@@ -12,13 +12,17 @@
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use log::{error, info};
+use log::error;
 use vmm_sys_util::epoll::EventSet;
+use vmm_sys_util::eventfd::EventFd;
 
 use super::{
     ctl::Ctl, dev::VirtQ, pcm::Pcm, read_request, spec::*, SUPPORTED_FORMATS,
@@ -30,7 +34,9 @@ use audio::{
     auth::AuthorityNotifier, get_record_authority, volume::VolumeListener, AudioInterface,
     AudioStreamIo,
 };
+use machine_manager::event_loop::EventLoop;
 use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
+use util::aio::buffer_is_zero;
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 
@@ -87,6 +93,22 @@ impl StreamElem {
     #[inline]
     fn filled_all(&self) -> bool {
         self.pos == self.in_size
+    }
+
+    fn out_buf_is_zero(&self) -> bool {
+        if self.out_size == 0 {
+            return false;
+        }
+
+        let mut buf = vec![0u8; self.out_size];
+        if self
+            .read_with_offset(size_of::<PcmXfer>() as u64, &mut buf)
+            .is_err()
+        {
+            return false;
+        }
+        // SAFETY: buf is allocated above so it's safe to call buffer_is_zero.
+        unsafe { buffer_is_zero(buf.as_ptr() as u64, buf.len() as u64) }
     }
 }
 
@@ -178,6 +200,19 @@ impl StreamIoHandler {
             .unwrap()
             .push_back(StreamElem::new(elem, self.vq.clone()));
     }
+
+    pub fn detect_silent_audio(&self) -> bool {
+        if self.queue.lock().unwrap().is_empty() {
+            return false;
+        }
+
+        for e in self.queue.lock().unwrap().iter() {
+            if !e.out_buf_is_zero() {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl AudioStreamIo for StreamIoHandler {
@@ -238,7 +273,7 @@ pub struct Stream {
     pub params: PcmSetParams,
     pub interface: Arc<Mutex<Option<Box<dyn AudioInterface>>>>,
     pub io_handler: Arc<StreamIoHandler>,
-    vm_pause_notifier: Option<u64>,
+    pub active: Arc<AtomicBool>,
 }
 
 impl Stream {
@@ -260,7 +295,7 @@ impl Stream {
                 queue: Mutex::new(VecDeque::new()),
                 vq: Arc::new(vq),
             }),
-            vm_pause_notifier: None,
+            active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -269,32 +304,6 @@ impl Stream {
             error!("Failed to flush all elements, {:?}", e);
         }
         Ok(())
-    }
-
-    pub fn register_vm_pause_notifier(&mut self) {
-        let interface = self.interface.clone();
-        let notifier = Arc::new(move |pause| {
-            if let Some(interface) = interface.lock().unwrap().as_mut() {
-                if pause {
-                    info!("vm paused, stop audio stream");
-                    if let Err(e) = interface.stop() {
-                        error!("failed to stop audio stream: {:?}", e);
-                    }
-                } else {
-                    info!("vm resumed, start audio stream");
-                    if let Err(e) = interface.start() {
-                        error!("failed to start audio stream: {:?}", e);
-                    }
-                }
-            }
-        });
-        self.vm_pause_notifier = Some(register_vm_pause_notifier(notifier));
-    }
-
-    pub fn unregister_vm_pause_notifier(&mut self) {
-        if let Some(id) = self.vm_pause_notifier.take() {
-            unregister_vm_pause_notifier(id);
-        }
     }
 }
 
@@ -674,5 +683,166 @@ impl AuthorityNotifier for EventIoHandler {
                 has_authority, e
             );
         }
+    }
+}
+
+pub struct VmPauseCtrlHandler {
+    evt_fd: Arc<EventFd>,
+    pcm: Arc<Mutex<Pcm>>,
+    reader: mpsc::Receiver<bool>,
+    iothread: Option<String>,
+    notifier_id: u64,
+}
+
+// SAFETY: it's safe to implement sync because this handler is only called
+// in virtio-snd iothread context.
+unsafe impl Sync for VmPauseCtrlHandler {}
+
+impl Drop for VmPauseCtrlHandler {
+    fn drop(&mut self) {
+        unregister_vm_pause_notifier(self.notifier_id);
+    }
+}
+
+impl VmPauseCtrlHandler {
+    pub fn new(pcm: Arc<Mutex<Pcm>>, iothread: Option<String>) -> Result<Self> {
+        let (sender, reader) = mpsc::channel();
+        let evt_fd = Arc::new(EventFd::new(libc::EFD_NONBLOCK)?);
+        let notifier_id = Self::register_vm_pause(sender, evt_fd.clone());
+
+        Ok(Self {
+            evt_fd,
+            pcm,
+            reader,
+            iothread,
+            notifier_id,
+        })
+    }
+
+    pub fn rawfd(&self) -> RawFd {
+        self.evt_fd.as_raw_fd()
+    }
+
+    fn register_vm_pause(sender: mpsc::Sender<bool>, evt_fd: Arc<EventFd>) -> u64 {
+        let notifier = Arc::new(move |pause| {
+            if let Err(e) = sender.send(pause) {
+                error!("failed to send vm pause {} to reader, {:?}", pause, e);
+            }
+            if let Err(e) = evt_fd.write(1) {
+                error!("failed to notify reader via event fd, {:?}", e);
+            }
+        });
+
+        register_vm_pause_notifier(notifier)
+    }
+
+    fn delay_start(handler: Arc<Self>, t: Duration) {
+        static TIMER_ID: Mutex<Option<u64>> = Mutex::new(None);
+
+        let cloned_handler = handler.clone();
+        let timer_cb = Box::new(move || {
+            let locked_pcm = cloned_handler.pcm.lock().unwrap();
+            let streams = locked_pcm.get_streams();
+
+            for (id, stream) in streams.iter().enumerate() {
+                if !stream.active.load(Ordering::Relaxed) {
+                    continue;
+                }
+
+                let mut locked_interface = stream.interface.lock().unwrap();
+                let Some(interface) = locked_interface.as_mut() else {
+                    continue;
+                };
+
+                if let Err(e) = interface.start() {
+                    error!("failed to start stream {} during vm resume, {:?}", id, e);
+                    stream.active.store(false, Ordering::Relaxed);
+                }
+            }
+        });
+
+        let mut locked_timer_id = TIMER_ID.lock().unwrap();
+
+        if let Some(id) = locked_timer_id.take() {
+            EventLoop::get_ctx(handler.iothread.as_ref())
+                .unwrap()
+                .timer_del(id);
+        }
+
+        *locked_timer_id = Some(
+            EventLoop::get_ctx(handler.iothread.as_ref())
+                .unwrap()
+                .timer_add(timer_cb, t),
+        );
+    }
+}
+
+impl IoHandler for VmPauseCtrlHandler {
+    fn register_notifier(handler: Arc<Self>, fd: RawFd) -> Vec<EventNotifier> {
+        const START_DELAY_MS: u64 = 200;
+
+        let cb: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
+            read_fd(fd);
+
+            let mut pause = None;
+            for value in handler.reader.try_iter() {
+                pause = Some(value);
+            }
+
+            if !pause? {
+                Self::delay_start(handler.clone(), Duration::from_millis(START_DELAY_MS));
+                return None;
+            }
+
+            let locked_pcm = handler.pcm.lock().unwrap();
+            let streams = locked_pcm.get_streams();
+
+            for (id, stream) in streams.iter().enumerate() {
+                if !stream.active.load(Ordering::Relaxed) {
+                    continue;
+                }
+
+                let mut locked_interface = stream.interface.lock().unwrap();
+                let Some(interface) = locked_interface.as_mut() else {
+                    continue;
+                };
+
+                if let Err(e) = interface.stop() {
+                    error!("failed to stop stream {} during vm pause, {:?}", id, e);
+                }
+            }
+
+            None
+        });
+
+        let notifiers = vec![EventNotifier::new(
+            NotifierOperation::AddShared,
+            fd,
+            None,
+            EventSet::IN,
+            vec![cb],
+        )];
+        notifiers
+    }
+
+    fn handle_queue(&self) -> Result<()> {
+        unreachable!()
+    }
+
+    fn handle_elem(
+        &self,
+        _sys_mem: &Arc<AddressSpace>,
+        _cache: &Option<RegionCache>,
+        _elem: Element,
+    ) -> Result<()> {
+        unreachable!()
+    }
+
+    fn get_vq(&self) -> &VirtQ {
+        unreachable!()
+    }
+
+    fn device_broken(&self) -> bool {
+        unreachable!()
     }
 }

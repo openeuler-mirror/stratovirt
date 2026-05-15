@@ -10,7 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{atomic::Ordering, Arc, RwLock};
 
 use anyhow::{bail, Result};
 use log::{error, info, warn};
@@ -22,8 +22,7 @@ use super::{
 use crate::Element;
 use address_space::{AddressSpace, RegionCache};
 use audio::{
-    create_audio_interface, get_record_authority, AudioBackend, AudioStreamDirection,
-    AudioStreamParams, PcmFmt, PcmRate,
+    create_audio_interface, AudioBackend, AudioStreamDirection, AudioStreamParams, PcmFmt, PcmRate,
 };
 
 pub struct Pcm {
@@ -65,6 +64,14 @@ impl Pcm {
 
         self.streams[id].io_handler.append(elem);
         None
+    }
+
+    pub fn get_streams(&self) -> &Vec<Stream> {
+        &self.streams
+    }
+
+    pub fn get_streams_mut(&mut self) -> &mut Vec<Stream> {
+        &mut self.streams
     }
 
     pub fn handle_pcm(
@@ -187,13 +194,6 @@ impl Pcm {
         &mut self.streams[stream_id as usize]
     }
 
-    fn check_record_auth(stream: &Stream) -> bool {
-        if stream.info.direction == VIRTIO_SND_D_OUTPUT {
-            return true;
-        }
-        get_record_authority()
-    }
-
     fn handle_pcm_prepare(
         &mut self,
         mem_space: &Arc<AddressSpace>,
@@ -268,12 +268,6 @@ impl Pcm {
         }
 
         let stream = self.get_stream_mut(stream_id);
-        if !Self::check_record_auth(stream) {
-            return (VIRTIO_SND_S_IO_ERR, 0);
-        }
-
-        stream.register_vm_pause_notifier();
-
         let mut interface = stream.interface.lock().unwrap();
         if let Some(i) = interface.as_mut() {
             if let Err(e) = i.start() {
@@ -282,6 +276,7 @@ impl Pcm {
             }
         }
 
+        stream.active.store(true, Ordering::Relaxed);
         info!("stream started: {:?}.", stream.params);
 
         (VIRTIO_SND_S_OK, 0)
@@ -308,8 +303,6 @@ impl Pcm {
         }
 
         let stream = self.get_stream_mut(stream_id);
-        stream.unregister_vm_pause_notifier();
-
         let mut interface = stream.interface.lock().unwrap();
         if let Some(audio) = interface.as_mut() {
             if let Err(e) = audio.stop() {
@@ -318,6 +311,7 @@ impl Pcm {
             }
         }
 
+        stream.active.store(false, Ordering::Relaxed);
         info!("stream stopped: {:?}", stream.params);
 
         (VIRTIO_SND_S_OK, 0)
@@ -348,7 +342,7 @@ impl Pcm {
             error!("Failed to flush stream {}, {:?}", stream_id, e);
         }
         if let Some(mut interface) = stream.interface.lock().unwrap().take() {
-            if let Err(e) = interface.stop() {
+            if let Err(e) = interface.release() {
                 error!("Failed to stop interface, {:?}", e);
             }
         }
