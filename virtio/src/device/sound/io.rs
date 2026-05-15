@@ -35,6 +35,7 @@ use audio::{
 };
 use machine_manager::event_loop::EventLoop;
 use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
+use util::aio::buffer_is_zero;
 use util::byte_code::ByteCode;
 use util::loop_context::{read_fd, EventNotifier, NotifierCallback, NotifierOperation};
 
@@ -91,6 +92,22 @@ impl StreamElem {
     #[inline]
     fn filled_all(&self) -> bool {
         self.pos == self.in_size
+    }
+
+    fn out_buf_is_zero(&self) -> bool {
+        if self.out_size == 0 {
+            return false;
+        }
+
+        let mut buf = vec![0u8; self.out_size];
+        if self
+            .read_with_offset(size_of::<PcmXfer>() as u64, &mut buf)
+            .is_err()
+        {
+            return false;
+        }
+        // SAFETY: buf is allocated above so it's safe to call buffer_is_zero.
+        unsafe { buffer_is_zero(buf.as_ptr() as u64, buf.len() as u64) }
     }
 }
 
@@ -181,6 +198,19 @@ impl StreamIoHandler {
             .lock()
             .unwrap()
             .push_back(StreamElem::new(elem, self.vq.clone()));
+    }
+
+    pub fn detect_silent_audio(&self) -> bool {
+        if self.queue.lock().unwrap().is_empty() {
+            return false;
+        }
+
+        for e in self.queue.lock().unwrap().iter() {
+            if !e.out_buf_is_zero() {
+                return false;
+            }
+        }
+        true
     }
 }
 

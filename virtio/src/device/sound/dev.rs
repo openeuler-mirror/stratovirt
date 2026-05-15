@@ -34,6 +34,7 @@ use audio::{
     volume::{create_volume_control, VolumeControl},
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::state_query::{register_silent_audio_cb, unregister_silent_audio_cb};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 
@@ -206,10 +207,21 @@ impl VirtioDevice for Sound {
         .with_context(|| "Failed to register sound rx notifier to MainLoop")?;
 
         // vm pause handler.
-        let vm_pause_handler =
-            Arc::new(VmPauseCtrlHandler::new(pcm, self.config.iothread.clone())?);
+        let vm_pause_handler = Arc::new(VmPauseCtrlHandler::new(
+            pcm.clone(),
+            self.config.iothread.clone(),
+        )?);
         let fd = vm_pause_handler.rawfd();
         self.register_notifier(vm_pause_handler, self.config.iothread.clone(), fd)?;
+
+        // detect silent PCM data of playback.
+        let mut locked_pcm = pcm.lock().unwrap();
+        let streams = locked_pcm.get_streams_mut();
+        let io_handler = streams[0].io_handler.clone();
+        register_silent_audio_cb(
+            "virtio-snd".to_string(),
+            Arc::new(move || io_handler.detect_silent_audio()),
+        );
 
         self.base.broken.store(false, Ordering::SeqCst);
         Ok(())
@@ -223,6 +235,8 @@ impl VirtioDevice for Sound {
         if let Some(handler) = self.event_handler.take() {
             unregister_authority_notifier(&(handler as Arc<dyn AuthorityNotifier>));
         }
+
+        unregister_silent_audio_cb("virtio-snd");
 
         unregister_event_helper(
             self.config.iothread.as_ref(),
