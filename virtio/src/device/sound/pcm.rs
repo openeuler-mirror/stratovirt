@@ -66,6 +66,10 @@ impl Pcm {
         None
     }
 
+    pub fn get_streams_mut(&mut self) -> &mut Vec<Stream> {
+        &mut self.streams
+    }
+
     pub fn handle_pcm(
         &mut self,
         code: u32,
@@ -268,7 +272,7 @@ impl Pcm {
             }
         }
 
-        *stream.active.write().unwrap() = true;
+        stream.active = true;
         info!("stream started: {:?}.", stream.params);
 
         (VIRTIO_SND_S_OK, 0)
@@ -303,7 +307,7 @@ impl Pcm {
             }
         }
 
-        *stream.active.write().unwrap() = false;
+        stream.active = false;
         info!("stream stopped: {:?}", stream.params);
 
         (VIRTIO_SND_S_OK, 0)
