@@ -15,6 +15,7 @@ use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -272,7 +273,7 @@ pub struct Stream {
     pub params: PcmSetParams,
     pub interface: Arc<Mutex<Option<Box<dyn AudioInterface>>>>,
     pub io_handler: Arc<StreamIoHandler>,
-    pub active: bool,
+    pub active: Arc<AtomicBool>,
 }
 
 impl Stream {
@@ -294,7 +295,7 @@ impl Stream {
                 queue: Mutex::new(VecDeque::new()),
                 vq: Arc::new(vq),
             }),
-            active: false,
+            active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -744,7 +745,7 @@ impl VmPauseCtrlHandler {
             let streams = locked_pcm.get_streams_mut();
 
             for (id, stream) in streams.iter_mut().enumerate() {
-                if !stream.active {
+                if !stream.active.load(Ordering::Relaxed) {
                     continue;
                 }
 
@@ -755,7 +756,7 @@ impl VmPauseCtrlHandler {
 
                 if let Err(e) = interface.start() {
                     error!("failed to start stream {} during vm resume, {:?}", id, e);
-                    stream.active = false;
+                    stream.active.store(false, Ordering::Relaxed);
                 }
             }
         });
@@ -797,7 +798,7 @@ impl IoHandler for VmPauseCtrlHandler {
             let streams = locked_pcm.get_streams_mut();
 
             for (id, stream) in streams.iter_mut().enumerate() {
-                if !stream.active {
+                if !stream.active.load(Ordering::Relaxed) {
                     continue;
                 }
 

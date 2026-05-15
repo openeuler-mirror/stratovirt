@@ -23,6 +23,7 @@ use super::{
     ctl::Ctl, io::VmPauseCtrlHandler, pcm::Pcm, spec::*, CtrlIoHandler, EventIoHandler, IoHandler,
     RxIoHandler, SoundConfig, TxIoHandler,
 };
+use crate::device::sound::io::Stream;
 use crate::{
     read_config_default, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
     VirtioInterruptType, VIRTIO_F_VERSION_1, VIRTIO_TYPE_SOUND,
@@ -34,7 +35,10 @@ use audio::{
     volume::{create_volume_control, VolumeControl},
 };
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
-use machine_manager::state_query::{register_silent_audio_cb, unregister_silent_audio_cb};
+use machine_manager::state_query::{
+    register_silent_audio_cb, register_state_query_callback, unregister_silent_audio_cb,
+    unregister_state_query_callback, KEYWORD_AUDIO_PLAY, KEYWORD_AUDIO_RECORD,
+};
 use util::byte_code::ByteCode;
 use util::gen_base_func;
 
@@ -219,9 +223,12 @@ impl VirtioDevice for Sound {
         let streams = locked_pcm.get_streams_mut();
         let io_handler = streams[0].io_handler.clone();
         register_silent_audio_cb(
-            "virtio-snd".to_string(),
+            KEYWORD_AUDIO_PLAY.to_string(),
             Arc::new(move || io_handler.detect_silent_audio()),
         );
+
+        // notify audio state of playback/capture.
+        register_state_query(streams);
 
         self.base.broken.store(false, Ordering::SeqCst);
         Ok(())
@@ -236,13 +243,42 @@ impl VirtioDevice for Sound {
             unregister_authority_notifier(&(handler as Arc<dyn AuthorityNotifier>));
         }
 
-        unregister_silent_audio_cb("virtio-snd");
+        unregister_silent_audio_cb(KEYWORD_AUDIO_PLAY);
+
+        unregister_state_query();
 
         unregister_event_helper(
             self.config.iothread.as_ref(),
             &mut self.base.deactivate_evts,
         )
     }
+}
+
+fn register_state_query(streams: &[Stream]) {
+    assert_eq!(streams.len(), VIRTIO_SND_STREAM_DEFAULT as usize);
+
+    let play_active = streams[0].active.clone();
+    let capt_active = streams[1].active.clone();
+
+    register_state_query_callback(
+        KEYWORD_AUDIO_PLAY.to_string(),
+        Arc::new(move || match play_active.load(Ordering::Relaxed) {
+            true => "On".to_string(),
+            false => "Off".to_string(),
+        }),
+    );
+    register_state_query_callback(
+        KEYWORD_AUDIO_RECORD.to_string(),
+        Arc::new(move || match capt_active.load(Ordering::Relaxed) {
+            true => "On".to_string(),
+            false => "Off".to_string(),
+        }),
+    );
+}
+
+fn unregister_state_query() {
+    unregister_state_query_callback(KEYWORD_AUDIO_PLAY);
+    unregister_state_query_callback(KEYWORD_AUDIO_RECORD);
 }
 
 #[derive(Clone)]
