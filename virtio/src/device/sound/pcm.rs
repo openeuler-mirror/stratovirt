@@ -66,6 +66,10 @@ impl Pcm {
         None
     }
 
+    pub fn get_streams(&self) -> &Vec<Stream> {
+        &self.streams
+    }
+
     pub fn get_streams_mut(&mut self) -> &mut Vec<Stream> {
         &mut self.streams
     }
