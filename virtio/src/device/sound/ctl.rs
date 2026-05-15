@@ -302,10 +302,8 @@ impl Ctl {
                 }
 
                 self.volume = value;
-                if !self.mute {
-                    self.volume_ctrl.set_volume(value);
-                    info!("volume(guest -> host): {}", value);
-                }
+                self.volume_ctrl.set_volume(value);
+                info!("volume(guest -> host): {}", value);
             }
             VIRTIO_SND_CTL_ROLE_MUTE => {
                 self.mute = value == 0;
