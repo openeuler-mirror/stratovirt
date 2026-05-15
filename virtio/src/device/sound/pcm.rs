@@ -22,8 +22,7 @@ use super::{
 use crate::Element;
 use address_space::{AddressSpace, RegionCache};
 use audio::{
-    create_audio_interface, get_record_authority, AudioBackend, AudioStreamDirection,
-    AudioStreamParams, PcmFmt, PcmRate,
+    create_audio_interface, AudioBackend, AudioStreamDirection, AudioStreamParams, PcmFmt, PcmRate,
 };
 
 pub struct Pcm {
@@ -187,13 +186,6 @@ impl Pcm {
         &mut self.streams[stream_id as usize]
     }
 
-    fn check_record_auth(stream: &Stream) -> bool {
-        if stream.info.direction == VIRTIO_SND_D_OUTPUT {
-            return true;
-        }
-        get_record_authority()
-    }
-
     fn handle_pcm_prepare(
         &mut self,
         mem_space: &Arc<AddressSpace>,
@@ -268,10 +260,6 @@ impl Pcm {
         }
 
         let stream = self.get_stream_mut(stream_id);
-        if !Self::check_record_auth(stream) {
-            return (VIRTIO_SND_S_IO_ERR, 0);
-        }
-
         let mut interface = stream.interface.lock().unwrap();
         if let Some(i) = interface.as_mut() {
             if let Err(e) = i.start() {
