@@ -272,8 +272,6 @@ impl Pcm {
             return (VIRTIO_SND_S_IO_ERR, 0);
         }
 
-        stream.register_vm_pause_notifier();
-
         let mut interface = stream.interface.lock().unwrap();
         if let Some(i) = interface.as_mut() {
             if let Err(e) = i.start() {
@@ -282,6 +280,7 @@ impl Pcm {
             }
         }
 
+        *stream.active.write().unwrap() = true;
         info!("stream started: {:?}.", stream.params);
 
         (VIRTIO_SND_S_OK, 0)
@@ -308,8 +307,6 @@ impl Pcm {
         }
 
         let stream = self.get_stream_mut(stream_id);
-        stream.unregister_vm_pause_notifier();
-
         let mut interface = stream.interface.lock().unwrap();
         if let Some(audio) = interface.as_mut() {
             if let Err(e) = audio.stop() {
@@ -318,6 +315,7 @@ impl Pcm {
             }
         }
 
+        *stream.active.write().unwrap() = false;
         info!("stream stopped: {:?}", stream.params);
 
         (VIRTIO_SND_S_OK, 0)

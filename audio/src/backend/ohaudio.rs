@@ -138,12 +138,14 @@ impl AudioInterface for OhAudio {
         self.init_ctx()?;
         self.start_ctx()?;
         *self.status.write().unwrap() = OhAudioStatus::Started;
+        info!("OHAudio {:?} start scene {}", self.direction, self.scene);
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
         self.stop_ctx();
         *self.status.write().unwrap() = OhAudioStatus::Ready;
+        info!("OHAudio {:?} stop", self.direction);
         Ok(())
     }
 }
@@ -270,7 +272,6 @@ impl OhAudio {
 
         match self.get_ctx().as_ref().unwrap().start() {
             Ok(()) => {
-                info!("OHAudio {:?} start scene {}", self.direction, self.scene);
                 *self.status.write().unwrap() = OhAudioStatus::Started;
                 Ok(())
             }

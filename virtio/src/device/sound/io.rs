@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context, Result};
 use log::{error, info};
@@ -238,11 +238,22 @@ pub struct Stream {
     pub params: PcmSetParams,
     pub interface: Arc<Mutex<Option<Box<dyn AudioInterface>>>>,
     pub io_handler: Arc<StreamIoHandler>,
-    vm_pause_notifier: Option<u64>,
+    pub active: Arc<RwLock<bool>>,
+    vm_pause_notifier: u64,
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        unregister_vm_pause_notifier(self.vm_pause_notifier);
+    }
 }
 
 impl Stream {
     pub fn new(direction: u8, vq: VirtQ) -> Self {
+        let interface = Arc::new(Mutex::new(None));
+        let active = Arc::new(RwLock::new(false));
+        let vm_pause_notifier =
+            Self::register_vm_pause_notifier(interface.clone(), active.clone(), direction);
         Self {
             info: PcmInfo {
                 hdr: SoundInfo::default(),
@@ -255,12 +266,13 @@ impl Stream {
                 padding: [0; 5],
             },
             params: PcmSetParams::default(),
-            interface: Arc::new(Mutex::new(None)),
+            interface,
             io_handler: Arc::new(StreamIoHandler {
                 queue: Mutex::new(VecDeque::new()),
                 vq: Arc::new(vq),
             }),
-            vm_pause_notifier: None,
+            active,
+            vm_pause_notifier,
         }
     }
 
@@ -271,30 +283,37 @@ impl Stream {
         Ok(())
     }
 
-    pub fn register_vm_pause_notifier(&mut self) {
-        let interface = self.interface.clone();
+    fn register_vm_pause_notifier(
+        interface: Arc<Mutex<Option<Box<dyn AudioInterface>>>>,
+        active: Arc<RwLock<bool>>,
+        direction: u8,
+    ) -> u64 {
+        let direction = match direction {
+            VIRTIO_SND_D_OUTPUT => "playback",
+            VIRTIO_SND_D_INPUT => "record",
+            _ => "unsupported direction",
+        };
+
         let notifier = Arc::new(move |pause| {
             if let Some(interface) = interface.lock().unwrap().as_mut() {
+                if !*active.read().unwrap() {
+                    return;
+                }
+
                 if pause {
-                    info!("vm paused, stop audio stream");
+                    info!("vm paused, stop {} stream", direction);
                     if let Err(e) = interface.stop() {
-                        error!("failed to stop audio stream: {:?}", e);
+                        error!("failed to stop {} stream: {:?}", direction, e);
                     }
                 } else {
-                    info!("vm resumed, start audio stream");
+                    info!("vm resumed, start {} stream", direction);
                     if let Err(e) = interface.start() {
-                        error!("failed to start audio stream: {:?}", e);
+                        error!("failed to start {} stream: {:?}", direction, e);
                     }
                 }
             }
         });
-        self.vm_pause_notifier = Some(register_vm_pause_notifier(notifier));
-    }
-
-    pub fn unregister_vm_pause_notifier(&mut self) {
-        if let Some(id) = self.vm_pause_notifier.take() {
-            unregister_vm_pause_notifier(id);
-        }
+        register_vm_pause_notifier(notifier)
     }
 }
 
