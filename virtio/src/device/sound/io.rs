@@ -753,15 +753,12 @@ impl IoHandler for VmPauseCtrlHandler {
         let cb: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
 
-            let pause = match handler.reader.recv() {
-                Ok(pause) => pause,
-                Err(e) => {
-                    error!("failed to receive message, {:?}", e);
-                    return None;
-                }
-            };
+            let mut pause = None;
+            for value in handler.reader.try_iter() {
+                pause = Some(value);
+            }
 
-            if !pause {
+            if !pause? {
                 Self::delay_start(handler.clone(), Duration::from_millis(START_DELAY_MS));
                 return None;
             }

@@ -22,6 +22,9 @@ pub const VIRTIO_SND_CTL_DEFAULT: u32 = 2;
 // Feature bits
 pub const VIRTIO_SND_F_CTLS: u32 = 0;
 
+// Queue size
+pub const VIRTIO_SND_QUEUE_SIZE: u16 = 64;
+
 // Jack request codes
 pub const VIRTIO_SND_R_JACK_INFO: u32 = 0x1;
 pub const VIRTIO_SND_R_JACK_REMAP: u32 = 0x2;
@@ -100,8 +103,6 @@ pub const VIRTIO_SND_CTL_ACCESS_TLV_COMMAND: u32 = 6;
 pub const VIRTIO_SND_CTL_EVT_MASK_VALUE: u32 = 0;
 pub const VIRTIO_SND_CTL_EVT_MASK_INFO: u32 = 1;
 pub const VIRTIO_SND_CTL_EVT_MASK_TLV: u32 = 2;
-
-pub const VIRTIO_SND_QUEUE_SIZE: u16 = 64;
 
 // CTL element roles
 pub const VIRTIO_SND_CTL_ROLE_UNDEFINED: u32 = 0;
