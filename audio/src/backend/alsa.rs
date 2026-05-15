@@ -98,6 +98,7 @@ impl AudioInterface for Alsa {
 
             pcm.hw_params(&hwp)
                 .context("Failed to apply hardware parameters")?;
+            trace::setup_alsa_hwp(&dir, &hwp);
         }
 
         // Configure software parameters
@@ -112,6 +113,7 @@ impl AudioInterface for Alsa {
                 .context("Failed to set start threshold")?;
             pcm.sw_params(&swp)
                 .context("Failed to apply software parameters")?;
+            trace::setup_alsa_swp(&dir, &swp);
 
             pcm.prepare().context("Failed to prepare PCM")?;
         }
@@ -191,6 +193,7 @@ impl AudioInterface for Alsa {
         });
 
         self.thread_handle = Some(handle);
+        trace::alsa_start(&direction);
         Ok(())
     }
 
@@ -216,7 +219,9 @@ impl AudioInterface for Alsa {
             }
         }
         pcm.prepare()
-            .context("Failed to prepare ALSA PCM after stop")
+            .context("Failed to prepare ALSA PCM after stop")?;
+        trace::alsa_stop(&self.direction);
+        Ok(())
     }
 }
 
@@ -225,6 +230,7 @@ impl AudioInterface for Alsa {
 /// `snd_pcm_writei` may accept fewer frames than requested; we loop until the full buffer is
 /// submitted. XRun is recovered and the current slice is retried without advancing.
 fn write_pcm(pcm: &Arc<Mutex<PCM>>, data: &[u8]) -> Result<usize> {
+    trace::trace_scope_start!(alsa_render_process, args = (data.len()));
     if data.is_empty() {
         return Ok(0);
     }
@@ -251,6 +257,7 @@ fn write_pcm(pcm: &Arc<Mutex<PCM>>, data: &[u8]) -> Result<usize> {
                     thread::yield_now();
                     continue;
                 }
+                trace::alsa_write_pcm(n);
                 offset = match offset.checked_add(n) {
                     Some(o) if o <= total_len => o,
                     Some(_) => bail!("ALSA wrote more bytes than supplied"),
@@ -280,6 +287,7 @@ fn write_pcm(pcm: &Arc<Mutex<PCM>>, data: &[u8]) -> Result<usize> {
 /// buffer is full. `readi` reports **frames**; we convert to bytes via `frames_to_bytes`.
 /// XRun (overrun) is recovered with `prepare`/`start` and the remainder is retried.
 fn read_pcm(pcm: &Arc<Mutex<PCM>>, data: &mut [u8]) -> Result<usize> {
+    trace::trace_scope_start!(alsa_capture_process, args = (data.len()));
     if data.is_empty() {
         return Ok(0);
     }
@@ -305,6 +313,7 @@ fn read_pcm(pcm: &Arc<Mutex<PCM>>, data: &mut [u8]) -> Result<usize> {
                     thread::yield_now();
                     continue;
                 }
+                trace::alsa_read_pcm(n);
                 offset = match offset.checked_add(n) {
                     Some(o) if o <= total_len => o,
                     Some(_) => bail!("ALSA read more bytes than buffer capacity"),

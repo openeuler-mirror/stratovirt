@@ -139,6 +139,7 @@ impl AudioInterface for OhAudio {
         self.start_ctx()?;
         *self.status.write().unwrap() = OhAudioStatus::Started;
         info!("OHAudio {:?} start scene {}", self.direction, self.scene);
+        trace::ohaudio_start(&self.direction, self.scene);
         Ok(())
     }
 
@@ -146,6 +147,7 @@ impl AudioInterface for OhAudio {
         self.stop_ctx();
         *self.status.write().unwrap() = OhAudioStatus::Ready;
         info!("OHAudio {:?} stop", self.direction);
+        trace::ohaudio_stop(&self.direction);
         Ok(())
     }
 
@@ -153,6 +155,8 @@ impl AudioInterface for OhAudio {
         if *self.status.read().unwrap() == OhAudioStatus::Started {
             self.stop()?;
         }
+        self.set_ctx(None);
+        trace::ohaudio_release(&self.direction);
         Ok(())
     }
 }
@@ -313,6 +317,7 @@ impl OhAudio {
         buffer: *mut ::std::os::raw::c_void,
         length: i32,
     ) -> i32 {
+        trace::trace_scope_start!(ohaudio_render_on_write_cb, args = (length));
         // SAFETY: 'user_data' should be valid while this callback is being called. We will
         // stop audio play before destroy user_data.
         let ohaudio = unsafe { &mut *(user_data as *mut OhAudio) };
@@ -338,6 +343,7 @@ impl OhAudio {
         buffer: *mut ::std::os::raw::c_void,
         length: i32,
     ) -> i32 {
+        trace::trace_scope_start!(ohaudio_capture_on_read_cb, args = (length));
         // SAFETY: 'user_data' should be valid while this callback is being called. We will
         // stop audio capture before destroy user_data.
         let ohaudio = unsafe { &mut *(user_data as *mut OhAudio) };
