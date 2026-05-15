@@ -20,8 +20,8 @@ use anyhow::{Context, Result};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{
-    ctl::Ctl, pcm::Pcm, spec::*, CtrlIoHandler, EventIoHandler, IoHandler, RxIoHandler,
-    SoundConfig, TxIoHandler,
+    ctl::Ctl, io::VmPauseCtrlHandler, pcm::Pcm, spec::*, CtrlIoHandler, EventIoHandler, IoHandler,
+    RxIoHandler, SoundConfig, TxIoHandler,
 };
 use crate::{
     read_config_default, Element, Queue, VirtioBase, VirtioDevice, VirtioError, VirtioInterrupt,
@@ -204,6 +204,12 @@ impl VirtioDevice for Sound {
             queue_evts[VIRTIO_QUEUE_RX_IDX].as_raw_fd(),
         )
         .with_context(|| "Failed to register sound rx notifier to MainLoop")?;
+
+        // vm pause handler.
+        let vm_pause_handler =
+            Arc::new(VmPauseCtrlHandler::new(pcm, self.config.iothread.clone())?);
+        let fd = vm_pause_handler.rawfd();
+        self.register_notifier(vm_pause_handler, self.config.iothread.clone(), fd)?;
 
         self.base.broken.store(false, Ordering::SeqCst);
         Ok(())
