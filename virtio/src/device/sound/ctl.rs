@@ -23,7 +23,7 @@ use util::byte_code::ByteCode;
 
 pub struct Ctl {
     volume_ctrl: Arc<dyn VolumeControl>,
-    pub range: (u32, u32),
+    range: (u32, u32),
     pub volume: u32,
     pub mute: bool,
 }
