@@ -334,7 +334,7 @@ impl Pcm {
             error!("Failed to flush stream {}, {:?}", stream_id, e);
         }
         if let Some(mut interface) = stream.interface.lock().unwrap().take() {
-            if let Err(e) = interface.stop() {
+            if let Err(e) = interface.release() {
                 error!("Failed to stop interface, {:?}", e);
             }
         }
