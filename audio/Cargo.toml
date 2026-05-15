@@ -11,7 +11,7 @@ anyhow = "1.0"
 log = "0.4"
 machine_manager = { path = "../machine_manager" }
 util = { path = "../util" }
-trace = { path = "../trace", optional = true }
+trace = { path = "../trace" }
 hisysevent = { path = "../hisysevent" }
 
 [target.'cfg(target_env = "gnu")'.dependencies]
