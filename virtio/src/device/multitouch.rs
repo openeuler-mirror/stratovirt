@@ -21,11 +21,11 @@ use ui::input::{
 };
 use util::aio::{wait_io_done, DEFAULT_IO_TIMEOUT};
 
+use crate::{EvdevConfig, Input, InputIoHandler};
 use crate::{
-    virtio_has_feature, VirtioBase, VirtioDevice, VirtioInterrupt, VIRTIO_INPUT_F_MTT_SCREEN,
+    VirtioBase, VirtioDevice, VirtioInterrupt, VIRTIO_INPUT_F_MTT_SCREEN,
     VIRTIO_INPUT_F_MTT_TOUCHPAD,
 };
-use crate::{EvdevConfig, Input, InputIoHandler};
 use address_space::AddressSpace;
 use machine_manager::config::{get_pci_df, parse_bool, valid_id};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
@@ -113,26 +113,31 @@ pub struct Multitouch {
 impl Multitouch {
     fn init_event_supported(evdev_cfg: &mut EvdevConfig, touchtype: MultitouchType) {
         let mut key_bits = *EvdevBuf::new().set_bit(BTN_TOUCH as usize);
-        let abs_bits = *EvdevBuf::new()
+        let mut abs_bits = *EvdevBuf::new()
             .set_bit(ABS_X as usize)
             .set_bit(ABS_Y as usize)
             .set_bit(ABS_MT_SLOT as usize)
-            .set_bit(ABS_MT_TOUCH_MAJOR as usize)
-            .set_bit(ABS_MT_TOUCH_MINOR as usize)
             .set_bit(ABS_MT_POSITION_X as usize)
             .set_bit(ABS_MT_POSITION_Y as usize)
-            .set_bit(ABS_MT_TRACKING_ID as usize)
-            .set_bit(ABS_MT_PRESSURE as usize);
+            .set_bit(ABS_MT_TRACKING_ID as usize);
 
         match touchtype {
             MultitouchType::Screen => {
+                abs_bits
+                    .set_bit(ABS_MT_TOUCH_MAJOR as usize)
+                    .set_bit(ABS_MT_TOUCH_MINOR as usize)
+                    .set_bit(ABS_MT_PRESSURE as usize);
                 evdev_cfg.event_supported = EvdevBufHelper::new()
                     .push(EV_ABS, abs_bits)
                     .push(EV_KEY, key_bits)
                     .to_raw();
             }
             MultitouchType::Pad => {
-                key_bits.set_bit(BTN_LEFT as usize);
+                key_bits
+                    .set_bit(BTN_LEFT as usize)
+                    .set_bit(BTN_TOOL_FINGER as usize)
+                    .set_bit(BTN_TOOL_DOUBLETAP as usize)
+                    .set_bit(BTN_TOOL_TRIPLETAP as usize);
                 let msc_bits = *EvdevBuf::new().set_bit(MSC_TIMESTAMP as usize);
                 evdev_cfg.event_supported = EvdevBufHelper::new()
                     .push(EV_ABS, abs_bits)
@@ -159,7 +164,8 @@ impl Multitouch {
     fn init_abs_info(evdev_cfg: &mut EvdevConfig, option: &MultitouchConfig) {
         let device_config = &MT_ABS_INFO[Into::<usize>::into(option.touchtype)];
 
-        evdev_cfg.abs_info = AbsinfoHelper::new()
+        let mut abs_info = AbsinfoHelper::new();
+        abs_info
             .push(
                 ABS_X,
                 InputAbsInfo::new(0, option.x as u32, device_config.x_res),
@@ -169,14 +175,6 @@ impl Multitouch {
                 InputAbsInfo::new(0, option.y as u32, device_config.y_res),
             )
             .push(ABS_MT_SLOT, InputAbsInfo::new(0, device_config.slot_max, 0))
-            .push(
-                ABS_MT_TOUCH_MAJOR,
-                InputAbsInfo::new(0, device_config.touch_major_max, 0),
-            )
-            .push(
-                ABS_MT_TOUCH_MINOR,
-                InputAbsInfo::new(0, device_config.touch_minor_max, 0),
-            )
             .push(
                 ABS_MT_POSITION_X,
                 InputAbsInfo::new(0, option.x as u32, device_config.x_res),
@@ -188,12 +186,24 @@ impl Multitouch {
             .push(
                 ABS_MT_TRACKING_ID,
                 InputAbsInfo::new(0, device_config.tracking_id_max, 0),
-            )
-            .push(
-                ABS_MT_PRESSURE,
-                InputAbsInfo::new(0, device_config.pressure_max, 0),
-            )
-            .to_raw();
+            );
+
+        if option.touchtype == MultitouchType::Screen {
+            abs_info
+                .push(
+                    ABS_MT_TOUCH_MAJOR,
+                    InputAbsInfo::new(0, device_config.touch_major_max, 0),
+                )
+                .push(
+                    ABS_MT_TOUCH_MINOR,
+                    InputAbsInfo::new(0, device_config.touch_minor_max, 0),
+                )
+                .push(
+                    ABS_MT_PRESSURE,
+                    InputAbsInfo::new(0, device_config.pressure_max, 0),
+                );
+        }
+        evdev_cfg.abs_info = abs_info.to_raw();
     }
 
     pub fn new(option: MultitouchConfig) -> Self {
@@ -264,15 +274,6 @@ impl VirtioDevice for Multitouch {
         interrupt_cb: Arc<VirtioInterrupt>,
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()> {
-        if self.touchtype == MultitouchType::Pad
-            && !virtio_has_feature(
-                self.device.virtio_base().driver_features,
-                VIRTIO_INPUT_F_MTT_TOUCHPAD,
-            )
-        {
-            bail!("the guest driver didn't initialize the device as touchpad");
-        }
-
         let handler = Arc::new(Mutex::new(self.device.create_io_handler(
             mem_space,
             interrupt_cb,
