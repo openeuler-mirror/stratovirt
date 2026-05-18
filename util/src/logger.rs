@@ -52,7 +52,7 @@ struct FileRotate {
     handler: Box<dyn Write + Send>,
     path: String,
     current_size: Wrapping<usize>,
-    create_day: i32,
+    create_day_key: i32,
 }
 
 impl FileRotate {
@@ -63,8 +63,8 @@ impl FileRotate {
 
         self.current_size += Wrapping(size_inc);
         let sec = gettime()?.0;
-        let today = get_format_time(sec)[2];
-        if self.current_size < Wrapping(LOG_ROTATE_SIZE_MAX) && self.create_day == today {
+        let today = get_day_key(sec);
+        if self.current_size < Wrapping(LOG_ROTATE_SIZE_MAX) && self.create_day_key == today {
             return Ok(());
         }
 
@@ -96,7 +96,7 @@ impl FileRotate {
         // Update log file.
         self.handler = Box::new(open_log_file(&self.path)?);
         self.current_size = Wrapping(0);
-        self.create_day = today;
+        self.create_day_key = today;
         Ok(())
     }
 }
@@ -150,22 +150,22 @@ fn init_vm_logger(
     logfile_path: String,
 ) -> Result<()> {
     let current_size;
-    let create_day;
+    let create_day_key;
     if logfile_path.is_empty() {
         current_size = Wrapping(0);
-        create_day = 0;
+        create_day_key = 0;
     } else {
         let metadata = File::open(&logfile_path)?.metadata()?;
         current_size = Wrapping(metadata.len() as usize);
         let mod_time = metadata.modified()?;
         let sec = mod_time.duration_since(UNIX_EPOCH)?.as_secs();
-        create_day = get_format_time(i64::try_from(sec)?)[2];
+        create_day_key = get_day_key(i64::try_from(sec)?);
     };
     let rotate = Mutex::new(FileRotate {
         handler: logfile,
         path: logfile_path,
         current_size,
-        create_day,
+        create_day_key,
     });
 
     let logger = VmLogger { rotate, level };
@@ -208,4 +208,31 @@ pub fn init_log(path: String) -> Result<()> {
     };
     init_logger_with_env(logfile, path.clone())
         .with_context(|| format!("Failed to init logger: {}", path))
+}
+
+fn get_day_key(sec: i64) -> i32 {
+    let format_time = get_format_time(sec);
+    format_time[0] * 10_000 + format_time[1] * 100 + format_time[2]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_day_key;
+    use crate::time::mktime64;
+
+    #[test]
+    fn test_day_key_differs_across_months_with_same_day_number() {
+        let april = get_day_key(mktime64(2026, 4, 12, 12, 0, 0) as i64);
+        let may = get_day_key(mktime64(2026, 5, 12, 12, 0, 0) as i64);
+
+        assert_ne!(april, may);
+    }
+
+    #[test]
+    fn test_day_key_matches_within_same_calendar_day() {
+        let noon = get_day_key(mktime64(2026, 5, 12, 12, 0, 0) as i64);
+        let afternoon = get_day_key(mktime64(2026, 5, 12, 13, 0, 0) as i64);
+
+        assert_eq!(noon, afternoon);
+    }
 }
