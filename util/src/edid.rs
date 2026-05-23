@@ -212,7 +212,8 @@ impl EdidInfo {
         let yfront: u32 = self.prefy * 5 / 1000;
         let ysync: u32 = self.prefy * 5 / 1000;
         let yblank: u32 = self.prefy * 35 / 1000;
-        let clock: u32 = 75 * (self.prefx + xblank) * (self.prefy + yblank);
+        // Use 60Hz for the preferred timing.
+        let clock: u32 = 60 * (self.prefx + xblank) * (self.prefy + yblank) / 10_000;
 
         LittleEndian::write_u16(&mut edid_array[offset..offset + 2], clock as u16);
         edid_array[offset + 2] = (self.prefx & 0xff) as u8;
