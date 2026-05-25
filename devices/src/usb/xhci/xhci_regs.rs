@@ -13,11 +13,12 @@
 use std::sync::atomic::{fence, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 
+use super::xhci_async::XhciAsyncCmd;
 use super::xhci_controller::dma_write_bytes;
 use super::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
 use super::xhci_ring::XhciTRB;
@@ -868,17 +869,34 @@ pub fn build_port_ops(xhci_port: &Arc<Mutex<UsbPort>>) -> RegionOps {
 }
 
 fn xhci_portsc_write(port: &Arc<Mutex<UsbPort>>, value: u32) -> Result<()> {
-    let locked_port = port.lock().unwrap();
-    let xhci = locked_port.xhci.upgrade().unwrap();
-    drop(locked_port);
+    let xhci = port.lock().unwrap().xhci.upgrade().unwrap();
+
+    let is_wpr = value & PORTSC_WPR == PORTSC_WPR;
+    let is_pr = value & PORTSC_PR == PORTSC_PR;
+    if is_wpr || is_pr {
+        let mut locked_port = port.lock().unwrap();
+
+        if locked_port.portsc & PORTSC_PR == PORTSC_PR {
+            return Ok(());
+        }
+        locked_port.portsc |= PORTSC_PR;
+
+        let cmd: XhciAsyncCmd = XhciAsyncCmd::PortReset {
+            xhci: xhci.clone(),
+            port_id: locked_port.port_id,
+            warm: is_wpr,
+        };
+
+        return xhci
+            .lock()
+            .unwrap()
+            .async_cmd_tx
+            .send(cmd)
+            .with_context(|| "Failed to send port reset cmd");
+    }
+
     // Lock controller first.
     let mut locked_xhci = xhci.lock().unwrap();
-    if value & PORTSC_WPR == PORTSC_WPR {
-        return locked_xhci.reset_port(port, true);
-    }
-    if value & PORTSC_PR == PORTSC_PR {
-        return locked_xhci.reset_port(port, false);
-    }
     let mut locked_port = port.lock().unwrap();
     let old_portsc = locked_port.portsc;
     let mut notify = 0;
