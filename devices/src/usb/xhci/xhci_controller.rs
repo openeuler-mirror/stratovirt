@@ -13,7 +13,9 @@
 use std::collections::{HashMap, LinkedList};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, Weak};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -22,6 +24,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
+use super::xhci_async::{AsyncCmdHandler, XhciAsyncCmd};
 use super::xhci_pci::XhciConfig;
 use super::xhci_regs::{
     XhciInterrupter, XhciInterrupterState, XhciOperReg, XhciOperRegState, XHCI_MAX_STREAMS_EXP,
@@ -1176,6 +1179,8 @@ pub struct XhciDevice {
     pub cmd_ring: XhciCommandRing,
     pub mem_space: Arc<AddressSpace>,
     pub enable_streams: bool,
+    pub async_cmd_tx: Sender<XhciAsyncCmd>,
+    async_thread_handle: Option<JoinHandle<()>>,
     /// Runtime Register.
     mfindex_start: Duration,
     mfwrap_timer_id: Option<u64>,
@@ -1241,6 +1246,15 @@ impl XhciDevice {
             config.streams.unwrap_or(true)
         };
 
+        let (cmd_tx, cmd_rx) = channel::<XhciAsyncCmd>();
+
+        let async_thread_handle = match AsyncCmdHandler::init(cmd_rx) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                panic!("failed to create async, {:?}", e);
+            }
+        };
+
         let xhci = XhciDevice {
             packet_count: 0,
             oper,
@@ -1252,6 +1266,8 @@ impl XhciDevice {
             cmd_ring: XhciCommandRing::new(mem_space),
             mem_space: mem_space.clone(),
             enable_streams: streams,
+            async_cmd_tx: cmd_tx,
+            async_thread_handle,
             mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
             mfwrap_timer_id: None,
             bme: bme.clone(),
@@ -1362,40 +1378,6 @@ impl XhciDevice {
         self.mfindex_start = EventLoop::get_ctx(None).unwrap().get_virtual_clock();
 
         self.mfwrap_update();
-    }
-
-    /// Reset xhci port.
-    pub fn reset_port(&mut self, xhci_port: &Arc<Mutex<UsbPort>>, warm_reset: bool) -> Result<()> {
-        let mut locked_port = xhci_port.lock().unwrap();
-        trace::usb_xhci_port_reset(&locked_port.port_id, &warm_reset);
-        let usb_dev = locked_port.dev.as_ref();
-        if usb_dev.is_none() {
-            // No device, no need to reset.
-            return Ok(());
-        }
-
-        let usb_dev = usb_dev.unwrap();
-        // During BIOS or Windows initialize XHCI at early stage, every port should be reset.
-        // Here we need to force reset for USB Host device no matter what state it is.
-        usb_dev.lock().unwrap().force_reset();
-        let speed = usb_dev.lock().unwrap().speed();
-        if speed == USB_SPEED_SUPER && warm_reset {
-            locked_port.portsc |= PORTSC_WRC;
-        }
-        match speed {
-            USB_SPEED_LOW | USB_SPEED_FULL | USB_SPEED_HIGH | USB_SPEED_SUPER => {
-                locked_port.set_port_link_state(PLS_U0);
-                trace::usb_xhci_port_link(&locked_port.port_id, &PLS_U0);
-                locked_port.portsc |= PORTSC_PED;
-            }
-            _ => {
-                error!("Invalid speed {}", speed);
-            }
-        }
-        locked_port.portsc &= !PORTSC_PR;
-        drop(locked_port);
-        self.port_notify(xhci_port, PORTSC_PRC)?;
-        Ok(())
     }
 
     /// Send PortStatusChange event to notify drivers.
@@ -3024,6 +3006,22 @@ impl XhciDevice {
                     intr.lock().unwrap().set_snapshot_state(saved_state);
                 }
             }
+        }
+    }
+}
+
+impl Drop for XhciDevice {
+    fn drop(&mut self) {
+        if let Err(e) = self.async_cmd_tx.send(XhciAsyncCmd::Exit) {
+            error!("failed to send exit command to xhci async thread, {:?}", e);
+            return;
+        }
+
+        let Some(handle) = self.async_thread_handle.take() else {
+            return;
+        };
+        if let Err(e) = handle.join() {
+            error!("failed to join xhci async thread, {:?}", e);
         }
     }
 }
