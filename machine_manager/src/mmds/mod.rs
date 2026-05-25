@@ -191,3 +191,138 @@ impl MmdsStore {
         self.config.ipv4_address
     }
 }
+
+/// Parse a dotted-decimal IPv4 string into a 4-byte array.
+/// Returns `None` if the string is not a valid IPv4 address.
+pub fn parse_ipv4(addr: &str) -> Option<[u8; 4]> {
+    let parts: Vec<&str> = addr.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut result = [0u8; 4];
+    for (i, part) in parts.iter().enumerate() {
+        result[i] = part.parse().ok()?;
+    }
+    Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_from_str_valid() {
+        assert_eq!(MmdsVersion::from_str("V1").unwrap(), MmdsVersion::V1);
+        assert_eq!(MmdsVersion::from_str("V2").unwrap(), MmdsVersion::V2);
+    }
+
+    #[test]
+    fn test_version_from_str_invalid() {
+        assert!(MmdsVersion::from_str("v1").is_err());
+        assert!(MmdsVersion::from_str("V3").is_err());
+        assert!(MmdsVersion::from_str("").is_err());
+    }
+
+    #[test]
+    fn test_put_and_get_json() {
+        let mut store = MmdsStore::new_default();
+        let data = MmdsData {
+            instance_id: "inst-001".to_string(),
+            env_id: "env-abc".to_string(),
+            address: "10.0.0.1".to_string(),
+            access_token_hash: None,
+        };
+        store.put(data).unwrap();
+        let json = store.get_json();
+        assert_eq!(json["instanceID"], "inst-001");
+        assert_eq!(json["envID"], "env-abc");
+        assert_eq!(json["address"], "10.0.0.1");
+    }
+
+    #[test]
+    fn test_patch_updates_only_specified_fields() {
+        let mut store = MmdsStore::new_default();
+        store
+            .put(MmdsData {
+                instance_id: "original".to_string(),
+                env_id: "env-orig".to_string(),
+                address: "1.2.3.4".to_string(),
+                access_token_hash: None,
+            })
+            .unwrap();
+        store
+            .patch(serde_json::json!({"instanceID": "updated"}))
+            .unwrap();
+        let json = store.get_json();
+        assert_eq!(json["instanceID"], "updated");
+        assert_eq!(json["envID"], "env-orig");
+        assert_eq!(json["address"], "1.2.3.4");
+    }
+
+    #[test]
+    fn test_patch_non_object_returns_error() {
+        let mut store = MmdsStore::new_default();
+        assert!(store
+            .patch(serde_json::Value::String("bad".to_string()))
+            .is_err());
+        assert!(store.patch(serde_json::Value::Array(vec![])).is_err());
+    }
+
+    #[test]
+    fn test_generate_and_validate_token() {
+        let mut store = MmdsStore::new_v2();
+        let token = store.generate_token(3600);
+        assert!(store.validate_token(&token));
+        assert!(!store.validate_token("nonexistent-token"));
+    }
+
+    #[test]
+    fn test_token_zero_ttl_is_immediately_invalid() {
+        let mut store = MmdsStore::new_v2();
+        let token = store.generate_token(0);
+        assert!(!store.validate_token(&token));
+    }
+
+    #[test]
+    fn test_get_v1_succeeds_without_token() {
+        let mut store = MmdsStore::new_default();
+        store.config.version = MmdsVersion::V1;
+        assert!(store.handle_get_request(None).is_ok());
+    }
+
+    #[test]
+    fn test_get_v2_requires_valid_token() {
+        let mut store = MmdsStore::new_v2();
+        assert!(store.handle_get_request(None).is_err());
+        assert!(store.handle_get_request(Some("bad-token")).is_err());
+        let token = store.generate_token(3600);
+        assert!(store.handle_get_request(Some(&token)).is_ok());
+    }
+
+    #[test]
+    fn test_is_interface_enabled() {
+        let mut store = MmdsStore::new_default();
+        store.config.network_interfaces = vec!["eth0".to_string(), "eth1".to_string()];
+        assert!(store.is_interface_enabled("eth0"));
+        assert!(store.is_interface_enabled("eth1"));
+        assert!(!store.is_interface_enabled("eth2"));
+    }
+
+    #[test]
+    fn test_parse_ipv4_valid() {
+        assert_eq!(parse_ipv4("169.254.169.254"), Some([169, 254, 169, 254]));
+        assert_eq!(parse_ipv4("0.0.0.0"), Some([0, 0, 0, 0]));
+        assert_eq!(parse_ipv4("255.255.255.255"), Some([255, 255, 255, 255]));
+        assert_eq!(parse_ipv4("192.168.1.1"), Some([192, 168, 1, 1]));
+    }
+
+    #[test]
+    fn test_parse_ipv4_invalid() {
+        assert_eq!(parse_ipv4(""), None);
+        assert_eq!(parse_ipv4("192.168.1"), None);
+        assert_eq!(parse_ipv4("192.168.1.1.1"), None);
+        assert_eq!(parse_ipv4("256.0.0.1"), None);
+        assert_eq!(parse_ipv4("192.168.1.abc"), None);
+        assert_eq!(parse_ipv4("192.168.1.-1"), None);
+    }
+}

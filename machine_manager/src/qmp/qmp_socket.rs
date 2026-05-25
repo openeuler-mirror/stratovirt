@@ -632,6 +632,22 @@ fn qmp_command_exec(
                 );
                 id
             }
+            QmpCommand::mmds_put { arguments, id } => {
+                qmp_response = controller.lock().unwrap().mmds_put(arguments);
+                id
+            }
+            QmpCommand::mmds_patch { arguments, id } => {
+                qmp_response = controller.lock().unwrap().mmds_patch(arguments);
+                id
+            }
+            QmpCommand::mmds_get { arguments: _, id } => {
+                qmp_response = controller.lock().unwrap().mmds_get();
+                id
+            }
+            QmpCommand::mmds_config { arguments, id } => {
+                qmp_response = controller.lock().unwrap().mmds_config(arguments);
+                id
+            }
             _ => None,
         }
     }
