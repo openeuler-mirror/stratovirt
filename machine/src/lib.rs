@@ -32,6 +32,7 @@ use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
@@ -132,7 +133,9 @@ use machine_manager::config::{
 use machine_manager::config::{VirtioSerialInfo, VirtioSerialPortCfg};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
+use machine_manager::mmds::{parse_ipv4, MmdsConfig, MmdsData, MmdsStore, MmdsVersion};
 use machine_manager::notifier::pause_notify;
+use machine_manager::qmp::{qmp_response::Response, qmp_schema};
 use migration::protocol::FileFormat;
 use migration::snapshot::MEMORY_PATH_SUFFIX;
 use migration::{MigrateOps, MigrationManager, MigrationStatus};
@@ -235,8 +238,10 @@ pub struct MachineBase {
     hypervisor: Arc<Mutex<dyn HypervisorOps>>,
     /// migrate hypervisor.
     migration_hypervisor: Arc<Mutex<dyn MigrateOps>>,
-    /// virtio-net-pci devices.
-    net_devs: HashMap<String, Arc<Mutex<dyn VirtioDevice>>>,
+    /// virtio-net-pci devices (non-vhost only), keyed by interface ID.
+    pub(crate) net_devs: HashMap<String, Arc<Mutex<dyn VirtioDevice>>>,
+    /// MMDS data store shared across both standard VM and microvm.
+    pub(crate) mmds_store: Arc<Mutex<MmdsStore>>,
 }
 
 impl MachineBase {
@@ -311,6 +316,7 @@ impl MachineBase {
             hypervisor,
             migration_hypervisor,
             net_devs: HashMap::new(),
+            mmds_store: Arc::new(Mutex::new(MmdsStore::new_default())),
         })
     }
 
@@ -381,6 +387,91 @@ impl MachineBase {
             true
         }
     }
+
+    pub(crate) fn mmds_put(&self, args: qmp_schema::MmdsPutArgs) -> Response {
+        let data = MmdsData {
+            instance_id: args.instance_id,
+            env_id: args.env_id,
+            address: args.address,
+            access_token_hash: args.access_token_hash,
+        };
+        match self.mmds_store.lock().unwrap().put(data) {
+            Ok(_) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    pub(crate) fn mmds_patch(&self, args: qmp_schema::MmdsPatchArgs) -> Response {
+        let mut obj = serde_json::Map::new();
+        if let Some(v) = args.instance_id {
+            obj.insert("instanceID".to_string(), serde_json::Value::String(v));
+        }
+        if let Some(v) = args.env_id {
+            obj.insert("envID".to_string(), serde_json::Value::String(v));
+        }
+        if let Some(v) = args.address {
+            obj.insert("address".to_string(), serde_json::Value::String(v));
+        }
+        if let Some(v) = args.access_token_hash {
+            obj.insert("accessTokenHash".to_string(), serde_json::Value::String(v));
+        }
+        match self
+            .mmds_store
+            .lock()
+            .unwrap()
+            .patch(serde_json::Value::Object(obj))
+        {
+            Ok(_) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    pub(crate) fn mmds_get(&self) -> Response {
+        Response::create_response(self.mmds_store.lock().unwrap().get_json(), None)
+    }
+
+    pub(crate) fn parse_and_update_mmds_config(
+        &self,
+        args: &qmp_schema::MmdsConfigArgs,
+    ) -> Result<(), Response> {
+        let version = match MmdsVersion::from_str(&args.version) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ))
+            }
+        };
+        let ipv4_address = if let Some(addr_str) = &args.ipv4_address {
+            match parse_ipv4(addr_str) {
+                Some(ip) => ip,
+                None => {
+                    return Err(Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(format!(
+                            "Invalid IPv4 address: {}",
+                            addr_str
+                        )),
+                        None,
+                    ))
+                }
+            }
+        } else {
+            [169, 254, 169, 254]
+        };
+        self.mmds_store.lock().unwrap().config = MmdsConfig {
+            version,
+            network_interfaces: args.network_interfaces.clone(),
+            ipv4_address,
+        };
+        Ok(())
+    }
 }
 
 macro_rules! create_device_add_matches {
@@ -404,6 +495,18 @@ macro_rules! create_device_add_matches {
             _ => bail!("Unsupported device: {:?}", $command),
         }
     };
+}
+
+pub(crate) fn apply_mmds_to_net_dev(dev: &mut virtio::Net, store: Option<Arc<Mutex<MmdsStore>>>) {
+    match store {
+        Some(s) => {
+            *dev.mmds_tcp_stack.lock().unwrap() =
+                Some(machine_manager::mmds::tcp_stack::MmdsTcpStack::new(s));
+        }
+        None => {
+            *dev.mmds_tcp_stack.lock().unwrap() = None;
+        }
+    }
 }
 
 pub trait MachineOps: MachineLifecycle {
@@ -1910,6 +2013,16 @@ pub trait MachineOps: MachineLifecycle {
             self.reset_bus(&net_cfg.id)?;
         }
         if !is_vhost {
+            // Wire mmds_store if this interface was pre-configured before the device was added.
+            let store = self.machine_base().mmds_store.clone();
+            let configured = store.lock().unwrap().config.network_interfaces.clone();
+            if configured.contains(&id) {
+                if let Ok(mut dev) = device.lock() {
+                    if let Some(net) = dev.as_any_mut().downcast_mut::<virtio::Net>() {
+                        crate::apply_mmds_to_net_dev(net, Some(store));
+                    }
+                }
+            }
             self.machine_base_mut().net_devs.insert(id, device);
         }
         Ok(())

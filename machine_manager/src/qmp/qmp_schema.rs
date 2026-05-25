@@ -147,7 +147,11 @@ define_qmp_command_enum!(
     trace_set_state("trace-set-state", trace_set_state),
     query_ohui_status("query-ohui-status", OhuiStatus, default),
     query_workloads("query-workloads", query_workloads),
-    detect_silent_audio("detect-silent-audio", DetectSilentAudio)
+    detect_silent_audio("detect-silent-audio", DetectSilentAudio),
+    mmds_put("put-mmds", MmdsPutArgs),
+    mmds_patch("patch-mmds", MmdsPatchArgs),
+    mmds_get("get-mmds", mmds_get, default),
+    mmds_config("put-mmds-config", MmdsConfigArgs)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -2211,6 +2215,53 @@ generate_command_impl!(query_workloads, Empty);
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DetectSilentAudio {}
+
+/// MMDS (Microvm Metadata Service) QMP command argument structs.
+/// Arguments for `put-mmds`: replace the entire MMDS data store.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MmdsPutArgs {
+    #[serde(rename = "instanceID")]
+    pub instance_id: String,
+    #[serde(rename = "envID")]
+    pub env_id: String,
+    pub address: String,
+    #[serde(rename = "accessTokenHash", skip_serializing_if = "Option::is_none")]
+    pub access_token_hash: Option<String>,
+}
+
+/// Arguments for `patch-mmds`: merge partial fields into the MMDS data store.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MmdsPatchArgs {
+    #[serde(rename = "instanceID", skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(rename = "envID", skip_serializing_if = "Option::is_none")]
+    pub env_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(rename = "accessTokenHash", skip_serializing_if = "Option::is_none")]
+    pub access_token_hash: Option<String>,
+}
+
+/// Arguments for `put-mmds-config`: configure the MMDS endpoint.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MmdsConfigArgs {
+    /// "V1" or "V2"
+    pub version: String,
+    /// List of network interface IDs that should intercept MMDS traffic.
+    #[serde(rename = "network-interfaces")]
+    pub network_interfaces: Vec<String>,
+    /// Optional IPv4 address override (default: "169.254.169.254").
+    #[serde(rename = "ipv4-address", skip_serializing_if = "Option::is_none")]
+    pub ipv4_address: Option<String>,
+}
+
+/// Empty arguments struct for `get-mmds` (no arguments required).
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct mmds_get {}
 
 /// VmNotifyEvent
 ///
