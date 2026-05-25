@@ -23,6 +23,8 @@ pub mod error;
 pub mod hid;
 #[cfg(feature = "usb_base")]
 pub mod keyboard;
+#[cfg(feature = "usb_host")]
+mod quirks;
 #[cfg(feature = "usb_storage")]
 pub mod storage;
 #[cfg(feature = "usb_base")]
