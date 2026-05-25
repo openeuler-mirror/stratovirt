@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Parser};
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,7 @@ use crate::pci::config::{
 use crate::pci::{
     init_intx, init_msix, le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState,
 };
+use crate::usb::xhci::xhci_async::XhciAsyncCmd;
 use crate::usb::UsbDevice;
 use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
@@ -233,27 +234,34 @@ impl XhciPciDevice {
     }
 
     pub fn detach_device(&self, id: String) -> Result<()> {
-        let mut locked_xhci = self.xhci.lock().unwrap();
-        let usb_port = locked_xhci.find_usb_port_by_id(&id);
-        if usb_port.is_none() {
-            bail!("Failed to detach device: id {} not found", id);
-        }
-        let usb_port = usb_port.unwrap();
-        let slot_id = usb_port.lock().unwrap().slot_id;
-        locked_xhci.detach_slot(slot_id)?;
-        locked_xhci.port_update(&usb_port, true)?;
+        let port = {
+            let mut locked_xhci = self.xhci.lock().unwrap();
 
-        // Unrealize device and discharge usb port.
-        let mut locked_port = usb_port.lock().unwrap();
-        let dev = locked_port.dev.as_ref().unwrap();
-        let mut locked_dev = dev.lock().unwrap();
-        trace::usb_xhci_detach_device(&locked_port.port_id, &locked_dev.device_id());
-        locked_dev.usb_device_base_mut().unplugged = true;
-        locked_dev.unrealize()?;
-        drop(locked_dev);
-        locked_xhci.discharge_usb_port(&mut locked_port);
+            let usb_port = locked_xhci
+                .find_usb_port_by_id(&id)
+                .ok_or_else(|| anyhow!("Failed to detach device: id {} not found", id))?;
 
-        Ok(())
+            let slot_id = {
+                let locked_port = usb_port.lock().unwrap();
+                locked_port.slot_id
+            };
+
+            locked_xhci.detach_slot(slot_id)?;
+            locked_xhci.port_update(&usb_port, true)?;
+
+            usb_port
+        };
+
+        let cmd = XhciAsyncCmd::DeviceDetach {
+            xhci: self.xhci.clone(),
+            port,
+        };
+        self.xhci
+            .lock()
+            .unwrap()
+            .async_cmd_tx
+            .send(cmd)
+            .with_context(|| "Failed to send device detach cmd")
     }
 }
 
