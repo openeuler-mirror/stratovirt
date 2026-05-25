@@ -438,6 +438,7 @@ dependencies = [
  "alsa",
  "anyhow",
  "audio",
+ "bitflags 1.3.2",
  "block_backend",
  "bytemuck",
  "byteorder",

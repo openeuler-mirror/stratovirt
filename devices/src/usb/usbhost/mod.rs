@@ -54,6 +54,7 @@ use crate::usb::{
         USB_TOKEN_IN, USB_TOKEN_OUT,
     },
     descriptor::USB_MAX_INTERFACES,
+    quirks::{get_device_quirks, UsbQuirk},
     xhci::xhci_controller::XhciDevice,
     UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
@@ -558,6 +559,7 @@ pub struct UsbHost {
     oh_dev: OhUsbDev,
     /// Indicate whether default state.
     is_default_state: bool,
+    quirks: UsbQuirk,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for util::link_list::List.
@@ -602,6 +604,7 @@ impl UsbHost {
             #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
             oh_dev,
             is_default_state: false,
+            quirks: UsbQuirk::empty(),
         })
     }
 
@@ -846,6 +849,9 @@ impl UsbHost {
         self.detach_kernel(true)?;
 
         self.ddesc = self.libdev.as_ref().unwrap().device_descriptor().ok();
+        self.config.vendorid = self.ddesc.as_ref().unwrap().vendor_id();
+        self.config.productid = self.ddesc.as_ref().unwrap().product_id();
+        self.quirks = get_device_quirks(self.config.vendorid, self.config.productid);
 
         self.ep_update();
 
@@ -931,19 +937,34 @@ impl UsbHost {
         trace::usb_host_set_config(self.config.hostbus, self.config.hostaddr, config);
         self.release_interfaces();
 
-        if let Err(e) = self
+        let current_config = self
             .handle
             .as_mut()
             .unwrap()
-            .set_active_configuration(config)
-        {
-            error!("Failed to set active configuration: {:?}", e);
-            if e == Error::NoDevice {
-                packet.status = UsbPacketStatus::NoDev
-            } else {
-                packet.status = UsbPacketStatus::Stall;
+            .active_configuration()
+            .unwrap_or(0);
+
+        let needs_set = if current_config == config {
+            self.quirks.always_set_config()
+        } else {
+            !self.quirks.ignore_set_config()
+        };
+
+        if needs_set {
+            if let Err(e) = self
+                .handle
+                .as_mut()
+                .unwrap()
+                .set_active_configuration(config)
+            {
+                error!("Failed to set active configuration: {:?}", e);
+                if e == Error::NoDevice {
+                    packet.status = UsbPacketStatus::NoDev
+                } else {
+                    packet.status = UsbPacketStatus::Stall;
+                }
+                return;
             }
-            return;
         }
 
         packet.status = self.claim_interfaces();
