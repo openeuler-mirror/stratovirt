@@ -170,4 +170,26 @@ impl IrqState {
             irq_handler.set_level_irq(self.irq, true)
         }
     }
+
+    pub fn raise_irq(&self) -> Result<()> {
+        if let Some(irq_handler) = self.irq_handler.as_ref() {
+            if let Some(irq_fd) = &self.irq_fd {
+                return irq_handler.write_irqfd(irq_fd.clone());
+            }
+
+            irq_handler.set_level_irq(self.irq, true)?
+        }
+        Ok(())
+    }
+
+    pub fn lower_irq(&self) -> Result<()> {
+        if let Some(irq_handler) = self.irq_handler.as_ref() {
+            if let Some(irq_fd) = &self.irq_fd {
+                return irq_handler.write_irqfd(irq_fd.clone());
+            }
+
+            irq_handler.set_level_irq(self.irq, false)?
+        }
+        Ok(())
+    }
 }
