@@ -363,12 +363,9 @@ impl SocketHandler {
     /// The socket file descriptor is broken.
     pub fn send_str(&mut self, s: &str) -> std::io::Result<()> {
         self.stream.flush().unwrap();
-        let msg = s.to_string() + "\r";
+        let msg = s.to_string() + "\r\n";
         match self.stream.write_all(msg.as_bytes()) {
-            Ok(_) => {
-                let _ = self.stream.write(b"\n")?;
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             Err(_) => Err(Error::new(
                 ErrorKind::BrokenPipe,
                 "The socket pipe is broken!",
