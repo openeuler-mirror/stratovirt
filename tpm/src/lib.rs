@@ -528,3 +528,177 @@ impl Ptm for PtmGetState {
         4 * std::mem::size_of::<u32>()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ptmresult() -> Result<()> {
+        let mut result_code: PtmResult = 0;
+
+        assert_eq!(result_code.get_req_size(), 0);
+        assert_eq!(result_code.get_resp_size(), 4);
+        assert!(result_code.to_req_buf().is_empty());
+
+        let buf: &[u8] = &[0, 0, 0, 1];
+        result_code.update_ptm_with_response(buf)?;
+        assert_eq!(result_code.get_result_code(), 0x1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ptmcap() -> Result<()> {
+        let mut cap: PtmCap = 0x0;
+
+        assert_eq!(cap.get_req_size(), 0);
+        assert_eq!(cap.get_resp_size(), 8);
+        assert!(cap.to_req_buf().is_empty());
+
+        let buf: &[u8] = &[0, 0, 0, 0xE, 0, 0, 0xFF, 0xFF];
+        cap.update_ptm_with_response(buf)?;
+        assert_eq!(cap.get_result_code(), 0xE);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ptmest() -> Result<()> {
+        let mut est: PtmEst = PtmEst::new();
+
+        assert_eq!(est.get_req_size(), 0);
+        assert_eq!(est.get_resp_size(), 8);
+        assert!(est.to_req_buf().is_empty());
+
+        let buf: &[u8] = &[0, 0, 0xE, 0, 0xC, 0, 1, 1];
+        est.update_ptm_with_response(buf)?;
+        assert_eq!(est.get_result_code(), 0xE00);
+        assert_eq!(est.resp.bit, 0xC);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ptminit() -> Result<()> {
+        let mut init: PtmInit = PtmInit::new();
+        init.init_flags = 0x1;
+
+        assert_eq!(init.get_req_size(), 4);
+        assert_eq!(init.get_resp_size(), 4);
+
+        let buf = init.to_req_buf();
+        assert_eq!(buf, [0x0, 0x0, 0x0, 0x1]);
+
+        let response_buf: &[u8] = &[0, 0, 0xE, 0];
+        init.update_ptm_with_response(response_buf)?;
+        assert_eq!(init.get_result_code(), 0xE00);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ptmsetbuffersize() -> Result<()> {
+        let mut psbs: PtmSetBufferSize = PtmSetBufferSize::new(1024);
+
+        assert_eq!(psbs.get_req_size(), 4);
+        assert_eq!(psbs.get_resp_size(), 16);
+
+        let req_buf = psbs.to_req_buf();
+        assert_eq!(req_buf, 1024u32.to_be_bytes());
+
+        let buf: &[u8] = &[
+            0, 0x12, 0x34, 0x56, 0, 0, 0, 0xA, 0, 0, 0, 0xB, 0, 0, 0, 0xC,
+        ];
+        psbs.update_ptm_with_response(buf)?;
+        assert_eq!(psbs.get_result_code(), 0x123456);
+        assert_eq!(psbs.get_bufsize(), 0xA);
+        assert_eq!(psbs.resp.minsize, 0xB);
+        assert_eq!(psbs.resp.maxsize, 0xC);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ptmsetloc() -> Result<()> {
+        let mut psl = PtmSetLoc::new();
+        psl.loc = 0x3;
+
+        assert_eq!(psl.get_req_size(), 4);
+        assert_eq!(psl.get_resp_size(), 4);
+
+        let req_buf = psl.to_req_buf();
+        assert_eq!(req_buf, [0x0, 0x0, 0x0, 0x3]);
+
+        let resp_buf: &[u8] = &[0x0, 0x0, 0x0, 0x1];
+        psl.update_ptm_with_response(resp_buf)?;
+        assert_eq!(psl.get_result_code(), 0x1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ptmresetest() -> Result<()> {
+        let mut pre = PtmResetEst::new();
+        pre.loc = 0x2;
+
+        assert_eq!(pre.get_req_size(), 4);
+        assert_eq!(pre.get_resp_size(), 4);
+
+        let req_buf = pre.to_req_buf();
+        assert_eq!(req_buf, [0x0, 0x0, 0x0, 0x2]);
+
+        let resp_buf: &[u8] = &[0x0, 0x0, 0x0, 0x0];
+        pre.update_ptm_with_response(resp_buf)?;
+
+        assert_eq!(pre.get_result_code(), 0x0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ptmgetstate() -> Result<()> {
+        let mut pgs = PtmGetState::default();
+        pgs.req_state_flags = 0x1;
+        pgs.req_type = 0x2;
+        pgs.req_offset = 0x3;
+
+        assert_eq!(pgs.get_req_size(), 12);
+        assert_eq!(pgs.get_resp_size(), 16);
+
+        let req_buf = pgs.to_req_buf();
+        assert_eq!(req_buf.len(), 12);
+        assert_eq!(req_buf[0..4], [0x0, 0x0, 0x0, 0x1]);
+        assert_eq!(req_buf[4..8], [0x0, 0x0, 0x0, 0x2]);
+        assert_eq!(req_buf[8..12], [0x0, 0x0, 0x0, 0x3]);
+
+        let resp_buf_err: &[u8] = &[
+            0x0, 0x0, 0x0, 0x5, // tpm_result = 5
+            0x0, 0x0, 0x0, 0x1, // resp_state_flags = 1
+            0x0, 0x0, 0x4, 0x0, // totlength = 1024
+            0x0, 0x0, 0x2, 0x0, // length = 512
+        ];
+        pgs.update_ptm_with_response(resp_buf_err)?;
+        assert_eq!(pgs.get_result_code(), 0x5);
+        assert_eq!(pgs.resp_state_flags, 0x1);
+        assert_eq!(pgs.totlength, 1024);
+        assert_eq!(pgs.length, 512);
+
+        let resp_buf_masked: &[u8] = &[
+            0x0, 0x0, 0x08, 0x05, // tpm_result = 0x805 (0x805 & 0x800 != 0)
+            0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x4, 0x0, 0x0, 0x0, 0x2, 0x0,
+        ];
+        pgs.update_ptm_with_response(resp_buf_masked)?;
+        assert_eq!(pgs.get_result_code(), TPM_SUCCESS);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_with_invalid_length() {
+        let mut result_code: PtmResult = 0;
+        let invalid_buf: &[u8] = &[0, 0, 1];
+
+        let res = result_code.update_ptm_with_response(invalid_buf);
+        assert!(res.is_err());
+
+        if let Err(Error::ConvertToPtm(_)) = res {
+            // pass
+        } else {
+            panic!("Expected Error::ConvertToPtm, got {:?}", res);
+        }
+    }
+}
