@@ -1942,6 +1942,9 @@ name = "tpm"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "byteorder",
+ "libc",
+ "log",
  "thiserror",
  "vmm-sys-util",
 ]
