@@ -2720,7 +2720,10 @@ pub trait MachineOps: MachineLifecycle {
         for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
             // Check whether the device id exists to ensure device uniqueness.
-            let id = get_value_of_parameter("id", cfg_args)?;
+            // Some devices (e.g. virtio-serial-device) have an optional id with an
+            // empty default; fall back to "" so that microVM (no PCI bus) skips
+            // the uniqueness check rather than bailing out here.
+            let id = get_value_of_parameter("id", cfg_args).unwrap_or_default();
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
             #[cfg(any(feature = "scream", feature = "virtio_snd"))]
