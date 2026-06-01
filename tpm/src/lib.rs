@@ -10,14 +10,25 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod emulator;
 pub mod socket;
 
 use anyhow::anyhow;
+use byteorder::{BigEndian, ByteOrder};
 use thiserror::Error;
 
 pub const TPM_CRB_BUFFER_MAX: usize = 3968; // 0x1000 - 0x80 TPM_CRB_ADDR_SIZE - A_CRB_DATA_BUFFER
 pub const TPM_TIS_BUFFER_MAX: usize = 4096;
 pub const TPM_SUCCESS: u32 = 0x0;
+
+const PTM_INIT_FLAG_DELETE_VOLATILE: u32 = 1;
+
+/*
+ * TPM device should implement this trait.
+ */
+pub trait OnComplete {
+    fn on_complete(&mut self, res: emulator::Result<usize>, buf: Vec<u8>);
+}
 
 /*
  * Structures required to process Request and Responses of Control commands
@@ -87,27 +98,30 @@ impl Ptm for PtmResult {
     }
 
     fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
-        const EXPECT_LEN: usize = 4;
-
         let len = buf.len();
-        if len != EXPECT_LEN {
+        let expect_len = self.get_resp_size();
+
+        if len != expect_len {
             return Err(Error::ConvertToPtm(anyhow!(
-                "PtmRes buffer is of incorrect length. Got {len} expected {EXPECT_LEN}."
+                "PtmRes buffer is of incorrect length. Got {len} expected {expect_len}."
             )));
         }
 
-        *self = u32::from_be_bytes(buf.try_into().unwrap());
+        *self = BigEndian::read_u32(&buf[..size_of::<PtmResult>()]);
         Ok(())
     }
 
+    #[inline]
     fn get_result_code(&self) -> u32 {
         *self
     }
 
+    #[inline]
     fn get_req_size(&self) -> usize {
         0
     }
 
+    #[inline]
     fn get_resp_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }
@@ -124,25 +138,30 @@ impl Ptm for PtmCap {
     }
 
     fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
-        let expected_len = 8;
         let len = buf.len();
+        let expect_len = self.get_resp_size();
+
         if len != self.get_resp_size() {
             return Err(Error::ConvertToPtm(anyhow!(
-                "Response for GetCapability cmd is of incorrect length. Got {len} expected {expected_len}."
+                "Response for GetCapability cmd is of incorrect length. Got {len} expected {expect_len}."
             )));
         }
-        *self = u64::from_be_bytes(buf[..].try_into().unwrap());
+        *self = BigEndian::read_u64(&buf[..size_of::<u64>()]);
+
         Ok(())
     }
 
+    #[inline]
     fn get_result_code(&self) -> u32 {
         ((*self) >> 32) as u32
     }
 
+    #[inline]
     fn get_req_size(&self) -> usize {
         0
     }
 
+    #[inline]
     fn get_resp_size(&self) -> usize {
         std::mem::size_of::<u64>()
     }
@@ -169,12 +188,6 @@ impl PtmEst {
     }
 }
 
-impl Default for PtmEst {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Ptm for PtmEst {
     fn to_req_buf(&self) -> Vec<u8> {
         // tpm's GetTpmEstablished call doesn't need any supporting message
@@ -183,26 +196,30 @@ impl Ptm for PtmEst {
     }
 
     fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
-        let expected_len = 8;
         let len = buf.len();
-        if len != expected_len {
+        let expect_len = self.get_resp_size();
+
+        if len != expect_len {
             return Err(Error::ConvertToPtm(anyhow!(
-                "Response for GetTpmEstablished cmd is of incorrect length. Got {len} expected {expected_len}."
+                "Response for GetTpmEstablished cmd is of incorrect length. Got {len} expected {expect_len}."
             )));
         }
-        self.result_code = u32::from_be_bytes(buf[..4].try_into().unwrap());
+        self.result_code = BigEndian::read_u32(&buf[..size_of::<u32>()]);
         self.resp.bit = buf[4];
         Ok(())
     }
 
+    #[inline]
     fn get_result_code(&self) -> u32 {
         self.result_code
     }
 
+    #[inline]
     fn get_req_size(&self) -> usize {
         0
     }
 
+    #[inline]
     fn get_resp_size(&self) -> usize {
         2 * std::mem::size_of::<u32>()
     }
@@ -215,12 +232,6 @@ pub struct PtmInit {
     pub init_flags: u32,
     /* response */
     pub result_code: PtmResult,
-}
-
-impl Default for PtmInit {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl PtmInit {
@@ -238,25 +249,29 @@ impl Ptm for PtmInit {
     }
 
     fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
-        let expected_len = 4;
         let len = buf.len();
-        if len != expected_len {
+        let expect_len = self.get_resp_size();
+
+        if len != expect_len {
             return Err(Error::ConvertToPtm(anyhow!(
-                "Response for Init cmd is of incorrect length. Got {len} expected {expected_len}."
+                "Response for Init cmd is of incorrect length. Got {len} expected {expect_len}."
             )));
         }
-        self.result_code = u32::from_be_bytes(buf[..].try_into().unwrap());
+        self.result_code = BigEndian::read_u32(buf);
         Ok(())
     }
 
+    #[inline]
     fn get_result_code(&self) -> u32 {
         self.result_code
     }
 
+    #[inline]
     fn get_req_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }
 
+    #[inline]
     fn get_resp_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }
@@ -307,6 +322,8 @@ impl PtmSetBufferSize {
             result_code: 0,
         }
     }
+
+    #[inline]
     pub fn get_bufsize(&self) -> u32 {
         self.resp.bufsize
     }
@@ -318,35 +335,33 @@ impl Ptm for PtmSetBufferSize {
     }
 
     fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
-        let expected_len = 16;
         let len = buf.len();
-        if len != expected_len {
+        let expect_len = self.get_resp_size();
+
+        if len != expect_len {
             return Err(Error::ConvertToPtm(anyhow!(
-                "Response for CmdSetBufferSize cmd is of incorrect length. Got {len} expected {expected_len}."
+                "Response for CmdSetBufferSize cmd is of incorrect length. Got {len} expected {expect_len}."
             )));
         }
-        self.result_code = u32::from_be_bytes(buf[0..4].try_into().unwrap());
-
-        let bufsize = &buf[4..8];
-        self.resp.bufsize = u32::from_be_bytes(bufsize.try_into().unwrap());
-
-        let minsize = &buf[8..12];
-        self.resp.minsize = u32::from_be_bytes(minsize.try_into().unwrap());
-
-        let maxsize = &buf[12..16];
-        self.resp.maxsize = u32::from_be_bytes(maxsize.try_into().unwrap());
+        self.result_code = BigEndian::read_u32(&buf[0..4]);
+        self.resp.bufsize = BigEndian::read_u32(&buf[4..8]);
+        self.resp.minsize = BigEndian::read_u32(&buf[8..12]);
+        self.resp.maxsize = BigEndian::read_u32(&buf[12..16]);
 
         Ok(())
     }
 
+    #[inline]
     fn get_result_code(&self) -> u32 {
         self.result_code
     }
 
+    #[inline]
     fn get_req_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }
 
+    #[inline]
     fn get_resp_size(&self) -> usize {
         4 * std::mem::size_of::<u32>()
     }
@@ -358,12 +373,6 @@ pub struct PtmSetLoc {
     pub loc: u32,
     /* response */
     pub result_code: PtmResult,
-}
-
-impl Default for PtmSetLoc {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl PtmSetLoc {
@@ -381,25 +390,29 @@ impl Ptm for PtmSetLoc {
     }
 
     fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
-        let expected_len = 4;
         let len = buf.len();
-        if len != expected_len {
+        let expect_len = self.get_resp_size();
+
+        if len != expect_len {
             return Err(Error::ConvertToPtm(anyhow!(
-                "Response for SetLocality cmd is of incorrect length. Got {len} expected {expected_len}."
+                "Response for SetLocality cmd is of incorrect length. Got {len} expected {expect_len}."
             )));
         }
-        self.result_code = u32::from_be_bytes(buf[..].try_into().unwrap());
+        self.result_code = BigEndian::read_u32(buf);
         Ok(())
     }
 
+    #[inline]
     fn get_result_code(&self) -> u32 {
         self.result_code
     }
 
+    #[inline]
     fn get_req_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }
 
+    #[inline]
     fn get_resp_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }
@@ -411,12 +424,6 @@ pub struct PtmResetEst {
     pub loc: u32,
     /* response */
     pub result_code: PtmResult,
-}
-
-impl Default for PtmResetEst {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl PtmResetEst {
@@ -434,25 +441,29 @@ impl Ptm for PtmResetEst {
     }
 
     fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
-        let expected_len = 4;
         let len = buf.len();
-        if len != expected_len {
+        let expect_len = self.get_resp_size();
+
+        if len != expect_len {
             return Err(Error::ConvertToPtm(anyhow!(
-                "Response for ResetEstablishedBit cmd is of incorrect length. Got {len} expected {expected_len}."
+                "Response for ResetEstablishedBit cmd is of incorrect length. Got {len} expected {expect_len}."
             )));
         }
-        self.result_code = u32::from_be_bytes(buf[..].try_into().unwrap());
+        self.result_code = BigEndian::read_u32(buf);
         Ok(())
     }
 
+    #[inline]
     fn get_result_code(&self) -> u32 {
         self.result_code
     }
 
+    #[inline]
     fn get_req_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }
 
+    #[inline]
     fn get_resp_size(&self) -> usize {
         std::mem::size_of::<u32>()
     }

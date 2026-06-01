@@ -8,5 +8,8 @@ description = "Tpm device emulation"
 
 [dependencies]
 anyhow = "1.0"
+byteorder = "1.4.3"
+libc = "0.2"
+log = "0.4"
 thiserror = "1.0"
 vmm-sys-util = "0.12.1"
