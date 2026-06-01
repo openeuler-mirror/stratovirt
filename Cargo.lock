@@ -1941,6 +1941,7 @@ dependencies = [
 name = "tpm"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "thiserror",
  "vmm-sys-util",
 ]
