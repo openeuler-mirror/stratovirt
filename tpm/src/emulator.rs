@@ -433,7 +433,7 @@ impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
         Ok(())
     }
 
-    pub fn reset_established_falg(&mut self, loc: u8) -> Result<()> {
+    pub fn reset_established_flag(&mut self, loc: u8) -> Result<()> {
         if self.cur_loc != loc as u32 {
             warn!(
                 "Reset established flag with another locality: {} current locality: {}",

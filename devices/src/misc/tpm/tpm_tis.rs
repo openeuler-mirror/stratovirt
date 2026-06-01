@@ -16,6 +16,7 @@ use std::time::Duration;
 use std::{cmp, thread};
 
 use anyhow::{anyhow, Context, Result};
+use byteorder::{BigEndian, ByteOrder};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
@@ -477,9 +478,8 @@ impl TpmTis {
             if let Some(buffer) = self.buffer.as_ref() {
                 let mut expected_len = 0;
                 if buffer.len() >= 6 {
-                    let mut size_bytes = [0u8; 4];
-                    size_bytes.copy_from_slice(&buffer[2..6]);
-                    expected_len = u32::from_be_bytes(size_bytes) as usize;
+                    expected_len =
+                        BigEndian::read_u32(&buffer[TPM_RSP_PS_OFFSET..TPM_RSP_RC_OFFSET]) as usize;
                 }
 
                 let len = std::cmp::min(expected_len, self.backend_buff_size);
@@ -627,8 +627,8 @@ impl SysBusDevOps for TpmTis {
     gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
     fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
-        let locty = locality_from_addr(offset);
-        let locty_idx = locty as usize;
+        let locty_u8 = locality_from_addr(offset);
+        let locty_usize = locty_u8 as usize;
 
         let reg_offset = (offset & 0xFFC) as u16;
         let shift = (offset & 0x3) as usize;
@@ -637,8 +637,8 @@ impl SysBusDevOps for TpmTis {
 
         match reg_offset {
             TPM_TIS_REG_ACCESS => {
-                let mut access = self.loc[locty_idx].access & !TPM_TIS_ACCESS_SEIZE;
-                if self.check_request_use_except(locty) {
+                let mut access = self.loc[locty_usize].access & !TPM_TIS_ACCESS_SEIZE;
+                if self.check_request_use_except(locty_u8) {
                     access |= TPM_TIS_ACCESS_PENDING_REQUEST;
                 }
 
@@ -670,27 +670,27 @@ impl SysBusDevOps for TpmTis {
                 }
             }
             TPM_TIS_REG_INT_ENABLE => {
-                val = self.loc[locty_idx].inte;
+                val = self.loc[locty_usize].inte;
             }
             TPM_TIS_REG_INT_VECTOR => {
                 val = self.sysbusdev_base().irq_state.irq;
             }
             TPM_TIS_REG_INT_STATUS => {
-                val = self.loc[locty_idx].ints;
+                val = self.loc[locty_usize].ints;
             }
             TPM_TIS_REG_INTF_CAPABILITY => {
                 val = TPM_TIS_CAPABILITIES_SUPPORTED2_0;
             }
             TPM_TIS_REG_STS => {
-                if self.active_locty == locty {
+                if self.active_locty == locty_u8 {
                     let mut burst_count: u32 = 0;
-                    if (self.loc[locty_idx].sts & TPM_TIS_STS_DATA_AVAILABLE) != 0 {
+                    if (self.loc[locty_usize].sts & TPM_TIS_STS_DATA_AVAILABLE) != 0 {
                         if let Some(buffer) = self.buffer.as_ref() {
                             let mut expected_len = 0;
                             if buffer.len() >= 6 {
-                                let mut size_bytes = [0u8; 4];
-                                size_bytes.copy_from_slice(&buffer[2..6]);
-                                expected_len = u32::from_be_bytes(size_bytes) as usize;
+                                expected_len = BigEndian::read_u32(
+                                    &buffer[TPM_RSP_PS_OFFSET..TPM_RSP_RC_OFFSET],
+                                ) as usize;
                             }
                             let len = std::cmp::min(expected_len, self.backend_buff_size);
                             burst_count = len.saturating_sub(self.rw_offset as usize) as u32;
@@ -705,14 +705,14 @@ impl SysBusDevOps for TpmTis {
                         }
                         burst_count = avail;
                     }
-                    val = (burst_count << TPM_TIS_BURST_COUNT_SHIFT) | self.loc[locty_idx].sts;
+                    val = (burst_count << TPM_TIS_BURST_COUNT_SHIFT) | self.loc[locty_usize].sts;
                 }
             }
             TPM_TIS_REG_DATA_FIFO | TPM_TIS_REG_DATA_XFIFO..=TPM_TIS_REG_DATA_XFIFO_END => {
-                if self.active_locty == locty {
+                if self.active_locty == locty_u8 {
                     for byte in data.iter_mut().take(copy_len) {
-                        if self.loc[locty_idx].state == TpmTisState::Completion {
-                            *byte = self.data_read(locty);
+                        if self.loc[locty_usize].state == TpmTisState::Completion {
+                            *byte = self.data_read(locty_u8);
                         } else {
                             *byte = TPM_TIS_NO_DATA_BYTE;
                         }
@@ -721,7 +721,7 @@ impl SysBusDevOps for TpmTis {
                 return true;
             }
             TPM_TIS_REG_INTERFACE_ID => {
-                val = self.loc[locty_idx].iface_id;
+                val = self.loc[locty_usize].iface_id;
             }
             TPM_TIS_REG_DID_VID => {
                 val = (TPM_TIS_TPM_DID << 16) | TPM_TIS_TPM_VID;
@@ -757,14 +757,14 @@ impl SysBusDevOps for TpmTis {
             );
         }
 
-        let locty = locality_from_addr(offset);
-        let locty_idx = locty as usize;
+        let locty_u8 = locality_from_addr(offset);
+        let locty_usize = locty_u8 as usize;
 
         let reg_offset = (offset & 0xFFC) as u16;
         let shift = (offset & 0x3) as usize;
         let copy_len = std::cmp::min(data.len(), 4 - shift);
 
-        if locty == 4 || locty_idx >= TPM_TIS_NUM_LOCALITIES {
+        if locty_usize == 4 || locty_usize >= TPM_TIS_NUM_LOCALITIES {
             return true;
         }
 
@@ -782,7 +782,7 @@ impl SysBusDevOps for TpmTis {
                 let mut set_new_locty = true;
 
                 if (write_val_u8 & TPM_TIS_ACCESS_ACTIVE_LOCALITY) != 0 {
-                    if self.active_locty == locty {
+                    if self.active_locty == locty_u8 {
                         let mut newlocty = TPM_TIS_NO_LOCALITY;
                         if let Some(idx) = self
                             .loc
@@ -794,7 +794,7 @@ impl SysBusDevOps for TpmTis {
                         if newlocty < TPM_TIS_NUM_LOCALITIES as u8 {
                             set_new_locty = false;
                             if let Err(EmulatorError::Disconnected) =
-                                self.prep_abort(locty, newlocty)
+                                self.prep_abort(locty_u8, newlocty)
                             {
                                 if !self.backend_disconnected {
                                     self.backend_disconnected = true;
@@ -812,34 +812,34 @@ impl SysBusDevOps for TpmTis {
                             active_locty = TPM_TIS_NO_LOCALITY;
                         }
                     } else {
-                        self.loc[locty_idx].access &= !TPM_TIS_ACCESS_REQUEST_USE;
+                        self.loc[locty_usize].access &= !TPM_TIS_ACCESS_REQUEST_USE;
                     }
                 }
 
                 if (write_val_u8 & TPM_TIS_ACCESS_BEEN_SEIZED) != 0 {
-                    self.loc[locty_idx].access &= !TPM_TIS_ACCESS_BEEN_SEIZED;
+                    self.loc[locty_usize].access &= !TPM_TIS_ACCESS_BEEN_SEIZED;
                 }
 
                 if (write_val_u8 & TPM_TIS_ACCESS_SEIZE) != 0 {
                     let is_active_valid = self.active_locty < TPM_TIS_NUM_LOCALITIES as u8;
 
-                    if !is_active_valid || (locty > self.active_locty) {
+                    if !is_active_valid || (locty_u8 > self.active_locty) {
                         let already_seizing =
-                            (self.loc[locty_idx].access & TPM_TIS_ACCESS_SEIZE) != 0;
+                            (self.loc[locty_usize].access & TPM_TIS_ACCESS_SEIZE) != 0;
 
-                        let higher_seize = (locty_idx + 1..TPM_TIS_NUM_LOCALITIES)
+                        let higher_seize = (locty_usize + 1..TPM_TIS_NUM_LOCALITIES)
                             .any(|l| (self.loc[l].access & TPM_TIS_ACCESS_SEIZE) != 0);
 
                         if !already_seizing && !higher_seize {
-                            for l in 0..locty_idx {
+                            for l in 0..locty_usize {
                                 self.loc[l].access &= !TPM_TIS_ACCESS_SEIZE;
                             }
 
-                            self.loc[locty_idx].access |= TPM_TIS_ACCESS_SEIZE;
+                            self.loc[locty_usize].access |= TPM_TIS_ACCESS_SEIZE;
                             set_new_locty = false;
 
                             if let Err(EmulatorError::Disconnected) =
-                                self.prep_abort(self.active_locty, locty)
+                                self.prep_abort(self.active_locty, locty_u8)
                             {
                                 if !self.backend_disconnected {
                                     self.backend_disconnected = true;
@@ -857,11 +857,12 @@ impl SysBusDevOps for TpmTis {
                     }
                 }
 
-                if (write_val_u8 & TPM_TIS_ACCESS_REQUEST_USE) != 0 && self.active_locty != locty {
+                if (write_val_u8 & TPM_TIS_ACCESS_REQUEST_USE) != 0 && self.active_locty != locty_u8
+                {
                     if self.active_locty < TPM_TIS_NUM_LOCALITIES as u8 {
-                        self.loc[locty_idx].access |= TPM_TIS_ACCESS_REQUEST_USE;
+                        self.loc[locty_usize].access |= TPM_TIS_ACCESS_REQUEST_USE;
                     } else {
-                        active_locty = locty;
+                        active_locty = locty_u8;
                     }
                 }
 
@@ -870,7 +871,7 @@ impl SysBusDevOps for TpmTis {
                 }
             }
             TPM_TIS_REG_INT_ENABLE => {
-                let mut current_bytes = self.loc[locty_idx].inte.to_le_bytes();
+                let mut current_bytes = self.loc[locty_usize].inte.to_le_bytes();
                 current_bytes[shift..shift + copy_len].copy_from_slice(&data[..copy_len]);
                 let new_inte = u32::from_le_bytes(current_bytes);
 
@@ -878,27 +879,28 @@ impl SysBusDevOps for TpmTis {
                     | TPM_TIS_INT_POLARITY_MASK
                     | TPM_TIS_INTERRUPTS_SUPPORTED;
 
-                self.loc[locty_idx].inte = new_inte & allowed_mask;
+                self.loc[locty_usize].inte = new_inte & allowed_mask;
             }
             TPM_TIS_REG_INT_VECTOR => {}
             TPM_TIS_REG_INT_STATUS => {
                 let clear_mask = write_val & TPM_TIS_INTERRUPTS_SUPPORTED;
-                if clear_mask != 0 && (self.loc[locty_idx].ints & TPM_TIS_INTERRUPTS_SUPPORTED) != 0
+                if clear_mask != 0
+                    && (self.loc[locty_usize].ints & TPM_TIS_INTERRUPTS_SUPPORTED) != 0
                 {
-                    self.loc[locty_idx].ints &= !clear_mask;
-                    if self.loc[locty_idx].ints == 0 {
+                    self.loc[locty_usize].ints &= !clear_mask;
+                    if self.loc[locty_usize].ints == 0 {
                         let _ = self.sysbusdev_base().irq_state.lower_irq();
                         debug!("All TPM interrupts cleared, lowering IRQ.");
                     }
                 }
             }
             TPM_TIS_REG_STS => {
-                if self.active_locty != locty {
+                if self.active_locty != locty_u8 {
                     return true;
                 }
 
                 if (write_val & TPM_TIS_STS_COMMAND_CANCEL) != 0
-                    && self.loc[locty_idx].state == TpmTisState::Execution
+                    && self.loc[locty_usize].state == TpmTisState::Execution
                 {
                     if let Err(e) = self.emulator.lock().unwrap().cancel_cmd() {
                         if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
@@ -915,9 +917,15 @@ impl SysBusDevOps for TpmTis {
                         warn!("Tpm backend cancel command failed: {:?}", e);
                     }
                 }
-                if (write_val & TPM_TIS_STS_RESET_ESTABLISHMENT) != 0 && (3..=4_u8).contains(&locty)
+                if (write_val & TPM_TIS_STS_RESET_ESTABLISHMENT) != 0
+                    && (3..=4_u8).contains(&locty_u8)
                 {
-                    if let Err(e) = self.emulator.lock().unwrap().reset_established_falg(locty) {
+                    if let Err(e) = self
+                        .emulator
+                        .lock()
+                        .unwrap()
+                        .reset_established_flag(locty_u8)
+                    {
                         if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
                             self.backend_disconnected = true;
 
@@ -937,17 +945,18 @@ impl SysBusDevOps for TpmTis {
                     & (TPM_TIS_STS_COMMAND_READY | TPM_TIS_STS_TPM_GO | TPM_TIS_STS_RESPONSE_RETRY);
 
                 if core_cmd == TPM_TIS_STS_COMMAND_READY {
-                    match self.loc[locty_idx].state {
+                    match self.loc[locty_usize].state {
                         TpmTisState::Ready => {
                             self.rw_offset = 0;
                         }
                         TpmTisState::Idle => {
-                            self.loc[locty_idx].set_sts(TPM_TIS_STS_COMMAND_READY);
-                            self.loc[locty_idx].state = TpmTisState::Ready;
-                            self.raise_irq(locty, TPM_TIS_INT_COMMAND_READY);
+                            self.loc[locty_usize].set_sts(TPM_TIS_STS_COMMAND_READY);
+                            self.loc[locty_usize].state = TpmTisState::Ready;
+                            self.raise_irq(locty_u8, TPM_TIS_INT_COMMAND_READY);
                         }
                         TpmTisState::Execution | TpmTisState::Reception => {
-                            if let Err(EmulatorError::Disconnected) = self.prep_abort(locty, locty)
+                            if let Err(EmulatorError::Disconnected) =
+                                self.prep_abort(locty_u8, locty_u8)
                             {
                                 if !self.backend_disconnected {
                                     self.backend_disconnected = true;
@@ -964,75 +973,76 @@ impl SysBusDevOps for TpmTis {
                         }
                         TpmTisState::Completion => {
                             self.rw_offset = 0;
-                            self.loc[locty_idx].state = TpmTisState::Ready;
-                            if (self.loc[locty_idx].sts & TPM_TIS_STS_COMMAND_READY) == 0 {
-                                self.loc[locty_idx].set_sts(TPM_TIS_STS_COMMAND_READY);
-                                self.raise_irq(locty, TPM_TIS_INT_COMMAND_READY);
+                            self.loc[locty_usize].state = TpmTisState::Ready;
+                            if (self.loc[locty_usize].sts & TPM_TIS_STS_COMMAND_READY) == 0 {
+                                self.loc[locty_usize].set_sts(TPM_TIS_STS_COMMAND_READY);
+                                self.raise_irq(locty_u8, TPM_TIS_INT_COMMAND_READY);
                             }
-                            self.loc[locty_idx].sts &= !TPM_TIS_STS_DATA_AVAILABLE;
+                            self.loc[locty_usize].sts &= !TPM_TIS_STS_DATA_AVAILABLE;
                         }
                     }
                 } else if core_cmd == TPM_TIS_STS_TPM_GO {
-                    let is_reception = self.loc[locty_idx].state == TpmTisState::Reception;
-                    let is_expected = (self.loc[locty_idx].sts & TPM_TIS_STS_EXPECT) == 0;
+                    let is_reception = self.loc[locty_usize].state == TpmTisState::Reception;
+                    let is_expected = (self.loc[locty_usize].sts & TPM_TIS_STS_EXPECT) == 0;
                     if is_reception && is_expected && !self.backend_disconnected {
-                        if let Err(e) = self.send_request_async(locty) {
+                        if let Err(e) = self.send_request_async(locty_u8) {
                             error!("Tpm send request failed: {:?}", e);
                         }
                     }
                 } else if core_cmd == TPM_TIS_STS_RESPONSE_RETRY
-                    && self.loc[locty_idx].state == TpmTisState::Completion
+                    && self.loc[locty_usize].state == TpmTisState::Completion
                 {
                     self.rw_offset = 0;
-                    self.loc[locty_idx].set_sts(TPM_TIS_STS_VALID | TPM_TIS_STS_DATA_AVAILABLE);
+                    self.loc[locty_usize].set_sts(TPM_TIS_STS_VALID | TPM_TIS_STS_DATA_AVAILABLE);
                 }
             }
             TPM_TIS_REG_DATA_FIFO | TPM_TIS_REG_DATA_XFIFO..=TPM_TIS_REG_DATA_XFIFO_END => {
-                if self.active_locty != locty {
+                if self.active_locty != locty_u8 {
                     return true;
                 }
 
-                match self.loc[locty_idx].state {
+                match self.loc[locty_usize].state {
                     TpmTisState::Idle | TpmTisState::Execution | TpmTisState::Completion => {
                         return true;
                     }
                     TpmTisState::Ready => {
-                        self.loc[locty_idx].state = TpmTisState::Reception;
-                        self.loc[locty_idx].set_sts(TPM_TIS_STS_EXPECT | TPM_TIS_STS_VALID);
+                        self.loc[locty_usize].state = TpmTisState::Reception;
+                        self.loc[locty_usize].set_sts(TPM_TIS_STS_EXPECT | TPM_TIS_STS_VALID);
                     }
                     _ => {}
                 }
 
                 for &byte in data[..copy_len].iter() {
-                    if (self.loc[locty_idx].sts & TPM_TIS_STS_EXPECT) != 0 {
+                    if (self.loc[locty_usize].sts & TPM_TIS_STS_EXPECT) != 0 {
                         if (self.rw_offset as usize) < self.backend_buff_size {
                             if let Some(buffer) = self.buffer.as_mut() {
                                 buffer[self.rw_offset as usize] = byte;
                                 self.rw_offset += 1;
                             }
                         } else {
-                            self.loc[locty_idx].set_sts(TPM_TIS_STS_VALID);
+                            self.loc[locty_usize].set_sts(TPM_TIS_STS_VALID);
                         }
                     }
                 }
 
-                if self.rw_offset > 5 && (self.loc[locty_idx].sts & TPM_TIS_STS_EXPECT) != 0 {
-                    let need_irq = (self.loc[locty_idx].sts & TPM_TIS_STS_VALID) == 0;
+                if self.rw_offset > 5 && (self.loc[locty_usize].sts & TPM_TIS_STS_EXPECT) != 0 {
+                    let need_irq = (self.loc[locty_usize].sts & TPM_TIS_STS_VALID) == 0;
+                    let expected_len = self
+                        .buffer
+                        .as_ref()
+                        .map(|buffer| {
+                            BigEndian::read_u32(&buffer[TPM_RSP_PS_OFFSET..TPM_RSP_RC_OFFSET])
+                        })
+                        .unwrap_or(0);
 
-                    let mut size_bytes = [0u8; 4];
-                    if let Some(buffer) = self.buffer.as_ref() {
-                        size_bytes.copy_from_slice(&buffer[2..6]);
-                    }
-                    let expected_len = u32::from_be_bytes(size_bytes) as usize;
-
-                    if expected_len > self.rw_offset as usize {
-                        self.loc[locty_idx].set_sts(TPM_TIS_STS_EXPECT | TPM_TIS_STS_VALID);
+                    if expected_len > self.rw_offset as u32 {
+                        self.loc[locty_usize].set_sts(TPM_TIS_STS_EXPECT | TPM_TIS_STS_VALID);
                     } else {
-                        self.loc[locty_idx].set_sts(TPM_TIS_STS_VALID);
+                        self.loc[locty_usize].set_sts(TPM_TIS_STS_VALID);
                     }
 
                     if need_irq {
-                        self.raise_irq(locty, TPM_TIS_INT_STS_VALID);
+                        self.raise_irq(locty_u8, TPM_TIS_INT_STS_VALID);
                     }
                 }
                 return true;
