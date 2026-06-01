@@ -10,10 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::cmp;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::legacy::error::LegacyError;
@@ -29,7 +31,10 @@ use acpi::{
 use acpi::{INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT};
 use address_space::GuestAddress;
 use tpm::{
-    emulator::{Emulator, Result as EmulatorResult},
+    emulator::{
+        Emulator, EmulatorError, Result as EmulatorResult, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET,
+        TPM_RSP_RC_OFFSET,
+    },
     OnComplete, TPM_TIS_BUFFER_MAX,
 };
 use util::gen_base_func;
@@ -121,6 +126,20 @@ pub const TPM_TIS_INTERRUPTS_SUPPORTED: u32 = TPM_TIS_INT_LOCALITY_CHANGED
     | TPM_TIS_INT_STS_VALID
     | TPM_TIS_INT_COMMAND_READY;
 
+#[inline]
+fn locality_from_addr(addr: u64) -> u8 {
+    let locty = ((addr >> TPM_TIS_LOCALITY_SHIFT) & 0x7) as u8;
+
+    debug_assert!(
+        locty < TPM_TIS_NUM_LOCALITIES as u8,
+        "Invalid TPM locality parsed from address: {:#x} (locty: {})",
+        addr,
+        locty
+    );
+
+    locty
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum TpmTisState {
     #[default]
@@ -152,7 +171,6 @@ impl TpmLocality {
     }
 }
 
-#[allow(dead_code)]
 pub struct TpmTis {
     base: SysBusDevBase,
     buffer: Option<Vec<u8>>,
@@ -190,12 +208,303 @@ impl TpmTis {
             .with_context(|| LegacyError::SetSysResErr)?;
         tpm.set_parent_bus(sysbus.clone());
 
+        tpm.reset()?;
+        tpm.get_established_flag()?;
+
         Ok(tpm)
+    }
+
+    fn write_fatal_error_response(&mut self) {
+        // TPM 2.0 Error Response Header (10 bytes total)
+        // [0..1] Tag: TPM_ST_NO_SESSIONS (0x8001)
+        // [2..5] Size: 10 bytes (0x0000000A)
+        // [6..9] Response Code: TPM_RC_FAILURE (0x0101) - Hardware error
+        if let Some(buffer) = self.buffer.as_mut() {
+            if buffer.len() >= 10 {
+                buffer[0..TPM_RSP_PS_OFFSET].copy_from_slice(&TPM_ST_NO_SESSION.to_be_bytes());
+                buffer[TPM_RSP_PS_OFFSET..TPM_RSP_RC_OFFSET]
+                    .copy_from_slice(&(TPM_RSP_HDR_SIZE as u32).to_be_bytes());
+                buffer[TPM_RSP_RC_OFFSET..TPM_RSP_HDR_SIZE]
+                    .copy_from_slice(&TPM_RC_FAILURE.to_be_bytes());
+
+                self.rw_offset = 10;
+            }
+        }
+    }
+
+    fn raise_irq(&mut self, locty: u8, irq_mask: u32) {
+        let locty_idx = locty as usize;
+
+        if locty_idx >= TPM_TIS_NUM_LOCALITIES {
+            error!("Attempted to raise IRQ for invalid locality: {}", locty);
+            return;
+        }
+
+        let loc = &mut self.loc[locty_idx];
+
+        let is_global_enabled = (loc.inte & TPM_TIS_INT_GLOBAL_INT_ENABLE) != 0;
+        let is_specific_enabled = (loc.inte & irq_mask) != 0;
+
+        if is_global_enabled && is_specific_enabled {
+            loc.ints |= irq_mask;
+            if let Err(e) = self.sysbusdev_base().irq_state.raise_irq() {
+                error!("Failed to raise irq, {e:?}");
+            }
+        }
+    }
+
+    fn new_active_locality(&mut self, new_active_locty: u8) {
+        let change = self.active_locty != new_active_locty;
+
+        if change && self.active_locty < TPM_TIS_NUM_LOCALITIES as u8 {
+            let old_locty_idx = self.active_locty as usize;
+
+            let is_seize = new_active_locty < TPM_TIS_NUM_LOCALITIES as u8
+                && (self.loc[new_active_locty as usize].access & TPM_TIS_ACCESS_SEIZE) != 0;
+
+            let mask = if is_seize {
+                !TPM_TIS_ACCESS_ACTIVE_LOCALITY
+            } else {
+                !(TPM_TIS_ACCESS_ACTIVE_LOCALITY | TPM_TIS_ACCESS_REQUEST_USE)
+            };
+
+            self.loc[old_locty_idx].access &= mask;
+
+            if is_seize {
+                self.loc[old_locty_idx].access |= TPM_TIS_ACCESS_BEEN_SEIZED;
+            }
+        }
+
+        self.active_locty = new_active_locty;
+
+        if new_active_locty < TPM_TIS_NUM_LOCALITIES as u8 {
+            let new_locty_idx = new_active_locty as usize;
+            self.loc[new_locty_idx].access |= TPM_TIS_ACCESS_ACTIVE_LOCALITY;
+            self.loc[new_locty_idx].access &= !(TPM_TIS_ACCESS_REQUEST_USE | TPM_TIS_ACCESS_SEIZE);
+        }
+
+        if change {
+            self.raise_irq(self.active_locty, TPM_TIS_INT_LOCALITY_CHANGED);
+        }
+    }
+
+    pub fn abort(&mut self) {
+        self.rw_offset = 0;
+
+        debug!("TPM TIS aborting, next locality: {}", self.next_locty);
+
+        if self.aborting_locty == self.next_locty
+            && self.aborting_locty < TPM_TIS_NUM_LOCALITIES as u8
+        {
+            let locty_idx = self.aborting_locty as usize;
+
+            self.loc[locty_idx].set_state(TpmTisState::Ready);
+            self.loc[locty_idx].set_sts(TPM_TIS_STS_COMMAND_READY);
+
+            self.raise_irq(self.aborting_locty, TPM_TIS_INT_COMMAND_READY);
+        }
+
+        self.new_active_locality(self.next_locty);
+
+        self.next_locty = TPM_TIS_NO_LOCALITY;
+        self.aborting_locty = TPM_TIS_NO_LOCALITY;
+    }
+
+    pub fn request_completed(&mut self, is_success: bool) {
+        let locty = self.active_locty as usize;
+
+        if locty >= TPM_TIS_NUM_LOCALITIES {
+            error!(
+                "TPM request_completed called with invalid active_locty: {}",
+                self.active_locty
+            );
+            return;
+        }
+
+        if is_success {
+            for loc in self.loc.iter_mut() {
+                loc.sts |= TPM_TIS_STS_SELFTEST_DONE;
+            }
+        }
+
+        self.loc[locty].set_sts(TPM_TIS_STS_VALID | TPM_TIS_STS_DATA_AVAILABLE);
+        self.loc[locty].set_state(TpmTisState::Completion);
+        self.rw_offset = 0;
+
+        if self.next_locty < TPM_TIS_NUM_LOCALITIES as u8 {
+            self.abort();
+        }
+
+        self.raise_irq(
+            locty as u8,
+            TPM_TIS_INT_DATA_AVAILABLE | TPM_TIS_INT_STS_VALID,
+        );
+    }
+
+    fn send_request_async(&mut self, locty: u8) -> Result<()> {
+        self.loc[locty as usize].set_state(TpmTisState::Execution);
+
+        let cmd_buf = match self.buffer.take() {
+            Some(buf) => buf,
+            None => {
+                error!("TPM executed but buffer is None!");
+                self.write_fatal_error_response();
+                self.request_completed(false);
+                return Err(anyhow::anyhow!("TPM buffer is None on execution"));
+            }
+        };
+        let cmd_len = cmp::min(self.rw_offset as usize, TPM_TIS_BUFFER_MAX);
+        let res = self
+            .emulator
+            .lock()
+            .unwrap()
+            .deliver_request_async(cmd_buf, cmd_len, locty);
+
+        if let Err(e) = res {
+            error!("Failed to dispatch TPM request to backend: {:?}", e);
+            self.write_fatal_error_response();
+            self.request_completed(false);
+            return Err(anyhow::anyhow!("Failed to trigger tpm request send: {}", e));
+        }
+
+        Ok(())
+    }
+
+    fn check_request_use_except(&self, locty: u8) -> bool {
+        self.loc.iter().enumerate().any(|(i, loc)| {
+            if i == locty as usize {
+                false
+            } else {
+                (loc.access & TPM_TIS_ACCESS_REQUEST_USE) != 0
+            }
+        })
+    }
+
+    fn prep_abort(&mut self, locty: u8, newlocty: u8) -> Result<(), EmulatorError> {
+        if newlocty >= TPM_TIS_NUM_LOCALITIES as u8 {
+            warn!("prep_abort called with invalid newlocty: {}", newlocty);
+            return Ok(());
+        }
+
+        self.aborting_locty = locty;
+        self.next_locty = newlocty;
+
+        let is_backend_busy = self
+            .loc
+            .iter()
+            .any(|loc| loc.state == TpmTisState::Execution);
+
+        if is_backend_busy {
+            debug!("TPM backend is busy executing. Sending cancel request...");
+            if let Err(e) = self.emulator.lock().unwrap().cancel_cmd() {
+                warn!("Failed to send cancel command to TPM backend: {:?}", e);
+                return Err(e);
+            }
+        }
+
+        self.abort();
+        Ok(())
+    }
+
+    fn data_read(&mut self, locty: u8) -> u8 {
+        let locty_idx = locty as usize;
+        let mut ret = TPM_TIS_NO_DATA_BYTE;
+
+        if (self.loc[locty_idx].sts & TPM_TIS_STS_DATA_AVAILABLE) != 0 {
+            if let Some(buffer) = self.buffer.as_ref() {
+                let mut expected_len = 0;
+                if buffer.len() >= 6 {
+                    let mut size_bytes = [0u8; 4];
+                    size_bytes.copy_from_slice(&buffer[2..6]);
+                    expected_len = u32::from_be_bytes(size_bytes) as usize;
+                }
+
+                let len = std::cmp::min(expected_len, self.backend_buff_size);
+
+                if (self.rw_offset as usize) < len {
+                    ret = buffer[self.rw_offset as usize];
+                    self.rw_offset += 1;
+                }
+
+                if (self.rw_offset as usize) >= len {
+                    debug!("TPM TIS: Last byte read, clearing DATA_AVAIL state.");
+
+                    self.loc[locty_idx].set_sts(TPM_TIS_STS_VALID);
+                    self.raise_irq(locty, TPM_TIS_INT_STS_VALID);
+                }
+            }
+        } else {
+            debug!(
+                "TPM TIS: Attempted to read empty FIFO at locality {}",
+                locty
+            );
+        }
+
+        ret
+    }
+
+    fn get_established_flag(&mut self) -> Result<bool, EmulatorError> {
+        self.emulator.lock().unwrap().get_established_flag()
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        let cur_buff_size = self.emulator.lock().unwrap().get_buffer_size();
+        self.backend_buff_size = cmp::min(cur_buff_size, TPM_TIS_BUFFER_MAX);
+
+        self.active_locty = TPM_TIS_NO_LOCALITY;
+        self.next_locty = TPM_TIS_NO_LOCALITY;
+        self.aborting_locty = TPM_TIS_NO_LOCALITY;
+        self.rw_offset = 0;
+
+        for loc in self.loc.iter_mut() {
+            loc.access = TPM_TIS_ACCESS_TPM_REG_VALID_STS;
+            loc.sts = TPM_TIS_STS_TPM_FAMILY2_0;
+            loc.iface_id = TPM_TIS_IFACE_ID_SUPPORTED_FLAGS2_0;
+            loc.inte = TPM_TIS_INT_POLARITY_LOW_LEVEL;
+            loc.ints = 0;
+            loc.set_state(TpmTisState::Idle);
+        }
+
+        if let Some(buffer) = self.buffer.as_mut() {
+            buffer.fill(0);
+        }
+
+        if let Err(e) = self
+            .emulator
+            .lock()
+            .unwrap()
+            .startup_tpm(self.backend_buff_size, false)
+        {
+            if matches!(
+                e,
+                EmulatorError::Disconnected
+                    | EmulatorError::ControlSocket(tpm::socket::Error::NotConnected)
+            ) {
+                warn!("TpmTis device reset while in disconnected state");
+                return Ok(());
+            }
+            return Err(anyhow!("Failed while running Startup TPM. Error: {e:?}"));
+        }
+        Ok(())
     }
 }
 
 impl OnComplete for TpmTis {
-    fn on_complete(&mut self, _r: EmulatorResult<usize>, _b: Vec<u8>) {}
+    fn on_complete(&mut self, res: EmulatorResult<usize>, buffer: Vec<u8>) {
+        self.buffer = Some(buffer);
+
+        match res {
+            Ok(response_size) => {
+                debug!("TPM request success, valid resp len {}", response_size);
+                self.request_completed(true);
+            }
+            Err(e) => {
+                error!("TPM async request failed: {:?}", e);
+                self.write_fatal_error_response();
+                self.request_completed(false);
+            }
+        }
+    }
 }
 
 impl Device for TpmTis {
@@ -204,31 +513,377 @@ impl Device for TpmTis {
     fn realize(self) -> Result<Arc<Mutex<Self>>> {
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
+        let emulator = self.emulator.clone();
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
+
+        emulator
+            .lock()
+            .unwrap()
+            .set_complete_handler(Arc::downgrade(&dev));
 
         Ok(dev)
     }
 
     fn unrealize(&mut self) -> Result<()> {
+        if let Err(e) = self.emulator.lock().unwrap().shutdown_tpm() {
+            return Err(anyhow!("Failed while running Shutdown TPM. Error: {e:?}"));
+        }
+
         Ok(())
     }
 
     fn reset(&mut self, _reset_child_device: bool) -> Result<()> {
-        Ok(())
+        self.reset()
     }
 }
 
 impl SysBusDevOps for TpmTis {
     gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
-    /// Read data from registers by guest
-    fn read(&mut self, _data: &mut [u8], _base: GuestAddress, _offset: u64) -> bool {
+    fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        let locty = locality_from_addr(offset);
+        let locty_idx = locty as usize;
+
+        let reg_offset = (offset & 0xFFC) as u16;
+        let shift = (offset & 0x3) as usize;
+        let copy_len = std::cmp::min(data.len(), 4 - shift);
+        let mut val: u32 = 0xFFFFFFFF;
+
+        match reg_offset {
+            TPM_TIS_REG_ACCESS => {
+                let mut access = self.loc[locty_idx].access & !TPM_TIS_ACCESS_SEIZE;
+                if self.check_request_use_except(locty) {
+                    access |= TPM_TIS_ACCESS_PENDING_REQUEST;
+                }
+
+                match self.get_established_flag() {
+                    Ok(is_established) => {
+                        if !is_established {
+                            access |= TPM_TIS_ACCESS_TPM_ESTABLISHMENT;
+                        }
+                        val = access as u32;
+                    }
+                    Err(e) => {
+                        error!("FATAL: Failed to read TPM established flag: {:?}", e);
+                    }
+                }
+            }
+            TPM_TIS_REG_INT_ENABLE => {
+                val = self.loc[locty_idx].inte;
+            }
+            TPM_TIS_REG_INT_VECTOR => {
+                val = self.sysbusdev_base().irq_state.irq;
+            }
+            TPM_TIS_REG_INT_STATUS => {
+                val = self.loc[locty_idx].ints;
+            }
+            TPM_TIS_REG_INTF_CAPABILITY => {
+                val = TPM_TIS_CAPABILITIES_SUPPORTED2_0;
+            }
+            TPM_TIS_REG_STS => {
+                if self.active_locty == locty {
+                    let mut burst_count: u32 = 0;
+                    if (self.loc[locty_idx].sts & TPM_TIS_STS_DATA_AVAILABLE) != 0 {
+                        if let Some(buffer) = self.buffer.as_ref() {
+                            let mut expected_len = 0;
+                            if buffer.len() >= 6 {
+                                let mut size_bytes = [0u8; 4];
+                                size_bytes.copy_from_slice(&buffer[2..6]);
+                                expected_len = u32::from_be_bytes(size_bytes) as usize;
+                            }
+                            let len = std::cmp::min(expected_len, self.backend_buff_size);
+                            burst_count = len.saturating_sub(self.rw_offset as usize) as u32;
+                        }
+                    } else {
+                        let mut avail = self
+                            .backend_buff_size
+                            .saturating_sub(self.rw_offset as usize)
+                            as u32;
+                        if data.len() == 1 && avail > 0xFF {
+                            avail = 0xFF;
+                        }
+                        burst_count = avail;
+                    }
+                    val = (burst_count << TPM_TIS_BURST_COUNT_SHIFT) | self.loc[locty_idx].sts;
+                }
+            }
+            TPM_TIS_REG_DATA_FIFO | TPM_TIS_REG_DATA_XFIFO..=TPM_TIS_REG_DATA_XFIFO_END => {
+                if self.active_locty == locty {
+                    for byte in data.iter_mut().take(copy_len) {
+                        if self.loc[locty_idx].state == TpmTisState::Completion {
+                            *byte = self.data_read(locty);
+                        } else {
+                            *byte = TPM_TIS_NO_DATA_BYTE;
+                        }
+                    }
+                }
+                return true;
+            }
+            TPM_TIS_REG_INTERFACE_ID => {
+                val = self.loc[locty_idx].iface_id;
+            }
+            TPM_TIS_REG_DID_VID => {
+                val = (TPM_TIS_TPM_DID << 16) | TPM_TIS_TPM_VID;
+            }
+            TPM_TIS_REG_RID => {
+                val = TPM_TIS_TPM_RID;
+            }
+            _ => {}
+        }
+
+        let val_bytes = val.to_le_bytes();
+        data[..copy_len].copy_from_slice(&val_bytes[shift..shift + copy_len]);
+
+        if reg_offset != TPM_TIS_REG_STS {
+            debug!(
+                "Tpm Tis Read: offset {:#X} len {:?} val = {:02X?}",
+                offset,
+                data.len(),
+                data
+            );
+        }
+
         true
     }
 
-    /// Write data to registers by guest
-    fn write(&mut self, _data: &[u8], _base: GuestAddress, _offset: u64) -> bool {
+    fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
+        if (offset & 0xFFC) as u16 != TPM_TIS_REG_DATA_FIFO {
+            debug!(
+                "Tpm Tis Write: offset {:#X} len {:?} input data {:02X?}",
+                offset,
+                data.len(),
+                data
+            );
+        }
+
+        let locty = locality_from_addr(offset);
+        let locty_idx = locty as usize;
+
+        let reg_offset = (offset & 0xFFC) as u16;
+        let shift = (offset & 0x3) as usize;
+        let copy_len = std::cmp::min(data.len(), 4 - shift);
+
+        if locty == 4 || locty_idx >= TPM_TIS_NUM_LOCALITIES {
+            return true;
+        }
+
+        let mut write_bytes = [0u8; 4];
+        write_bytes[shift..shift + copy_len].copy_from_slice(&data[..copy_len]);
+        let write_val = u32::from_le_bytes(write_bytes);
+        let mut write_val_u8 = write_val as u8;
+
+        match reg_offset {
+            TPM_TIS_REG_ACCESS => {
+                if (write_val_u8 & TPM_TIS_ACCESS_SEIZE) != 0 {
+                    write_val_u8 &= !(TPM_TIS_ACCESS_REQUEST_USE | TPM_TIS_ACCESS_ACTIVE_LOCALITY);
+                }
+                let mut active_locty = self.active_locty;
+                let mut set_new_locty = true;
+
+                if (write_val_u8 & TPM_TIS_ACCESS_ACTIVE_LOCALITY) != 0 {
+                    if self.active_locty == locty {
+                        let mut newlocty = TPM_TIS_NO_LOCALITY;
+                        if let Some(idx) = self
+                            .loc
+                            .iter()
+                            .rposition(|loc| (loc.access & TPM_TIS_ACCESS_REQUEST_USE) != 0)
+                        {
+                            newlocty = idx as u8;
+                        }
+                        if newlocty < TPM_TIS_NUM_LOCALITIES as u8 {
+                            set_new_locty = false;
+                            let _ = self.prep_abort(locty, newlocty);
+                        } else {
+                            active_locty = TPM_TIS_NO_LOCALITY;
+                        }
+                    } else {
+                        self.loc[locty_idx].access &= !TPM_TIS_ACCESS_REQUEST_USE;
+                    }
+                }
+
+                if (write_val_u8 & TPM_TIS_ACCESS_BEEN_SEIZED) != 0 {
+                    self.loc[locty_idx].access &= !TPM_TIS_ACCESS_BEEN_SEIZED;
+                }
+
+                if (write_val_u8 & TPM_TIS_ACCESS_SEIZE) != 0 {
+                    let is_active_valid = self.active_locty < TPM_TIS_NUM_LOCALITIES as u8;
+
+                    if !is_active_valid || (locty > self.active_locty) {
+                        let already_seizing =
+                            (self.loc[locty_idx].access & TPM_TIS_ACCESS_SEIZE) != 0;
+
+                        let higher_seize = (locty_idx + 1..TPM_TIS_NUM_LOCALITIES)
+                            .any(|l| (self.loc[l].access & TPM_TIS_ACCESS_SEIZE) != 0);
+
+                        if !already_seizing && !higher_seize {
+                            for l in 0..locty_idx {
+                                self.loc[l].access &= !TPM_TIS_ACCESS_SEIZE;
+                            }
+
+                            self.loc[locty_idx].access |= TPM_TIS_ACCESS_SEIZE;
+                            set_new_locty = false;
+
+                            let _ = self.prep_abort(self.active_locty, locty);
+                        }
+                    }
+                }
+
+                if (write_val_u8 & TPM_TIS_ACCESS_REQUEST_USE) != 0 && self.active_locty != locty {
+                    if self.active_locty < TPM_TIS_NUM_LOCALITIES as u8 {
+                        self.loc[locty_idx].access |= TPM_TIS_ACCESS_REQUEST_USE;
+                    } else {
+                        active_locty = locty;
+                    }
+                }
+
+                if set_new_locty {
+                    self.new_active_locality(active_locty);
+                }
+            }
+            TPM_TIS_REG_INT_ENABLE => {
+                let mut current_bytes = self.loc[locty_idx].inte.to_le_bytes();
+                current_bytes[shift..shift + copy_len].copy_from_slice(&data[..copy_len]);
+                let new_inte = u32::from_le_bytes(current_bytes);
+
+                let allowed_mask = TPM_TIS_INT_GLOBAL_INT_ENABLE
+                    | TPM_TIS_INT_POLARITY_MASK
+                    | TPM_TIS_INTERRUPTS_SUPPORTED;
+
+                self.loc[locty_idx].inte = new_inte & allowed_mask;
+            }
+            TPM_TIS_REG_INT_VECTOR => {}
+            TPM_TIS_REG_INT_STATUS => {
+                let clear_mask = write_val & TPM_TIS_INTERRUPTS_SUPPORTED;
+                if clear_mask != 0 && (self.loc[locty_idx].ints & TPM_TIS_INTERRUPTS_SUPPORTED) != 0
+                {
+                    self.loc[locty_idx].ints &= !clear_mask;
+                    if self.loc[locty_idx].ints == 0 {
+                        let _ = self.sysbusdev_base().irq_state.lower_irq();
+                        debug!("All TPM interrupts cleared, lowering IRQ.");
+                    }
+                }
+            }
+            TPM_TIS_REG_STS => {
+                if self.active_locty != locty {
+                    return true;
+                }
+
+                if (write_val & TPM_TIS_STS_COMMAND_CANCEL) != 0
+                    && self.loc[locty_idx].state == TpmTisState::Execution
+                {
+                    if let Err(e) = self.emulator.lock().unwrap().cancel_cmd() {
+                        warn!("Tpm backend cancel command failed: {:?}", e);
+                    }
+                }
+                if (write_val & TPM_TIS_STS_RESET_ESTABLISHMENT) != 0 && (3..=4_u8).contains(&locty)
+                {
+                    if let Err(e) = self.emulator.lock().unwrap().reset_established_falg(locty) {
+                        warn!("Tpm backend cancel command failed: {:?}", e);
+                    }
+                }
+
+                let core_cmd = write_val
+                    & (TPM_TIS_STS_COMMAND_READY | TPM_TIS_STS_TPM_GO | TPM_TIS_STS_RESPONSE_RETRY);
+
+                if core_cmd == TPM_TIS_STS_COMMAND_READY {
+                    match self.loc[locty_idx].state {
+                        TpmTisState::Ready => {
+                            self.rw_offset = 0;
+                        }
+                        TpmTisState::Idle => {
+                            self.loc[locty_idx].set_sts(TPM_TIS_STS_COMMAND_READY);
+                            self.loc[locty_idx].state = TpmTisState::Ready;
+                            self.raise_irq(locty, TPM_TIS_INT_COMMAND_READY);
+                        }
+                        TpmTisState::Execution | TpmTisState::Reception => {
+                            let _ = self.prep_abort(locty, locty);
+                        }
+                        TpmTisState::Completion => {
+                            self.rw_offset = 0;
+                            self.loc[locty_idx].state = TpmTisState::Ready;
+                            if (self.loc[locty_idx].sts & TPM_TIS_STS_COMMAND_READY) == 0 {
+                                self.loc[locty_idx].set_sts(TPM_TIS_STS_COMMAND_READY);
+                                self.raise_irq(locty, TPM_TIS_INT_COMMAND_READY);
+                            }
+                            self.loc[locty_idx].sts &= !TPM_TIS_STS_DATA_AVAILABLE;
+                        }
+                    }
+                } else if core_cmd == TPM_TIS_STS_TPM_GO {
+                    let is_reception = self.loc[locty_idx].state == TpmTisState::Reception;
+                    let is_expected = (self.loc[locty_idx].sts & TPM_TIS_STS_EXPECT) == 0;
+                    if is_reception && is_expected {
+                        if let Err(e) = self.send_request_async(locty) {
+                            error!("Tpm send request failed: {:?}", e);
+                        }
+                    }
+                } else if core_cmd == TPM_TIS_STS_RESPONSE_RETRY
+                    && self.loc[locty_idx].state == TpmTisState::Completion
+                {
+                    self.rw_offset = 0;
+                    self.loc[locty_idx].set_sts(TPM_TIS_STS_VALID | TPM_TIS_STS_DATA_AVAILABLE);
+                }
+            }
+            TPM_TIS_REG_DATA_FIFO | TPM_TIS_REG_DATA_XFIFO..=TPM_TIS_REG_DATA_XFIFO_END => {
+                if self.active_locty != locty {
+                    return true;
+                }
+
+                match self.loc[locty_idx].state {
+                    TpmTisState::Idle | TpmTisState::Execution | TpmTisState::Completion => {
+                        return true;
+                    }
+                    TpmTisState::Ready => {
+                        self.loc[locty_idx].state = TpmTisState::Reception;
+                        self.loc[locty_idx].set_sts(TPM_TIS_STS_EXPECT | TPM_TIS_STS_VALID);
+                    }
+                    _ => {}
+                }
+
+                for &byte in data[..copy_len].iter() {
+                    if (self.loc[locty_idx].sts & TPM_TIS_STS_EXPECT) != 0 {
+                        if (self.rw_offset as usize) < self.backend_buff_size {
+                            if let Some(buffer) = self.buffer.as_mut() {
+                                buffer[self.rw_offset as usize] = byte;
+                                self.rw_offset += 1;
+                            }
+                        } else {
+                            self.loc[locty_idx].set_sts(TPM_TIS_STS_VALID);
+                        }
+                    }
+                }
+
+                if self.rw_offset > 5 && (self.loc[locty_idx].sts & TPM_TIS_STS_EXPECT) != 0 {
+                    let need_irq = (self.loc[locty_idx].sts & TPM_TIS_STS_VALID) == 0;
+
+                    let mut size_bytes = [0u8; 4];
+                    if let Some(buffer) = self.buffer.as_ref() {
+                        size_bytes.copy_from_slice(&buffer[2..6]);
+                    }
+                    let expected_len = u32::from_be_bytes(size_bytes) as usize;
+
+                    if expected_len > self.rw_offset as usize {
+                        self.loc[locty_idx].set_sts(TPM_TIS_STS_EXPECT | TPM_TIS_STS_VALID);
+                    } else {
+                        self.loc[locty_idx].set_sts(TPM_TIS_STS_VALID);
+                    }
+
+                    if need_irq {
+                        self.raise_irq(locty, TPM_TIS_INT_STS_VALID);
+                    }
+                }
+                return true;
+            }
+            TPM_TIS_REG_INTERFACE_ID => {
+                if (write_val & TPM_TIS_IFACE_ID_INT_SEL_LOCK) != 0 {
+                    for loc in self.loc.iter_mut() {
+                        loc.iface_id |= TPM_TIS_IFACE_ID_INT_SEL_LOCK;
+                    }
+                }
+            }
+            _ => {}
+        }
+
         true
     }
 }
