@@ -316,3 +316,177 @@ impl Ctl {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockVolumeControl {
+        volume: u32,
+        mute: bool,
+        range: (u32, u32),
+    }
+
+    impl MockVolumeControl {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                volume: 75,
+                mute: false,
+                range: (0, 100),
+            })
+        }
+    }
+
+    impl VolumeControl for MockVolumeControl {
+        fn get_volume(&self) -> u32 {
+            self.volume
+        }
+
+        fn set_volume(&self, _volume: u32) {
+            // no-op for mock
+        }
+
+        fn get_mute(&self) -> bool {
+            self.mute
+        }
+
+        fn set_mute(&self, _mute: bool) {
+            // no-op for mock
+        }
+
+        fn get_volume_range(&self) -> (u32, u32) {
+            self.range
+        }
+
+        fn register_listener(&self, _listener: Arc<dyn audio::volume::VolumeListener>) -> u64 {
+            0
+        }
+
+        fn unregister_listener(&self, _id: u64) {
+            // no-op for mock
+        }
+    }
+
+    fn create_dummy_address_space() -> Arc<AddressSpace> {
+        use address_space::Region;
+        let root = Region::init_container_region(u64::MAX, "test_root");
+        AddressSpace::new(root, "test", None).unwrap()
+    }
+
+    #[test]
+    fn test_ctl_new() {
+        let vol_ctrl = MockVolumeControl::new();
+        let ctl = Ctl::new(vol_ctrl);
+        assert_eq!(ctl.volume, 75);
+        assert!(!ctl.mute);
+        assert_eq!(ctl.range, (0, 100));
+    }
+
+    #[test]
+    fn test_update_volume() {
+        let vol_ctrl = MockVolumeControl::new();
+        let mut ctl = Ctl::new(vol_ctrl);
+        ctl.update_volume(50, true);
+        assert_eq!(ctl.volume, 50);
+        assert!(ctl.mute);
+    }
+
+    #[test]
+    fn test_get_ctl_id_by_role() {
+        let vol_ctrl = MockVolumeControl::new();
+        let ctl = Ctl::new(vol_ctrl);
+        assert_eq!(ctl.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_VOLUME), 0);
+        assert_eq!(ctl.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_MUTE), 1);
+        assert_eq!(ctl.get_ctl_id_by_role(VIRTIO_SND_CTL_ROLE_UNDEFINED), 0);
+    }
+
+    #[test]
+    fn test_handle_ctl_unsupported() {
+        let sys_mem = create_dummy_address_space();
+        let vol_ctrl = MockVolumeControl::new();
+        let mut ctl = Ctl::new(vol_ctrl);
+        let result = ctl.handle_ctl(
+            VIRTIO_SND_R_CTL_ENUM_ITEMS,
+            &sys_mem,
+            &None,
+            &Element::default(),
+        );
+        assert_eq!(result.0, VIRTIO_SND_S_NOT_SUPP);
+
+        let result = ctl.handle_ctl(0xFFFFFFFF, &sys_mem, &None, &Element::default());
+        assert_eq!(result.0, VIRTIO_SND_S_BAD_MSG);
+    }
+
+    #[test]
+    fn test_validate_control_id() {
+        let vol_ctrl = MockVolumeControl::new();
+        let ctl = Ctl::new(vol_ctrl);
+        assert!(ctl.validate_control_id(0).is_ok());
+        assert!(ctl.validate_control_id(1).is_ok());
+        assert!(ctl.validate_control_id(2).is_err());
+        assert!(ctl.validate_control_id(100).is_err());
+    }
+
+    #[test]
+    fn test_do_ctl_read_volume() {
+        let vol_ctrl = MockVolumeControl::new();
+        let ctl = Ctl::new(vol_ctrl);
+        let result = ctl.do_ctl_read(0).unwrap();
+        assert_eq!(u32::from_le(result.integer[0]), 75);
+    }
+
+    #[test]
+    fn test_do_ctl_read_mute() {
+        let vol_ctrl = MockVolumeControl::new();
+        let ctl = Ctl::new(vol_ctrl);
+        let result = ctl.do_ctl_read(1).unwrap();
+        assert_eq!(u32::from_le(result.integer[0]), 1);
+    }
+
+    #[test]
+    fn test_do_ctl_read_invalid_id() {
+        let vol_ctrl = MockVolumeControl::new();
+        let ctl = Ctl::new(vol_ctrl);
+        assert!(ctl.do_ctl_read(2).is_err());
+    }
+
+    #[test]
+    fn test_do_ctl_write_volume() {
+        let vol_ctrl = MockVolumeControl::new();
+        let mut ctl = Ctl::new(vol_ctrl);
+        let mut value = CtlValue::default();
+        value.integer[0] = 50u32.to_le();
+        assert!(ctl.do_ctl_write(0, &value).is_ok());
+        assert_eq!(ctl.volume, 50);
+    }
+
+    #[test]
+    fn test_do_ctl_write_volume_out_of_range() {
+        let vol_ctrl = MockVolumeControl::new();
+        let mut ctl = Ctl::new(vol_ctrl);
+        let mut value = CtlValue::default();
+        value.integer[0] = 200u32.to_le();
+        assert!(ctl.do_ctl_write(0, &value).is_err());
+    }
+
+    #[test]
+    fn test_do_ctl_write_mute_true() {
+        let vol_ctrl = MockVolumeControl::new();
+        let mut ctl = Ctl::new(vol_ctrl);
+        let mut value = CtlValue::default();
+        value.integer[0] = 0u32.to_le();
+        assert!(ctl.do_ctl_write(1, &value).is_ok());
+        assert!(ctl.mute);
+    }
+
+    #[test]
+    fn test_do_ctl_write_mute_false() {
+        let vol_ctrl = MockVolumeControl::new();
+        let mut ctl = Ctl::new(vol_ctrl);
+        ctl.mute = true;
+        let mut value = CtlValue::default();
+        value.integer[0] = 1u32.to_le();
+        assert!(ctl.do_ctl_write(1, &value).is_ok());
+        assert!(!ctl.mute);
+    }
+}

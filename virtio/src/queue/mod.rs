@@ -63,6 +63,7 @@ pub struct ElemIovec {
 }
 
 /// IO request element.
+#[derive(Default)]
 pub struct Element {
     /// Index of the descriptor in the table.
     pub index: u16,

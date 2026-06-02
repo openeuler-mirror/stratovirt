@@ -75,3 +75,23 @@ fn read_request<T: ByteCode>(
 
     Ok(req)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_supported_formats() {
+        assert!(SUPPORTED_FORMATS & (1 << VIRTIO_SND_PCM_FMT_S16) != 0);
+        assert!(SUPPORTED_FORMATS & (1 << VIRTIO_SND_PCM_FMT_S24) != 0);
+        assert!(SUPPORTED_FORMATS & (1 << VIRTIO_SND_PCM_FMT_S32) != 0);
+        assert!(SUPPORTED_FORMATS & (1 << 0) == 0);
+    }
+
+    #[test]
+    fn test_supported_rates() {
+        assert!(SUPPORTED_RATES & (1 << VIRTIO_SND_PCM_RATE_44100) != 0);
+        assert!(SUPPORTED_RATES & (1 << VIRTIO_SND_PCM_RATE_48000) != 0);
+        assert!(SUPPORTED_RATES & (1 << 0) == 0);
+    }
+}
