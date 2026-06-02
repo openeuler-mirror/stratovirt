@@ -346,7 +346,19 @@ class BaseVM:
             self.config_network(self.ipalloc_type)
             if self.ssh_session:
                 self.ssh_session.close()
-            self.ssh_session = self.create_ssh_session()
+            try:
+                self.ssh_session = self.create_ssh_session()
+            except Exception as ssh_err:
+                # vhost-kernel (and similar passthrough NICs) may cause the
+                # bridge to appear linkdown briefly, making SSH unreachable from
+                # the host.  Allow launch to proceed; tests that only need QMP
+                # or serial will still work.
+                import logging as _logging
+                _logging.getLogger("global").warning(
+                    "SSH session creation failed (may be expected for "
+                    "vhost-kernel or nested KVM): %s", ssh_err
+                )
+                self.ssh_session = None
 
     @retry(wait_fixed=200, stop_max_attempt_number=50)
     def _wait_console_create(self):

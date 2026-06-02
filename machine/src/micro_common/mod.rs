@@ -345,6 +345,20 @@ impl LightMachine {
             bail!("Unsupported replaceable device type.");
         };
 
+        // Read the MMDS whitelist before acquiring the devices lock to keep lock
+        // ordering consistent with mmds_config (mmds_store → devices).
+        let mmds_ifaces = if index >= MMIO_REPLACEABLE_BLK_NR {
+            self.base
+                .mmds_store
+                .lock()
+                .unwrap()
+                .config
+                .network_interfaces
+                .clone()
+        } else {
+            Vec::new()
+        };
+
         // Find the replaceable device and replace it.
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
         if let Some(device_info) = replaceable_devices.get_mut(index) {
@@ -361,6 +375,19 @@ impl LightMachine {
                 .update_config(configs)
                 .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
         }
+
+        // Propagate mmds_store if this is a net slot and mmds_config already named it.
+        // Reuse the already-held replaceable_devices guard instead of re-locking.
+        if mmds_ifaces.contains(&id) {
+            if let Some(info) = replaceable_devices.get(index) {
+                if let Ok(mut dev) = info.device.lock() {
+                    if let Some(net_dev) = dev.as_any_mut().downcast_mut::<Net>() {
+                        crate::apply_mmds_to_net_dev(net_dev, Some(self.base.mmds_store.clone()));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -393,6 +420,12 @@ impl LightMachine {
                     .unwrap()
                     .update_config(Vec::new())
                     .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
+                // Clear mmds_store so the slot doesn't leak it to the next device.
+                if let Ok(mut dev) = device_info.device.lock() {
+                    if let Some(net_dev) = dev.as_any_mut().downcast_mut::<Net>() {
+                        crate::apply_mmds_to_net_dev(net_dev, None);
+                    }
+                }
             }
         }
 
@@ -1075,6 +1108,44 @@ impl DeviceInterface for LightMachine {
                 )
             }
         }
+    }
+
+    fn mmds_put(&self, args: qmp_schema::MmdsPutArgs) -> Response {
+        self.base.mmds_put(args)
+    }
+
+    fn mmds_patch(&self, args: qmp_schema::MmdsPatchArgs) -> Response {
+        self.base.mmds_patch(args)
+    }
+
+    fn mmds_get(&self) -> Response {
+        self.base.mmds_get()
+    }
+
+    fn mmds_config(&self, args: qmp_schema::MmdsConfigArgs) -> Response {
+        if let Err(resp) = self.base.parse_and_update_mmds_config(&args) {
+            return resp;
+        }
+
+        // Walk all used replaceable net devices and enable/disable MMDS.
+        let devices = self.replaceable_info.devices.lock().unwrap();
+        for info in devices.iter() {
+            if !info.used {
+                continue;
+            }
+            if let Ok(mut dev) = info.device.lock() {
+                if let Some(net_dev) = dev.as_any_mut().downcast_mut::<Net>() {
+                    let store = if args.network_interfaces.contains(&info.id) {
+                        Some(self.base.mmds_store.clone())
+                    } else {
+                        None
+                    };
+                    crate::apply_mmds_to_net_dev(net_dev, store);
+                }
+            }
+        }
+
+        Response::create_empty_response()
     }
 }
 

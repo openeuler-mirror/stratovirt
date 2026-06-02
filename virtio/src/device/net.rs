@@ -51,6 +51,7 @@ use crate::{
 use address_space::{AddressAttr, AddressSpace};
 use machine_manager::config::{ConfigCheck, NetDevcfg, NetworkInterfaceConfig};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
+use machine_manager::mmds::tcp_stack::MmdsTcpStack;
 use machine_manager::state_query::{
     register_state_query_callback, unregister_state_query_callback,
 };
@@ -713,6 +714,8 @@ struct NetIoQueue<T> {
     queue_size: u16,
     macnat: Option<T>,
     io_inflight: IoRef,
+    /// Shared MMDS TCP stack (Arc shared with Net so mmds_config can update it live).
+    mmds_tcp_stack: Arc<Mutex<Option<MmdsTcpStack>>>,
 }
 
 impl<T: Macnat + 'static> NetIoQueue<T> {
@@ -762,6 +765,20 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
             .lock()
             .unwrap()
             .filter_packets(&buf[NET_HDR_LENGTH..]))
+    }
+
+    fn complete_elem(&self, queue: &mut Queue, index: u16, len: u32) -> Result<()> {
+        queue
+            .vring
+            .add_used(index, len)
+            .with_context(|| format!("Net: failed to add used ring {}", index))?;
+        if queue.vring.should_notify(self.driver_features) {
+            (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(queue), false).with_context(
+                || VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring),
+            )?;
+            trace::virtqueue_send_interrupt("Net", queue as *const _ as u64);
+        }
+        Ok(())
     }
 
     fn handle_rx(&self, tap: &Arc<RwLock<Option<Tap>>>) -> Result<()> {
@@ -823,23 +840,7 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
                 continue;
             }
 
-            queue
-                .vring
-                .add_used(elem.index, u32::try_from(size)?)
-                .with_context(|| {
-                    format!(
-                        "Failed to add used ring for net rx, index: {}, len: {}",
-                        elem.index, size
-                    )
-                })?;
-
-            if queue.vring.should_notify(self.driver_features) {
-                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
-                    .with_context(|| {
-                        VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
-                    })?;
-                trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
-            }
+            self.complete_elem(&mut queue, elem.index, u32::try_from(size)?)?;
 
             rx_packets += 1;
             if rx_packets >= self.queue_size {
@@ -872,22 +873,56 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
 
             // drop all tx packets if link is down
             if !self.link_status.load(Ordering::SeqCst) {
-                queue
-                    .vring
-                    .add_used(elem.index, 0)
-                    .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
-                if queue.vring.should_notify(self.driver_features) {
-                    (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
-                        .with_context(|| {
-                            VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
-                        })?;
-                    trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
-                }
+                self.complete_elem(&mut queue, elem.index, 0)?;
                 continue;
             }
 
             let (_, iovecs) =
                 gpa_hva_iovec_map(&elem.out_iovec, &self.mem_space, queue.vring.get_cache())?;
+
+            // --- MMDS interception ---
+            {
+                let mut mmds_guard = self.mmds_tcp_stack.lock().unwrap();
+                if let Some(mmds_stack) = mmds_guard.as_mut() {
+                    // SAFETY: iovecs are valid HVAs from address_space translation.
+                    let is_mmds =
+                        unsafe { MmdsTcpStack::is_mmds_packet_iov(&iovecs, &mmds_stack.local_ip) };
+                    if is_mmds {
+                        // Full copy only for confirmed MMDS packets.
+                        let pkt_len: usize = iovecs.iter().map(|iov| iov.iov_len as usize).sum();
+                        let mut pkt_buf = vec![0u8; pkt_len];
+                        let mut pos = 0usize;
+                        for iov in &iovecs {
+                            let len = iov.iov_len as usize;
+                            // SAFETY: iov_base and iov_len come from a validated iovec built from
+                            // guest memory descriptors; the slice bounds are within pkt_buf which
+                            // was allocated to exactly pkt_len bytes above.
+                            unsafe {
+                                util::aio::mem_to_buf(&mut pkt_buf[pos..pos + len], iov.iov_base)?;
+                            }
+                            pos += len;
+                        }
+                        // Process through MMDS TCP stack and inject responses into RX queue.
+                        let responses = mmds_stack.process(&pkt_buf);
+                        drop(mmds_guard);
+                        for resp_bytes in responses {
+                            self.inject_rx_packet(&resp_bytes);
+                        }
+                        // Mark TX descriptor as consumed (don't forward to TAP).
+                        self.complete_elem(&mut queue, elem.index, 0)?;
+                        tx_packets += 1;
+                        if tx_packets >= self.queue_size {
+                            self.tx
+                                .queue_evt
+                                .write(1)
+                                .with_context(|| "Failed to trigger tx queue event".to_string())?;
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            }
+            // --- end MMDS interception ---
 
             let locked_tap = tap.read().unwrap();
             if locked_tap.is_none() {
@@ -921,18 +956,7 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
 
             drop(locked_tap);
 
-            queue
-                .vring
-                .add_used(elem.index, 0)
-                .with_context(|| format!("Net tx: Failed to add used ring {}", elem.index))?;
-
-            if queue.vring.should_notify(self.driver_features) {
-                (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&queue), false)
-                    .with_context(|| {
-                        VirtioError::InterruptTrigger("net", VirtioInterruptType::Vring)
-                    })?;
-                trace::virtqueue_send_interrupt("Net", &*queue as *const _ as u64);
-            }
+            self.complete_elem(&mut queue, elem.index, 0)?;
             tx_packets += 1;
             if tx_packets >= self.queue_size {
                 self.tx
@@ -944,6 +968,54 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
         }
 
         Ok(())
+    }
+
+    /// Write `pkt` bytes into an available RX descriptor and notify the guest.
+    /// Silently drops the packet if no RX buffer is available.
+    fn inject_rx_packet(&self, pkt: &[u8]) {
+        let mut rx_queue = match self.rx.queue.try_lock() {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        let elem = match rx_queue
+            .vring
+            .pop_avail(&self.mem_space, self.driver_features)
+        {
+            Ok(e) if e.desc_num > 0 => e,
+            _ => return,
+        };
+
+        // Map GPA→HVA for the RX descriptor's in_iovec.
+        let (_, hva_iovecs) =
+            match gpa_hva_iovec_map(&elem.in_iovec, &self.mem_space, rx_queue.vring.get_cache()) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("MMDS inject_rx: gpa_hva_iovec_map failed: {}", e);
+                    return;
+                }
+            };
+
+        // Write packet bytes into the descriptor buffers.
+        // SAFETY: hva_iovecs contains valid HVA pointers produced by gpa_hva_iovec_map above.
+        let written = match unsafe { util::aio::iov_from_buf_direct(&hva_iovecs, pkt) } {
+            Ok(n) => n,
+            Err(e) => {
+                warn!("MMDS inject_rx: write failed: {}", e);
+                return;
+            }
+        };
+
+        if rx_queue.vring.add_used(elem.index, written as u32).is_err() {
+            warn!("MMDS inject_rx: add_used failed");
+            return;
+        }
+
+        if rx_queue.vring.should_notify(self.driver_features) {
+            if let Err(e) = (self.interrupt_cb)(&VirtioInterruptType::Vring, Some(&rx_queue), false)
+            {
+                warn!("MMDS inject_rx: failed to trigger interrupt: {:?}", e);
+            }
+        }
     }
 }
 
@@ -1372,6 +1444,10 @@ pub struct Net {
     timer_id: Option<u64>,
     /// indicate if io is inflight
     io_inflight: IoRef,
+    /// Shared MMDS TCP stack between Net and running NetIoQueue workers.
+    /// Using Arc<Mutex<Option<...>>> so mmds_config can enable/disable it on
+    /// already-activated devices without restarting the queue worker.
+    pub mmds_tcp_stack: Arc<Mutex<Option<MmdsTcpStack>>>,
 }
 
 impl Net {
@@ -2039,6 +2115,7 @@ impl VirtioDevice for Net {
         let mut notify_link_down = false;
         let mut senders = Vec::new();
         let queue_pairs = queue_num / 2;
+
         for index in 0..queue_pairs {
             let rx_queue = queues[index * 2].clone();
             let rx_queue_evt = queue_evts[index * 2].clone();
@@ -2075,6 +2152,7 @@ impl VirtioDevice for Net {
                 queue_size: self.queue_size_max(),
                 macnat: self.get_macnat_handler(),
                 io_inflight: self.io_inflight.clone(),
+                mmds_tcp_stack: self.mmds_tcp_stack.clone(),
             });
 
             self.register_notifiers(net_queue, tap, receiver)?;

@@ -575,6 +575,40 @@ pub trait DeviceInterface {
             None,
         )
     }
+
+    /// Write the entire MMDS data store (put-mmds).
+    fn mmds_put(&self, _args: crate::qmp::qmp_schema::MmdsPutArgs) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("put-mmds not supported for this VM type".to_string()),
+            None,
+        )
+    }
+
+    /// Merge partial fields into the MMDS data store (patch-mmds).
+    fn mmds_patch(&self, _args: crate::qmp::qmp_schema::MmdsPatchArgs) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("patch-mmds not supported for this VM type".to_string()),
+            None,
+        )
+    }
+
+    /// Read the entire MMDS data store (get-mmds).
+    fn mmds_get(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("get-mmds not supported for this VM type".to_string()),
+            None,
+        )
+    }
+
+    /// Configure the MMDS endpoint (put-mmds-config).
+    fn mmds_config(&self, _args: crate::qmp::qmp_schema::MmdsConfigArgs) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError(
+                "put-mmds-config not supported for this VM type".to_string(),
+            ),
+            None,
+        )
+    }
 }
 
 /// Migrate external api
