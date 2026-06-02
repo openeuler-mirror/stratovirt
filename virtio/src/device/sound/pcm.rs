@@ -382,3 +382,114 @@ fn convert_params(
         period_bytes,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pcm_new() {
+        let pcm = Pcm::new(2, None, AudioBackend::Null);
+        assert_eq!(pcm.streams.len(), 0);
+        assert!(pcm.token_id.is_none());
+    }
+
+    #[test]
+    fn test_convert_params_valid() {
+        let params = PcmSetParams {
+            hdr: PcmHdr {
+                hdr: SndHdr { code: 0u32.to_le() },
+                stream_id: 0u32.to_le(),
+            },
+            buffer_bytes: 8192,
+            period_bytes: 1024,
+            features: 0,
+            channels: 2,
+            format: VIRTIO_SND_PCM_FMT_S16,
+            rate: VIRTIO_SND_PCM_RATE_44100,
+            padding: 0,
+        };
+        let result = convert_params(&params, VIRTIO_SND_D_OUTPUT, 1024);
+        assert!(result.is_ok());
+        let audio_params = result.unwrap();
+        assert_eq!(audio_params.channels, 2);
+        assert_eq!(audio_params.period_bytes, 1024);
+    }
+
+    #[test]
+    fn test_convert_params_invalid_rate() {
+        let params = PcmSetParams {
+            hdr: PcmHdr {
+                hdr: SndHdr { code: 0u32.to_le() },
+                stream_id: 0u32.to_le(),
+            },
+            buffer_bytes: 8192,
+            period_bytes: 1024,
+            features: 0,
+            channels: 2,
+            format: VIRTIO_SND_PCM_FMT_S16,
+            rate: 0,
+            padding: 0,
+        };
+        let result = convert_params(&params, VIRTIO_SND_D_OUTPUT, 1024);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_convert_params_invalid_format() {
+        let params = PcmSetParams {
+            hdr: PcmHdr {
+                hdr: SndHdr { code: 0u32.to_le() },
+                stream_id: 0u32.to_le(),
+            },
+            buffer_bytes: 8192,
+            period_bytes: 1024,
+            features: 0,
+            channels: 2,
+            format: 0,
+            rate: VIRTIO_SND_PCM_RATE_44100,
+            padding: 0,
+        };
+        let result = convert_params(&params, VIRTIO_SND_D_OUTPUT, 1024);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_convert_params_invalid_direction() {
+        let params = PcmSetParams {
+            hdr: PcmHdr {
+                hdr: SndHdr { code: 0u32.to_le() },
+                stream_id: 0u32.to_le(),
+            },
+            buffer_bytes: 8192,
+            period_bytes: 1024,
+            features: 0,
+            channels: 2,
+            format: VIRTIO_SND_PCM_FMT_S16,
+            rate: VIRTIO_SND_PCM_RATE_44100,
+            padding: 0,
+        };
+        let result = convert_params(&params, 2, 1024);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_streams_empty() {
+        let pcm = Pcm::new(0, None, AudioBackend::Null);
+        assert!(pcm.get_streams().is_empty());
+    }
+
+    #[test]
+    fn test_get_streams_mut_empty() {
+        let mut pcm = Pcm::new(0, None, AudioBackend::Null);
+        assert!(pcm.get_streams_mut().is_empty());
+    }
+
+    #[test]
+    fn test_push_elem_to_stream_invalid_id() {
+        let pcm = Pcm::new(0, None, AudioBackend::Null);
+        let elem = Element::default();
+        let result = pcm.push_elem_to_stream(0, elem);
+        assert!(result.is_some());
+    }
+}

@@ -148,3 +148,155 @@ pub fn create_volume_control(backend: AudioBackend) -> Arc<dyn VolumeControl> {
         _ => Arc::new(NullVolumeControl) as Arc<dyn VolumeControl>,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    #[test]
+    fn test_null_volume_control_set_volume() {
+        let control = NullVolumeControl;
+        // set_volume should not panic or change the volume
+        control.set_volume(100);
+        assert_eq!(control.get_volume(), 0);
+        control.set_volume(MAX_VOLUME);
+        assert_eq!(control.get_volume(), 0);
+        control.set_volume(0);
+        assert_eq!(control.get_volume(), 0);
+    }
+
+    #[test]
+    fn test_null_volume_control_set_mute() {
+        let control = NullVolumeControl;
+        // set_mute should not panic or change the mute state
+        control.set_mute(true);
+        assert_eq!(control.get_mute(), false);
+        control.set_mute(false);
+        assert_eq!(control.get_mute(), false);
+        control.set_mute(true);
+        assert_eq!(control.get_mute(), false);
+    }
+
+    #[test]
+    fn test_null_volume_control_register_listener() {
+        let control = NullVolumeControl;
+
+        struct DummyListener;
+        impl VolumeListener for DummyListener {
+            fn notify(&self, _volume: u32, _mute: bool) {}
+        }
+
+        let id = control.register_listener(Arc::new(DummyListener));
+        assert_eq!(id, 0);
+    }
+
+    #[test]
+    fn test_null_volume_control_unregister_listener() {
+        let control = NullVolumeControl;
+        // Should not panic
+        control.unregister_listener(0);
+        control.unregister_listener(42);
+        control.unregister_listener(u64::MAX);
+    }
+
+    #[test]
+    fn test_null_volume_control_arc_usage() {
+        // Test that NullVolumeControl works correctly when wrapped in Arc
+        let control: Arc<dyn VolumeControl> = Arc::new(NullVolumeControl);
+        assert_eq!(control.get_volume(), 0);
+        assert_eq!(control.get_mute(), false);
+
+        // Test clone of Arc
+        let control_clone = control.clone();
+        control_clone.set_volume(5000);
+        assert_eq!(control.get_volume(), 0);
+    }
+
+    #[test]
+    fn test_volume_listener_trait() {
+        use std::sync::Arc;
+
+        struct TestListener {
+            last_volume: AtomicU32,
+            last_mute: AtomicBool,
+        }
+        impl VolumeListener for TestListener {
+            fn notify(&self, volume: u32, mute: bool) {
+                self.last_volume.store(volume, Ordering::SeqCst);
+                self.last_mute.store(mute, Ordering::SeqCst);
+            }
+        }
+
+        let listener = Arc::new(TestListener {
+            last_volume: AtomicU32::new(0),
+            last_mute: AtomicBool::new(false),
+        });
+
+        // Verify the listener can be used through the trait object
+        let trait_listener: Arc<dyn VolumeListener> = listener.clone();
+
+        // Send notification through the trait
+        trait_listener.notify(MAX_VOLUME, true);
+
+        // Verify the state was updated via the concrete type
+        assert_eq!(listener.last_volume.load(Ordering::SeqCst), MAX_VOLUME);
+        assert!(listener.last_mute.load(Ordering::SeqCst));
+
+        // Send another notification
+        trait_listener.notify(0, false);
+        assert_eq!(listener.last_volume.load(Ordering::SeqCst), 0);
+        assert!(!listener.last_mute.load(Ordering::SeqCst));
+
+        // Test that VolumeListener is Send + Sync
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Arc<dyn VolumeListener>>();
+    }
+
+    #[test]
+    fn test_volume_listener_multiple_notifications() {
+        struct CountingListener {
+            count: std::sync::atomic::AtomicU32,
+        }
+        impl VolumeListener for CountingListener {
+            fn notify(&self, _volume: u32, _mute: bool) {
+                self.count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let listener = Arc::new(CountingListener {
+            count: AtomicU32::new(0),
+        }) as Arc<dyn VolumeListener>;
+
+        listener.notify(100, false);
+        listener.notify(200, true);
+        listener.notify(300, false);
+        listener.notify(MAX_VOLUME, false);
+
+        // Can't access count through the trait, but we verify no panic occurs.
+        // The real verification is that the code compiles and runs without error.
+    }
+
+    #[test]
+    fn test_create_volume_control_null_backend() {
+        let control = create_volume_control(AudioBackend::Null);
+        assert_eq!(control.get_volume(), 0);
+        assert_eq!(control.get_mute(), false);
+        assert_eq!(control.get_volume_range(), (0, 0));
+    }
+
+    #[test]
+    fn test_create_volume_control_returns_valid_arc() {
+        // Verify that the returned Arc<dyn VolumeControl> is valid and usable
+        let control = create_volume_control(AudioBackend::Null);
+        let control_clone = control.clone();
+        assert_eq!(control_clone.get_volume(), 0);
+
+        // Multiple operations in sequence should not panic
+        control.set_volume(100);
+        control.set_mute(true);
+        control.set_volume(200);
+        control.set_mute(false);
+        assert_eq!(control.get_volume(), 0);
+    }
+}
