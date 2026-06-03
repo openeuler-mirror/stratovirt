@@ -475,6 +475,39 @@ pub struct ScsiCommand {
     pub mode: ScsiXferMode,
 }
 
+impl ScsiCommand {
+    fn check_lba_invalid(&self, datalen: u32, device: &Arc<Mutex<dyn Device>>) -> Result<()> {
+        let opstype = scsi_operation_type(self.op);
+        if opstype != NON_EMULATE_SCSI_OPS || self.op == SYNCHRONIZE_CACHE {
+            return Ok(());
+        }
+
+        SCSI_DEVICE!(device, locked_dev, scsi_dev);
+        let disk_size = scsi_dev.disk_sectors << SECTOR_SHIFT;
+        let disk_type = scsi_dev.scsi_type;
+        let offset_shift = match disk_type {
+            SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
+            _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
+        };
+        let offset = self
+            .lba
+            .checked_shl(offset_shift)
+            .with_context(|| "Too large offset IO!")?;
+
+        offset
+            .checked_add(u64::from(datalen))
+            .filter(|&off| off <= disk_size)
+            .with_context(|| {
+                format!(
+                    "op 0x{:x} read/write length {} from {} is larger than disk size {}",
+                    self.op, datalen, offset, disk_size
+                )
+            })?;
+
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct ScsiCompleteCb {
     pub req: Arc<Mutex<ScsiRequest>>,
@@ -533,29 +566,7 @@ impl ScsiRequest {
         let op = cmd.op;
         let opstype = scsi_operation_type(op);
 
-        if op == WRITE_10 || op == READ_10 {
-            SCSI_DEVICE!(device, locked_dev, scsi_dev);
-            let disk_size = scsi_dev.disk_sectors << SECTOR_SHIFT;
-            let disk_type = scsi_dev.scsi_type;
-            let offset_shift = match disk_type {
-                SCSI_TYPE_DISK => SCSI_DISK_DEFAULT_BLOCK_SIZE_SHIFT,
-                _ => SCSI_CDROM_DEFAULT_BLOCK_SIZE_SHIFT,
-            };
-            let offset = cmd
-                .lba
-                .checked_shl(offset_shift)
-                .with_context(|| "Too large offset IO!")?;
-
-            offset
-                .checked_add(u64::from(datalen))
-                .filter(|&off| off <= disk_size)
-                .with_context(|| {
-                    format!(
-                        "op 0x{:x} read/write length {} from {} is larger than disk size {}",
-                        op, datalen, offset, disk_size
-                    )
-                })?;
-        }
+        cmd.check_lba_invalid(datalen, &device)?;
 
         Ok(ScsiRequest {
             cmd,
