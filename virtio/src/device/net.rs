@@ -821,19 +821,21 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
 
             // Read the data from the tap device.
             let locked_tap = tap.read().unwrap();
+
             let size = if locked_tap.is_some() {
                 locked_tap.as_ref().unwrap().receive_packets(&iovecs)
             } else {
-                -1
+                queue.vring.push_back();
+                break;
             };
-            let tap_mac = locked_tap.as_ref().unwrap().get_mac();
-            drop(locked_tap);
-
             let len = self.rx_min_bytes();
             if size < len as isize {
                 queue.vring.push_back();
                 break;
             }
+
+            let tap_mac = locked_tap.as_ref().unwrap().get_mac();
+            drop(locked_tap);
 
             if self.process_rx_packet(&iovecs, len, tap_mac.as_ref())? {
                 queue.vring.push_back();

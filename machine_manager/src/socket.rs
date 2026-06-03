@@ -376,7 +376,7 @@ impl SocketHandler {
     pub fn get_line(&mut self) -> Result<Option<String>> {
         self.buffer.clear();
         self.stream.clear();
-        self.stream.read_fd().unwrap();
+        self.stream.read_fd()?;
         self.stream.get_buf_string().map(|buffer| {
             self.buffer = buffer;
             if self.stream.pos == 0 {
@@ -397,7 +397,9 @@ impl SocketHandler {
     ) -> (Result<Option<D>>, Option<RawFd>) {
         self.buffer.clear();
         self.stream.clear();
-        self.stream.read_fd().unwrap();
+        if let Err(e) = self.stream.read_fd() {
+            return (Err(e.into()), None);
+        }
         match self.stream.get_buf_string() {
             Ok(buffer) => {
                 self.buffer = buffer;
