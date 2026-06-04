@@ -405,6 +405,10 @@ impl AsyncMsgHandle for Emulator {
     fn get_evt_fd(&self) -> Arc<EventFd> {
         self.evt_fd.clone()
     }
+
+    fn get_data_fd(&self) -> Option<RawFd> {
+        self.data_stream.as_raw_fd()
+    }
 }
 
 impl TpmBackend for Emulator {

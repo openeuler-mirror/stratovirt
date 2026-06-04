@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::io::{self, ErrorKind, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -118,5 +119,9 @@ impl SocketDev {
                     Error::WriteToSocket(e)
                 }
             })
+    }
+
+    pub fn as_raw_fd(&self) -> Option<RawFd> {
+        self.stream.as_ref().map(|s| s.as_raw_fd())
     }
 }

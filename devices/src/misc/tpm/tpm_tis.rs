@@ -562,7 +562,10 @@ impl OnComplete for TpmTis {
                 self.request_completed(true);
             }
             Err(e) => {
-                if matches!(e, AioError::Disconnected) && !self.backend_disconnected {
+                if matches!(e, AioError::Disconnected) {
+                    if self.backend_disconnected {
+                        return;
+                    }
                     self.backend_disconnected = true;
 
                     let disconnected_msg = VmNotifyEvent {
@@ -573,6 +576,7 @@ impl OnComplete for TpmTis {
                     };
                     event!(VmNotifyEvent; disconnected_msg);
                 }
+
                 error!("TPM async request failed: {:?}", e);
                 self.write_fatal_error_response();
                 self.request_completed(false);

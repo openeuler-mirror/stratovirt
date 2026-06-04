@@ -165,6 +165,20 @@ pub fn gen_delete_notifiers(fds: &[RawFd]) -> Vec<EventNotifier> {
     notifiers
 }
 
+pub fn gen_park_notifiers(fds: &[RawFd], event: EventSet) -> Vec<EventNotifier> {
+    let mut notifiers = Vec::with_capacity(fds.len());
+    for fd in fds {
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::Park,
+            *fd,
+            None,
+            event,
+            Vec::new(),
+        ));
+    }
+    notifiers
+}
+
 pub fn create_new_eventfd() -> Result<EventFd, Error> {
     EventFd::new(EFD_NONBLOCK | EFD_CLOEXEC)
 }
