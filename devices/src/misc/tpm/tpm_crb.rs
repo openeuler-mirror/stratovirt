@@ -26,10 +26,7 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder, AmlString,
 };
 use address_space::GuestAddress;
-use tpm::{
-    emulator::{Emulator, Result as EmulatorResult},
-    OnComplete, TPM_CRB_BUFFER_MAX,
-};
+use tpm::{emulator::Emulator, TPM_CRB_BUFFER_MAX};
 use util::gen_base_func;
 
 #[allow(dead_code)]
@@ -229,7 +226,7 @@ fn locality_from_addr(addr: u32) -> u8 {
 
 pub struct TpmCrb {
     base: SysBusDevBase,
-    emulator: Emulator<TpmCrb>,
+    emulator: Emulator,
     regs: [u32; TPM_CRB_R_MAX],
     backend_buff_size: usize,
     data_buff: [u8; TPM_CRB_BUFFER_MAX],
@@ -380,10 +377,6 @@ impl TpmCrb {
     }
 }
 
-impl OnComplete for TpmCrb {
-    fn on_complete(&mut self, _r: EmulatorResult<usize>, _b: Vec<u8>) {}
-}
-
 impl Device for TpmCrb {
     gen_base_func!(device_base, device_base_mut, DeviceBase, base.base);
 
@@ -392,11 +385,6 @@ impl Device for TpmCrb {
         MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         let dev = Arc::new(Mutex::new(self));
         sysbus.attach_device(&dev)?;
-
-        dev.lock()
-            .unwrap()
-            .emulator
-            .set_complete_handler(Arc::downgrade(&dev));
 
         Ok(dev)
     }

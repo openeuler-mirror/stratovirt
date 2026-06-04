@@ -15,3 +15,5 @@ thiserror = "1.0"
 vmm-sys-util = "0.12.1"
 serde = { version = "1.0", features = ["derive"] }
 serde-big-array = "0.5.1"
+machine_manager = { path = "../machine_manager" }
+util = { path = "../util" }

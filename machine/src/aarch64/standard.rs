@@ -582,8 +582,14 @@ impl MachineOps for StdMachine {
                     .with_context(|| "Failed to realize TpmCrb device")?;
             }
             TpmInterfaceType::Tis => {
-                let tpm = TpmTis::new(&self.base.sysbus, TPM_START, TPM_TIS_SIZE, &tpm_cfg.path)
-                    .with_context(|| "Failed to new TpmTis device")?;
+                let tpm = TpmTis::new(
+                    &self.base.sysbus,
+                    TPM_START,
+                    TPM_TIS_SIZE,
+                    &tpm_cfg.path,
+                    tpm_cfg.iothread.clone(),
+                )
+                .with_context(|| "Failed to new TpmTis device")?;
                 tpm.realize()
                     .with_context(|| "Failed to realize TpmTis device")?;
             }

@@ -32,6 +32,8 @@ pub struct TpmConfig {
     pub path: String,
     #[arg(long, default_value_t = TpmInterfaceType::Tis)]
     pub interface_type: TpmInterfaceType,
+    #[arg(long)]
+    pub iothread: Option<String>,
 }
 
 #[derive(ValueEnum, Copy, Clone, Debug, PartialEq, Eq, Default)]
