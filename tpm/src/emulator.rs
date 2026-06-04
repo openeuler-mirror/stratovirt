@@ -10,23 +10,24 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
 use std::mem;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex, Weak};
-use std::thread;
+use std::sync::{Arc, Mutex};
 
 use byteorder::{BigEndian, ByteOrder};
-use log::{error, info, warn};
+use log::{error, warn};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use vmm_sys_util::eventfd::EventFd;
 
+use crate::aio::{self, AioError, AsyncMsg, AsyncMsgHandle};
 use crate::socket::{self, SocketDev};
 use crate::{
-    CtrlCmdCode, OnComplete, Ptm, PtmCap, PtmEst, PtmGetState, PtmInit, PtmResetEst, PtmResult,
+    CtrlCmdCode, Ptm, PtmCap, PtmEst, PtmGetState, PtmInit, PtmResetEst, PtmResult,
     PtmSetBufferSize, PtmSetLoc, PTM_BLOB_TYPE_PERMANENT, PTM_BLOB_TYPE_SAVESTATE,
     PTM_BLOB_TYPE_VOLATILE, PTM_INIT_FLAG_DELETE_VOLATILE, PTM_STATE_FLAG_DECRYPTED, TPM_SUCCESS,
     TPM_TIS_BUFFER_MAX,
@@ -112,15 +113,16 @@ impl From<io::Error> for EmulatorError {
     }
 }
 
-pub type Result<T> = anyhow::Result<T, EmulatorError>;
-
-pub enum DataPlaneMsg {
-    Request {
-        cmd_buf: Vec<u8>,
-        cmd_len: usize,
-        locty: u8,
-    },
+impl From<EmulatorError> for AioError {
+    fn from(val: EmulatorError) -> Self {
+        match val {
+            EmulatorError::Disconnected => AioError::Disconnected,
+            _ => AioError::TpmError(format!("{:?}", val)),
+        }
+    }
 }
+
+pub type Result<T> = anyhow::Result<T, EmulatorError>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TpmStateBlob {
@@ -135,18 +137,18 @@ pub struct TpmStateBlobs {
     pub savestate: TpmStateBlob,
 }
 
-pub struct Emulator<T: OnComplete + Sync + Send + 'static> {
+pub struct Emulator {
     caps: PtmCap, /* capabilities of the TPM */
     control_socket: SocketDev,
     data_stream: SocketDev,
-    data_tx: Option<Sender<DataPlaneMsg>>,
+    data_requests: VecDeque<AsyncMsg>,
+    evt_fd: Arc<EventFd>,
     established_flag_cached: bool,
     established_flag: bool,
     cur_loc: u32,
-    complete_handler: Weak<Mutex<T>>,
 }
 
-impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
+impl Emulator {
     /// Create Emulator Instance
     ///
     /// # Arguments
@@ -155,17 +157,16 @@ impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
     ///
     pub fn new(path: impl AsRef<Path>) -> Result<Arc<Mutex<Self>>> {
         let (cli_stream, srv_stream) = UnixStream::pair()?;
-        let (tx, rx) = channel::<DataPlaneMsg>();
 
         let emulator = Arc::new(Mutex::new(Self {
             caps: 0,
             control_socket: SocketDev::new_with_path(path)?,
             data_stream: SocketDev::new(cli_stream),
-            data_tx: Some(tx),
+            data_requests: VecDeque::new(),
+            evt_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK | libc::EFD_CLOEXEC)?),
             established_flag_cached: false,
             established_flag: false,
             cur_loc: TPM_INVALID_LOC,
-            complete_handler: Weak::new(),
         }));
 
         emulator
@@ -174,11 +175,7 @@ impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
             .probe_and_check_caps()?
             .set_data_fd(srv_stream.as_raw_fd())?;
 
-        Self::start_data_worker(emulator.clone(), rx).and(Ok(emulator))
-    }
-
-    pub fn set_complete_handler(&mut self, handler: Weak<Mutex<T>>) {
-        self.complete_handler = handler;
+        Ok(emulator)
     }
 
     pub fn process_request(&mut self, cmd_buf: &mut [u8], cmd_len: usize) -> Result<usize> {
@@ -211,58 +208,6 @@ impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
         }
 
         Ok(total_size)
-    }
-
-    pub fn stop_data_worker(&mut self) -> Weak<Mutex<T>> {
-        self.data_tx = None;
-        self.complete_handler.clone()
-    }
-
-    fn start_data_worker(emulator: Arc<Mutex<Self>>, rx: Receiver<DataPlaneMsg>) -> Result<()> {
-        thread::Builder::new()
-            .name("vTPM Data Plane Worker Thread".to_string())
-            .spawn(move || {
-                info!("vTPM Data Plane Worker Thread started");
-
-                for msg in rx {
-                    let DataPlaneMsg::Request {
-                        mut cmd_buf,
-                        cmd_len,
-                        locty,
-                    } = msg;
-
-                    let Some(complete_handler) =
-                        emulator.lock().unwrap().complete_handler.upgrade()
-                    else {
-                        info!("OnComplete handler has been dropped");
-                        break;
-                    };
-
-                    if let Err(e) = emulator.lock().unwrap().set_locality(locty as u32) {
-                        error!("TPM set locality failed: {:?}", e);
-                        complete_handler
-                            .lock()
-                            .unwrap()
-                            .on_complete(Err(e), cmd_buf);
-                        continue;
-                    }
-
-                    let result = emulator
-                        .lock()
-                        .unwrap()
-                        .process_request(&mut cmd_buf, cmd_len);
-                    complete_handler
-                        .lock()
-                        .unwrap()
-                        .on_complete(result, cmd_buf);
-                }
-
-                info!("vTPM Data Plane Worker Thread gracefully shutting down");
-            })
-            .map_err(|e| {
-                EmulatorError::Initialize(format!("Failed to spawn worker thread: {}", e))
-            })?;
-        Ok(())
     }
 
     /// Send data fd to swtpm
@@ -376,26 +321,6 @@ impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
         self.established_flag = est.resp.bit == 0;
 
         Ok(self.established_flag)
-    }
-
-    pub fn deliver_request_async(
-        &mut self,
-        cmd_buf: Vec<u8>,
-        cmd_len: usize,
-        locty: u8,
-    ) -> Result<()> {
-        let tx = self.data_tx.as_ref().ok_or(EmulatorError::Disconnected)?;
-        let msg = DataPlaneMsg::Request {
-            cmd_buf,
-            cmd_len,
-            locty,
-        };
-
-        if tx.send(msg).is_err() {
-            self.data_tx = None;
-            return Err(EmulatorError::Disconnected);
-        }
-        Ok(())
     }
 
     pub fn cancel_cmd(&mut self) -> Result<()> {
@@ -578,5 +503,50 @@ impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
         }
 
         Ok(())
+    }
+}
+
+impl AsyncMsgHandle for Emulator {
+    fn deliver_request_async(
+        &mut self,
+        cmd_buf: Vec<u8>,
+        cmd_len: usize,
+        locty: u8,
+    ) -> aio::Result<()> {
+        let msg = AsyncMsg::Request {
+            cmd_buf,
+            cmd_len,
+            locty,
+        };
+
+        self.data_requests.push_back(msg);
+        self.evt_fd.write(1)?;
+        Ok(())
+    }
+
+    fn handle_async_request(&mut self, request: AsyncMsg) -> (aio::Result<()>, Vec<u8>) {
+        let AsyncMsg::Request {
+            mut cmd_buf,
+            cmd_len,
+            locty,
+        } = request;
+
+        if let Err(e) = self.set_locality(locty as u32) {
+            error!("TPM set locality failed: {:?}", e);
+            return (Err(e.into()), cmd_buf);
+        }
+
+        match self.process_request(&mut cmd_buf, cmd_len) {
+            Ok(_) => (Ok(()), cmd_buf),
+            Err(e) => (Err(e.into()), cmd_buf),
+        }
+    }
+
+    fn get_request(&mut self) -> Option<AsyncMsg> {
+        self.data_requests.pop_front()
+    }
+
+    fn get_evt_fd(&self) -> RawFd {
+        self.evt_fd.as_raw_fd()
     }
 }

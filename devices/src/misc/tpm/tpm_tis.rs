@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,6 +20,7 @@ use anyhow::{anyhow, Context, Result};
 use byteorder::{BigEndian, ByteOrder};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::legacy::error::LegacyError;
 use crate::misc::tpm::{TpmInterfaceType, TPM_DISCONNECTED_NOTIFY_CODE};
@@ -42,11 +44,15 @@ use migration::{
 };
 use migration_derive::DescSerde;
 use tpm::{
-    emulator::{
-        Emulator, EmulatorError, Result as EmulatorResult, TpmStateBlobs, TPM_RSP_HDR_SIZE,
-        TPM_RSP_PS_OFFSET, TPM_RSP_RC_OFFSET,
+    aio::{
+        self, register_async_ctrl_notifier, unregister_async_ctrl_notifier, AioError,
+        AsyncMsgHandle, OnComplete,
     },
-    OnComplete, TPM_TIS_BUFFER_MAX,
+    emulator::{
+        Emulator, EmulatorError, TpmStateBlobs, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET,
+        TPM_RSP_RC_OFFSET,
+    },
+    TPM_TIS_BUFFER_MAX,
 };
 use util::gen_base_func;
 
@@ -203,9 +209,11 @@ pub struct TpmTis {
     aborting_locty: u8,
     next_locty: u8,
     loc: [TpmLocality; TPM_TIS_NUM_LOCALITIES],
-    pub emulator: Arc<Mutex<Emulator<TpmTis>>>,
+    pub emulator: Arc<Mutex<Emulator>>,
     backend_buff_size: usize,
     backend_disconnected: bool,
+    iothread: Option<String>,
+    update_evt: Option<Arc<EventFd>>,
 }
 
 impl TpmTis {
@@ -214,6 +222,7 @@ impl TpmTis {
         region_base: u64,
         region_size: u64,
         path: impl AsRef<Path>,
+        iothread: Option<String>,
     ) -> Result<Self> {
         let emulator = Emulator::new(path)
             .map_err(|e| anyhow!("Failed while initializing tpm Emulator: {e:?}"))?;
@@ -229,6 +238,8 @@ impl TpmTis {
             emulator,
             backend_buff_size: TPM_TIS_BUFFER_MAX,
             backend_disconnected: false,
+            iothread,
+            update_evt: None,
         };
         tpm.set_sys_resource(sysbus, region_base, region_size, "TPM-TIS")
             .with_context(|| LegacyError::SetSysResErr)?;
@@ -243,8 +254,6 @@ impl TpmTis {
     pub fn reconnect(&mut self, path: impl AsRef<Path>) -> Result<()> {
         info!("Reconnecting vTPM to: {:?}", path.as_ref());
 
-        let handler = self.emulator.lock().unwrap().stop_data_worker();
-
         let new_emulator =
             Emulator::new(path).map_err(|e| anyhow::anyhow!("Reconnect to swtpm failed: {}", e))?;
 
@@ -258,12 +267,22 @@ impl TpmTis {
         {
             return Err(anyhow!("Failed while running Startup TPM. Error: {e:?}"));
         }
-        new_emulator.lock().unwrap().set_complete_handler(handler);
 
         self.emulator = new_emulator;
         self.backend_disconnected = false;
 
+        if let Some(ref evt) = self.update_evt {
+            evt.write(1)?;
+        }
+
         info!("vTPM reconnect sequence completed successfully.");
+        Ok(())
+    }
+
+    fn register_update_event(handler: Arc<Mutex<TpmTis>>) -> Result<()> {
+        let iothread = handler.lock().unwrap().iothread.clone();
+        let update_evt = register_async_ctrl_notifier(handler.clone(), iothread)?;
+        handler.lock().unwrap().update_evt = Some(update_evt);
         Ok(())
     }
 
@@ -415,7 +434,7 @@ impl TpmTis {
 
         if let Err(e) = res {
             error!("Failed to dispatch TPM request to backend: {:?}", e);
-            if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+            if matches!(e, AioError::Disconnected) && !self.backend_disconnected {
                 self.backend_disconnected = true;
 
                 let disconnected_msg = VmNotifyEvent {
@@ -553,16 +572,17 @@ impl TpmTis {
 }
 
 impl OnComplete for TpmTis {
-    fn on_complete(&mut self, res: EmulatorResult<usize>, buffer: Vec<u8>) {
+    type T = Emulator;
+
+    fn on_complete(&mut self, res: aio::Result<()>, buffer: Vec<u8>) {
         self.buffer = Some(buffer);
 
         match res {
-            Ok(response_size) => {
-                debug!("TPM request success, valid resp len {}", response_size);
+            Ok(_) => {
                 self.request_completed(true);
             }
             Err(e) => {
-                if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+                if matches!(e, AioError::Disconnected) && !self.backend_disconnected {
                     self.backend_disconnected = true;
 
                     let disconnected_msg = VmNotifyEvent {
@@ -579,6 +599,10 @@ impl OnComplete for TpmTis {
             }
         }
     }
+
+    fn get_async_handler(&self) -> Arc<Mutex<Self::T>> {
+        self.emulator.clone()
+    }
 }
 
 impl Device for TpmTis {
@@ -586,15 +610,12 @@ impl Device for TpmTis {
 
     fn realize(self) -> Result<Arc<Mutex<Self>>> {
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
-        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
-        let emulator = self.emulator.clone();
         let dev = Arc::new(Mutex::new(self));
+        MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         sysbus.attach_device(&dev)?;
 
-        emulator
-            .lock()
-            .unwrap()
-            .set_complete_handler(Arc::downgrade(&dev));
+        Self::register_update_event(dev.clone())?;
+        dev.lock().unwrap().update_evt.as_ref().unwrap().write(1)?;
 
         MigrationManager::register_device_instance(
             TpmTisSnapshot::descriptor(),
@@ -608,6 +629,10 @@ impl Device for TpmTis {
     fn unrealize(&mut self) -> Result<()> {
         if let Err(e) = self.emulator.lock().unwrap().shutdown_tpm() {
             return Err(anyhow!("Failed while running Shutdown TPM. Error: {e:?}"));
+        }
+
+        if let Some(evt) = self.update_evt.take() {
+            unregister_async_ctrl_notifier(evt.as_raw_fd(), self.iothread.as_ref());
         }
 
         MigrationManager::unregister_device_instance(

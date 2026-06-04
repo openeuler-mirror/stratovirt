@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod aio;
 pub mod emulator;
 pub mod socket;
 
@@ -28,13 +29,6 @@ const PTM_BLOB_TYPE_SAVESTATE: u32 = 3;
 const PTM_STATE_FLAG_DECRYPTED: u32 = 1;
 
 const PTM_INIT_FLAG_DELETE_VOLATILE: u32 = 1;
-
-/*
- * TPM device should implement this trait.
- */
-pub trait OnComplete {
-    fn on_complete(&mut self, res: emulator::Result<usize>, buf: Vec<u8>);
-}
 
 /*
  * Structures required to process Request and Responses of Control commands
