@@ -393,7 +393,6 @@ impl StateTransfer for Vsock {
 }
 
 impl MigrationHook for Vsock {
-    #[cfg(target_arch = "aarch64")]
     fn resume(&mut self) -> Result<()> {
         Result::with_context(self.transport_reset(), || {
             "Failed to resume virtio vsock device"
