@@ -11,13 +11,14 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
+    collections::VecDeque,
     io,
     os::fd::{AsRawFd, RawFd},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
-use log::error;
+use log::{error, warn};
 use thiserror::Error;
 
 use machine_manager::event_loop::EventLoop;
@@ -62,13 +63,9 @@ pub type Result<T> = anyhow::Result<T, AioError>;
  * TPM Backend should implement this trait.
  */
 pub trait AsyncMsgHandle {
-    fn deliver_request_async(&mut self, cmd_buf: Vec<u8>, cmd_len: usize, locty: u8) -> Result<()>;
-
     fn handle_async_request(&mut self, request: AsyncMsg) -> (Result<()>, Vec<u8>);
 
-    fn get_request(&mut self) -> Option<AsyncMsg>;
-
-    fn get_evt_fd(&self) -> RawFd;
+    fn get_evt_fd(&self) -> Arc<EventFd>;
 }
 
 /*
@@ -80,6 +77,44 @@ pub trait OnComplete {
     fn on_complete(&mut self, res: Result<()>, buf: Vec<u8>);
 
     fn get_async_handler(&self) -> Arc<Mutex<Self::T>>;
+}
+
+#[derive(Default)]
+struct AsyncCtrl {
+    requests: VecDeque<AsyncMsg>,
+    evt: Option<Arc<EventFd>>,
+}
+
+static ASYNC_CTRL: LazyLock<Mutex<AsyncCtrl>> = LazyLock::new(|| Mutex::new(AsyncCtrl::default()));
+
+pub fn deliver_request(msg: AsyncMsg) {
+    let mut async_ctrl = ASYNC_CTRL.lock().unwrap();
+
+    if async_ctrl.evt.is_none() {
+        warn!("there's no evet fd to notify async handler of tpm data request");
+        return;
+    }
+
+    async_ctrl.requests.push_back(msg);
+    if let Err(e) = async_ctrl.evt.as_ref().unwrap().write(1) {
+        error!("Failed to write event fd, {:?}", e);
+    }
+}
+
+fn pop_request() -> Option<AsyncMsg> {
+    ASYNC_CTRL.lock().unwrap().requests.pop_front()
+}
+
+fn async_ctrl_reset() {
+    let mut async_ctrl = ASYNC_CTRL.lock().unwrap();
+    async_ctrl.requests.clear();
+    async_ctrl.evt = None;
+}
+
+fn async_ctrl_init(evt: Arc<EventFd>) {
+    let mut async_ctrl = ASYNC_CTRL.lock().unwrap();
+    async_ctrl.requests.clear();
+    async_ctrl.evt = Some(evt);
 }
 
 pub fn register_async_ctrl_notifier<T>(
@@ -109,17 +144,21 @@ where
         }
 
         let async_handler = complete_handler.lock().unwrap().get_async_handler();
-        let evtfd = async_handler.lock().unwrap().get_evt_fd();
+        let evt = async_handler.lock().unwrap().get_evt_fd();
         let async_notifier = vec![create_async_request_notifier(
             complete_handler.clone(),
             async_handler.clone(),
-            evtfd,
+            evt.as_raw_fd(),
         )];
         if let Err(e) = EventLoop::update_event(async_notifier, cloned_iothread.as_ref()) {
             error!("Failed to update event: {:?}", e);
+            async_ctrl_reset();
+            return Some(notifiers);
         }
 
-        *del_evt.lock().unwrap() = Some(evtfd);
+        async_ctrl_init(evt.clone());
+
+        *del_evt.lock().unwrap() = Some(evt.as_raw_fd());
 
         Some(notifiers)
     });
@@ -137,6 +176,8 @@ where
 }
 
 pub fn unregister_async_ctrl_notifier(fd: RawFd, iothread: Option<&String>) {
+    async_ctrl_reset();
+
     let notifier = vec![EventNotifier::new(
         NotifierOperation::Delete,
         fd,
@@ -144,7 +185,6 @@ pub fn unregister_async_ctrl_notifier(fd: RawFd, iothread: Option<&String>) {
         EventSet::IN,
         Vec::new(),
     )];
-
     if let Err(e) = EventLoop::update_event(notifier, iothread) {
         error!("Failed to unregister async ctrl notifier, {:?}", e);
     }
@@ -163,7 +203,7 @@ where
         read_fd(fd);
 
         loop {
-            let Some(request) = async_handler.lock().unwrap().get_request() else {
+            let Some(request) = pop_request() else {
                 break;
             };
 

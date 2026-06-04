@@ -10,7 +10,6 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
 use std::mem;
 use std::os::fd::{AsRawFd, RawFd};
@@ -141,7 +140,6 @@ pub struct Emulator {
     caps: PtmCap, /* capabilities of the TPM */
     control_socket: SocketDev,
     data_stream: SocketDev,
-    data_requests: VecDeque<AsyncMsg>,
     evt_fd: Arc<EventFd>,
     established_flag_cached: bool,
     established_flag: bool,
@@ -386,23 +384,6 @@ impl Emulator {
 }
 
 impl AsyncMsgHandle for Emulator {
-    fn deliver_request_async(
-        &mut self,
-        cmd_buf: Vec<u8>,
-        cmd_len: usize,
-        locty: u8,
-    ) -> aio::Result<()> {
-        let msg = AsyncMsg::Request {
-            cmd_buf,
-            cmd_len,
-            locty,
-        };
-
-        self.data_requests.push_back(msg);
-        self.evt_fd.write(1)?;
-        Ok(())
-    }
-
     fn handle_async_request(&mut self, request: AsyncMsg) -> (aio::Result<()>, Vec<u8>) {
         let AsyncMsg::Request {
             mut cmd_buf,
@@ -421,12 +402,8 @@ impl AsyncMsgHandle for Emulator {
         }
     }
 
-    fn get_request(&mut self) -> Option<AsyncMsg> {
-        self.data_requests.pop_front()
-    }
-
-    fn get_evt_fd(&self) -> RawFd {
-        self.evt_fd.as_raw_fd()
+    fn get_evt_fd(&self) -> Arc<EventFd> {
+        self.evt_fd.clone()
     }
 }
 
@@ -446,7 +423,6 @@ impl TpmBackend for Emulator {
             caps: 0,
             control_socket: SocketDev::new_with_path(path)?,
             data_stream: SocketDev::new(cli_stream),
-            data_requests: VecDeque::new(),
             evt_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK | libc::EFD_CLOEXEC)?),
             established_flag_cached: false,
             established_flag: false,
