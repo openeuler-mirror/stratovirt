@@ -14,6 +14,9 @@ pub mod aio;
 pub mod emulator;
 pub mod socket;
 
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
 use anyhow::anyhow;
 use byteorder::{BigEndian, ByteOrder};
 use thiserror::Error;
@@ -29,6 +32,34 @@ const PTM_BLOB_TYPE_SAVESTATE: u32 = 3;
 const PTM_STATE_FLAG_DECRYPTED: u32 = 1;
 
 const PTM_INIT_FLAG_DELETE_VOLATILE: u32 = 1;
+
+pub trait TpmMigration {
+    fn get_state(&mut self) -> anyhow::Result<Vec<u8>>;
+
+    fn set_state(&mut self, state: Vec<u8>) -> anyhow::Result<()>;
+}
+
+pub trait TpmBackend: aio::AsyncMsgHandle + TpmMigration {
+    type E;
+
+    fn new(path: impl AsRef<Path>) -> anyhow::Result<Arc<Mutex<Self>>, Self::E>;
+
+    fn startup_tpm(&mut self, buffersize: usize, is_resume: bool) -> anyhow::Result<(), Self::E>;
+
+    fn shutdown_tpm(&mut self) -> anyhow::Result<(), Self::E>;
+
+    fn process_request(
+        &mut self,
+        cmd_buf: &mut [u8],
+        cmd_len: usize,
+    ) -> anyhow::Result<usize, Self::E>;
+
+    fn cancel_cmd(&mut self) -> anyhow::Result<(), Self::E>;
+
+    fn get_established_flag(&mut self) -> anyhow::Result<bool, Self::E>;
+
+    fn reset_established_flag(&mut self, loc: u8) -> anyhow::Result<(), Self::E>;
+}
 
 /*
  * Structures required to process Request and Responses of Control commands

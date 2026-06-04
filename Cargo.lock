@@ -1948,7 +1948,7 @@ dependencies = [
  "log",
  "machine_manager",
  "serde",
- "serde-big-array",
+ "serde_json",
  "thiserror",
  "util",
  "vmm-sys-util",

@@ -28,9 +28,9 @@ use crate::aio::{self, AioError, AsyncMsg, AsyncMsgHandle};
 use crate::socket::{self, SocketDev};
 use crate::{
     CtrlCmdCode, Ptm, PtmCap, PtmEst, PtmGetState, PtmInit, PtmResetEst, PtmResult,
-    PtmSetBufferSize, PtmSetLoc, PTM_BLOB_TYPE_PERMANENT, PTM_BLOB_TYPE_SAVESTATE,
-    PTM_BLOB_TYPE_VOLATILE, PTM_INIT_FLAG_DELETE_VOLATILE, PTM_STATE_FLAG_DECRYPTED, TPM_SUCCESS,
-    TPM_TIS_BUFFER_MAX,
+    PtmSetBufferSize, PtmSetLoc, TpmBackend, TpmMigration, PTM_BLOB_TYPE_PERMANENT,
+    PTM_BLOB_TYPE_SAVESTATE, PTM_BLOB_TYPE_VOLATILE, PTM_INIT_FLAG_DELETE_VOLATILE,
+    PTM_STATE_FLAG_DECRYPTED, TPM_SUCCESS, TPM_TIS_BUFFER_MAX,
 };
 
 const TPM_INVALID_LOC: u32 = 0xff;
@@ -131,7 +131,7 @@ pub struct TpmStateBlob {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TpmStateBlobs {
+struct TpmStateBlobs {
     pub permanent: TpmStateBlob,
     pub volatile: TpmStateBlob,
     pub savestate: TpmStateBlob,
@@ -149,67 +149,6 @@ pub struct Emulator {
 }
 
 impl Emulator {
-    /// Create Emulator Instance
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - A path to the Unix Domain Socket swtpm is listening on
-    ///
-    pub fn new(path: impl AsRef<Path>) -> Result<Arc<Mutex<Self>>> {
-        let (cli_stream, srv_stream) = UnixStream::pair()?;
-
-        let emulator = Arc::new(Mutex::new(Self {
-            caps: 0,
-            control_socket: SocketDev::new_with_path(path)?,
-            data_stream: SocketDev::new(cli_stream),
-            data_requests: VecDeque::new(),
-            evt_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK | libc::EFD_CLOEXEC)?),
-            established_flag_cached: false,
-            established_flag: false,
-            cur_loc: TPM_INVALID_LOC,
-        }));
-
-        emulator
-            .lock()
-            .unwrap()
-            .probe_and_check_caps()?
-            .set_data_fd(srv_stream.as_raw_fd())?;
-
-        Ok(emulator)
-    }
-
-    pub fn process_request(&mut self, cmd_buf: &mut [u8], cmd_len: usize) -> Result<usize> {
-        let is_selftest_cmd = is_selftest(cmd_buf);
-
-        self.data_stream.write_all(&cmd_buf[..cmd_len])?;
-
-        let mut header = [0u8; TPM_RSP_HDR_SIZE];
-        self.data_stream.read_exact(&mut header)?;
-
-        let total_size =
-            BigEndian::read_u32(&header[TPM_RSP_PS_OFFSET..TPM_RSP_RC_OFFSET]) as usize;
-        if total_size < TPM_RSP_HDR_SIZE || total_size > cmd_buf.len() {
-            return Err(EmulatorError::InvalidResponseSize);
-        }
-
-        if is_selftest_cmd && total_size != TPM_RSP_HDR_SIZE {
-            return Err(EmulatorError::SelfTest(format!(
-                "Self test response should have 10 bytes. Only {} returned",
-                total_size
-            )));
-        }
-
-        cmd_buf[..TPM_RSP_HDR_SIZE].copy_from_slice(&header);
-
-        let remaining = total_size - TPM_RSP_HDR_SIZE;
-        if remaining > 0 {
-            self.data_stream
-                .read_exact(&mut cmd_buf[TPM_RSP_HDR_SIZE..total_size])?;
-        }
-
-        Ok(total_size)
-    }
-
     /// Send data fd to swtpm
     fn set_data_fd(&mut self, data_fd: RawFd) -> Result<()> {
         let mut res: PtmResult = 0;
@@ -305,34 +244,6 @@ impl Emulator {
         Ok(())
     }
 
-    pub fn get_established_flag(&mut self) -> Result<bool> {
-        let mut est: PtmEst = PtmEst::new();
-
-        if self.established_flag_cached {
-            return Ok(self.established_flag);
-        }
-
-        if let Err(e) = self.run_control_cmd(&mut est, CtrlCmdCode::GetTpmEstablished, None) {
-            error!("Failed to run CmdGetTpmEstablished control command. Error: {e:?}");
-            return Err(e);
-        }
-
-        self.established_flag_cached = true;
-        self.established_flag = est.resp.bit == 0;
-
-        Ok(self.established_flag)
-    }
-
-    pub fn cancel_cmd(&mut self) -> Result<()> {
-        // Check if emulator implements Cancel command
-        if (self.caps & PTM_CAP_CANCEL_TPM_CMD) != PTM_CAP_CANCEL_TPM_CMD {
-            return Err(EmulatorError::UnsupportedCapability("Cancel TPM Command"));
-        }
-
-        let mut res: PtmResult = 0;
-        self.run_control_cmd(&mut res, CtrlCmdCode::CancelTpmCmd, None)
-    }
-
     /// Configure buffer size to use while communicating with swtpm
     fn set_buffer_size(&mut self, wanted_size: usize) -> Result<usize> {
         let mut psbs: PtmSetBufferSize = PtmSetBufferSize::new(wanted_size as u32);
@@ -344,7 +255,7 @@ impl Emulator {
         Ok(psbs.get_bufsize() as usize)
     }
 
-    pub fn set_locality(&mut self, loc: u32) -> Result<()> {
+    fn set_locality(&mut self, loc: u32) -> Result<()> {
         if self.cur_loc == loc {
             return Ok(());
         }
@@ -358,32 +269,6 @@ impl Emulator {
         Ok(())
     }
 
-    pub fn reset_established_flag(&mut self, loc: u8) -> Result<()> {
-        if self.cur_loc != loc as u32 {
-            warn!(
-                "Reset established flag with another locality: {} current locality: {}",
-                loc, self.cur_loc
-            );
-        }
-        let mut pre: PtmResetEst = PtmResetEst::new();
-        pre.loc = loc as u32;
-        self.run_control_cmd(&mut pre, CtrlCmdCode::ResetTpmEstablished, None)
-    }
-
-    pub fn startup_tpm(&mut self, buffersize: usize, is_resume: bool) -> Result<()> {
-        let mut init: PtmInit = PtmInit::new();
-
-        if buffersize != 0 {
-            self.set_buffer_size(buffersize)?;
-        }
-
-        if is_resume {
-            init.init_flags |= PTM_INIT_FLAG_DELETE_VOLATILE;
-        }
-
-        self.run_control_cmd(&mut init, CtrlCmdCode::Init, None)
-    }
-
     fn stop_tpm(&mut self) -> Result<()> {
         let mut res: PtmResult = 0;
 
@@ -394,13 +279,7 @@ impl Emulator {
         self.set_buffer_size(0).unwrap_or(TPM_TIS_BUFFER_MAX)
     }
 
-    pub fn shutdown_tpm(&mut self) -> Result<()> {
-        let mut res: PtmResult = 0;
-
-        self.run_control_cmd(&mut res, CtrlCmdCode::Shutdown, None)
-    }
-
-    pub fn get_state_blobs(&mut self) -> Result<TpmStateBlobs> {
+    fn get_state_blobs(&mut self) -> Result<TpmStateBlobs> {
         let permanent = self.get_state_blob(PTM_BLOB_TYPE_PERMANENT)?;
         let volatile = self.get_state_blob(PTM_BLOB_TYPE_VOLATILE)?;
         let savestate = self.get_state_blob(PTM_BLOB_TYPE_SAVESTATE)?;
@@ -449,7 +328,7 @@ impl Emulator {
         })
     }
 
-    pub fn set_state_blobs(&mut self, blobs: TpmStateBlobs) -> Result<()> {
+    fn set_state_blobs(&mut self, blobs: TpmStateBlobs) -> Result<()> {
         self.stop_tpm().map_err(|e| {
             EmulatorError::Initialize(format!(
                 "Failed to stop TPM before restoring state: {:?}",
@@ -548,5 +427,145 @@ impl AsyncMsgHandle for Emulator {
 
     fn get_evt_fd(&self) -> RawFd {
         self.evt_fd.as_raw_fd()
+    }
+}
+
+impl TpmBackend for Emulator {
+    type E = EmulatorError;
+
+    /// Create Emulator Instance
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - A path to the Unix Domain Socket swtpm is listening on
+    ///
+    fn new(path: impl AsRef<Path>) -> Result<Arc<Mutex<Self>>> {
+        let (cli_stream, srv_stream) = UnixStream::pair()?;
+
+        let emulator = Arc::new(Mutex::new(Self {
+            caps: 0,
+            control_socket: SocketDev::new_with_path(path)?,
+            data_stream: SocketDev::new(cli_stream),
+            data_requests: VecDeque::new(),
+            evt_fd: Arc::new(EventFd::new(libc::EFD_NONBLOCK | libc::EFD_CLOEXEC)?),
+            established_flag_cached: false,
+            established_flag: false,
+            cur_loc: TPM_INVALID_LOC,
+        }));
+
+        emulator
+            .lock()
+            .unwrap()
+            .probe_and_check_caps()?
+            .set_data_fd(srv_stream.as_raw_fd())?;
+
+        Ok(emulator)
+    }
+
+    fn startup_tpm(&mut self, buffersize: usize, is_resume: bool) -> Result<()> {
+        let mut init: PtmInit = PtmInit::new();
+
+        if buffersize != 0 {
+            self.set_buffer_size(buffersize)?;
+        }
+
+        if is_resume {
+            init.init_flags |= PTM_INIT_FLAG_DELETE_VOLATILE;
+        }
+
+        self.run_control_cmd(&mut init, CtrlCmdCode::Init, None)
+    }
+
+    fn shutdown_tpm(&mut self) -> Result<()> {
+        let mut res: PtmResult = 0;
+
+        self.run_control_cmd(&mut res, CtrlCmdCode::Shutdown, None)
+    }
+
+    fn process_request(&mut self, cmd_buf: &mut [u8], cmd_len: usize) -> Result<usize> {
+        let is_selftest_cmd = is_selftest(cmd_buf);
+
+        self.data_stream.write_all(&cmd_buf[..cmd_len])?;
+
+        let mut header = [0u8; TPM_RSP_HDR_SIZE];
+        self.data_stream.read_exact(&mut header)?;
+
+        let total_size =
+            BigEndian::read_u32(&header[TPM_RSP_PS_OFFSET..TPM_RSP_RC_OFFSET]) as usize;
+        if total_size < TPM_RSP_HDR_SIZE || total_size > cmd_buf.len() {
+            return Err(EmulatorError::InvalidResponseSize);
+        }
+
+        if is_selftest_cmd && total_size != TPM_RSP_HDR_SIZE {
+            return Err(EmulatorError::SelfTest(format!(
+                "Self test response should have 10 bytes. Only {} returned",
+                total_size
+            )));
+        }
+
+        cmd_buf[..TPM_RSP_HDR_SIZE].copy_from_slice(&header);
+
+        let remaining = total_size - TPM_RSP_HDR_SIZE;
+        if remaining > 0 {
+            self.data_stream
+                .read_exact(&mut cmd_buf[TPM_RSP_HDR_SIZE..total_size])?;
+        }
+
+        Ok(total_size)
+    }
+
+    fn cancel_cmd(&mut self) -> Result<()> {
+        // Check if emulator implements Cancel command
+        if (self.caps & PTM_CAP_CANCEL_TPM_CMD) != PTM_CAP_CANCEL_TPM_CMD {
+            return Err(EmulatorError::UnsupportedCapability("Cancel TPM Command"));
+        }
+
+        let mut res: PtmResult = 0;
+        self.run_control_cmd(&mut res, CtrlCmdCode::CancelTpmCmd, None)
+    }
+
+    fn get_established_flag(&mut self) -> Result<bool> {
+        let mut est: PtmEst = PtmEst::new();
+
+        if self.established_flag_cached {
+            return Ok(self.established_flag);
+        }
+
+        if let Err(e) = self.run_control_cmd(&mut est, CtrlCmdCode::GetTpmEstablished, None) {
+            error!("Failed to run CmdGetTpmEstablished control command. Error: {e:?}");
+            return Err(e);
+        }
+
+        self.established_flag_cached = true;
+        self.established_flag = est.resp.bit == 0;
+
+        Ok(self.established_flag)
+    }
+
+    fn reset_established_flag(&mut self, loc: u8) -> Result<()> {
+        if self.cur_loc != loc as u32 {
+            warn!(
+                "Reset established flag with another locality: {} current locality: {}",
+                loc, self.cur_loc
+            );
+        }
+        let mut pre: PtmResetEst = PtmResetEst::new();
+        pre.loc = loc as u32;
+        self.run_control_cmd(&mut pre, CtrlCmdCode::ResetTpmEstablished, None)
+    }
+}
+
+impl TpmMigration for Emulator {
+    fn get_state(&mut self) -> anyhow::Result<Vec<u8>> {
+        let blobs = self.get_state_blobs()?;
+
+        Ok(serde_json::to_vec(&blobs)?)
+    }
+
+    fn set_state(&mut self, state: Vec<u8>) -> anyhow::Result<()> {
+        let blobs: TpmStateBlobs = serde_json::from_slice(&state)?;
+        self.set_state_blobs(blobs)?;
+
+        Ok(())
     }
 }

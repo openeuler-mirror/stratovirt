@@ -26,7 +26,7 @@ use acpi::{
     AmlResTemplate, AmlScopeBuilder, AmlString,
 };
 use address_space::GuestAddress;
-use tpm::{emulator::Emulator, TPM_CRB_BUFFER_MAX};
+use tpm::{emulator::Emulator, TpmBackend, TPM_CRB_BUFFER_MAX};
 use util::gen_base_func;
 
 #[allow(dead_code)]
