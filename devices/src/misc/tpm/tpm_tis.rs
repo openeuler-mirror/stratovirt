@@ -45,8 +45,8 @@ use migration::{
 use migration_derive::DescSerde;
 use tpm::{
     aio::{
-        self, register_async_ctrl_notifier, unregister_async_ctrl_notifier, AioError,
-        AsyncMsgHandle, OnComplete,
+        self, deliver_request, register_async_ctrl_notifier, unregister_async_ctrl_notifier,
+        AioError, AsyncMsg, OnComplete,
     },
     emulator::{Emulator, EmulatorError, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET, TPM_RSP_RC_OFFSET},
     TpmBackend, TpmMigration, TPM_TIS_BUFFER_MAX,
@@ -206,11 +206,11 @@ pub struct TpmTis {
     aborting_locty: u8,
     next_locty: u8,
     loc: [TpmLocality; TPM_TIS_NUM_LOCALITIES],
-    pub emulator: Arc<Mutex<Emulator>>,
+    emulator: Arc<Mutex<Emulator>>,
     backend_buff_size: usize,
     backend_disconnected: bool,
     iothread: Option<String>,
-    update_evt: Option<Arc<EventFd>>,
+    async_ctrl_evt: Option<Arc<EventFd>>,
 }
 
 impl TpmTis {
@@ -232,11 +232,11 @@ impl TpmTis {
             aborting_locty: 0,
             next_locty: 0,
             loc: [TpmLocality::default(); TPM_TIS_NUM_LOCALITIES],
-            emulator,
+            emulator: emulator.clone(),
             backend_buff_size: TPM_TIS_BUFFER_MAX,
             backend_disconnected: false,
             iothread,
-            update_evt: None,
+            async_ctrl_evt: None,
         };
         tpm.set_sys_resource(sysbus, region_base, region_size, "TPM-TIS")
             .with_context(|| LegacyError::SetSysResErr)?;
@@ -268,7 +268,7 @@ impl TpmTis {
         self.emulator = new_emulator;
         self.backend_disconnected = false;
 
-        if let Some(ref evt) = self.update_evt {
+        if let Some(ref evt) = self.async_ctrl_evt {
             evt.write(1)?;
         }
 
@@ -278,8 +278,8 @@ impl TpmTis {
 
     fn register_update_event(handler: Arc<Mutex<TpmTis>>) -> Result<()> {
         let iothread = handler.lock().unwrap().iothread.clone();
-        let update_evt = register_async_ctrl_notifier(handler.clone(), iothread)?;
-        handler.lock().unwrap().update_evt = Some(update_evt);
+        let async_ctrl_evt = register_async_ctrl_notifier(handler.clone(), iothread)?;
+        handler.lock().unwrap().async_ctrl_evt = Some(async_ctrl_evt);
         Ok(())
     }
 
@@ -423,29 +423,12 @@ impl TpmTis {
             }
         };
         let cmd_len = cmp::min(self.rw_offset as usize, TPM_TIS_BUFFER_MAX);
-        let res = self
-            .emulator
-            .lock()
-            .unwrap()
-            .deliver_request_async(cmd_buf, cmd_len, locty);
 
-        if let Err(e) = res {
-            error!("Failed to dispatch TPM request to backend: {:?}", e);
-            if matches!(e, AioError::Disconnected) && !self.backend_disconnected {
-                self.backend_disconnected = true;
-
-                let disconnected_msg = VmNotifyEvent {
-                    klass: DEVICE_CLASS_ID,
-                    type_t: TPM_TYPE,
-                    code: TPM_DISCONNECTED_NOTIFY_CODE,
-                    message: None,
-                };
-                event!(VmNotifyEvent; disconnected_msg);
-            }
-            self.write_fatal_error_response();
-            self.request_completed(false);
-            return Err(anyhow::anyhow!("Failed to trigger tpm request send: {}", e));
-        }
+        deliver_request(AsyncMsg::Request {
+            cmd_buf,
+            cmd_len,
+            locty,
+        });
 
         Ok(())
     }
@@ -612,7 +595,12 @@ impl Device for TpmTis {
         sysbus.attach_device(&dev)?;
 
         Self::register_update_event(dev.clone())?;
-        dev.lock().unwrap().update_evt.as_ref().unwrap().write(1)?;
+        dev.lock()
+            .unwrap()
+            .async_ctrl_evt
+            .as_ref()
+            .unwrap()
+            .write(1)?;
 
         MigrationManager::register_device_instance(
             TpmTisSnapshot::descriptor(),
@@ -628,7 +616,7 @@ impl Device for TpmTis {
             return Err(anyhow!("Failed while running Shutdown TPM. Error: {e:?}"));
         }
 
-        if let Some(evt) = self.update_evt.take() {
+        if let Some(evt) = self.async_ctrl_evt.take() {
             unregister_async_ctrl_notifier(evt.as_raw_fd(), self.iothread.as_ref());
         }
 
@@ -1153,7 +1141,7 @@ impl StateTransfer for TpmTisMigration {
 
         let tpm = self.tpm.lock().unwrap();
 
-        let state_blobs = tpm
+        let state_blob = tpm
             .emulator
             .lock()
             .unwrap()
@@ -1168,7 +1156,7 @@ impl StateTransfer for TpmTisMigration {
             next_locty: tpm.next_locty,
             loc_states: tpm.loc,
             backend_buff_size: tpm.backend_buff_size,
-            swtpm_blob: state_blobs,
+            swtpm_blob: state_blob,
         };
 
         Ok(serde_json::to_vec(&snapshot)?)
