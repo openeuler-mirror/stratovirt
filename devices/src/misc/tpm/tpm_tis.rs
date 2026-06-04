@@ -48,11 +48,8 @@ use tpm::{
         self, register_async_ctrl_notifier, unregister_async_ctrl_notifier, AioError,
         AsyncMsgHandle, OnComplete,
     },
-    emulator::{
-        Emulator, EmulatorError, TpmStateBlobs, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET,
-        TPM_RSP_RC_OFFSET,
-    },
-    TPM_TIS_BUFFER_MAX,
+    emulator::{Emulator, EmulatorError, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET, TPM_RSP_RC_OFFSET},
+    TpmBackend, TpmMigration, TPM_TIS_BUFFER_MAX,
 };
 use util::gen_base_func;
 
@@ -198,7 +195,7 @@ pub struct TpmTisSnapshot {
     pub next_locty: u8,
     pub loc_states: [TpmLocality; TPM_TIS_NUM_LOCALITIES],
     pub backend_buff_size: usize,
-    pub swtpm_blob: TpmStateBlobs,
+    pub swtpm_blob: Vec<u8>,
 }
 
 pub struct TpmTis {
@@ -1160,7 +1157,7 @@ impl StateTransfer for TpmTisMigration {
             .emulator
             .lock()
             .unwrap()
-            .get_state_blobs()
+            .get_state()
             .map_err(|e| anyhow::anyhow!("Failed to fetch swtpm state blobs: {:?}", e))?;
 
         let snapshot = TpmTisSnapshot {
@@ -1196,7 +1193,7 @@ impl StateTransfer for TpmTisMigration {
         tpm.emulator
             .lock()
             .unwrap()
-            .set_state_blobs(snapshot.swtpm_blob)
+            .set_state(snapshot.swtpm_blob)
             .map_err(|e| anyhow::anyhow!("Failed to restore swtpm state blobs: {:?}", e))?;
 
         tpm.emulator
