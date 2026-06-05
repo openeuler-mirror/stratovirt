@@ -199,24 +199,15 @@ impl Ptm for PtmCap {
 }
 
 /* GET_TPMESTABLISHED Response */
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PtmEstResp {
     pub bit: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PtmEst {
     pub resp: PtmEstResp,
     pub result_code: PtmResult,
-}
-
-impl PtmEst {
-    pub fn new() -> Self {
-        Self {
-            result_code: 0,
-            resp: PtmEstResp { bit: 0 },
-        }
-    }
 }
 
 impl Ptm for PtmEst {
@@ -257,21 +248,12 @@ impl Ptm for PtmEst {
 }
 
 /* INIT Response */
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PtmInit {
     /* request */
     pub init_flags: u32,
     /* response */
     pub result_code: PtmResult,
-}
-
-impl PtmInit {
-    pub fn new() -> Self {
-        Self {
-            init_flags: 0,
-            result_code: 0,
-        }
-    }
 }
 
 impl Ptm for PtmInit {
@@ -415,6 +397,12 @@ impl PtmSetLoc {
     }
 }
 
+impl Default for PtmSetLoc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Ptm for PtmSetLoc {
     fn to_req_buf(&self) -> Vec<u8> {
         self.loc.to_be_bytes().to_vec()
@@ -463,6 +451,12 @@ impl PtmResetEst {
             loc: 0xff,
             result_code: 0,
         }
+    }
+}
+
+impl Default for PtmResetEst {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -588,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_ptmest() -> Result<()> {
-        let mut est: PtmEst = PtmEst::new();
+        let mut est: PtmEst = PtmEst::default();
 
         assert_eq!(est.get_req_size(), 0);
         assert_eq!(est.get_resp_size(), 8);
@@ -603,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_ptminit() -> Result<()> {
-        let mut init: PtmInit = PtmInit::new();
+        let mut init: PtmInit = PtmInit::default();
         init.init_flags = 0x1;
 
         assert_eq!(init.get_req_size(), 4);
@@ -641,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_ptmsetloc() -> Result<()> {
-        let mut psl = PtmSetLoc::new();
+        let mut psl = PtmSetLoc::default();
         psl.loc = 0x3;
 
         assert_eq!(psl.get_req_size(), 4);
@@ -658,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_ptmresetest() -> Result<()> {
-        let mut pre = PtmResetEst::new();
+        let mut pre = PtmResetEst::default();
         pre.loc = 0x2;
 
         assert_eq!(pre.get_req_size(), 4);

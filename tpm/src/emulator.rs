@@ -258,8 +258,10 @@ impl Emulator {
             return Ok(());
         }
 
-        let mut psl: PtmSetLoc = PtmSetLoc::new();
-        psl.loc = loc;
+        let mut psl: PtmSetLoc = PtmSetLoc {
+            loc,
+            ..Default::default()
+        };
         self.run_control_cmd(&mut psl, CtrlCmdCode::SetLocality, None)?;
 
         self.cur_loc = loc;
@@ -443,7 +445,7 @@ impl TpmBackend for Emulator {
     }
 
     fn startup_tpm(&mut self, buffersize: usize, is_resume: bool) -> Result<()> {
-        let mut init: PtmInit = PtmInit::new();
+        let mut init: PtmInit = PtmInit::default();
 
         if buffersize != 0 {
             self.set_buffer_size(buffersize)?;
@@ -505,7 +507,7 @@ impl TpmBackend for Emulator {
     }
 
     fn get_established_flag(&mut self) -> Result<bool> {
-        let mut est: PtmEst = PtmEst::new();
+        let mut est: PtmEst = PtmEst::default();
 
         if self.established_flag_cached {
             return Ok(self.established_flag);
@@ -529,8 +531,10 @@ impl TpmBackend for Emulator {
                 loc, self.cur_loc
             );
         }
-        let mut pre: PtmResetEst = PtmResetEst::new();
-        pre.loc = loc as u32;
+        let mut pre: PtmResetEst = PtmResetEst {
+            loc: loc as u32,
+            ..Default::default()
+        };
         self.run_control_cmd(&mut pre, CtrlCmdCode::ResetTpmEstablished, None)
     }
 }
