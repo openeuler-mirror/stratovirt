@@ -263,7 +263,8 @@ impl VirtioDevice for Pmem {
             bail!("File size should align to 2MB for virtio-pmem@{}", self.id);
         }
 
-        self.backend.realize()?;
+        self.backend
+            .realize_with_file_readonly(!self.backend.share)?;
         self.init_config_features()?;
         Ok(())
     }
@@ -432,5 +433,73 @@ impl MigrationHook for Pmem {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use machine_manager::config::str_slip_to_clap;
+    use vmm_sys_util::tempfile::TempFile;
+
+    use super::*;
+
+    fn parse_mem_backend(args: &str) -> std::result::Result<MemBackendObjConfig, clap::Error> {
+        MemBackendObjConfig::try_parse_from(str_slip_to_clap(args, true, false))
+    }
+
+    fn test_pmem(path: &str, share: bool) -> Pmem {
+        let mem_backend = format!(
+            "memory-backend-file,size=2M,id=mem0,mem-path={},share={}",
+            path,
+            if share { "on" } else { "off" }
+        );
+        let memobj = parse_mem_backend(&mem_backend).unwrap();
+        let config = VirtioPmemDevConfig {
+            classtype: "virtio-pmem-device".to_string(),
+            id: "pmem0".to_string(),
+            memaddr: Some(VIRTIO_PMEM_BLOCK_SIZE),
+            memdev: "mem0".to_string(),
+            ..Default::default()
+        };
+
+        let mut pmem = Pmem::new(config, memobj);
+        pmem.config.start = VIRTIO_PMEM_BLOCK_SIZE;
+        pmem
+    }
+
+    #[test]
+    fn share_off_pmem_rejects_short_file_without_extending_it() {
+        let file = TempFile::new().unwrap();
+        let file_path = file.as_path().to_str().unwrap().to_string();
+        let mut pmem = test_pmem(&file_path, false);
+
+        assert!(pmem.realize().is_err());
+        assert_eq!(std::fs::metadata(&file_path).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn share_on_pmem_extends_short_file_backend() {
+        let file = TempFile::new().unwrap();
+        let file_path = file.as_path().to_str().unwrap().to_string();
+        let mut pmem = test_pmem(&file_path, true);
+
+        assert!(pmem.realize().is_ok());
+        assert_eq!(
+            std::fs::metadata(&file_path).unwrap().len(),
+            VIRTIO_PMEM_BLOCK_SIZE
+        );
+    }
+
+    #[test]
+    fn memory_backend_file_rejects_discard_write_options() {
+        assert!(parse_mem_backend(
+            "memory-backend-file,size=2M,id=mem0,mem-path=test.fd,readonly=on"
+        )
+        .is_err());
+        assert!(parse_mem_backend(
+            "memory-backend-file,size=2M,id=mem0,mem-path=test.fd,discard_writes=on"
+        )
+        .is_err());
     }
 }

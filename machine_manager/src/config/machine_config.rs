@@ -197,6 +197,10 @@ impl MemoryBackend {
     }
 
     pub fn realize(&mut self) -> Result<()> {
+        self.realize_with_file_readonly(false)
+    }
+
+    pub fn realize_with_file_readonly(&mut self, file_readonly: bool) -> Result<()> {
         match self.mb_type {
             MEM_BACKEND_TYPE_MEMFD => {
                 let path_str = match self.file_path.as_ref() {
@@ -225,16 +229,27 @@ impl MemoryBackend {
                 let unlink = !path.exists();
                 let file = std::fs::OpenOptions::new()
                     .read(true)
-                    .write(true)
-                    .create(true)
+                    .write(!file_readonly)
+                    .create(!file_readonly)
                     .truncate(false)
                     .open(path)
                     .with_context(|| format!("Failed to open file: {}", path_str))?;
-                if file.metadata().unwrap().len() < self.size {
-                    file.set_len(self.size)?;
-                }
-                if unlink {
-                    remove_file(path.as_os_str())?;
+                let file_len = file.metadata()?.len();
+                if file_readonly {
+                    if file_len < self.size {
+                        bail!(
+                            "Backing file {} does not have enough space for memory backend (size is 0x{:X})",
+                            path_str,
+                            self.size
+                        );
+                    }
+                } else {
+                    if file_len < self.size {
+                        file.set_len(self.size)?;
+                    }
+                    if unlink {
+                        remove_file(path.as_os_str())?;
+                    }
                 }
                 self.backend = Some(Arc::new(file));
             }
