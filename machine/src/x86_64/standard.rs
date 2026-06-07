@@ -757,8 +757,11 @@ impl MachineOps for StdMachine {
 pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
     bpf_rule
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_PIT2() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_PIT2() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_CLOCK() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_CLOCK() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_IRQCHIP() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_IRQCHIP() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XSAVE() as u32)

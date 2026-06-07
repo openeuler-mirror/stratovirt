@@ -88,6 +88,8 @@ ioctl_io_nr!(KVM_GET_API_VERSION, KVMIO, 0x00);
 ioctl_ior_nr!(KVM_GET_MP_STATE, KVMIO, 0x98, kvm_mp_state);
 ioctl_ior_nr!(KVM_GET_VCPU_EVENTS, KVMIO, 0x9f, kvm_vcpu_events);
 ioctl_ior_nr!(KVM_GET_CLOCK, KVMIO, 0x7c, kvm_clock_data);
+ioctl_iow_nr!(KVM_SET_CLOCK, KVMIO, 0x7b, kvm_clock_data);
+ioctl_ior_nr!(KVM_SET_IRQCHIP, KVMIO, 0x63, kvm_irqchip);
 ioctl_ior_nr!(KVM_GET_REGS, KVMIO, 0x81, kvm_regs);
 ioctl_ior_nr!(KVM_GET_SREGS, KVMIO, 0x83, kvm_sregs);
 ioctl_ior_nr!(KVM_GET_FPU, KVMIO, 0x8c, kvm_fpu);

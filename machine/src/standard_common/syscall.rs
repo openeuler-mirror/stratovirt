@@ -45,6 +45,14 @@ const FUTEX_WAKE_PRIVATE: u32 = FUTEX_WAKE | FUTEX_PRIVATE_FLAG;
 const FUTEX_CMP_REQUEUE_PRIVATE: u32 = FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAKE_OP_PRIVATE: u32 = FUTEX_WAKE_OP | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAIT_BITSET_PRIVATE: u32 = FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG;
+const FUTEX_WAKE_BITSET: u32 = 10;
+const FUTEX_WAKE_BITSET_PRIVATE: u32 = FUTEX_WAKE_BITSET | FUTEX_PRIVATE_FLAG;
+const FUTEX_REQUEUE: u32 = 3;
+const FUTEX_REQUEUE_PRIVATE: u32 = FUTEX_REQUEUE | FUTEX_PRIVATE_FLAG;
+#[cfg(target_env = "gnu")]
+const FUTEX_LOCK_PI2: u32 = 13;
+#[cfg(target_env = "gnu")]
+const FUTEX_LOCK_PI2_PRIVATE: u32 = FUTEX_LOCK_PI2 | FUTEX_PRIVATE_FLAG;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/ioctls.h
 const TCGETS: u32 = 0x5401;
@@ -296,7 +304,9 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_OP_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE);
     #[cfg(target_env = "gnu")]
     return BpfRule::new(libc::SYS_futex)
         .add_constraint(
@@ -309,5 +319,8 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_OP_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_LOCK_PI2_PRIVATE);
 }

@@ -121,6 +121,8 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_sched_getaffinity),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_clock_gettime),
+        #[cfg(target_env = "gnu")]
+        BpfRule::new(libc::SYS_clock_nanosleep),
         BpfRule::new(libc::SYS_prctl),
         madvise_rule(),
     ];
@@ -139,6 +141,11 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FIONBIO)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_RUN)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_DEVICE_ATTR)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_USER_MEMORY_REGION)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IOEVENTFD)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_IRQFD() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_GSI_ROUTING() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SIGNAL_MSI)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_GUEST_CID() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_VSOCK_SET_RUNNING() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_VRING_CALL() as u32)
@@ -149,6 +156,8 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_VRING_KICK() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_OWNER() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_FEATURES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_GET_FEATURES() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_RESET_OWNER() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_SET_MEM_TABLE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VHOST_NET_SET_BACKEND() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, TUNGETFEATURES() as u32)
@@ -180,6 +189,15 @@ fn madvise_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 2, libc::MADV_REMOVE as u32);
 }
 
+const FUTEX_WAKE_BITSET: u32 = 10;
+const FUTEX_WAKE_BITSET_PRIVATE: u32 = FUTEX_WAKE_BITSET | FUTEX_PRIVATE_FLAG;
+const FUTEX_REQUEUE: u32 = 3;
+const FUTEX_REQUEUE_PRIVATE: u32 = FUTEX_REQUEUE | FUTEX_PRIVATE_FLAG;
+#[cfg(target_env = "gnu")]
+const FUTEX_LOCK_PI2: u32 = 13;
+#[cfg(target_env = "gnu")]
+const FUTEX_LOCK_PI2_PRIVATE: u32 = FUTEX_LOCK_PI2 | FUTEX_PRIVATE_FLAG;
+
 fn futex_rule() -> BpfRule {
     #[cfg(any(target_env = "musl", target_env = "ohos"))]
     return BpfRule::new(libc::SYS_futex)
@@ -187,7 +205,9 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_OP_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE);
     #[cfg(target_env = "gnu")]
     return BpfRule::new(libc::SYS_futex)
         .add_constraint(
@@ -199,5 +219,8 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_OP_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_LOCK_PI2_PRIVATE);
 }
