@@ -18,6 +18,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::uffd::UffdMemoryBackend;
 use crate::{AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use migration::{
     DeviceStateDesc, MemBlock, MigrationError, MigrationHook, RestoreMode, StateTransfer,
@@ -313,6 +314,75 @@ impl AddressSpace {
 
         Ok(())
     }
+
+    /// Hand guest RAM over to the external uffd daemon instead of copying it
+    /// from the snapshot memory file.
+    ///
+    /// Registers every machine RAM subregion with a userfaultfd, sends the fd
+    /// together with each region's offset within the snapshot memory file to
+    /// the daemon, and blocks until the daemon's ready-ACK. On return the file
+    /// cursor is positioned past the RAM data, so the ram list section that
+    /// follows can be restored from the file as usual.
+    pub fn restore_uffd_ram_from_snapshot(
+        &self,
+        memory: &mut File,
+        socket_path: &str,
+    ) -> Result<()> {
+        let address_space_state = read_address_space_state(memory)?;
+        let first_region_offset = memory.stream_position()?;
+
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+
+        let mut uffd = UffdMemoryBackend::new(socket_path)
+            .with_context(|| "UFFD restore: failed to create userfaultfd")?;
+        let mut offset = first_region_offset;
+        for region in machine_ram.subregions().iter() {
+            // SAFETY: the region comes from the machine RAM subregion list; its
+            // host mapping stays alive for the VM's lifetime.
+            if let Some(host_addr) = unsafe { region.get_host_address(AddressAttr::Ram) } {
+                uffd.register_region(host_addr, region.size(), offset)
+                    .with_context(|| {
+                        format!(
+                            "UFFD restore: register region '{}' host={:#x} size={:#x}",
+                            region.name,
+                            host_addr,
+                            region.size()
+                        )
+                    })?;
+                offset += region.size();
+            }
+        }
+
+        // The daemon serves page faults using the file offsets registered
+        // above; a size mismatch means the snapshot layout does not match the
+        // current RAM layout and pages would be served from wrong offsets.
+        let registered_size = offset - first_region_offset;
+        if registered_size != address_space_state.total_region_size {
+            bail!(
+                "UFFD restore: registered RAM size {:#x} does not match snapshot region size {:#x}",
+                registered_size,
+                address_space_state.total_region_size
+            );
+        }
+
+        uffd.send_to_external_uffd_daemon()
+            .with_context(|| "UFFD restore: send_to_external_uffd_daemon failed")?;
+
+        // Skip the RAM data so the caller can restore the ram list section.
+        let region_data_end = first_region_offset
+            .checked_add(address_space_state.total_region_size)
+            .with_context(|| {
+                format!(
+                    "Restore memory add overflow: {} + {}",
+                    first_region_offset, address_space_state.total_region_size
+                )
+            })?;
+        memory.seek(SeekFrom::Start(region_data_end))?;
+
+        Ok(())
+    }
 }
 
 impl StateTransfer for AddressSpace {
@@ -388,6 +458,9 @@ impl MigrationHook for AddressSpace {
                         }
                     }
                 }
+            }
+            RestoreMode::Uffd { socket_path } => {
+                self.restore_uffd_ram_from_snapshot(memory, socket_path)?
             }
         }
 

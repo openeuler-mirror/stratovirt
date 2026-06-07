@@ -41,6 +41,8 @@ const TIOCGWINSZ: u32 = 0x5413;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
+const UFFDIO_API: u32 = 0xc018aa3f;
+const UFFDIO_REGISTER: u32 = 0xc020aa00;
 
 /// Create a syscall whitelist for seccomp.
 ///
@@ -124,6 +126,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_clock_nanosleep),
         BpfRule::new(libc::SYS_prctl),
+        BpfRule::new(libc::SYS_userfaultfd),
         madvise_rule(),
     ];
     syscall.append(&mut arch_syscall_whitelist());
@@ -169,7 +172,9 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_API)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_REGISTER);
     arch_ioctl_allow_list(bpf_rule)
 }
 

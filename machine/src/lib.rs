@@ -3163,7 +3163,11 @@ fn start_incoming_migration(
     let path = migrate_info.uri;
     match migrate_info.mode {
         MigrateMode::File => {
-            let restore_mode = if migrate_info.mapped {
+            let restore_mode = if let Some(uffd_sock) = migrate_info.uffd_sock.as_ref() {
+                RestoreMode::Uffd {
+                    socket_path: uffd_sock.clone(),
+                }
+            } else if migrate_info.mapped {
                 RestoreMode::Mapped
             } else {
                 RestoreMode::Copy

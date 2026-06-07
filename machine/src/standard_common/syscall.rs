@@ -62,6 +62,8 @@ const FIONREAD: u32 = 0x541B;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
+const UFFDIO_API: u32 = 0xc018aa3f;
+const UFFDIO_REGISTER: u32 = 0xc020aa00;
 
 /// Create a syscall allowlist for seccomp.
 ///
@@ -135,6 +137,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_msync),
         BpfRule::new(libc::SYS_readlinkat),
         BpfRule::new(libc::SYS_renameat),
+        BpfRule::new(libc::SYS_userfaultfd),
         BpfRule::new(libc::SYS_socket),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_bind),
@@ -276,6 +279,10 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_PARM() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMESIZES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32);
+
+    let bpf_rule = bpf_rule
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_API)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_REGISTER);
 
     arch_ioctl_allow_list(bpf_rule)
 }
