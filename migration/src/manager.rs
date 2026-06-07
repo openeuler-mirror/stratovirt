@@ -26,6 +26,7 @@ use crate::migration::DirtyBitmap;
 use crate::protocol::{
     DeviceStateDesc, MemBlock, MigrationStatus, StateTransfer, MAX_DEVICE_STATE_SIZE,
 };
+use crate::snapshot::RestoreMode;
 use crate::MigrateOps;
 use machine_manager::config::VmConfig;
 use machine_manager::machine::MachineLifecycle;
@@ -114,8 +115,8 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * _memory - The file of memory data, this parameter is optional.
-    /// * _mapped - Whether to directly mmap the memory file as the backend.
-    fn restore_memory(&self, _memory: &mut File, _mapped: bool) -> Result<()> {
+    /// * _mode - How guest memory is provided (see [`RestoreMode`]).
+    fn restore_memory(&self, _memory: &mut File, _mode: &RestoreMode) -> Result<()> {
         Ok(())
     }
 
