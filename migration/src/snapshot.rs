@@ -49,6 +49,10 @@ pub enum RestoreMode {
     Mapped,
     /// Read/copy memory from the snapshot file into pre-allocated RAM.
     Copy,
+    /// Guest RAM pages are served on demand by the external uffd daemon
+    /// listening on `socket_path`. Memory outside guest RAM (the ram list
+    /// section) is still copied from the snapshot memory file.
+    Uffd { socket_path: String },
 }
 
 impl MigrationManager {
@@ -142,6 +146,9 @@ impl MigrationManager {
             return Err(anyhow!(MigrationError::InvalidSnapshotPath));
         }
 
+        // The memory snapshot file is needed in every mode: even in `Uffd`
+        // mode, where guest RAM is served lazily by the external daemon, the
+        // ram list section is still restored from this file.
         snapshot_path.push(MEMORY_PATH_SUFFIX);
         let mut memory_file =
             File::open(&snapshot_path).with_context(|| "Failed to open memory snapshot file")?;
@@ -163,6 +170,8 @@ impl MigrationManager {
         let ret = Arc::new(AtomicBool::new(true));
         let gpu_ret = ret.clone();
         let gpu_path = path.to_string();
+        // GPU state must be restored in all modes, including `Uffd` where guest
+        // memory is provided lazily and `load_memory` is false.
         let handle = thread::Builder::new()
             .name("restore-gpu".to_string())
             .spawn(move || {

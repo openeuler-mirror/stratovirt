@@ -52,6 +52,11 @@ pub struct IncomingConfig {
     // the file instead of mapping.
     #[arg(long, default_value = "true", action = ArgAction::Append)]
     pub mapped: bool,
+    // UFFD lazy-load: Unix socket path of the external uffd daemon.
+    // When set, memory is served on demand via userfaultfd instead of being
+    // loaded from disk upfront.  File mode only.
+    #[arg(long = "uffd_sock")]
+    pub uffd_sock: Option<String>,
 }
 
 impl Default for IncomingConfig {
@@ -60,6 +65,7 @@ impl Default for IncomingConfig {
             mode: MigrateMode::Unknown,
             uri: String::new(),
             mapped: true,
+            uffd_sock: None,
         }
     }
 }
@@ -72,8 +78,9 @@ impl IncomingConfig {
             .and_then(|s| s.split_once(':'))
             .with_context(|| format!("Invalid incoming config {}", s))?;
         let mut cli_args = format!("mode={},uri={}", mode, uri);
-        if let Some(mapped_args) = parts.next() {
-            cli_args.push_str(&format!(",{}", mapped_args));
+        // Collect all remaining key=value options (mapped, uffd_sock, …)
+        for extra in parts {
+            cli_args.push_str(&format!(",{}", extra));
         }
 
         let config = IncomingConfig::try_parse_from(str_slip_to_clap(&cli_args, false, false))?;
@@ -99,6 +106,14 @@ impl IncomingConfig {
             uri_vec[1]
                 .parse::<u16>()
                 .with_context(|| format!("Invalid ip port {}", uri_vec[1]))?;
+        }
+
+        if self.uffd_sock.is_some() && self.mode != MigrateMode::File {
+            bail!("uffd_sock is only valid with file mode");
+        }
+
+        if self.uffd_sock.is_some() && self.mapped {
+            bail!("uffd_sock and mapped=true are mutually exclusive: memory is served by the uffd daemon, not mmap'd from disk");
         }
 
         Ok(())
@@ -145,6 +160,7 @@ mod tests {
         let result_1 = result.unwrap();
         assert_eq!(result_1.mode, MigrateMode::Unix);
         assert_eq!(result_1.uri, "/tmp/stratovirt.sock".to_string());
+        assert_eq!(result_1.uffd_sock, None);
 
         let incoming_case2 = "tcp:192.168.1.2:2022";
         let result = parse_incoming_uri(incoming_case2);
@@ -172,11 +188,33 @@ mod tests {
         assert_eq!(result_6.mode, MigrateMode::File);
         assert_eq!(result_6.uri, "/tmp/incoming_file".to_string());
         assert_eq!(result_6.mapped, true);
+        assert_eq!(result_6.uffd_sock, None);
 
         let incoming_case7 = "file:/tmp/incoming_file,mapped=false";
         let result7 = parse_incoming_uri(incoming_case7);
         assert!(result7.is_ok());
         assert_eq!(result7.unwrap().mapped, false);
+
+        // UFFD fields
+        let incoming_uffd = "file:/tmp/snap,mapped=false,uffd_sock=/run/uffd.sock";
+        let result_uffd = parse_incoming_uri(incoming_uffd);
+        assert!(result_uffd.is_ok());
+        let cfg = result_uffd.unwrap();
+        assert_eq!(cfg.mode, MigrateMode::File);
+        assert_eq!(cfg.uri, "/tmp/snap".to_string());
+        assert_eq!(cfg.mapped, false);
+        assert_eq!(cfg.uffd_sock, Some("/run/uffd.sock".to_string()));
+
+        // UFFD fields are rejected on non-file mode
+        let bad_uffd = "unix:/tmp/sock,uffd_sock=/run/uffd.sock";
+        assert!(parse_incoming_uri(bad_uffd).is_err());
+
+        // uffd_sock + mapped=true is rejected (mutually exclusive)
+        let bad_uffd_mapped = "file:/tmp/snap,uffd_sock=/run/uffd.sock";
+        assert!(parse_incoming_uri(bad_uffd_mapped).is_err());
+
+        let bad_uffd_mapped_explicit = "file:/tmp/snap,mapped=true,uffd_sock=/run/uffd.sock";
+        assert!(parse_incoming_uri(bad_uffd_mapped_explicit).is_err());
     }
 
     #[test]
@@ -189,6 +227,7 @@ mod tests {
                 mode: MigrateMode::Tcp,
                 uri: "192.168.1.2:2022".to_string(),
                 mapped: true,
+                uffd_sock: None,
             }
         );
 
@@ -202,6 +241,7 @@ mod tests {
                 mode: MigrateMode::Unix,
                 uri: "/tmp/stratovirt.sock".to_string(),
                 mapped: true,
+                uffd_sock: None,
             }
         );
 
@@ -218,6 +258,22 @@ mod tests {
                 mode: MigrateMode::File,
                 uri: "/tmp/stratovirt_file".to_string(),
                 mapped: false,
+                uffd_sock: None,
+            }
+        );
+
+        // UFFD fields
+        let mut vm_config_case5 = VmConfig::default();
+        assert!(vm_config_case5
+            .add_incoming("file:/tmp/snap,mapped=false,uffd_sock=/run/uffd.sock")
+            .is_ok());
+        assert_eq!(
+            vm_config_case5.incoming.unwrap(),
+            IncomingConfig {
+                mode: MigrateMode::File,
+                uri: "/tmp/snap".to_string(),
+                mapped: false,
+                uffd_sock: Some("/run/uffd.sock".to_string()),
             }
         );
     }
