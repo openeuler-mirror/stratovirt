@@ -138,7 +138,7 @@ use machine_manager::notifier::pause_notify;
 use machine_manager::qmp::{qmp_response::Response, qmp_schema};
 use migration::protocol::FileFormat;
 use migration::snapshot::MEMORY_PATH_SUFFIX;
-use migration::{MigrateOps, MigrationManager, MigrationStatus};
+use migration::{MigrateOps, MigrationManager, MigrationStatus, RestoreMode};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::arg_parser;
@@ -3144,22 +3144,34 @@ pub fn vm_run(
             .run(cmd_args.is_present("freeze_cpu"))
             .with_context(|| "Failed to start VM.")?;
     } else {
-        start_incoming_migration(vm).with_context(|| "Failed to start migration.")?;
+        start_incoming_migration(vm, cmd_args.is_present("freeze_cpu"))
+            .with_context(|| "Failed to start migration.")?;
     }
 
     Ok(())
 }
 
 /// Start incoming migration from destination.
-fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Result<()> {
+///
+/// `freeze_cpu`: when true (i.e. `-S` was passed on the cmdline), the VM is
+/// kept paused after restore regardless of the VmState recorded in the snapshot.
+fn start_incoming_migration(
+    vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>,
+    freeze_cpu: bool,
+) -> Result<()> {
     let migrate_info = vm.lock().unwrap().get_migrate_info();
     let path = migrate_info.uri;
     match migrate_info.mode {
         MigrateMode::File => {
-            // Set status to `Active`
+            let restore_mode = if migrate_info.mapped {
+                RestoreMode::Mapped
+            } else {
+                RestoreMode::Copy
+            };
+
             MigrationManager::set_status(MigrationStatus::Active)?;
             MigrationManager::notify_status(false, MigrationStatus::Active)?;
-            let ret = MigrationManager::restore_snapshot(&path, migrate_info.mapped);
+            let ret = MigrationManager::restore_snapshot(&path, restore_mode);
             if ret.is_err() {
                 let _ = MigrationManager::set_status(MigrationStatus::Failed);
                 if let Err(e) = MigrationManager::notify_status(false, MigrationStatus::Failed) {
@@ -3167,9 +3179,10 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
                 }
                 ret.with_context(|| "Failed to restore snapshot")?;
             }
+
             let vm_locked = vm.lock().unwrap();
-            let pause = *vm_locked.get_vm_state().lock().unwrap() == VmState::Paused;
-            // Set status to `Completed`
+            // `-S` takes priority over the VmState recorded in the snapshot.
+            let pause = freeze_cpu || *vm_locked.get_vm_state().lock().unwrap() == VmState::Paused;
             MigrationManager::set_status(MigrationStatus::Completed)?;
             MigrationManager::notify_status(false, MigrationStatus::Completed)?;
             vm_locked

@@ -43,6 +43,14 @@ pub const MEMORY_PATH_SUFFIX: &str = "memory";
 /// The suffix used for snapshot device state storage.
 const DEVICE_PATH_SUFFIX: &str = "state";
 
+/// How guest memory is provided during snapshot restore.
+pub enum RestoreMode {
+    /// Directly mmap the memory snapshot file as the RAM backend.
+    Mapped,
+    /// Read/copy memory from the snapshot file into pre-allocated RAM.
+    Copy,
+}
+
 impl MigrationManager {
     /// Save snapshot for `VM`.
     ///
@@ -127,8 +135,8 @@ impl MigrationManager {
     /// # Argument
     ///
     /// * `path` - snapshot dir path.
-    /// * `mapped` - Whether to directly mmap the memory file as the backend.
-    pub fn restore_snapshot(path: &str, mapped: bool) -> Result<()> {
+    /// * `mode` - how guest memory is provided (see [`RestoreMode`]).
+    pub fn restore_snapshot(path: &str, mode: RestoreMode) -> Result<()> {
         let mut snapshot_path = PathBuf::from(path);
         if !snapshot_path.is_dir() {
             return Err(anyhow!(MigrationError::InvalidSnapshotPath));
@@ -165,7 +173,7 @@ impl MigrationManager {
                 });
             })?;
 
-        Self::restore_memory(&mut memory_file, mapped)
+        Self::restore_memory(&mut memory_file, &mode)
             .with_context(|| "Failed to load snapshot memory")?;
         let snapshot_desc_db =
             Self::restore_desc_db(&mut device_state_file, device_state_header.desc_len)
@@ -212,24 +220,25 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `file` - snapshot memory file.
-    /// * `mapped` - Whether to directly mmap the memory file as the backend.
-    fn restore_memory(file: &mut File, mapped: bool) -> Result<()> {
+    /// * `mode` - how guest memory is provided (see [`RestoreMode`]).
+    fn restore_memory(file: &mut File, mode: &RestoreMode) -> Result<()> {
         // Restore memory managed by address space.
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
         locked_vmm
             .memory
             .as_ref()
             .unwrap()
-            .restore_memory(file, mapped)?;
+            .restore_memory(file, mode)?;
 
-        // Restore memory managed by ram list.
+        // Restore memory managed by ram list. It is always copied from the
+        // snapshot file, regardless of how guest RAM is provided.
         locked_vmm
             .ram_list
             .as_ref()
             .unwrap()
             .lock()
             .unwrap()
-            .restore_memory(file, false)?;
+            .restore_memory(file, mode)?;
 
         Ok(())
     }

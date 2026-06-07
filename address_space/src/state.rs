@@ -19,7 +19,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
-use migration::{DeviceStateDesc, MemBlock, MigrationError, MigrationHook, StateTransfer};
+use migration::{
+    DeviceStateDesc, MemBlock, MigrationError, MigrationHook, RestoreMode, StateTransfer,
+};
 use migration_derive::DescSerde;
 use util::aio::ALIGNMENT_SIZE;
 use util::num_ops::round_up;
@@ -370,16 +372,21 @@ impl MigrationHook for AddressSpace {
         Ok(())
     }
 
-    fn restore_memory(&self, memory: &mut File, mapped: bool) -> Result<()> {
-        if mapped {
-            self.skip_mapped_ram_from_snapshot(memory)?;
-        } else if let Some(machine_ram) = self.get_machine_ram() {
-            let _ = read_address_space_state(memory)?;
-            for region in machine_ram.subregions().iter() {
-                if let Some(base_addr) = region.start_addr() {
-                    region
-                        .write(memory, base_addr, 0, region.size())
-                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
+    fn restore_memory(&self, memory: &mut File, mode: &RestoreMode) -> Result<()> {
+        match mode {
+            // The memory file is already mmap'ed as the RAM backend; just move
+            // the cursor past the RAM data.
+            RestoreMode::Mapped => self.skip_mapped_ram_from_snapshot(memory)?,
+            RestoreMode::Copy => {
+                if let Some(machine_ram) = self.get_machine_ram() {
+                    let _ = read_address_space_state(memory)?;
+                    for region in machine_ram.subregions().iter() {
+                        if let Some(base_addr) = region.start_addr() {
+                            region
+                                .write(memory, base_addr, 0, region.size())
+                                .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
+                        }
+                    }
                 }
             }
         }
