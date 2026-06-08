@@ -732,20 +732,37 @@ class QMPProtocol:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
     def __sock_recv(self, only_event=False):
-        """Get data from socket"""
-        recv = self.sock.recv(1024).decode('utf-8').split('\n')
-        if recv and not recv[-1]:
-            recv.pop()
+        """Get data from socket.
+
+        When not in only_event mode, any asynchronous events that arrive
+        before the command response are stored and the function loops until
+        the actual command response is received.  Without this loop, a
+        leftover event (e.g. the STOP event from a preceding 'stop' QMP
+        command) would be mistaken for the response to the next command
+        (e.g. 'migrate'), causing the next command to be sent immediately
+        and StratoVirt to receive two concatenated JSON objects in one
+        MSG_DONTWAIT read, which then fails serde_json deserialization.
+        """
         resp = None
-        while recv:
-            resp = json.loads(recv.pop(0))
-            if 'event' not in resp:
-                return resp
-            LOG.debug("-> %s", resp)
-            self.events.append(resp)
+        while True:
+            data = self.sock.recv(1024)
+            if not data:
+                return None
+            recv = data.decode('utf-8').split('\n')
+            if recv and not recv[-1]:
+                recv.pop()
+            while recv:
+                resp = json.loads(recv.pop(0))
+                if 'event' not in resp:
+                    return resp
+                LOG.debug("-> %s", resp)
+                self.events.append(resp)
+                if only_event:
+                    return resp
+            # recv exhausted without a command response
             if only_event:
                 return resp
-        return resp
+            # In command-response mode, only events seen so far: loop for the response
 
     def _cmd(self, name, args=None, cmd_id=None):
         """
