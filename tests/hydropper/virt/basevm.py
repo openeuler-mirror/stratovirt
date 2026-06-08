@@ -266,7 +266,7 @@ class BaseVM:
 
     def create_serial_control(self):
         """Create serial control"""
-        self._wait_console_create()
+        self.wait_console_create()
         self.serial_console = aexpect.ShellSession(
             "/usr/bin/nc -U %s" % self._console_address,
             auto_close=False,
@@ -361,7 +361,7 @@ class BaseVM:
                 self.ssh_session = None
 
     @retry(wait_fixed=200, stop_max_attempt_number=50)
-    def _wait_console_create(self):
+    def wait_console_create(self):
         os.stat(self._console_address)
 
     @retry(wait_fixed=1000, stop_max_attempt_number=70)
