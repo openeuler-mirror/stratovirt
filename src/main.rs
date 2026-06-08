@@ -38,7 +38,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(ret) => ret.report(),
         Err(ref e) => {
-            write!(&mut std::io::stderr(), "{}", format_args!("{:?}\r\n", e))
+            write!(&mut std::io::stderr(), "{}", format_args!("{:#}\r\n", e))
                 .expect("Error writing to stderr");
 
             ExitCode::FAILURE
@@ -82,7 +82,7 @@ fn run() -> Result<()> {
     let mut vm_config: VmConfig = match create_vmconfig(&cmd_args) {
         Ok(vm_cfg) => vm_cfg,
         Err(e) => {
-            error!("Failed to create vmconfig {:?}", e);
+            error!("Failed to create vmconfig {:#}", e);
             return Err(e);
         }
     };
@@ -98,7 +98,7 @@ fn run() -> Result<()> {
         }
         Err(ref e) => {
             set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
-            error!("{}", format!("{:?}\r\n", e));
+            error!("{}", format!("{:#}\r\n", e));
             // clean temporary file
             TempCleaner::clean();
             EventLoop::loop_clean();
