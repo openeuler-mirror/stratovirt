@@ -221,8 +221,10 @@ impl TpmTis {
         path: impl AsRef<Path>,
         iothread: Option<String>,
     ) -> Result<Self> {
-        let emulator = Emulator::new(path)
-            .map_err(|e| anyhow!("Failed while initializing tpm Emulator: {e:?}"))?;
+        let emulator =
+            Arc::new(Mutex::new(Emulator::new(path).map_err(|e| {
+                anyhow!("Failed while initializing tpm Emulator: {e:?}")
+            })?));
 
         let mut tpm = TpmTis {
             base: SysBusDevBase::new(SysBusDevType::Tpm(TpmInterfaceType::Tis)),
@@ -232,7 +234,7 @@ impl TpmTis {
             aborting_locty: 0,
             next_locty: 0,
             loc: [TpmLocality::default(); TPM_TIS_NUM_LOCALITIES],
-            emulator: emulator.clone(),
+            emulator,
             backend_buff_size: TPM_TIS_BUFFER_MAX,
             backend_disconnected: false,
             iothread,
@@ -252,7 +254,9 @@ impl TpmTis {
         info!("Reconnecting vTPM to: {:?}", path.as_ref());
 
         let new_emulator =
-            Emulator::new(path).map_err(|e| anyhow::anyhow!("Reconnect to swtpm failed: {}", e))?;
+            Arc::new(Mutex::new(Emulator::new(path).map_err(|e| {
+                anyhow::anyhow!("Reconnect to swtpm failed: {}", e)
+            })?));
 
         let cur_buff_size = new_emulator.lock().unwrap().get_buffer_size();
         self.backend_buff_size = cmp::min(cur_buff_size, TPM_TIS_BUFFER_MAX);

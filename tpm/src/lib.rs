@@ -15,7 +15,6 @@ pub mod emulator;
 pub mod socket;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use byteorder::{BigEndian, ByteOrder};
@@ -42,7 +41,9 @@ pub trait TpmMigration {
 pub trait TpmBackend: aio::AsyncMsgHandle + TpmMigration {
     type E;
 
-    fn new(path: impl AsRef<Path>) -> anyhow::Result<Arc<Mutex<Self>>, Self::E>;
+    fn new(path: impl AsRef<Path>) -> anyhow::Result<Self, Self::E>
+    where
+        Self: Sized;
 
     fn startup_tpm(&mut self, buffersize: usize, is_resume: bool) -> anyhow::Result<(), Self::E>;
 
