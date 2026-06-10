@@ -15,7 +15,7 @@ use std::mem;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use byteorder::{BigEndian, ByteOrder};
 use log::{error, warn};
@@ -422,10 +422,10 @@ impl TpmBackend for Emulator {
     ///
     /// * `path` - A path to the Unix Domain Socket swtpm is listening on
     ///
-    fn new(path: impl AsRef<Path>) -> Result<Arc<Mutex<Self>>> {
+    fn new(path: impl AsRef<Path>) -> Result<Self> {
         let (cli_stream, srv_stream) = UnixStream::pair()?;
 
-        let emulator = Arc::new(Mutex::new(Self {
+        let mut emulator = Self {
             caps: 0,
             control_socket: SocketDev::new_with_path(path)?,
             data_stream: SocketDev::new(cli_stream),
@@ -433,11 +433,9 @@ impl TpmBackend for Emulator {
             established_flag_cached: false,
             established_flag: false,
             cur_loc: TPM_INVALID_LOC,
-        }));
+        };
 
         emulator
-            .lock()
-            .unwrap()
             .probe_and_check_caps()?
             .set_data_fd(srv_stream.as_raw_fd())?;
 

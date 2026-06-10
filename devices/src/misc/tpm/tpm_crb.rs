@@ -242,13 +242,10 @@ impl TpmCrb {
     ) -> Result<Self> {
         let emulator = Emulator::new(path)
             .map_err(|e| anyhow!("Failed while initializing tpm Emulator: {e:?}"))?;
-        let mutex_emulator =
-            Arc::try_unwrap(emulator).map_err(|_| anyhow!("not the only owner"))?;
-        let inner_emulator = mutex_emulator.into_inner().map_err(|_| anyhow!("poison"))?;
 
         let mut tpm = TpmCrb {
             base: SysBusDevBase::new(SysBusDevType::Tpm(TpmInterfaceType::Crb)),
-            emulator: inner_emulator,
+            emulator,
             regs: [0; TPM_CRB_R_MAX],
             backend_buff_size: TPM_CRB_BUFFER_MAX,
             data_buff: [0; TPM_CRB_BUFFER_MAX],
