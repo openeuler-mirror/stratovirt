@@ -11,7 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use std::fs::File;
+use std::io::ErrorKind;
 use std::mem::size_of;
+use std::os::unix::fs::FileExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -26,6 +28,13 @@ use log::error;
 use nix::unistd::{sysconf, SysconfVar};
 
 use crate::UtilError;
+
+pub const PAGEMAP_PRESENT: u64 = 1 << 63;
+pub const PAGEMAP_SWAPPED: u64 = 1 << 62;
+pub const PAGEMAP_UFFD_WP: u64 = 1 << 57;
+
+const PAGEMAP_ENTRY_SIZE: usize = size_of::<u64>();
+const DEFAULT_PAGEMAP_BATCH_BYTES: usize = 2 * 1024 * 1024;
 
 /// This function used to remove group and others permission using libc::chmod.
 pub fn limit_permission(path: &str) -> Result<()> {
@@ -53,6 +62,141 @@ pub fn host_page_size() -> u64 {
         }
     };
     page_size as u64
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PagemapEntry(u64);
+
+impl PagemapEntry {
+    pub fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+
+    pub fn is_present(self) -> bool {
+        self.0 & PAGEMAP_PRESENT != 0
+    }
+
+    pub fn is_swapped(self) -> bool {
+        self.0 & PAGEMAP_SWAPPED != 0
+    }
+
+    pub fn is_resident(self) -> bool {
+        self.is_present() || self.is_swapped()
+    }
+
+    pub fn is_uffd_wp(self) -> bool {
+        self.0 & PAGEMAP_UFFD_WP != 0
+    }
+
+    pub fn is_uffd_dirty(self) -> bool {
+        self.is_resident() && !self.is_uffd_wp()
+    }
+}
+
+pub struct PagemapBatchReader {
+    file: File,
+    buffer: Vec<u8>,
+}
+
+impl PagemapBatchReader {
+    pub fn new() -> Result<Self> {
+        let file = File::open("/proc/self/pagemap")
+            .with_context(|| "Failed to open /proc/self/pagemap")?;
+        Self::with_file_and_buffer_size(file, DEFAULT_PAGEMAP_BATCH_BYTES)
+    }
+
+    fn with_file_and_buffer_size(file: File, buffer_size: usize) -> Result<Self> {
+        let entry_count = buffer_size / PAGEMAP_ENTRY_SIZE;
+        if entry_count == 0 {
+            bail!("pagemap batch buffer is too small");
+        }
+
+        Ok(Self {
+            file,
+            buffer: vec![0_u8; entry_count * PAGEMAP_ENTRY_SIZE],
+        })
+    }
+
+    pub fn scan_range<F>(
+        &mut self,
+        base: u64,
+        size: u64,
+        page_size: u64,
+        mut visit: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, PagemapEntry) -> Result<()>,
+    {
+        if page_size == 0 {
+            bail!("Invalid host page size");
+        }
+        if size == 0 {
+            return Ok(());
+        }
+
+        let end = base
+            .checked_add(size)
+            .with_context(|| "pagemap scan range overflow")?;
+        let start_page = base / page_size;
+        let end_page = end.div_ceil(page_size);
+        let page_count = end_page
+            .checked_sub(start_page)
+            .with_context(|| "pagemap scan page count underflow")?;
+        let entries_per_batch = u64::try_from(self.buffer.len() / PAGEMAP_ENTRY_SIZE)
+            .with_context(|| "pagemap batch size overflow")?;
+
+        let mut scanned_pages = 0_u64;
+        while scanned_pages < page_count {
+            let batch_pages = std::cmp::min(page_count - scanned_pages, entries_per_batch);
+            let batch_bytes = usize::try_from(batch_pages)
+                .with_context(|| "pagemap batch page count overflow")?
+                .checked_mul(PAGEMAP_ENTRY_SIZE)
+                .with_context(|| "pagemap batch byte count overflow")?;
+            let page_index = start_page
+                .checked_add(scanned_pages)
+                .with_context(|| "pagemap page index overflow")?;
+            let file_offset = page_index
+                .checked_mul(PAGEMAP_ENTRY_SIZE as u64)
+                .with_context(|| "pagemap offset overflow")?;
+
+            read_exact_at(&self.file, &mut self.buffer[..batch_bytes], file_offset)?;
+            for (index, chunk) in self.buffer[..batch_bytes]
+                .chunks_exact(PAGEMAP_ENTRY_SIZE)
+                .enumerate()
+            {
+                let raw = u64::from_ne_bytes(chunk.try_into().unwrap());
+                let relative_page = scanned_pages
+                    .checked_add(u64::try_from(index).with_context(|| "page index overflow")?)
+                    .with_context(|| "relative page index overflow")?;
+                visit(relative_page, PagemapEntry::from_raw(raw))?;
+            }
+
+            scanned_pages = scanned_pages
+                .checked_add(batch_pages)
+                .with_context(|| "pagemap scanned page count overflow")?;
+        }
+
+        Ok(())
+    }
+}
+
+fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> Result<()> {
+    let mut read = 0_usize;
+    while read < buf.len() {
+        let len = file
+            .read_at(&mut buf[read..], offset + read as u64)
+            .with_context(|| "Failed to read /proc/self/pagemap")?;
+        if len == 0 {
+            let err = std::io::Error::new(ErrorKind::UnexpectedEof, "short pagemap read");
+            return Err(err).with_context(|| "Failed to read /proc/self/pagemap");
+        }
+        read += len;
+    }
+    Ok(())
 }
 
 /// Parse unix uri to unix path.
@@ -490,13 +634,14 @@ impl UnixSock {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, File};
+    use std::io::Write;
     use std::path::Path;
     use std::time::Duration;
 
     use libc::{c_void, iovec};
 
-    use super::{parse_unix_uri, UnixSock};
+    use super::{parse_unix_uri, PagemapBatchReader, PagemapEntry, UnixSock};
 
     #[test]
     fn test_parse_uri() {
@@ -576,5 +721,64 @@ mod tests {
         if sock_path.exists() {
             fs::remove_file("./test_socket2.sock").unwrap();
         }
+    }
+
+    #[test]
+    fn test_pagemap_entry_classification() {
+        let present = PagemapEntry::from_raw(1_u64 << 63);
+        assert!(present.is_present());
+        assert!(!present.is_swapped());
+        assert!(present.is_resident());
+        assert!(present.is_uffd_dirty());
+
+        let swapped_wp = PagemapEntry::from_raw((1_u64 << 62) | (1_u64 << 57));
+        assert!(!swapped_wp.is_present());
+        assert!(swapped_wp.is_swapped());
+        assert!(swapped_wp.is_resident());
+        assert!(!swapped_wp.is_uffd_dirty());
+
+        let empty = PagemapEntry::from_raw(0);
+        assert!(!empty.is_present());
+        assert!(!empty.is_swapped());
+        assert!(!empty.is_resident());
+        assert!(!empty.is_uffd_dirty());
+    }
+
+    #[test]
+    fn test_pagemap_batch_reader_scans_across_batches() {
+        let path = format!("test_pagemap_batch_{}.bin", std::process::id());
+        let mut file = File::create(&path).unwrap();
+        for entry in [1_u64, 2, 3, 4, 5] {
+            file.write_all(&entry.to_ne_bytes()).unwrap();
+        }
+        drop(file);
+
+        let file = File::open(&path).unwrap();
+        let mut reader = PagemapBatchReader::with_file_and_buffer_size(file, 16).unwrap();
+        let mut seen = Vec::new();
+        reader
+            .scan_range(0, 5 * 4096, 4096, |page_index, entry| {
+                seen.push((page_index, entry.raw()));
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(seen, vec![(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_pagemap_batch_reader_reports_short_read() {
+        let path = format!("test_pagemap_short_{}.bin", std::process::id());
+        let mut file = File::create(&path).unwrap();
+        file.write_all(&1_u64.to_ne_bytes()).unwrap();
+        drop(file);
+
+        let file = File::open(&path).unwrap();
+        let mut reader = PagemapBatchReader::with_file_and_buffer_size(file, 16).unwrap();
+        let result = reader.scan_range(0, 2 * 4096, 4096, |_, _| Ok(()));
+
+        assert!(result.is_err());
+        fs::remove_file(path).unwrap();
     }
 }

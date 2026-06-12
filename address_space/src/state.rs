@@ -18,7 +18,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::uffd::UffdMemoryBackend;
+use crate::uffd::{store_uffd_backend, UffdMemoryBackend};
 use crate::{AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
 use migration::{
     DeviceStateDesc, MemBlock, MigrationError, MigrationHook, RestoreMode, StateTransfer,
@@ -369,6 +369,7 @@ impl AddressSpace {
 
         uffd.send_to_external_uffd_daemon()
             .with_context(|| "UFFD restore: send_to_external_uffd_daemon failed")?;
+        store_uffd_backend(uffd);
 
         // Skip the RAM data so the caller can restore the ram list section.
         let region_data_end = first_region_offset
