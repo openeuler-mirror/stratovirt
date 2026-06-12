@@ -254,6 +254,30 @@ pub trait DeviceInterface {
     /// Query machine mem size.
     fn query_mem(&self) -> Response;
 
+    /// Query stable memory mappings used by external memory export.
+    fn query_mem_mappings(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query-mem-mappings not implemented".to_string()),
+            None,
+        )
+    }
+
+    /// Query resident and zero page bitmaps for cold snapshot export.
+    fn query_mem_page_state(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query-mem-page-state not implemented".to_string()),
+            None,
+        )
+    }
+
+    /// Query UFFD-WP dirty bitmap after state restore.
+    fn query_mem_dirty_bitmap(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query-mem-dirty-bitmap not implemented".to_string()),
+            None,
+        )
+    }
+
     /// Query the info of vnc server.
     fn query_vnc(&self) -> Response;
 
