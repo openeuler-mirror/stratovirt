@@ -22,6 +22,7 @@ mod rng_test;
 mod scream_test;
 mod scsi_test;
 mod serial_test;
+mod snapshot_memory_test;
 mod usb_camera_test;
 mod usb_storage_test;
 mod usb_test;

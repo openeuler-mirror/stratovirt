@@ -697,6 +697,42 @@ mod tests {
     }
 
     #[test]
+    fn test_is_snapshot_uses_save_side_migrate_uri_rules() {
+        let command = QmpCommand::migrate {
+            arguments: qmp_schema::migrate {
+                uri: "file:/tmp/snap,memory=external".to_string(),
+            },
+            id: Some("snapshot-id".to_string()),
+        };
+        let mut snapshot_id = None;
+
+        assert!(is_snapshot(&command, &mut snapshot_id));
+        assert_eq!(snapshot_id, Some("snapshot-id".to_string()));
+
+        let command = QmpCommand::migrate {
+            arguments: qmp_schema::migrate {
+                uri: "file:/tmp/snap,mapped=false".to_string(),
+            },
+            id: Some("snapshot-id".to_string()),
+        };
+        let mut snapshot_id = None;
+
+        assert!(is_snapshot(&command, &mut snapshot_id));
+        assert_eq!(snapshot_id, Some("snapshot-id".to_string()));
+
+        let command = QmpCommand::migrate {
+            arguments: qmp_schema::migrate {
+                uri: "tcp:127.0.0.1:2022".to_string(),
+            },
+            id: None,
+        };
+        let mut snapshot_id = None;
+
+        assert!(!is_snapshot(&command, &mut snapshot_id));
+        assert_eq!(snapshot_id, None);
+    }
+
+    #[test]
     fn test_socket_lifecycle() {
         // Pre test. Environment Preparation
         let (listener, _, server) = prepare_unix_socket_environment("04");
