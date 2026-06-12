@@ -24,6 +24,7 @@ pub mod snapshot;
 pub use error::MigrationError;
 pub use manager::{MigrationHook, MigrationManager};
 pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
+pub use snapshot::RestoreMode;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

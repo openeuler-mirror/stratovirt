@@ -81,6 +81,7 @@
 //! ```
 
 pub mod error;
+pub mod uffd;
 
 mod address;
 mod address_space;

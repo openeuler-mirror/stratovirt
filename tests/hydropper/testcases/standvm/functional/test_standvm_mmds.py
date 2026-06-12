@@ -243,17 +243,21 @@ def test_mmds_standvm_imdsv2(standvm):
     not os.path.exists("/dev/vhost-net"),
     reason="/dev/vhost-net not present; vhost-kernel unsupported on this host",
 )
-def test_mmds_standvm_vhost_rejected(standvm):
+def test_mmds_standvm_vhost_silently_skipped(standvm):
     """
-    put-mmds-config must reject vhost-kernel interfaces.
+    put-mmds-config silently skips vhost-kernel interfaces.
 
-    A vhost device bypasses the virtio TX handler and therefore cannot
-    intercept MMDS traffic.  The StdMachine handler refuses any interface ID
-    that is not in the net_devs map; vhost devices are excluded from that map.
+    A vhost device bypasses the virtio TX handler and cannot intercept MMDS
+    traffic.  The StdMachine handler warns and drops vhost interface IDs from
+    the active MMDS set rather than rejecting the call outright — this allows
+    the same config to be reused after a hotplug that replaces the vhost NIC
+    with a plain virtio-net device.
 
     1. Launch standvm with vhost-kernel NIC
-    2. Call put-mmds-config with the vhost device ID
-    3. Expect a GenericError response
+    2. Call put-mmds-config with the vhost device ID — expect success
+    3. Write metadata via put-mmds
+    4. Add route inside the guest and attempt curl — expect failure (vhost
+       interface is not intercepting MMDS traffic)
     """
     test_vm = standvm
     _launch_standvm(test_vm, vhost_type="vhost-kernel")
@@ -262,12 +266,18 @@ def test_mmds_standvm_vhost_rejected(standvm):
     resp = test_vm.qmp.qmp_command("put-mmds-config",
                                    version="V1",
                                    network_interfaces=[net_id])
-    assert "error" in resp, \
-        "Expected error for vhost interface, got success: %s" % resp
-    err_msg = resp["error"].get("desc", "")
-    assert "vhost" in err_msg.lower() or "not found" in err_msg.lower(), \
-        "Error message does not mention vhost or not-found: %s" % err_msg
-    logging.info("vhost rejection verified: %s", err_msg)
+    assert "error" not in resp, \
+        "put-mmds-config with vhost interface should succeed (vhost silently skipped), got: %s" % resp
+    logging.info("put-mmds-config with vhost interface succeeded (vhost skipped): %s", resp)
+
+    _put_mmds_data(test_vm)
+    _add_mmds_route(test_vm)
+
+    # MMDS should NOT intercept traffic on a vhost interface.
+    status, body = _curl_get(test_vm, max_time=3)
+    assert status != 0, \
+        "curl to MMDS should fail on vhost interface (not intercepted), got exit=%d body=%s" % (status, body)
+    logging.info("Confirmed: MMDS not reachable via vhost interface (expected)")
 
 
 @pytest.mark.standvm_accept
