@@ -263,6 +263,8 @@ pub trait DeviceInterface {
     }
 
     /// Query resident and zero page bitmaps for cold snapshot export.
+    /// Swapped guest RAM pages are treated as resident and read back in before
+    /// zero-page classification.
     fn query_mem_page_state(&self) -> Response {
         Response::create_error_response(
             QmpErrorClass::GenericError("query-mem-page-state not implemented".to_string()),
