@@ -3166,6 +3166,7 @@ fn start_incoming_migration(
             let restore_mode = if let Some(uffd_sock) = migrate_info.uffd_sock.as_ref() {
                 RestoreMode::Uffd {
                     socket_path: uffd_sock.clone(),
+                    memory: migrate_info.memory,
                 }
             } else if migrate_info.mapped {
                 RestoreMode::Mapped

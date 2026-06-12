@@ -16,6 +16,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
+use machine_manager::config::SnapshotMemoryMode;
 use serde::{Deserialize, Serialize};
 
 use crate::state::{get_state_slice, read_state_slice};
@@ -95,7 +96,7 @@ impl StateTransfer for RamList {
 }
 
 impl MigrationHook for RamList {
-    fn save_memory(&self, file: &mut File) -> Result<()> {
+    fn save_memory(&self, file: &mut File, _memory: SnapshotMemoryMode) -> Result<()> {
         let state_header = self.get_state_vec()?;
         let data_slice = get_state_slice(&state_header)
             .with_context(|| "Failed to get state slice while saving ramlist")?;

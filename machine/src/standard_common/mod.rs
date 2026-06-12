@@ -63,7 +63,7 @@ use machine_manager::config::get_cameradev_config;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::ShutdownAction;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_incoming_uri, parse_size,
+    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_migrate_uri, parse_size,
     BootIndexInfo, ConfigCheck, DiskFormat, DriveConfig, ExBool, MigrateMode, NumaNode, NumaNodes,
     M,
 };
@@ -1085,9 +1085,9 @@ impl MachineLifecycle for StdMachine {
 
 impl MigrateInterface for StdMachine {
     fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
+        match parse_migrate_uri(&uri) {
             Ok(incoming) => match incoming.mode {
-                MigrateMode::File => migration::snapshot(incoming.uri),
+                MigrateMode::File => migration::snapshot(incoming.uri, incoming.memory),
                 MigrateMode::Unix => migration::migration_unix_mode(incoming.uri),
                 MigrateMode::Tcp => migration::migration_tcp_mode(incoming.uri),
                 _ => Response::create_error_response(
