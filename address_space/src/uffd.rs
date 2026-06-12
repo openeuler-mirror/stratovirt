@@ -20,8 +20,12 @@ use std::io::Read;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
+use machine_manager::qmp::qmp_schema::MemDirtyBitmap;
+use util::bitmap::set_dense_bitmap_bit;
+use util::unix::{host_page_size, PagemapBatchReader};
 use vmm_sys_util::sock_ctrl_msg::ScmSocket;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -36,9 +40,11 @@ const SYS_USERFAULTFD_NR: libc::c_long = 323;
 const UFFD_API: u64 = 0xAA;
 const UFFDIO_API: u64 = 0xc018aa3f;
 const UFFDIO_REGISTER: u64 = 0xc020aa00;
+const UFFDIO_WRITEPROTECT: u64 = 0xc018aa06;
 
 const UFFDIO_REGISTER_MODE_MISSING: u64 = 1 << 0;
 const UFFDIO_REGISTER_MODE_WP: u64 = 1 << 1;
+const UFFDIO_WRITEPROTECT_MODE_WP: u64 = 1 << 0;
 
 // UFFD_FEATURE_EVENT_REMOVE: generate REMOVE events on madvise(MADV_DONTNEED)
 // so the external uffd daemon can track dirty pages during snapshot creation.
@@ -67,12 +73,24 @@ struct UffdioRegister {
     ioctls: u64,
 }
 
+#[repr(C)]
+struct UffdioWriteProtect {
+    range: UffdioRange,
+    mode: u64,
+}
+
+static UFFD_BACKEND: OnceLock<Mutex<Option<UffdMemoryBackend>>> = OnceLock::new();
+
+fn backend_state() -> &'static Mutex<Option<UffdMemoryBackend>> {
+    UFFD_BACKEND.get_or_init(|| Mutex::new(None))
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Wire format sent to the external uffd daemon
 // ────────────────────────────────────────────────────────────────────────────
 
 /// One guest RAM region as serialised and sent to the external uffd daemon's UFFD handler.
-#[derive(serde::Serialize)]
+#[derive(Debug, PartialEq, serde::Serialize)]
 struct RegionMapping {
     base_hva: u64,
     size: u64,
@@ -180,18 +198,8 @@ impl UffdMemoryBackend {
         // no pointers or memory invariants are involved.
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
 
-        let mappings: Vec<RegionMapping> = self
-            .regions
-            .iter()
-            .map(|&(host_addr, size, offset)| RegionMapping {
-                base_hva: host_addr,
-                size,
-                offset,
-                page_size_kib: page_size,
-            })
-            .collect();
-
-        let json = serde_json::to_vec(&mappings).context("failed to serialise region mappings")?;
+        let json = serde_json::to_vec(&self.region_mappings(page_size))
+            .context("failed to serialise region mappings")?;
 
         let mut stream = send_fd_with_json(&self.socket_path, self.uffd_fd, &json)
             .context("failed to send uffd fd to external uffd daemon")?;
@@ -204,6 +212,102 @@ impl UffdMemoryBackend {
 
         Ok(())
     }
+
+    fn region_mappings(&self, page_size: u64) -> Vec<RegionMapping> {
+        self.regions
+            .iter()
+            .map(|&(host_addr, size, offset)| RegionMapping {
+                base_hva: host_addr,
+                size,
+                offset,
+                page_size_kib: page_size,
+            })
+            .collect()
+    }
+}
+
+/// Keep the UFFD fd alive in StratoVirt and make dirty bitmap queries available.
+pub fn store_uffd_backend(backend: UffdMemoryBackend) {
+    *backend_state().lock().unwrap() = Some(backend);
+}
+
+fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
+    // Dirty bitmap bits and pagemap entries both use the host base page size.
+    let page_size = host_page_size();
+    let mut pagemap = PagemapBatchReader::new()?;
+    let mut bitmap = Vec::new();
+
+    for &(base_hva, size, offset) in &backend.regions {
+        if offset % page_size != 0 {
+            bail!(
+                "UFFD mapping offset {} is not aligned to page size {}",
+                offset,
+                page_size
+            );
+        }
+        let page_base = offset / page_size;
+        pagemap.scan_range(base_hva, size, page_size, |bitmap_page_index, entry| {
+            if entry.is_uffd_dirty() {
+                set_dense_bitmap_bit(&mut bitmap, page_base + bitmap_page_index)?;
+            }
+            Ok(())
+        })?;
+    }
+
+    Ok(MemDirtyBitmap { bitmap, page_size })
+}
+
+fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<()> {
+    let mode = if enabled {
+        UFFDIO_WRITEPROTECT_MODE_WP
+    } else {
+        0
+    };
+
+    for &(base_hva, size, _) in &backend.regions {
+        if size == 0 {
+            continue;
+        }
+
+        let mut wp = UffdioWriteProtect {
+            range: UffdioRange {
+                start: base_hva,
+                len: size,
+            },
+            mode,
+        };
+        // SAFETY: backend.uffd_fd is an open userfaultfd and `wp` points to a
+        // valid UFFDIO_WRITEPROTECT payload for the duration of the ioctl.
+        let ret = unsafe {
+            libc::ioctl(
+                backend.uffd_fd,
+                UFFDIO_WRITEPROTECT as libc::c_ulong,
+                &mut wp as *mut UffdioWriteProtect,
+            )
+        };
+        if ret < 0 {
+            bail!(
+                "Failed to {} UFFD-WP range at {:#x}: {}",
+                if enabled { "enable" } else { "disable" },
+                base_hva,
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Return dirty pages since the previous query, then reset UFFD-WP tracking.
+pub fn query_and_reset_dirty_bitmap() -> Result<MemDirtyBitmap> {
+    let guard = backend_state().lock().unwrap();
+    let backend = guard
+        .as_ref()
+        .with_context(|| "UFFD dirty tracking is not enabled")?;
+
+    let bitmap = build_dirty_bitmap(backend)?;
+    write_protect_mappings(backend, true)
+        .with_context(|| "Failed to reset UFFD-WP dirty tracking")?;
+    Ok(bitmap)
 }
 
 impl Drop for UffdMemoryBackend {
@@ -341,6 +445,35 @@ mod tests {
 
         handle.join().expect("daemon thread");
         let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn test_region_mappings_use_registered_offsets() {
+        let backend = UffdMemoryBackend {
+            socket_path: PathBuf::from("/tmp/unused.sock"),
+            regions: vec![(0x1000, 0x2000, 0), (0x8000, 0x1000, 0x2000)],
+            uffd_fd: -1,
+        };
+
+        let mappings = backend.region_mappings(4096);
+
+        assert_eq!(
+            mappings,
+            vec![
+                RegionMapping {
+                    base_hva: 0x1000,
+                    size: 0x2000,
+                    offset: 0,
+                    page_size_kib: 4096,
+                },
+                RegionMapping {
+                    base_hva: 0x8000,
+                    size: 0x1000,
+                    offset: 0x2000,
+                    page_size_kib: 4096,
+                },
+            ]
+        );
     }
 
     #[test]
