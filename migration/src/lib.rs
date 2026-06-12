@@ -54,8 +54,8 @@ pub struct MigrateMemSlot {
 /// # Arguments
 ///
 /// * `path` - snapshot dir path. If path dir not exists, will create it.
-pub fn snapshot(path: String) -> Response {
-    if let Err(e) = MigrationManager::save_snapshot(&path) {
+pub fn snapshot(path: String, memory: machine_manager::config::SnapshotMemoryMode) -> Response {
+    if let Err(e) = MigrationManager::save_snapshot(&path, memory) {
         error!("Failed to migrate to path \'{:?}\': {:?}", path, e);
         let _ = MigrationManager::set_status(MigrationStatus::Failed);
         if let Err(e) = MigrationManager::notify_status(true, MigrationStatus::Failed) {

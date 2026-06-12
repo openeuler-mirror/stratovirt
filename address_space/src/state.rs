@@ -16,6 +16,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
+use machine_manager::config::SnapshotMemoryMode;
 use serde::{Deserialize, Serialize};
 
 use crate::uffd::{store_uffd_backend, UffdMemoryBackend};
@@ -327,9 +328,10 @@ impl AddressSpace {
         &self,
         memory: &mut File,
         socket_path: &str,
+        snapshot_memory: SnapshotMemoryMode,
     ) -> Result<()> {
         let address_space_state = read_address_space_state(memory)?;
-        let first_region_offset = memory.stream_position()?;
+        let ram_data_file_offset = memory.stream_position()?;
 
         let machine_ram = self
             .get_machine_ram()
@@ -337,12 +339,16 @@ impl AddressSpace {
 
         let mut uffd = UffdMemoryBackend::new(socket_path)
             .with_context(|| "UFFD restore: failed to create userfaultfd")?;
-        let mut offset = first_region_offset;
+        let registered_offset_base = match snapshot_memory {
+            SnapshotMemoryMode::Full => ram_data_file_offset,
+            SnapshotMemoryMode::External => 0,
+        };
+        let mut registered_offset = registered_offset_base;
         for region in machine_ram.subregions().iter() {
             // SAFETY: the region comes from the machine RAM subregion list; its
             // host mapping stays alive for the VM's lifetime.
             if let Some(host_addr) = unsafe { region.get_host_address(AddressAttr::Ram) } {
-                uffd.register_region(host_addr, region.size(), offset)
+                uffd.register_region(host_addr, region.size(), registered_offset)
                     .with_context(|| {
                         format!(
                             "UFFD restore: register region '{}' host={:#x} size={:#x}",
@@ -351,14 +357,14 @@ impl AddressSpace {
                             region.size()
                         )
                     })?;
-                offset += region.size();
+                registered_offset += region.size();
             }
         }
 
         // The daemon serves page faults using the file offsets registered
         // above; a size mismatch means the snapshot layout does not match the
         // current RAM layout and pages would be served from wrong offsets.
-        let registered_size = offset - first_region_offset;
+        let registered_size = registered_offset - registered_offset_base;
         if registered_size != address_space_state.total_region_size {
             bail!(
                 "UFFD restore: registered RAM size {:#x} does not match snapshot region size {:#x}",
@@ -371,16 +377,18 @@ impl AddressSpace {
             .with_context(|| "UFFD restore: send_to_external_uffd_daemon failed")?;
         store_uffd_backend(uffd);
 
-        // Skip the RAM data so the caller can restore the ram list section.
-        let region_data_end = first_region_offset
-            .checked_add(address_space_state.total_region_size)
-            .with_context(|| {
-                format!(
-                    "Restore memory add overflow: {} + {}",
-                    first_region_offset, address_space_state.total_region_size
-                )
-            })?;
-        memory.seek(SeekFrom::Start(region_data_end))?;
+        if snapshot_memory == SnapshotMemoryMode::Full {
+            // Skip the RAM data so the caller can restore the ram list section.
+            let region_data_end = ram_data_file_offset
+                .checked_add(address_space_state.total_region_size)
+                .with_context(|| {
+                    format!(
+                        "Restore memory add overflow: {} + {}",
+                        ram_data_file_offset, address_space_state.total_region_size
+                    )
+                })?;
+            memory.seek(SeekFrom::Start(region_data_end))?;
+        }
 
         Ok(())
     }
@@ -423,12 +431,16 @@ impl StateTransfer for AddressSpace {
 }
 
 impl MigrationHook for AddressSpace {
-    fn save_memory(&self, fd: &mut File) -> Result<()> {
+    fn save_memory(&self, fd: &mut File, memory: SnapshotMemoryMode) -> Result<()> {
         // Save address space header.
         let ram_state = self.get_state_vec()?;
         let data_slice = get_state_slice(&ram_state)
             .with_context(|| "Failed to get state slice while saving state")?;
         fd.write_all(&data_slice)?;
+
+        if memory == SnapshotMemoryMode::External {
+            return Ok(());
+        }
 
         // Save address space region.
         if let Some(machine_ram) = self.get_machine_ram() {
@@ -460,9 +472,10 @@ impl MigrationHook for AddressSpace {
                     }
                 }
             }
-            RestoreMode::Uffd { socket_path } => {
-                self.restore_uffd_ram_from_snapshot(memory, socket_path)?
-            }
+            RestoreMode::Uffd {
+                socket_path,
+                memory: snapshot_memory,
+            } => self.restore_uffd_ram_from_snapshot(memory, socket_path, *snapshot_memory)?,
         }
 
         Ok(())
@@ -518,4 +531,47 @@ pub fn read_state_slice(file: &mut File) -> Result<Vec<u8>> {
     }
 
     Ok(data_slice[..state_len as usize].to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::io::Seek;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_save_memory_external_skips_guest_ram_bytes() {
+        let root = Region::init_container_region(0x1000, "root");
+        let machine_ram = Arc::new(Region::init_container_region(0x1000, "machine-ram"));
+        let mem = Arc::new(
+            HostMemMapping::new(GuestAddress(0), None, 0x1000, None, false, false, false).unwrap(),
+        );
+        let ram_region = Region::init_ram_region(mem, "ram");
+        machine_ram.add_subregion_not_update(ram_region, 0).unwrap();
+        let space = AddressSpace::new(root, "space", Some(machine_ram)).unwrap();
+        let metadata_path = std::env::temp_dir().join(format!(
+            "stratovirt-address-space-metadata-{}",
+            std::process::id()
+        ));
+        let full_path = std::env::temp_dir().join(format!(
+            "stratovirt-address-space-full-{}",
+            std::process::id()
+        ));
+        let mut metadata_file = File::create(&metadata_path).unwrap();
+        let mut full_file = File::create(&full_path).unwrap();
+
+        space
+            .save_memory(&mut metadata_file, SnapshotMemoryMode::External)
+            .unwrap();
+        space
+            .save_memory(&mut full_file, SnapshotMemoryMode::Full)
+            .unwrap();
+
+        let metadata_len = metadata_file.stream_position().unwrap();
+        let full_len = full_file.stream_position().unwrap();
+        let _ = std::fs::remove_file(metadata_path);
+        let _ = std::fs::remove_file(full_path);
+        assert_eq!(full_len - metadata_len, 0x1000);
+    }
 }

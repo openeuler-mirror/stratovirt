@@ -20,6 +20,7 @@ use std::thread;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::error;
+use machine_manager::config::SnapshotMemoryMode;
 
 use crate::general::{translate_id, Lifecycle};
 use crate::manager::{MigrationManager, MIGRATION_MANAGER};
@@ -52,7 +53,25 @@ pub enum RestoreMode {
     /// Guest RAM pages are served on demand by the external uffd daemon
     /// listening on `socket_path`. Memory outside guest RAM (the ram list
     /// section) is still copied from the snapshot memory file.
-    Uffd { socket_path: String },
+    Uffd {
+        socket_path: String,
+        memory: SnapshotMemoryMode,
+    },
+}
+
+fn memory_file_format(memory: SnapshotMemoryMode) -> Result<FileFormat> {
+    match memory {
+        SnapshotMemoryMode::Full => Ok(FileFormat::MemoryFull),
+        SnapshotMemoryMode::External => Ok(FileFormat::MemoryExternal),
+    }
+}
+
+fn memory_mode_from_format(format: FileFormat) -> Result<SnapshotMemoryMode> {
+    match format {
+        FileFormat::MemoryFull => Ok(SnapshotMemoryMode::Full),
+        FileFormat::MemoryExternal => Ok(SnapshotMemoryMode::External),
+        FileFormat::Device => bail!("Invalid memory snapshot file"),
+    }
 }
 
 impl MigrationManager {
@@ -67,7 +86,7 @@ impl MigrationManager {
     /// # Argument
     ///
     /// * `path` - snapshot dir path. If path dir not exists, will create it.
-    pub fn save_snapshot(path: &str) -> Result<()> {
+    pub fn save_snapshot(path: &str, memory: SnapshotMemoryMode) -> Result<()> {
         // Set status to `Active`
         MigrationManager::set_status(MigrationStatus::Active)?;
         MigrationManager::notify_status(true, MigrationStatus::Active)?;
@@ -109,7 +128,7 @@ impl MigrationManager {
         vm_memory_path.push(MEMORY_PATH_SUFFIX);
         match File::create(vm_memory_path) {
             Ok(mut memory_file) => {
-                Self::save_memory(&mut memory_file)?;
+                Self::save_memory(&mut memory_file, memory)?;
             }
             Err(e) => {
                 bail!("Failed to create snapshot memory file: {}", e);
@@ -154,8 +173,19 @@ impl MigrationManager {
             File::open(&snapshot_path).with_context(|| "Failed to open memory snapshot file")?;
         let memory_header = Self::restore_header(&mut memory_file)?;
         memory_header.check_header()?;
-        if memory_header.format != FileFormat::MemoryFull {
-            bail!("Invalid memory snapshot file");
+        let snapshot_memory = memory_mode_from_format(memory_header.format)?;
+        // Header checks must stay on the restore path because they validate
+        // the actual snapshot file, not only the user-provided incoming URI.
+        match mode {
+            RestoreMode::Mapped | RestoreMode::Copy
+                if snapshot_memory == SnapshotMemoryMode::External =>
+            {
+                bail!("memory=external requires UFFD restore")
+            }
+            RestoreMode::Uffd { memory, .. } if memory != snapshot_memory => {
+                bail!("Incoming memory mode does not match snapshot memory file")
+            }
+            _ => {}
         }
         snapshot_path.pop();
         snapshot_path.push(DEVICE_PATH_SUFFIX);
@@ -207,11 +237,15 @@ impl MigrationManager {
     /// # Arguments
     ///
     /// * `file` - The memory file to save memory data.
-    fn save_memory(file: &mut File) -> Result<()> {
-        Self::save_header(Some(FileFormat::MemoryFull), file)?;
+    fn save_memory(file: &mut File, memory: SnapshotMemoryMode) -> Result<()> {
+        Self::save_header(Some(memory_file_format(memory)?), file)?;
 
         let locked_vmm = MIGRATION_MANAGER.vmm.read().unwrap();
-        locked_vmm.memory.as_ref().unwrap().save_memory(file)?;
+        locked_vmm
+            .memory
+            .as_ref()
+            .unwrap()
+            .save_memory(file, memory)?;
 
         locked_vmm
             .ram_list
@@ -219,7 +253,7 @@ impl MigrationManager {
             .unwrap()
             .lock()
             .unwrap()
-            .save_memory(file)?;
+            .save_memory(file, SnapshotMemoryMode::Full)?;
 
         Ok(())
     }

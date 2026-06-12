@@ -57,7 +57,7 @@ use machine_manager::config::get_chardev_socket_path;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::Param;
 use machine_manager::config::{
-    parse_incoming_uri, parse_size, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
+    parse_migrate_uri, parse_size, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
     NetDevcfg, NetworkInterfaceConfig, VmConfig,
 };
 use machine_manager::machine::{
@@ -1151,9 +1151,9 @@ impl DeviceInterface for LightMachine {
 
 impl MigrateInterface for LightMachine {
     fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
+        match parse_migrate_uri(&uri) {
             Ok(incoming) => match incoming.mode {
-                MigrateMode::File => migration::snapshot(incoming.uri),
+                MigrateMode::File => migration::snapshot(incoming.uri, incoming.memory),
                 MigrateMode::Unix | MigrateMode::Tcp => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(
                         "MicroVM does not support migration".to_string(),

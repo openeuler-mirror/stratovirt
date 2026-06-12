@@ -310,6 +310,7 @@ pub const MAX_DEVICE_STATE_SIZE: usize = 1 << 20;
 pub enum FileFormat {
     Device,
     MemoryFull,
+    MemoryExternal,
 }
 
 /// The endianness of byte order.

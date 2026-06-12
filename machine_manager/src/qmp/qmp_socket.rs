@@ -26,7 +26,7 @@ use vmm_sys_util::epoll::EventSet;
 use super::qmp_schema;
 use super::qmp_schema::QmpCommand;
 use super::{qmp_channel::QmpChannel, qmp_response::QmpGreeting, qmp_response::Response};
-use crate::config::{parse_incoming_uri, MigrateMode};
+use crate::config::{parse_migrate_uri, MigrateMode};
 use crate::event;
 use crate::event_loop::EventLoop;
 use crate::machine::{MachineExternalInterface, VmState};
@@ -469,7 +469,7 @@ fn is_snapshot(qmp_command: &QmpCommand, snapshot_id: &mut Option<String>) -> bo
         ref id,
     } = qmp_command
     {
-        if let Ok(incoming) = parse_incoming_uri(&arguments.uri) {
+        if let Ok(incoming) = parse_migrate_uri(&arguments.uri) {
             if incoming.mode == MigrateMode::File {
                 *snapshot_id = id.clone();
                 return true;
