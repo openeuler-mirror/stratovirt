@@ -62,8 +62,10 @@ const FIONREAD: u32 = 0x541B;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
-const UFFDIO_API: u32 = 0xc018aa3f;
-const UFFDIO_REGISTER: u32 = 0xc020aa00;
+// userfaultfd ioctl numbers used only by the seccomp allowlist.
+const UFFDIO_API_IOCTL: u32 = 0xc018aa3f;
+const UFFDIO_REGISTER_IOCTL: u32 = 0xc020aa00;
+const UFFDIO_WRITEPROTECT_IOCTL: u32 = 0xc018aa06;
 
 /// Create a syscall allowlist for seccomp.
 ///
@@ -89,6 +91,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_epoll_ctl),
         BpfRule::new(libc::SYS_ppoll),
         BpfRule::new(libc::SYS_fdatasync),
+        BpfRule::new(libc::SYS_fsync),
         BpfRule::new(libc::SYS_recvmsg),
         BpfRule::new(libc::SYS_sendmsg),
         BpfRule::new(libc::SYS_sendto),
@@ -111,6 +114,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_sigaltstack),
         BpfRule::new(libc::SYS_mmap),
         BpfRule::new(libc::SYS_mprotect),
+        BpfRule::new(libc::SYS_userfaultfd),
         BpfRule::new(libc::SYS_munmap),
         BpfRule::new(libc::SYS_accept4),
         BpfRule::new(libc::SYS_lseek),
@@ -247,7 +251,10 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_API_IOCTL)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_REGISTER_IOCTL)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_WRITEPROTECT_IOCTL);
 
     #[cfg(feature = "vfio_device")]
     let bpf_rule = bpf_rule
@@ -279,10 +286,6 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_S_PARM() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMESIZES() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, VIDIOC_ENUM_FRAMEINTERVALS() as u32);
-
-    let bpf_rule = bpf_rule
-        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_API)
-        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_REGISTER);
 
     arch_ioctl_allow_list(bpf_rule)
 }

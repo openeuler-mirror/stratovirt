@@ -1910,8 +1910,9 @@ pub struct MemMapping {
 /// query-mem-page-state
 ///
 /// Query resident and zero-page bitmaps for cold external memory export. The
-/// VM must be paused. Bitmap bits are indexed by the same flat guest RAM order
-/// returned by `query-mem-mappings`.
+/// VM must be paused. `resident` includes pages present in RAM or swapped out;
+/// swapped pages are read back in before zero-page classification. Bitmap bits
+/// are indexed by the same flat guest RAM order returned by `query-mem-mappings`.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct query_mem_page_state {}

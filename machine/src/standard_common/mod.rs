@@ -1243,6 +1243,59 @@ impl DeviceInterface for StdMachine {
         Response::create_empty_response()
     }
 
+    fn query_mem_mappings(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_mappings(self.get_vm_ram()) {
+            Ok(mappings) => {
+                Response::create_response(serde_json::to_value(mappings).unwrap(), None)
+            }
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_page_state(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_page_state(self.get_vm_ram()) {
+            Ok(state) => Response::create_response(serde_json::to_value(state).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_dirty_bitmap(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match address_space::uffd::query_and_reset_dirty_bitmap() {
+            Ok(bitmap) => Response::create_response(serde_json::to_value(bitmap).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
     fn query_vnc(&self) -> Response {
         #[cfg(feature = "vnc")]
         if let Some(vnc_info) = qmp_query_vnc() {
