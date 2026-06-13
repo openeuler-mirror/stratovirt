@@ -345,10 +345,33 @@ impl AddressSpace {
         };
         let mut registered_offset = registered_offset_base;
         for region in machine_ram.subregions().iter() {
+            let state = address_space_state
+                .ram_region_state
+                .iter()
+                .find(|state| state.name == region.name)
+                .with_context(|| format!("Can not find ram region {:?}", region.name))?;
+            if state.size != region.size() {
+                bail!(
+                    "Size of ram region {} changed, saved size {}, now {}.",
+                    region.name,
+                    state.size,
+                    region.size()
+                );
+            }
+
+            let offset = registered_offset_base
+                .checked_add(state.offset)
+                .with_context(|| {
+                    format!(
+                        "Restore memory overflow: {} + {}",
+                        registered_offset_base, state.offset
+                    )
+                })?;
+
             // SAFETY: the region comes from the machine RAM subregion list; its
             // host mapping stays alive for the VM's lifetime.
             if let Some(host_addr) = unsafe { region.get_host_address(AddressAttr::Ram) } {
-                uffd.register_region(host_addr, region.size(), registered_offset)
+                uffd.register_region(host_addr, region.size(), offset)
                     .with_context(|| {
                         format!(
                             "UFFD restore: register region '{}' host={:#x} size={:#x}",
