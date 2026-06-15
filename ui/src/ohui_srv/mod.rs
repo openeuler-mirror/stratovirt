@@ -410,6 +410,10 @@ impl DisplayChangeListenerOperations for OhUiServer {
             return Ok(());
         }
 
+        if x < 0 || y < 0 || w <= 0 || h <= 0 {
+            bail!("Invalid dirty area: x={}, y={}, w={}, h={}", x, y, w, h);
+        }
+
         let locked_surface = self.surface.read().unwrap();
         if locked_surface.guest_image.is_null() {
             return Ok(());
