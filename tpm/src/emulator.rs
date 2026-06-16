@@ -26,7 +26,7 @@ use vmm_sys_util::eventfd::EventFd;
 use crate::aio::{self, AioError, AsyncMsg, AsyncMsgHandle};
 use crate::socket::{self, SocketDev};
 use crate::{
-    CtrlCmdCode, Ptm, PtmCap, PtmEst, PtmGetState, PtmInit, PtmResetEst, PtmResult,
+    BackendError, CtrlCmdCode, Ptm, PtmCap, PtmEst, PtmGetState, PtmInit, PtmResetEst, PtmResult,
     PtmSetBufferSize, PtmSetLoc, TpmBackend, TpmMigration, PTM_BLOB_TYPE_PERMANENT,
     PTM_BLOB_TYPE_SAVESTATE, PTM_BLOB_TYPE_VOLATILE, PTM_INIT_FLAG_DELETE_VOLATILE,
     PTM_STATE_FLAG_DECRYPTED, TPM_SUCCESS, TPM_TIS_BUFFER_MAX,
@@ -112,11 +112,27 @@ impl From<io::Error> for EmulatorError {
     }
 }
 
-impl From<EmulatorError> for AioError {
-    fn from(val: EmulatorError) -> Self {
+/// Collapse the detailed emulator error into the backend-agnostic
+/// `BackendError` exposed across the `TpmBackend` trait boundary.
+impl From<EmulatorError> for BackendError {
+    fn from(e: EmulatorError) -> Self {
+        match e {
+            EmulatorError::Disconnected
+            | EmulatorError::ControlSocket(socket::Error::NotConnected) => {
+                BackendError::Disconnected
+            }
+            EmulatorError::UnsupportedCapability(cap) => BackendError::UnsupportedCapability(cap),
+            EmulatorError::TpmError(code) => BackendError::TpmError(code),
+            other => BackendError::Other(anyhow::Error::new(other)),
+        }
+    }
+}
+
+impl From<BackendError> for AioError {
+    fn from(val: BackendError) -> Self {
         match val {
-            EmulatorError::Disconnected => AioError::Disconnected,
-            _ => AioError::TpmError(format!("{:?}", val)),
+            BackendError::Disconnected => AioError::Disconnected,
+            other => AioError::TpmError(format!("{:?}", other)),
         }
     }
 }
@@ -383,46 +399,11 @@ impl Emulator {
 
         Ok(())
     }
-}
 
-impl AsyncMsgHandle for Emulator {
-    fn handle_async_request(&mut self, request: AsyncMsg) -> (aio::Result<()>, Vec<u8>) {
-        let AsyncMsg::Request {
-            mut cmd_buf,
-            cmd_len,
-            locty,
-        } = request;
-
-        if let Err(e) = self.set_locality(locty as u32) {
-            error!("TPM set locality failed: {:?}", e);
-            return (Err(e.into()), cmd_buf);
-        }
-
-        match self.process_request(&mut cmd_buf, cmd_len) {
-            Ok(_) => (Ok(()), cmd_buf),
-            Err(e) => (Err(e.into()), cmd_buf),
-        }
-    }
-
-    fn get_evt_fd(&self) -> Arc<EventFd> {
-        self.evt_fd.clone()
-    }
-
-    fn get_data_fd(&self) -> Option<RawFd> {
-        self.data_stream.as_raw_fd()
-    }
-}
-
-impl TpmBackend for Emulator {
-    type E = EmulatorError;
-
-    /// Create Emulator Instance
+    /// Connect to the swtpm control socket and negotiate capabilities.
     ///
-    /// # Arguments
-    ///
-    /// * `path` - A path to the Unix Domain Socket swtpm is listening on
-    ///
-    fn new(path: impl AsRef<Path>) -> Result<Self> {
+    /// `path` is the Unix Domain Socket swtpm is listening on.
+    fn connect(path: impl AsRef<Path>) -> Result<Self> {
         let (cli_stream, srv_stream) = UnixStream::pair()?;
 
         let mut emulator = Self {
@@ -442,27 +423,9 @@ impl TpmBackend for Emulator {
         Ok(emulator)
     }
 
-    fn startup_tpm(&mut self, buffersize: usize, is_resume: bool) -> Result<()> {
-        let mut init: PtmInit = PtmInit::default();
-
-        if buffersize != 0 {
-            self.set_buffer_size(buffersize)?;
-        }
-
-        if is_resume {
-            init.init_flags |= PTM_INIT_FLAG_DELETE_VOLATILE;
-        }
-
-        self.run_control_cmd(&mut init, CtrlCmdCode::Init, None)
-    }
-
-    fn shutdown_tpm(&mut self) -> Result<()> {
-        let mut res: PtmResult = 0;
-
-        self.run_control_cmd(&mut res, CtrlCmdCode::Shutdown, None)
-    }
-
-    fn process_request(&mut self, cmd_buf: &mut [u8], cmd_len: usize) -> Result<usize> {
+    /// Send a command over the data channel and read the response back into
+    /// `cmd_buf`, returning the total response size.
+    fn run_data_cmd(&mut self, cmd_buf: &mut [u8], cmd_len: usize) -> Result<usize> {
         let is_selftest_cmd = is_selftest(cmd_buf);
 
         self.data_stream.write_all(&cmd_buf[..cmd_len])?;
@@ -493,18 +456,87 @@ impl TpmBackend for Emulator {
 
         Ok(total_size)
     }
+}
 
-    fn cancel_cmd(&mut self) -> Result<()> {
+impl AsyncMsgHandle for Emulator {
+    fn handle_async_request(&mut self, request: AsyncMsg) -> (aio::Result<()>, Vec<u8>) {
+        let AsyncMsg::Request {
+            mut cmd_buf,
+            cmd_len,
+            locty,
+        } = request;
+
+        if let Err(e) = self.set_locality(locty as u32) {
+            error!("TPM set locality failed: {:?}", e);
+            return (Err(BackendError::from(e).into()), cmd_buf);
+        }
+
+        match self.process_request(&mut cmd_buf, cmd_len) {
+            Ok(_) => (Ok(()), cmd_buf),
+            Err(e) => (Err(e.into()), cmd_buf),
+        }
+    }
+
+    fn get_evt_fd(&self) -> Arc<EventFd> {
+        self.evt_fd.clone()
+    }
+
+    fn get_data_fd(&self) -> Option<RawFd> {
+        self.data_stream.as_raw_fd()
+    }
+}
+
+impl TpmBackend for Emulator {
+    fn new(path: impl AsRef<Path>) -> anyhow::Result<Self, BackendError> {
+        Ok(Self::connect(path)?)
+    }
+
+    fn startup_tpm(
+        &mut self,
+        buffersize: usize,
+        is_resume: bool,
+    ) -> anyhow::Result<(), BackendError> {
+        let mut init: PtmInit = PtmInit::default();
+
+        if buffersize != 0 {
+            self.set_buffer_size(buffersize)?;
+        }
+
+        if is_resume {
+            init.init_flags |= PTM_INIT_FLAG_DELETE_VOLATILE;
+        }
+
+        self.run_control_cmd(&mut init, CtrlCmdCode::Init, None)?;
+        Ok(())
+    }
+
+    fn shutdown_tpm(&mut self) -> anyhow::Result<(), BackendError> {
+        let mut res: PtmResult = 0;
+
+        self.run_control_cmd(&mut res, CtrlCmdCode::Shutdown, None)?;
+        Ok(())
+    }
+
+    fn process_request(
+        &mut self,
+        cmd_buf: &mut [u8],
+        cmd_len: usize,
+    ) -> anyhow::Result<usize, BackendError> {
+        Ok(self.run_data_cmd(cmd_buf, cmd_len)?)
+    }
+
+    fn cancel_cmd(&mut self) -> anyhow::Result<(), BackendError> {
         // Check if emulator implements Cancel command
         if (self.caps & PTM_CAP_CANCEL_TPM_CMD) != PTM_CAP_CANCEL_TPM_CMD {
-            return Err(EmulatorError::UnsupportedCapability("Cancel TPM Command"));
+            return Err(BackendError::UnsupportedCapability("Cancel TPM Command"));
         }
 
         let mut res: PtmResult = 0;
-        self.run_control_cmd(&mut res, CtrlCmdCode::CancelTpmCmd, None)
+        self.run_control_cmd(&mut res, CtrlCmdCode::CancelTpmCmd, None)?;
+        Ok(())
     }
 
-    fn get_established_flag(&mut self) -> Result<bool> {
+    fn get_established_flag(&mut self) -> anyhow::Result<bool, BackendError> {
         let mut est: PtmEst = PtmEst::default();
 
         if self.established_flag_cached {
@@ -513,7 +545,7 @@ impl TpmBackend for Emulator {
 
         if let Err(e) = self.run_control_cmd(&mut est, CtrlCmdCode::GetTpmEstablished, None) {
             error!("Failed to run CmdGetTpmEstablished control command. Error: {e:?}");
-            return Err(e);
+            return Err(e.into());
         }
 
         self.established_flag_cached = true;
@@ -522,7 +554,7 @@ impl TpmBackend for Emulator {
         Ok(self.established_flag)
     }
 
-    fn reset_established_flag(&mut self, loc: u8) -> Result<()> {
+    fn reset_established_flag(&mut self, loc: u8) -> anyhow::Result<(), BackendError> {
         if self.cur_loc != loc as u32 {
             warn!(
                 "Reset established flag with another locality: {} current locality: {}",
@@ -533,7 +565,8 @@ impl TpmBackend for Emulator {
             loc: loc as u32,
             ..Default::default()
         };
-        self.run_control_cmd(&mut pre, CtrlCmdCode::ResetTpmEstablished, None)
+        self.run_control_cmd(&mut pre, CtrlCmdCode::ResetTpmEstablished, None)?;
+        Ok(())
     }
 }
 
