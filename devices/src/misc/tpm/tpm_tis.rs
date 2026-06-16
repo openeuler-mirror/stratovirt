@@ -48,8 +48,8 @@ use tpm::{
         self, deliver_request, register_async_ctrl_notifier, unregister_async_ctrl_notifier,
         AioError, AsyncMsg, OnComplete,
     },
-    emulator::{Emulator, EmulatorError, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET, TPM_RSP_RC_OFFSET},
-    TpmBackend, TpmMigration, TPM_TIS_BUFFER_MAX,
+    emulator::{Emulator, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET, TPM_RSP_RC_OFFSET},
+    BackendError, TpmBackend, TpmMigration, TPM_TIS_BUFFER_MAX,
 };
 use util::gen_base_func;
 
@@ -447,7 +447,7 @@ impl TpmTis {
         })
     }
 
-    fn prep_abort(&mut self, locty: u8, newlocty: u8) -> Result<(), EmulatorError> {
+    fn prep_abort(&mut self, locty: u8, newlocty: u8) -> Result<(), BackendError> {
         if newlocty >= TPM_TIS_NUM_LOCALITIES as u8 {
             warn!("prep_abort called with invalid newlocty: {}", newlocty);
             return Ok(());
@@ -509,7 +509,7 @@ impl TpmTis {
         ret
     }
 
-    fn get_established_flag(&mut self) -> Result<bool, EmulatorError> {
+    fn get_established_flag(&mut self) -> Result<bool, BackendError> {
         self.emulator.lock().unwrap().get_established_flag()
     }
 
@@ -541,11 +541,7 @@ impl TpmTis {
             .unwrap()
             .startup_tpm(self.backend_buff_size, false)
         {
-            if matches!(
-                e,
-                EmulatorError::Disconnected
-                    | EmulatorError::ControlSocket(tpm::socket::Error::NotConnected)
-            ) {
+            if matches!(e, BackendError::Disconnected) {
                 warn!("TpmTis device reset while in disconnected state");
                 return Ok(());
             }
@@ -670,8 +666,7 @@ impl SysBusDevOps for TpmTis {
                         }
                         Err(e) => {
                             error!("FATAL: Failed to read TPM established flag: {:?}", e);
-                            if matches!(e, EmulatorError::Disconnected)
-                                && !self.backend_disconnected
+                            if matches!(e, BackendError::Disconnected) && !self.backend_disconnected
                             {
                                 self.backend_disconnected = true;
 
@@ -811,7 +806,7 @@ impl SysBusDevOps for TpmTis {
                         }
                         if newlocty < TPM_TIS_NUM_LOCALITIES as u8 {
                             set_new_locty = false;
-                            if let Err(EmulatorError::Disconnected) =
+                            if let Err(BackendError::Disconnected) =
                                 self.prep_abort(locty_u8, newlocty)
                             {
                                 if !self.backend_disconnected {
@@ -856,7 +851,7 @@ impl SysBusDevOps for TpmTis {
                             self.loc[locty_usize].access |= TPM_TIS_ACCESS_SEIZE;
                             set_new_locty = false;
 
-                            if let Err(EmulatorError::Disconnected) =
+                            if let Err(BackendError::Disconnected) =
                                 self.prep_abort(self.active_locty, locty_u8)
                             {
                                 if !self.backend_disconnected {
@@ -921,7 +916,7 @@ impl SysBusDevOps for TpmTis {
                     && self.loc[locty_usize].state == TpmTisState::Execution
                 {
                     if let Err(e) = self.emulator.lock().unwrap().cancel_cmd() {
-                        if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+                        if matches!(e, BackendError::Disconnected) && !self.backend_disconnected {
                             self.backend_disconnected = true;
 
                             let disconnected_msg = VmNotifyEvent {
@@ -944,7 +939,7 @@ impl SysBusDevOps for TpmTis {
                         .unwrap()
                         .reset_established_flag(locty_u8)
                     {
-                        if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+                        if matches!(e, BackendError::Disconnected) && !self.backend_disconnected {
                             self.backend_disconnected = true;
 
                             let disconnected_msg = VmNotifyEvent {
@@ -973,7 +968,7 @@ impl SysBusDevOps for TpmTis {
                             self.raise_irq(locty_u8, TPM_TIS_INT_COMMAND_READY);
                         }
                         TpmTisState::Execution | TpmTisState::Reception => {
-                            if let Err(EmulatorError::Disconnected) =
+                            if let Err(BackendError::Disconnected) =
                                 self.prep_abort(locty_u8, locty_u8)
                             {
                                 if !self.backend_disconnected {

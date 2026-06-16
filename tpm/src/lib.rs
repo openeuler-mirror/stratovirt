@@ -38,28 +38,52 @@ pub trait TpmMigration {
     fn set_state(&mut self, state: Vec<u8>) -> anyhow::Result<()>;
 }
 
-pub trait TpmBackend: aio::AsyncMsgHandle + TpmMigration {
-    type E;
+/// Unified error type exposed by every `TpmBackend` implementation
+/// (e.g. the swtpm `Emulator`, or a future passthrough backend).
+///
+/// Backends keep their own detailed, implementation-specific error type
+/// internally and convert into `BackendError` at the trait boundary, so the
+/// frontend devices only have to reason about backend-agnostic failures.
+#[derive(Error, Debug)]
+pub enum BackendError {
+    /// The backend connection has been lost.
+    #[error("TPM backend disconnected")]
+    Disconnected,
+    /// The backend does not implement a required capability.
+    #[error("TPM backend does not support capability: {0}")]
+    UnsupportedCapability(&'static str),
+    /// The TPM returned a non-success result code.
+    #[error("TPM command failed with code: {0:#x}")]
+    TpmError(u32),
+    /// Any other implementation-specific failure.
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
-    fn new(path: impl AsRef<Path>) -> anyhow::Result<Self, Self::E>
+pub trait TpmBackend: aio::AsyncMsgHandle + TpmMigration {
+    fn new(path: impl AsRef<Path>) -> anyhow::Result<Self, BackendError>
     where
         Self: Sized;
 
-    fn startup_tpm(&mut self, buffersize: usize, is_resume: bool) -> anyhow::Result<(), Self::E>;
+    fn startup_tpm(
+        &mut self,
+        buffersize: usize,
+        is_resume: bool,
+    ) -> anyhow::Result<(), BackendError>;
 
-    fn shutdown_tpm(&mut self) -> anyhow::Result<(), Self::E>;
+    fn shutdown_tpm(&mut self) -> anyhow::Result<(), BackendError>;
 
     fn process_request(
         &mut self,
         cmd_buf: &mut [u8],
         cmd_len: usize,
-    ) -> anyhow::Result<usize, Self::E>;
+    ) -> anyhow::Result<usize, BackendError>;
 
-    fn cancel_cmd(&mut self) -> anyhow::Result<(), Self::E>;
+    fn cancel_cmd(&mut self) -> anyhow::Result<(), BackendError>;
 
-    fn get_established_flag(&mut self) -> anyhow::Result<bool, Self::E>;
+    fn get_established_flag(&mut self) -> anyhow::Result<bool, BackendError>;
 
-    fn reset_established_flag(&mut self, loc: u8) -> anyhow::Result<(), Self::E>;
+    fn reset_established_flag(&mut self, loc: u8) -> anyhow::Result<(), BackendError>;
 }
 
 /*
