@@ -17,6 +17,16 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::UtilError;
 
+/// Set one bit in a dense `Vec<u64>` bitmap, growing the vector as needed.
+pub fn set_dense_bitmap_bit(bitmap: &mut Vec<u64>, bit: u64) -> Result<()> {
+    let word_index = usize::try_from(bit / 64).with_context(|| "bitmap index overflow")?;
+    if bitmap.len() <= word_index {
+        bitmap.resize(word_index + 1, 0);
+    }
+    bitmap[word_index] |= 1_u64 << (bit % 64);
+    Ok(())
+}
+
 /// This struct is used to offer bitmap.
 pub struct Bitmap<T: BitOps> {
     /// The data to restore bit information.
@@ -429,7 +439,7 @@ bitops!(u64);
 
 #[cfg(test)]
 mod tests {
-    use super::Bitmap;
+    use super::{set_dense_bitmap_bit, Bitmap};
 
     #[test]
     fn test_bitmap_basic() {
@@ -442,6 +452,17 @@ mod tests {
         assert!(bitmap.change(15).is_ok());
         assert!(bitmap.change(16).is_err());
         assert!(!bitmap.contain(15).unwrap());
+    }
+
+    #[test]
+    fn test_set_dense_bitmap_bit_grows_vec() {
+        let mut bitmap = Vec::new();
+
+        set_dense_bitmap_bit(&mut bitmap, 0).unwrap();
+        set_dense_bitmap_bit(&mut bitmap, 63).unwrap();
+        set_dense_bitmap_bit(&mut bitmap, 64).unwrap();
+
+        assert_eq!(bitmap, vec![1_u64 | (1_u64 << 63), 1_u64]);
     }
 
     #[test]

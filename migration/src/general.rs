@@ -44,7 +44,9 @@ impl MigrationManager {
             header.format = format;
             header.desc_len = match format {
                 FileFormat::Device => Self::desc_db_len()?,
-                FileFormat::MemoryFull => (host_page_size() as usize) * 2 - HEADER_LENGTH,
+                FileFormat::MemoryFull | FileFormat::MemoryExternal => {
+                    (host_page_size() as usize) * 2 - HEADER_LENGTH
+                }
             };
         } else {
             header.desc_len = Self::desc_db_len()?;

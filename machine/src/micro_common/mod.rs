@@ -57,7 +57,7 @@ use machine_manager::config::get_chardev_socket_path;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::Param;
 use machine_manager::config::{
-    parse_incoming_uri, parse_size, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
+    parse_migrate_uri, parse_size, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
     NetDevcfg, NetworkInterfaceConfig, VmConfig,
 };
 use machine_manager::machine::{
@@ -764,6 +764,59 @@ impl DeviceInterface for LightMachine {
         Response::create_empty_response()
     }
 
+    fn query_mem_mappings(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_mappings(self.get_vm_ram()) {
+            Ok(mappings) => {
+                Response::create_response(serde_json::to_value(mappings).unwrap(), None)
+            }
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_page_state(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_page_state(self.get_vm_ram()) {
+            Ok(state) => Response::create_response(serde_json::to_value(state).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_dirty_bitmap(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match address_space::uffd::query_and_reset_dirty_bitmap() {
+            Ok(bitmap) => Response::create_response(serde_json::to_value(bitmap).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
     /// VNC is not supported by light machine currently.
     fn query_vnc(&self) -> Response {
         Response::create_error_response(
@@ -1151,9 +1204,9 @@ impl DeviceInterface for LightMachine {
 
 impl MigrateInterface for LightMachine {
     fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
+        match parse_migrate_uri(&uri) {
             Ok(incoming) => match incoming.mode {
-                MigrateMode::File => migration::snapshot(incoming.uri),
+                MigrateMode::File => migration::snapshot(incoming.uri, incoming.memory),
                 MigrateMode::Unix | MigrateMode::Tcp => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(
                         "MicroVM does not support migration".to_string(),

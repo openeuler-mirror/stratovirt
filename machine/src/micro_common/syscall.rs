@@ -41,8 +41,10 @@ const TIOCGWINSZ: u32 = 0x5413;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
-const UFFDIO_API: u32 = 0xc018aa3f;
-const UFFDIO_REGISTER: u32 = 0xc020aa00;
+// userfaultfd ioctl numbers used only by the seccomp allowlist.
+const UFFDIO_API_IOCTL: u32 = 0xc018aa3f;
+const UFFDIO_REGISTER_IOCTL: u32 = 0xc020aa00;
+const UFFDIO_WRITEPROTECT_IOCTL: u32 = 0xc018aa06;
 
 /// Create a syscall whitelist for seccomp.
 ///
@@ -67,6 +69,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_eventfd2),
         BpfRule::new(libc::SYS_epoll_ctl),
         BpfRule::new(libc::SYS_fdatasync),
+        BpfRule::new(libc::SYS_fsync),
         BpfRule::new(libc::SYS_recvmsg),
         BpfRule::new(libc::SYS_sendmsg),
         BpfRule::new(libc::SYS_sendto),
@@ -109,6 +112,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_fallocate),
         BpfRule::new(libc::SYS_socket),
         BpfRule::new(libc::SYS_mprotect),
+        BpfRule::new(libc::SYS_userfaultfd),
         BpfRule::new(libc::SYS_ppoll),
         BpfRule::new(libc::SYS_connect),
         #[cfg(target_env = "gnu")]
@@ -173,8 +177,9 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_API)
-        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_REGISTER);
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_API_IOCTL)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_REGISTER_IOCTL)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_WRITEPROTECT_IOCTL);
     arch_ioctl_allow_list(bpf_rule)
 }
 

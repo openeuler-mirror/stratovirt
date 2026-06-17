@@ -104,6 +104,9 @@ define_qmp_command_enum!(
     get_viomem("get-viomem", Box<get_viomem>),
     query_mem("query-mem", query_mem, default),
     query_mem_gpa("query-mem-gpa", query_mem_gpa, default),
+    query_mem_mappings("query-mem-mappings", query_mem_mappings, default),
+    query_mem_page_state("query-mem-page-state", query_mem_page_state, default),
+    query_mem_dirty_bitmap("query-mem-dirty-bitmap", query_mem_dirty_bitmap, default),
     query_balloon("query-balloon", query_balloon, default),
     query_vnc("query-vnc", query_vnc, default),
     query_display_image("query-display-image", query_display_image, default),
@@ -1878,6 +1881,69 @@ pub struct SnapshotInfo {
 pub struct query_mem {}
 generate_command_impl!(query_mem, Empty);
 
+/// query-mem-mappings
+///
+/// Query privileged host RAM mappings for external snapshot memory export.
+/// The VM must be paused. `offset` is the byte offset of each RAM region in
+/// the flat external guest RAM image, and `base-host-virt-addr` is an HVA that
+/// is only meaningful to the local management process.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem_mappings {}
+generate_command_impl!(query_mem_mappings, MemMappings);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemMappings {
+    pub mappings: Vec<MemMapping>,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemMapping {
+    #[serde(rename = "base-host-virt-addr")]
+    pub base_host_virt_addr: u64,
+    pub size: u64,
+    pub offset: u64,
+    #[serde(rename = "page-size")]
+    pub page_size: u64,
+}
+
+/// query-mem-page-state
+///
+/// Query resident and zero-page bitmaps for cold external memory export. The
+/// VM must be paused. `resident` includes pages present in RAM or swapped out;
+/// swapped pages are read back in before zero-page classification. Bitmap bits
+/// are indexed by the same flat guest RAM order returned by `query-mem-mappings`.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem_page_state {}
+generate_command_impl!(query_mem_page_state, MemPageState);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemPageState {
+    pub resident: Vec<u64>,
+    pub empty: Vec<u64>,
+    #[serde(rename = "page-size")]
+    pub page_size: u64,
+}
+
+/// query-mem-dirty-bitmap
+///
+/// Query dirty pages after UFFD restore and reset dirty tracking. The VM must
+/// be paused. The returned bitmap covers writes observed since the previous
+/// query/reset point; after the response is built, UFFD-WP is re-enabled for
+/// all registered RAM mappings.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem_dirty_bitmap {}
+generate_command_impl!(query_mem_dirty_bitmap, MemDirtyBitmap);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemDirtyBitmap {
+    pub bitmap: Vec<u64>,
+    #[serde(rename = "page-size")]
+    pub page_size: u64,
+}
+
 /// query-vcpu-reg
 ///
 /// Query vcpu register value.
@@ -2294,6 +2360,8 @@ pub const PVPANIC_TYPE: u32 = 3;
 
 #[cfg(test)]
 mod tests {
+    use strum::VariantNames;
+
     use super::*;
 
     #[test]
@@ -2753,6 +2821,58 @@ mod tests {
         };
         let part_msg = r#"ok"#;
         assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_snapshot_memory_commands() {
+        let json_msgs = [
+            r#"
+            {
+                "execute": "query-mem-mappings"
+            }
+            "#,
+            r#"
+            {
+                "execute": "query-mem-page-state"
+            }
+            "#,
+            r#"
+            {
+                "execute": "query-mem-dirty-bitmap"
+            }
+            "#,
+        ];
+
+        for json_msg in json_msgs {
+            let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+                Ok(_) => "ok".to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert_eq!(err_msg, "ok");
+        }
+    }
+
+    #[test]
+    fn test_qmp_snapshot_memory_commands_are_queryable() {
+        let command_names = QmpCommand::VARIANTS;
+        for name in [
+            "query-mem-mappings",
+            "query-mem-page-state",
+            "query-mem-dirty-bitmap",
+        ] {
+            assert!(command_names.contains(&name), "missing QMP command {name}");
+        }
+    }
+
+    #[test]
+    fn test_snapshot_debug_commands_are_not_public_qmp() {
+        let command_names = QmpCommand::VARIANTS;
+        for name in ["vmstate-save", "vmstate-load", "blockdev-drain"] {
+            assert!(
+                !command_names.contains(&name),
+                "debug command {name} should not be public QMP"
+            );
+        }
     }
 
     #[test]

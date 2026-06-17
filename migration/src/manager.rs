@@ -28,7 +28,7 @@ use crate::protocol::{
 };
 use crate::snapshot::RestoreMode;
 use crate::MigrateOps;
-use machine_manager::config::VmConfig;
+use machine_manager::config::{SnapshotMemoryMode, VmConfig};
 use machine_manager::machine::MachineLifecycle;
 use util::byte_code::ByteCode;
 
@@ -106,7 +106,7 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * _file - The file object object to save memory data.
-    fn save_memory(&self, _file: &mut File) -> Result<()> {
+    fn save_memory(&self, _file: &mut File, _memory: SnapshotMemoryMode) -> Result<()> {
         Ok(())
     }
 

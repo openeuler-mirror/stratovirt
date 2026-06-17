@@ -18,7 +18,6 @@ pub mod standard_common;
 pub mod x86_64;
 
 mod micro_common;
-
 pub use crate::error::MachineError;
 pub use micro_common::LightMachine;
 pub use standard_common::StdMachine;
@@ -28,14 +27,10 @@ use std::fs::{remove_file, File};
 use std::net::TcpListener;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
-#[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
-use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
-#[cfg(feature = "windows_emu_pid")]
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
@@ -47,7 +42,7 @@ use vmm_sys_util::eventfd::EventFd;
 use address_space::FileBackend;
 use address_space::{
     create_backend_mem, create_default_mem, register_ram_list, AddressAttr, AddressSpace,
-    AliasRegionState, GuestAddress, RamRegionState, Region, DEFAULT_RAM_REGION_NAME,
+    AliasRegionState, GuestAddress, RamRegionState, Region, RegionType, DEFAULT_RAM_REGION_NAME,
 };
 #[cfg(target_arch = "aarch64")]
 use address_space::{register_ram_region, HostMemMapping};
@@ -147,6 +142,10 @@ use util::loop_context::{
     gen_delete_notifiers, EventNotifier, NotifierCallback, NotifierOperation,
 };
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
+use util::{
+    bitmap::set_dense_bitmap_bit,
+    unix::{host_page_size, PagemapBatchReader},
+};
 #[cfg(feature = "vfio_device")]
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
 #[cfg(feature = "vhostuser_fs")]
@@ -507,6 +506,103 @@ pub(crate) fn apply_mmds_to_net_dev(dev: &mut virtio::Net, store: Option<Arc<Mut
             *dev.mmds_tcp_stack.lock().unwrap() = None;
         }
     }
+}
+
+fn sorted_ram_regions(machine_ram: &Region) -> Vec<Region> {
+    let mut ram_regions: Vec<Region> = machine_ram
+        .subregions()
+        .into_iter()
+        .filter(|region| region.region_type() == RegionType::Ram)
+        .collect();
+    ram_regions.sort_by_key(|region| region.offset().raw_value());
+    ram_regions
+}
+
+fn region_page_size(region: &Region) -> u64 {
+    region
+        .get_region_page_size()
+        .filter(|size| *size != 0)
+        .unwrap_or_else(host_page_size)
+}
+
+pub(crate) fn build_mem_mappings(machine_ram: &Region) -> Result<qmp_schema::MemMappings> {
+    let ram_regions = sorted_ram_regions(machine_ram);
+    let mut next_offset = 0_u64;
+    let mut mappings = Vec::with_capacity(ram_regions.len());
+    for region in ram_regions {
+        // SAFETY: Machine RAM regions own valid host mappings for their whole region size.
+        let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
+            .with_context(|| format!("RAM region {} has no host address", region.name))?;
+        let size = region.size();
+        let page_size = region_page_size(&region);
+
+        mappings.push(qmp_schema::MemMapping {
+            base_host_virt_addr,
+            size,
+            offset: next_offset,
+            page_size,
+        });
+        next_offset = next_offset
+            .checked_add(size)
+            .with_context(|| "RAM mapping offset overflow")?;
+    }
+
+    Ok(qmp_schema::MemMappings { mappings })
+}
+
+pub(crate) fn build_mem_page_state(machine_ram: &Region) -> Result<qmp_schema::MemPageState> {
+    let ram_regions = sorted_ram_regions(machine_ram);
+    let page_size = host_page_size();
+    let mut pagemap = PagemapBatchReader::new()?;
+
+    let mut page_base = 0_u64;
+    let mut resident = Vec::new();
+    let mut empty = Vec::new();
+    for region in ram_regions {
+        let size = region.size();
+        let page_count = size.div_ceil(page_size);
+        let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
+            .with_context(|| format!("RAM region {} has no host address", region.name))?;
+
+        pagemap.scan_range(base_host_virt_addr, size, page_size, |page_index, entry| {
+            if !entry.is_resident() {
+                return Ok(());
+            }
+            let bitmap_index = page_base
+                .checked_add(page_index)
+                .with_context(|| "resident bitmap index overflow")?;
+            set_dense_bitmap_bit(&mut resident, bitmap_index)?;
+
+            let page_offset = page_index
+                .checked_mul(page_size)
+                .with_context(|| "page offset overflow")?;
+            let bytes_left = size - page_offset;
+            let cmp_len = std::cmp::min(page_size, bytes_left);
+            let cmp_len_usize =
+                usize::try_from(cmp_len).with_context(|| "page comparison length overflow")?;
+            // SAFETY: page_offset and cmp_len are bounded by this RAM region's size.
+            let page = unsafe {
+                std::slice::from_raw_parts(
+                    (base_host_virt_addr + page_offset) as *const u8,
+                    cmp_len_usize,
+                )
+            };
+            if page.iter().all(|byte| *byte == 0) {
+                set_dense_bitmap_bit(&mut empty, bitmap_index)?;
+            }
+            Ok(())
+        })?;
+
+        page_base = page_base
+            .checked_add(page_count)
+            .with_context(|| "page-state bitmap index overflow")?;
+    }
+
+    Ok(qmp_schema::MemPageState {
+        resident,
+        empty,
+        page_size,
+    })
 }
 
 pub trait MachineOps: MachineLifecycle {
@@ -3166,6 +3262,7 @@ fn start_incoming_migration(
             let restore_mode = if let Some(uffd_sock) = migrate_info.uffd_sock.as_ref() {
                 RestoreMode::Uffd {
                     socket_path: uffd_sock.clone(),
+                    memory: migrate_info.memory,
                 }
             } else if migrate_info.mapped {
                 RestoreMode::Mapped
@@ -3357,4 +3454,88 @@ pub fn type_init() -> Result<()> {
     devices_register_pcidevops_type()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use address_space::{GuestAddress, HostMemMapping, Region};
+
+    use super::*;
+
+    #[test]
+    fn test_build_mem_mappings_sorts_regions_and_assigns_contiguous_offsets() {
+        let root = Region::init_container_region(0x4000, "root");
+        let high = Arc::new(
+            HostMemMapping::new(
+                GuestAddress(0x2000),
+                None,
+                0x1000,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
+        );
+        let low = Arc::new(
+            HostMemMapping::new(GuestAddress(0), None, 0x2000, None, false, false, false).unwrap(),
+        );
+
+        root.add_subregion_not_update(Region::init_ram_region(high.clone(), "high"), 0x2000)
+            .unwrap();
+        root.add_subregion_not_update(Region::init_ram_region(low.clone(), "low"), 0)
+            .unwrap();
+
+        let mappings = build_mem_mappings(&root).unwrap();
+
+        assert_eq!(mappings.mappings.len(), 2);
+        assert_eq!(mappings.mappings[0].base_host_virt_addr, low.host_address());
+        assert_eq!(mappings.mappings[0].size, 0x2000);
+        assert_eq!(mappings.mappings[0].offset, 0);
+        assert_eq!(
+            mappings.mappings[1].base_host_virt_addr,
+            high.host_address()
+        );
+        assert_eq!(mappings.mappings[1].size, 0x1000);
+        assert_eq!(mappings.mappings[1].offset, 0x2000);
+    }
+
+    #[test]
+    fn test_build_mem_page_state_reports_resident_and_empty_pages() {
+        let page_size = host_page_size();
+        let root = Region::init_container_region(page_size * 3, "root");
+        let mem = Arc::new(
+            HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                page_size * 3,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
+        );
+        let host_addr = mem.host_address();
+        // SAFETY: The mapping is valid for page_size * 3 bytes.
+        let first_page =
+            unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, page_size as usize) };
+        first_page[0] = 1;
+        // SAFETY: The second page is valid and this write makes it resident while keeping it zero.
+        let second_page = unsafe {
+            std::slice::from_raw_parts_mut((host_addr + page_size) as *mut u8, page_size as usize)
+        };
+        second_page[0] = 0;
+
+        root.add_subregion_not_update(Region::init_ram_region(mem, "mem"), 0)
+            .unwrap();
+
+        let state = build_mem_page_state(&root).unwrap();
+
+        assert_eq!(state.page_size, page_size);
+        assert_eq!(state.resident, vec![0b11]);
+        assert_eq!(state.empty, vec![0b10]);
+    }
 }
