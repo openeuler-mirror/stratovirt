@@ -27,10 +27,14 @@ use std::fs::{remove_file, File};
 use std::net::TcpListener;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
+#[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
+#[cfg(feature = "windows_emu_pid")]
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
