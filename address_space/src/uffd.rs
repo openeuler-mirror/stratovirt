@@ -281,7 +281,7 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
         let ret = unsafe {
             libc::ioctl(
                 backend.uffd_fd,
-                UFFDIO_WRITEPROTECT as libc::c_ulong,
+                UFFDIO_WRITEPROTECT as _,
                 &mut wp as *mut UffdioWriteProtect,
             )
         };
