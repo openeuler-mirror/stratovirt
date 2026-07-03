@@ -565,6 +565,9 @@ pub(crate) fn build_mem_page_state(machine_ram: &Region) -> Result<qmp_schema::M
     for region in ram_regions {
         let size = region.size();
         let page_count = size.div_ceil(page_size);
+        // SAFETY: `sorted_ram_regions()` only returns RAM regions from the
+        // address space. The returned host address is validated below before
+        // being passed to pagemap scanning.
         let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
             .with_context(|| format!("RAM region {} has no host address", region.name))?;
 
