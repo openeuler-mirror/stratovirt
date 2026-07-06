@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::{ptr, vec};
 
@@ -41,7 +41,8 @@ use address_space::{AddressSpace, FileBackend, GuestAddress};
 use machine_manager::config::{get_pci_df, valid_id, DEFAULT_VIRTQUEUE_SIZE};
 use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
 use migration::{
-    DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer, MAX_LARGE_DEVICE_STATE_SIZE,
+    DeviceStateDesc, MigrationHook, MigrationManager, MigrationStatus, StateTransfer,
+    MAX_LARGE_DEVICE_STATE_SIZE,
 };
 use migration_derive::{ByteCode, DescSerde};
 use serde::{Deserialize, Serialize};
@@ -55,7 +56,9 @@ use ui::pixman::{
     create_pixman_image, get_image_data, get_image_format, get_image_height, get_image_stride,
     get_image_width, ref_pixman_image, unref_pixman_image,
 };
-use util::aio::{iov_from_buf_direct, iov_to_buf_direct, Iovec};
+use util::aio::{
+    iov_from_buf_direct, iov_to_buf_direct, wait_io_done, IoRef, Iovec, DEFAULT_IO_TIMEOUT,
+};
 use util::byte_code::ByteCode;
 use util::edid::EdidInfo;
 use util::gen_base_func;
@@ -709,6 +712,10 @@ struct GpuIoHandler {
     driver_features: u64,
     /// Runtime resources shared with the device owner for vmstate.
     runtime: Arc<Mutex<GpuRuntimeState>>,
+    /// Whether the device is entering migration snapshot.
+    migrating: Arc<AtomicBool>,
+    /// Indicate if GPU queue handling is inflight.
+    io_inflight: IoRef,
     /// The number of scanouts
     num_scanouts: u32,
     /// States of all output_states.
@@ -1728,6 +1735,10 @@ impl GpuIoHandler {
         let mut req_queue = Vec::new();
 
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let mut elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -1760,6 +1771,10 @@ impl GpuIoHandler {
         let mut queue = cursor_queue.lock().unwrap();
 
         loop {
+            if self.migrating.load(Ordering::SeqCst) {
+                break;
+            }
+
             let mut elem = queue
                 .vring
                 .pop_avail(&self.mem_space, self.driver_features)?;
@@ -1806,7 +1821,9 @@ impl EventNotifierHelper for GpuIoHandler {
         let handler_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(e) = handler_clone.lock().unwrap().ctrl_queue_evt_handler() {
+            let mut locked_handler = handler_clone.lock().unwrap();
+            let _inflight = locked_handler.io_inflight.inc_ref();
+            if let Err(e) = locked_handler.ctrl_queue_evt_handler() {
                 error!("Failed to process ctrlq for virtio gpu, err: {:?}", e);
             }
             None
@@ -1823,7 +1840,9 @@ impl EventNotifierHelper for GpuIoHandler {
         let handler_clone = handler.clone();
         let h: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {
             read_fd(fd);
-            if let Err(e) = handler_clone.lock().unwrap().cursor_queue_evt_handler() {
+            let mut locked_handler = handler_clone.lock().unwrap();
+            let _inflight = locked_handler.io_inflight.inc_ref();
+            if let Err(e) = locked_handler.cursor_queue_evt_handler() {
                 error!("Failed to process cursorq for virtio gpu, err: {:?}", e);
             }
             None
@@ -1864,6 +1883,12 @@ pub struct Gpu {
     mem_space: Arc<AddressSpace>,
     /// Runtime resources shared with the IO handler.
     runtime: Arc<Mutex<GpuRuntimeState>>,
+    /// Whether the device is entering migration snapshot.
+    migrating: Arc<AtomicBool>,
+    /// Indicate if GPU queue handling is inflight.
+    io_inflight: IoRef,
+    /// The queue notify events for handling GPU requests.
+    queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
     /// bar0 file backend which is set by ohui server
     bar0_fb: Option<FileBackend>,
 }
@@ -1887,6 +1912,9 @@ impl Gpu {
             consoles: Vec::new(),
             mem_space,
             runtime: Arc::new(Mutex::new(GpuRuntimeState::default())),
+            migrating: Arc::new(AtomicBool::new(false)),
+            io_inflight: IoRef::default(),
+            queue_evts: Arc::new(Mutex::new(Vec::new())),
             bar0_fb: None,
         }
     }
@@ -2394,6 +2422,7 @@ impl VirtioDevice for Gpu {
             let con_ref = con.as_ref().unwrap().upgrade().unwrap();
             con_ref.lock().unwrap().dev_opts = gpu_opts.clone();
         }
+        *self.queue_evts.lock().unwrap() = queue_evts.clone();
 
         let handler = GpuIoHandler {
             ctrl_queue: queues[0].clone(),
@@ -2404,6 +2433,8 @@ impl VirtioDevice for Gpu {
             interrupt_cb,
             driver_features: self.base.driver_features,
             runtime: self.runtime.clone(),
+            migrating: self.migrating.clone(),
+            io_inflight: self.io_inflight.clone(),
             num_scanouts: self.cfg.max_outputs,
             output_states: self.output_states.clone(),
             max_hostmem: self.cfg.max_hostmem,
@@ -2424,6 +2455,7 @@ impl VirtioDevice for Gpu {
         }
 
         let result = unregister_event_helper(None, &mut self.base.deactivate_evts);
+        self.queue_evts.lock().unwrap().clear();
         *self.runtime.lock().unwrap() = GpuRuntimeState::new(&self.consoles);
         info!("virtio-gpu deactivate {:?}", result);
         result
@@ -2445,8 +2477,41 @@ impl StateTransfer for Gpu {
 }
 
 impl MigrationHook for Gpu {
+    fn resume(&mut self) -> Result<()> {
+        let locked_evts = self.queue_evts.lock().unwrap();
+        for evt in locked_evts.iter() {
+            if let Err(e) = evt.write(1) {
+                error!(
+                    "Failed to trigger gpu queue event {}, {:?}",
+                    evt.as_raw_fd(),
+                    e
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn max_state_size(&self) -> usize {
         MAX_LARGE_DEVICE_STATE_SIZE
+    }
+
+    fn notify_status(&self, save: bool, status: MigrationStatus) -> Result<()> {
+        if save {
+            match status {
+                MigrationStatus::Active => {
+                    self.migrating.store(true, Ordering::SeqCst);
+                    info!("Drain the request for gpu device {}", self.cfg.id);
+                    wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.cfg.id);
+                }
+                MigrationStatus::Completed
+                | MigrationStatus::Failed
+                | MigrationStatus::Canceled => {
+                    self.migrating.store(false, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 
