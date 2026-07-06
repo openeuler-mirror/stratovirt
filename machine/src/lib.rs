@@ -188,7 +188,7 @@ use virtio::{
 #[cfg(feature = "virtio_balloon")]
 use virtio::{Balloon, BalloonConfig, BalloonState};
 #[cfg(feature = "virtio_gpu")]
-use virtio::{Gpu, GpuDevConfig};
+use virtio::{Gpu, GpuDevConfig, GpuState};
 #[cfg(feature = "virtio_input")]
 use virtio::{Input, InputConfig};
 #[cfg(feature = "virtio_multitouch")]
@@ -2297,7 +2297,10 @@ pub trait MachineOps: MachineLifecycle {
         let config = GpuDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         config.check();
         let bdf = PciBdf::new(config.bus.clone(), config.addr);
-        let device = Arc::new(Mutex::new(Gpu::new(config.clone())));
+        let device = Arc::new(Mutex::new(Gpu::new(
+            config.clone(),
+            self.get_sys_mem().clone(),
+        )));
 
         #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
         if device.lock().unwrap().device_quirk() == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0)
@@ -2307,6 +2310,11 @@ pub trait MachineOps: MachineLifecycle {
             device.lock().unwrap().set_bar0_fb(self.get_ohui_fb());
         }
 
+        MigrationManager::register_device_instance(
+            GpuState::descriptor(),
+            device.clone(),
+            &config.id,
+        );
         self.add_virtio_pci_device(&config.id, &bdf, device, false, false)?;
         Ok(())
     }
