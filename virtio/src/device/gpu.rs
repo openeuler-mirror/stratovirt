@@ -2272,6 +2272,24 @@ impl Gpu {
 
     fn restore_state_blob(&mut self, state: &[u8]) -> Result<()> {
         let (gpu_state, blob) = Self::split_state_blob(state)?;
+        let total_hostmem = gpu_state.resources.iter().try_fold(0_u64, |acc, res| {
+            acc.checked_add(res.host_mem)
+                .with_context(|| "Virtio-gpu used host memory overflow")
+        })?;
+        if total_hostmem != gpu_state.used_hostmem {
+            bail!(
+                "Virtio-gpu used host memory mismatch, total {}, state {}",
+                total_hostmem,
+                gpu_state.used_hostmem
+            );
+        }
+        if gpu_state.used_hostmem > self.cfg.max_hostmem {
+            bail!(
+                "Virtio-gpu used host memory {} exceeds max_hostmem {}",
+                gpu_state.used_hostmem,
+                self.cfg.max_hostmem
+            );
+        }
 
         self.base.device_features = gpu_state.device_features;
         self.base.driver_features = gpu_state.driver_features;
