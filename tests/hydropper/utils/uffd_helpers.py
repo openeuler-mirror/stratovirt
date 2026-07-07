@@ -305,7 +305,7 @@ class MockUffdDaemon:
                     self.errors.append('page fault %#x outside all regions' % page_addr)
                     continue
 
-                file_off = region['offset'] + (page_addr - region['base_hva'])
+                file_off = region['offset'] + (page_addr - region['base_host_virt_addr'])
                 page_data = mem[file_off: file_off + page_size]
                 ctypes.memmove(buf, page_data, min(len(page_data), page_size))
 
@@ -328,7 +328,7 @@ class MockUffdDaemon:
 
     def _find_region(self, page_addr):
         for r in self.regions:
-            base = r['base_hva']
+            base = r['base_host_virt_addr']
             if base <= page_addr < base + r['size']:
                 return r
         return None
