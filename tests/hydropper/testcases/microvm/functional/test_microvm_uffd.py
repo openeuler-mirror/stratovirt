@@ -106,13 +106,13 @@ class TestUffdProtocol:
 
         regions = [
             {
-                'base_hva': 0x7F0000000000,
+                'base_host_virt_addr': 0x7F0000000000,
                 'size': 0x100000,
                 'offset': 8192,
                 'page_size_kib': 4096,
             },
             {
-                'base_hva': 0x7F0000200000,
+                'base_host_virt_addr': 0x7F0000200000,
                 'size': 0x200000,
                 'offset': 8192 + 0x100000,
                 'page_size_kib': 4096,
@@ -132,7 +132,7 @@ class TestUffdProtocol:
         daemon.join(timeout=3)
         assert not daemon.errors
         assert len(daemon.regions) == 2
-        assert daemon.regions[0]['base_hva'] == 0x7F0000000000
+        assert daemon.regions[0]['base_host_virt_addr'] == 0x7F0000000000
         assert daemon.regions[1]['size'] == 0x200000
 
     def test_fd_received_via_scm_rights_is_valid(self, tmp_path):

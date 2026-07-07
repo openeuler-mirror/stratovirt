@@ -92,7 +92,7 @@ fn backend_state() -> &'static Mutex<Option<UffdMemoryBackend>> {
 /// One guest RAM region as serialised and sent to the external uffd daemon's UFFD handler.
 #[derive(Debug, PartialEq, serde::Serialize)]
 struct RegionMapping {
-    base_hva: u64,
+    base_host_virt_addr: u64,
     size: u64,
     /// Byte offset of this region's data within the flat snapshot file.
     offset: u64,
@@ -217,7 +217,7 @@ impl UffdMemoryBackend {
         self.regions
             .iter()
             .map(|&(host_addr, size, offset)| RegionMapping {
-                base_hva: host_addr,
+                base_host_virt_addr: host_addr,
                 size,
                 offset,
                 page_size_kib: page_size,
@@ -237,7 +237,7 @@ fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
     let mut pagemap = PagemapBatchReader::new()?;
     let mut bitmap = Vec::new();
 
-    for &(base_hva, size, offset) in &backend.regions {
+    for &(base_host_virt_addr, size, offset) in &backend.regions {
         if offset % page_size != 0 {
             bail!(
                 "UFFD mapping offset {} is not aligned to page size {}",
@@ -246,12 +246,17 @@ fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
             );
         }
         let page_base = offset / page_size;
-        pagemap.scan_range(base_hva, size, page_size, |bitmap_page_index, entry| {
-            if entry.is_uffd_dirty() {
-                set_dense_bitmap_bit(&mut bitmap, page_base + bitmap_page_index)?;
-            }
-            Ok(())
-        })?;
+        pagemap.scan_range(
+            base_host_virt_addr,
+            size,
+            page_size,
+            |bitmap_page_index, entry| {
+                if entry.is_uffd_dirty() {
+                    set_dense_bitmap_bit(&mut bitmap, page_base + bitmap_page_index)?;
+                }
+                Ok(())
+            },
+        )?;
     }
 
     Ok(MemDirtyBitmap { bitmap, page_size })
@@ -264,14 +269,14 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
         0
     };
 
-    for &(base_hva, size, _) in &backend.regions {
+    for &(base_host_virt_addr, size, _) in &backend.regions {
         if size == 0 {
             continue;
         }
 
         let mut wp = UffdioWriteProtect {
             range: UffdioRange {
-                start: base_hva,
+                start: base_host_virt_addr,
                 len: size,
             },
             mode,
@@ -289,7 +294,7 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
             bail!(
                 "Failed to {} UFFD-WP range at {:#x}: {}",
                 if enabled { "enable" } else { "disable" },
-                base_hva,
+                base_host_virt_addr,
                 std::io::Error::last_os_error()
             );
         }
@@ -461,13 +466,13 @@ mod tests {
             mappings,
             vec![
                 RegionMapping {
-                    base_hva: 0x1000,
+                    base_host_virt_addr: 0x1000,
                     size: 0x2000,
                     offset: 0,
                     page_size_kib: 4096,
                 },
                 RegionMapping {
-                    base_hva: 0x8000,
+                    base_host_virt_addr: 0x8000,
                     size: 0x1000,
                     offset: 0x2000,
                     page_size_kib: 4096,
@@ -511,5 +516,18 @@ mod tests {
             }
             None => eprintln!("skip: userfaultfd not available"),
         }
+    }
+    
+    #[test]
+    fn test_region_mapping_serializes_base_host_virt_addr() {
+        let mapping = RegionMapping {
+            base_host_virt_addr: 0x1000,
+            size: 0x2000,
+            offset: 0,
+            page_size_kib: 4096,
+        };
+
+        let json = serde_json::to_value(mapping).unwrap();
+        assert_eq!(json["base_host_virt_addr"], 0x1000);
     }
 }
