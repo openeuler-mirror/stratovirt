@@ -62,7 +62,7 @@ pub trait MigrationHook: StateTransfer {
             .get_state_vec()
             .with_context(|| "Failed to get device state")?;
 
-        if state_data.len() > MAX_DEVICE_STATE_SIZE {
+        if state_data.len() > self.max_state_size() {
             bail!("Invalid state length {}, id {}", state_data.len(), id);
         }
 
@@ -79,6 +79,11 @@ pub trait MigrationHook: StateTransfer {
             .with_context(|| "Failed to write device state")?;
 
         Ok(())
+    }
+
+    /// Return the maximum state vector length accepted for this device.
+    fn max_state_size(&self) -> usize {
+        MAX_DEVICE_STATE_SIZE
     }
 
     /// Restore device state from `[u8]` to `Device`.

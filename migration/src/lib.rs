@@ -23,7 +23,10 @@ pub mod snapshot;
 
 pub use error::MigrationError;
 pub use manager::{MigrationHook, MigrationManager};
-pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
+pub use protocol::{
+    DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer,
+    MAX_LARGE_DEVICE_STATE_SIZE,
+};
 pub use snapshot::RestoreMode;
 
 use std::collections::HashMap;

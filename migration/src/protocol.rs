@@ -303,6 +303,8 @@ const EAX_VENDOR_INFO: u32 = 0x0;
 pub const HEADER_LENGTH: usize = 4096;
 /// The max size of one device state is 1MiB.
 pub const MAX_DEVICE_STATE_SIZE: usize = 1 << 20;
+/// The max size of a device state that explicitly carries large binary data.
+pub const MAX_LARGE_DEVICE_STATE_SIZE: usize = 1 << 30;
 
 /// Format type for migration.
 /// Different file format will have different file layout.
