@@ -427,21 +427,21 @@ mod tests {
     #[test]
     fn test_send_to_external_uffd_daemon_receives_ack() {
         let socket_path = "/tmp/sv_test_uffd_ack_ok.sock";
+        let Some(uffd) = try_new_uffd(socket_path) else {
+            eprintln!("skip: userfaultfd not available");
+            return;
+        };
+
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path).expect("bind");
 
         let handle = spawn_mock_daemon_with_ack(listener);
 
-        match try_new_uffd(socket_path) {
-            Some(uffd) => {
-                // regions is empty → sends `[]` as JSON; tests the ACK round-trip.
-                assert!(
-                    uffd.send_to_external_uffd_daemon().is_ok(),
-                    "should succeed after daemon sends ACK"
-                );
-            }
-            None => eprintln!("skip: userfaultfd not available"),
-        }
+        // regions is empty → sends `[]` as JSON; tests the ACK round-trip.
+        assert!(
+            uffd.send_to_external_uffd_daemon().is_ok(),
+            "should succeed after daemon sends ACK"
+        );
 
         handle.join().expect("daemon thread");
         let _ = std::fs::remove_file(socket_path);
@@ -479,21 +479,21 @@ mod tests {
     #[test]
     fn test_send_to_external_uffd_daemon_no_ack_returns_error() {
         let socket_path = "/tmp/sv_test_uffd_ack_err.sock";
+        let Some(uffd) = try_new_uffd(socket_path) else {
+            eprintln!("skip: userfaultfd not available");
+            return;
+        };
+
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path).expect("bind");
 
         let handle = spawn_mock_daemon_no_ack(listener);
 
-        match try_new_uffd(socket_path) {
-            Some(uffd) => {
-                // Daemon closes connection without ACK → read_exact gets EOF.
-                assert!(
-                    uffd.send_to_external_uffd_daemon().is_err(),
-                    "should fail when no ACK is received"
-                );
-            }
-            None => eprintln!("skip: userfaultfd not available"),
-        }
+        // Daemon closes connection without ACK → read_exact gets EOF.
+        assert!(
+            uffd.send_to_external_uffd_daemon().is_err(),
+            "should fail when no ACK is received"
+        );
 
         handle.join().expect("daemon thread");
         let _ = std::fs::remove_file(socket_path);
