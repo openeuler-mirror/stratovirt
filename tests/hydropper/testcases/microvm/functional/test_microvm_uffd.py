@@ -56,8 +56,8 @@ class TestUffdProtocol:
     def _start_daemon(daemon, srv):
         daemon.start_with_server(srv)
 
-    def test_ack_returned_to_sender(self, tmp_path):
-        """Client receives the ACK byte when the daemon is ready."""
+    def test_legacy_ack_can_still_be_sent(self, tmp_path):
+        """The mock daemon can still send the legacy ACK byte for compatibility."""
         srv, path = self._server_socket(tmp_path)
         daemon = MockUffdDaemon(path, send_ack=True)
         self._start_daemon(daemon, srv)
@@ -76,8 +76,8 @@ class TestUffdProtocol:
         assert ack == b'\x01'
         assert not daemon.errors
 
-    def test_no_ack_causes_empty_recv(self, tmp_path):
-        """When the daemon closes without sending ACK the client gets EOF."""
+    def test_sender_does_not_require_ack(self, tmp_path):
+        """The sender can complete the handoff without reading an ACK byte."""
         srv, path = self._server_socket(tmp_path)
         daemon = MockUffdDaemon(path, send_ack=False)
         self._start_daemon(daemon, srv)
@@ -87,16 +87,14 @@ class TestUffdProtocol:
             client = send_fd_with_json(path, null_fd, b'[]')
             os.close(null_fd)
             null_fd = -1
-            try:
-                ack = client.recv(1)
-            finally:
-                client.close()
+            client.close()
         finally:
             if null_fd >= 0:
                 os.close(null_fd)
 
         daemon.join(timeout=3)
-        assert ack == b''  # EOF — no ACK was sent
+        assert daemon.regions == []
+        assert not daemon.errors
 
     def test_region_json_is_parsed_correctly(self, tmp_path):
         """Region JSON sent by the client is decoded correctly by the daemon."""
