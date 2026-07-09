@@ -836,12 +836,12 @@ impl InputReceiver for SerialPortHandler {
             return;
         }
 
-        if self.port.as_ref().unwrap().lock().unwrap().guest_connected {
-            self.enable_inputqueue_notify(true);
-        }
-
         let mut locked_port = self.port.as_ref().unwrap().lock().unwrap();
         locked_port.paused = true;
+        if locked_port.guest_connected {
+            drop(locked_port);
+            self.enable_inputqueue_notify(true);
+        }
     }
 }
 
