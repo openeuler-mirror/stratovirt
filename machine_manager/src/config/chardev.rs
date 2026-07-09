@@ -89,6 +89,7 @@ impl ChardevConfig {
             ChardevType::Pty { id } => id,
             ChardevType::Socket { id, .. } => id,
             ChardevType::File { id, .. } => id,
+            ChardevType::Pipe { id, .. } => id,
             ChardevType::RedirectToLog { id } => id,
         }
         .clone()
@@ -135,6 +136,12 @@ pub enum ChardevType {
         nowait: bool,
     },
     File {
+        #[arg(long, value_parser = valid_id)]
+        id: String,
+        #[arg(long, value_parser = valid_path)]
+        path: String,
+    },
+    Pipe {
         #[arg(long, value_parser = valid_id)]
         id: String,
         #[arg(long, value_parser = valid_path)]
@@ -495,6 +502,13 @@ mod tests {
             ChardevType::File {
                 id: "test_id".to_string(),
                 path: "/some/file".to_string(),
+            },
+        );
+        check_argument(
+            "pipe,id=test_id,path=/some/pipe".to_string(),
+            ChardevType::Pipe {
+                id: "test_id".to_string(),
+                path: "/some/pipe".to_string(),
             },
         );
 
