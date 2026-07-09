@@ -794,7 +794,7 @@ Note: the kernel must contain physical device drivers, otherwise it cannot be lo
 See [VFIO](./vfio.md) for more details.
 
 ### 2.12 Chardev
-The type of chardev backend could be: stdio, pty, socket, file(output only) and pipe.
+The type of chardev backend could be: stdio, pty, socket, file(output only), pipe and null.
 
 One property can be set for chardev of stdio or pty type.
 * id: unique chardev-id.
@@ -820,6 +820,9 @@ Two properties can be set for chardev of pipe type.
 * id: unique chardev-id.
 * path: base path to the pipe on the host. StratoVirt first tries to open `<path>.in` and `<path>.out`, and falls back to opening `<path>` if the split pipe files are unavailable.
 
+One property can be set for chardev of null type.
+* id: unique chardev-id.
+
 ```shell
 # redirect methods
 -chardev stdio,id=<chardev_id>
@@ -828,6 +831,7 @@ Two properties can be set for chardev of pipe type.
 -chardev socket,id=<chardev_id>,port=<port>[,host=<host>][,server,nowait]
 -chardev file,id=<chardev_id>,path=<file_path>
 -chardev pipe,id=<chardev_id>,path=<pipe_path>
+-chardev null,id=<chardev_id>
 ```
 
 ### 2.13 USB

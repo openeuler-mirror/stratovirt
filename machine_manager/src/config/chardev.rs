@@ -90,6 +90,7 @@ impl ChardevConfig {
             ChardevType::Socket { id, .. } => id,
             ChardevType::File { id, .. } => id,
             ChardevType::Pipe { id, .. } => id,
+            ChardevType::Null { id } => id,
             ChardevType::RedirectToLog { id } => id,
         }
         .clone()
@@ -146,6 +147,10 @@ pub enum ChardevType {
         id: String,
         #[arg(long, value_parser = valid_path)]
         path: String,
+    },
+    Null {
+        #[arg(long, value_parser = valid_id)]
+        id: String,
     },
     RedirectToLog {
         #[arg(long, value_parser = valid_id)]
@@ -509,6 +514,12 @@ mod tests {
             ChardevType::Pipe {
                 id: "test_id".to_string(),
                 path: "/some/pipe".to_string(),
+            },
+        );
+        check_argument(
+            "null,id=test_id".to_string(),
+            ChardevType::Null {
+                id: "test_id".to_string(),
             },
         );
 
