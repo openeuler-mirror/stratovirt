@@ -79,6 +79,7 @@ const DEFAULT_PORT_QUEUE_SIZE: u16 = 128;
 const DEFAULT_CTRL_QUEUE_SIZE: u16 = 32;
 const CTRL_IN_QUEUE_IDX: usize = 2;
 const CTRL_OUT_QUEUE_IDX: usize = 3;
+const CTRL_QUEUE_INDICES: &[usize] = &[CTRL_IN_QUEUE_IDX, CTRL_OUT_QUEUE_IDX];
 
 /// If the driver negotiated the VIRTIO_CONSOLE_F_MULTIPORT, the two control queues are used.
 /// The layout of the control message is VirtioConsoleControl.
@@ -168,6 +169,8 @@ pub struct Serial {
     processing_queue: Arc<AtomicBool>,
     /// The queue notify events for handling IO.
     queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
+    /// Whether control queues have been activated before DRIVER_OK.
+    ctrl_queues_activated: bool,
 }
 
 impl Serial {
@@ -328,13 +331,16 @@ impl VirtioDevice for Serial {
             }
         }
 
-        self.control_queues_activate(
-            mem_space,
-            interrupt_cb,
-            &queues,
-            queue_evts,
-            self.base.broken.clone(),
-        )?;
+        if !self.ctrl_queues_activated {
+            self.control_queues_activate(
+                mem_space,
+                interrupt_cb,
+                &queues,
+                queue_evts,
+                self.base.broken.clone(),
+            )?;
+            self.ctrl_queues_activated = true;
+        }
 
         Ok(())
     }
@@ -345,7 +351,50 @@ impl VirtioDevice for Serial {
         }
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
         self.queue_evts.lock().unwrap().clear();
+        self.ctrl_queues_activated = false;
 
+        Ok(())
+    }
+
+    fn early_queue_indices(&self) -> &'static [usize] {
+        if !self.ctrl_queues_activated
+            && self.base.driver_features & (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT) != 0
+            && CTRL_QUEUE_INDICES.iter().all(|idx| {
+                self.base
+                    .queues_config
+                    .get(*idx)
+                    .map(|cfg| cfg.ready)
+                    .unwrap_or(false)
+            })
+        {
+            CTRL_QUEUE_INDICES
+        } else {
+            &[]
+        }
+    }
+
+    fn activate_early_queues(
+        &mut self,
+        mem_space: Arc<AddressSpace>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queue_evts: Vec<Arc<EventFd>>,
+    ) -> Result<()> {
+        let queues = self.base.queues.clone();
+        if queues.len() != self.queue_num() {
+            return Err(anyhow!(VirtioError::IncorrectQueueNum(
+                self.queue_num(),
+                queues.len()
+            )));
+        }
+
+        self.control_queues_activate(
+            mem_space,
+            interrupt_cb,
+            &queues,
+            queue_evts,
+            self.base.broken.clone(),
+        )?;
+        self.ctrl_queues_activated = true;
         Ok(())
     }
 }

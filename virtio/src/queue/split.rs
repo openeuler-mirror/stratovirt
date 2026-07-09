@@ -163,6 +163,16 @@ impl QueueConfig {
         }
     }
 
+    /// Return whether two queues have the same guest-visible layout.
+    pub fn has_same_layout(&self, other: &Self) -> bool {
+        self.desc_table == other.desc_table
+            && self.avail_ring == other.avail_ring
+            && self.used_ring == other.used_ring
+            && self.max_size == other.max_size
+            && self.size == other.size
+            && self.ready == other.ready
+    }
+
     fn get_desc_size(&self) -> u64 {
         u64::from(min(self.size, self.max_size)) * DESCRIPTOR_LEN
     }

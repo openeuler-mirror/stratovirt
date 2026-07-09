@@ -751,6 +751,21 @@ pub trait VirtioDevice: Send + AsAny {
         queue_evts: Vec<Arc<EventFd>>,
     ) -> Result<()>;
 
+    /// Return queues that can be activated before DRIVER_OK.
+    fn early_queue_indices(&self) -> &'static [usize] {
+        &[]
+    }
+
+    /// Activate queues returned by `early_queue_indices`.
+    fn activate_early_queues(
+        &mut self,
+        _mem_space: Arc<AddressSpace>,
+        _interrupt_cb: Arc<VirtioInterrupt>,
+        _queue_evts: Vec<Arc<EventFd>>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Deactivate virtio device, this function remove event fd
     /// of device out of the event loop.
     fn deactivate(&mut self) -> Result<()> {
