@@ -202,6 +202,7 @@ impl Chardev {
                 self.input = Some(input);
                 self.output = Some(output);
             }
+            ChardevType::Null { .. } => (),
             ChardevType::RedirectToLog { .. } => {
                 let (sender, receiver) = channel::<u8>();
                 self.output = Some(Arc::new(Mutex::new(SenderWrapper(sender))));
@@ -327,6 +328,7 @@ impl Chardev {
                 return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
             }
             ChardevType::Socket { .. } | ChardevType::Pipe { .. } => (),
+            ChardevType::Null { .. } => return Ok(()),
             ChardevType::RedirectToLog { .. } => {
                 if self.output.is_none() {
                     bail!("Channel has no sender");
@@ -941,6 +943,7 @@ impl EventNotifierHelper for Chardev {
                 ChardevType::Pty { .. } => get_terminal_notifier(chardev),
                 ChardevType::Socket { .. } => get_socket_notifier(chardev),
                 ChardevType::Pipe { .. } => return get_pipe_notifiers(chardev),
+                ChardevType::Null { .. } => None,
                 ChardevType::File { .. } => None,
                 ChardevType::RedirectToLog { .. } => None,
             }
