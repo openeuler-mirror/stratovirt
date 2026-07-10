@@ -966,10 +966,10 @@ impl SerialControlHandler {
                 return;
             }
 
-            let cloned_ports = self.ports.clone();
-            let mut locked_ports = cloned_ports.lock().unwrap();
-            for (_, port) in locked_ports.iter_mut() {
-                self.send_control_event(port.lock().unwrap().nr, VIRTIO_CONSOLE_PORT_ADD, 1);
+            let mut port_ids: Vec<u32> = self.ports.lock().unwrap().keys().copied().collect();
+            port_ids.sort_unstable();
+            for port_id in port_ids {
+                self.send_control_event(port_id, VIRTIO_CONSOLE_PORT_ADD, 1);
             }
             return;
         }
