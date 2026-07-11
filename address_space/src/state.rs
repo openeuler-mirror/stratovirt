@@ -321,9 +321,9 @@ impl AddressSpace {
     ///
     /// Registers every machine RAM subregion with a userfaultfd, sends the fd
     /// together with each region's offset within the snapshot memory file to
-    /// the daemon, and blocks until the daemon's ready-ACK. On return the file
-    /// cursor is positioned past the RAM data, so the ram list section that
-    /// follows can be restored from the file as usual.
+    /// the daemon. On return the file cursor is positioned past the RAM data,
+    /// so the ram list section that follows can be restored from the file as
+    /// usual.
     pub fn restore_uffd_ram_from_snapshot(
         &self,
         memory: &mut File,

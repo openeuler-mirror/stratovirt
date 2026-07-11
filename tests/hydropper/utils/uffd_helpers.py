@@ -137,7 +137,7 @@ def recv_fd_and_json(conn):
 def send_fd_with_json(sock_path, fd, json_bytes):
     """Connect to *sock_path* and send *fd* + *json_bytes* via SCM_RIGHTS.
 
-    Returns the open UnixStream so the caller can read the ACK byte.
+    Returns the open UnixStream so the caller can keep the handoff socket alive.
     Mirrors StratoVirt's ``send_fd_with_json`` Rust function.
     """
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -165,13 +165,13 @@ class MockUffdDaemon:
         1. Listen on ``socket_path``.
         2. Accept one connection.
         3. Receive JSON region list + uffd fd via SCM_RIGHTS.
-        4. Send 1-byte ACK (unless ``send_ack=False``).
+        4. Optionally send a legacy 1-byte ACK.
         5. (Optional) Serve MISSING page faults from ``memory_file``.
 
     After ``stop()``, inspect ``errors`` and ``page_faults_served``.
     """
 
-    def __init__(self, socket_path, memory_file=None, send_ack=True):
+    def __init__(self, socket_path, memory_file=None, send_ack=False):
         self.socket_path = socket_path
         self.memory_file = memory_file
         self.send_ack = send_ack
@@ -264,10 +264,8 @@ class MockUffdDaemon:
         if fd >= 0:
             self._uffd_fd = fd
 
-        if not self.send_ack:
-            return
-
-        conn.sendall(b'\x01')
+        if self.send_ack:
+            conn.sendall(b'\x01')
 
         if self.memory_file and self._uffd_fd >= 0:
             self._serve_faults()
@@ -305,7 +303,7 @@ class MockUffdDaemon:
                     self.errors.append('page fault %#x outside all regions' % page_addr)
                     continue
 
-                file_off = region['offset'] + (page_addr - region['base_hva'])
+                file_off = region['offset'] + (page_addr - region['base_host_virt_addr'])
                 page_data = mem[file_off: file_off + page_size]
                 ctypes.memmove(buf, page_data, min(len(page_data), page_size))
 
@@ -328,7 +326,7 @@ class MockUffdDaemon:
 
     def _find_region(self, page_addr):
         for r in self.regions:
-            base = r['base_hva']
+            base = r['base_host_virt_addr']
             if base <= page_addr < base + r['size']:
                 return r
         return None

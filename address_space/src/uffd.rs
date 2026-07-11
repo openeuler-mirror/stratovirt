@@ -10,13 +10,10 @@
 //   5. Send one message via sendmsg:
 //      - iov[0]: JSON-encoded Vec<RegionMapping>  (region addresses + sizes)
 //      - cmsg:   SCM_RIGHTS carrying the uffd fd
-//   6. Block-read one ACK byte from the socket.  The daemon sends this byte
-//      once its Serve() goroutine is running and ready to handle page faults.
-//      This ensures vCPUs do not start executing before the daemon is ready.
+//   6. Keep the handoff socket alive for the backend lifetime.
 //   7. The external uffd daemon takes ownership of the uffd and serves page faults
 //      from the snapshot block device.
 
-use std::io::Read;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -92,7 +89,7 @@ fn backend_state() -> &'static Mutex<Option<UffdMemoryBackend>> {
 /// One guest RAM region as serialised and sent to the external uffd daemon's UFFD handler.
 #[derive(Debug, PartialEq, serde::Serialize)]
 struct RegionMapping {
-    base_hva: u64,
+    base_host_virt_addr: u64,
     size: u64,
     /// Byte offset of this region's data within the flat snapshot file.
     offset: u64,
@@ -112,6 +109,7 @@ pub struct UffdMemoryBackend {
     /// Collected RAM regions (host addr, size, cumulative offset).
     regions: Vec<(u64, u64, u64)>,
     uffd_fd: RawFd,
+    handoff_stream: Option<UnixStream>,
 }
 
 impl UffdMemoryBackend {
@@ -123,6 +121,7 @@ impl UffdMemoryBackend {
             socket_path: PathBuf::from(socket_path),
             regions: Vec::new(),
             uffd_fd,
+            handoff_stream: None,
         })
     }
 
@@ -186,14 +185,12 @@ impl UffdMemoryBackend {
         Ok(())
     }
 
-    /// Connect to the external uffd daemon socket, hand over the uffd fd together
-    /// with the region mapping JSON, then block until the daemon sends a one-byte
-    /// ready ACK.
-    ///
-    /// The ACK ensures the daemon's Serve() loop is running before this function
-    /// returns.  Callers must not resume vCPUs until this returns successfully,
-    /// otherwise a page fault could arrive before the daemon is ready to handle it.
-    pub fn send_to_external_uffd_daemon(&self) -> Result<()> {
+    /// Connect to the external uffd daemon socket and hand over the uffd fd together
+    /// with the region mapping JSON. The handoff socket is kept open for the backend
+    /// lifetime so the daemon observes a stable peer; no ready-ACK is read back, since
+    /// the userfaultfd kernel semantics already queue page faults until the daemon
+    /// starts serving them.
+    pub fn send_to_external_uffd_daemon(&mut self) -> Result<()> {
         // SAFETY: sysconf(_SC_PAGESIZE) is always valid on Linux and never fails;
         // no pointers or memory invariants are involved.
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
@@ -201,14 +198,9 @@ impl UffdMemoryBackend {
         let json = serde_json::to_vec(&self.region_mappings(page_size))
             .context("failed to serialise region mappings")?;
 
-        let mut stream = send_fd_with_json(&self.socket_path, self.uffd_fd, &json)
+        let stream = send_fd_with_json(&self.socket_path, self.uffd_fd, &json)
             .context("failed to send uffd fd to external uffd daemon")?;
-
-        // Block until the daemon signals it is ready to serve page faults.
-        let mut ack = [0u8; 1];
-        stream
-            .read_exact(&mut ack)
-            .context("waiting for uffd daemon ready ACK")?;
+        self.handoff_stream = Some(stream);
 
         Ok(())
     }
@@ -217,7 +209,7 @@ impl UffdMemoryBackend {
         self.regions
             .iter()
             .map(|&(host_addr, size, offset)| RegionMapping {
-                base_hva: host_addr,
+                base_host_virt_addr: host_addr,
                 size,
                 offset,
                 page_size_kib: page_size,
@@ -237,7 +229,7 @@ fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
     let mut pagemap = PagemapBatchReader::new()?;
     let mut bitmap = Vec::new();
 
-    for &(base_hva, size, offset) in &backend.regions {
+    for &(base_host_virt_addr, size, offset) in &backend.regions {
         if offset % page_size != 0 {
             bail!(
                 "UFFD mapping offset {} is not aligned to page size {}",
@@ -246,12 +238,17 @@ fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
             );
         }
         let page_base = offset / page_size;
-        pagemap.scan_range(base_hva, size, page_size, |bitmap_page_index, entry| {
-            if entry.is_uffd_dirty() {
-                set_dense_bitmap_bit(&mut bitmap, page_base + bitmap_page_index)?;
-            }
-            Ok(())
-        })?;
+        pagemap.scan_range(
+            base_host_virt_addr,
+            size,
+            page_size,
+            |bitmap_page_index, entry| {
+                if entry.is_uffd_dirty() {
+                    set_dense_bitmap_bit(&mut bitmap, page_base + bitmap_page_index)?;
+                }
+                Ok(())
+            },
+        )?;
     }
 
     Ok(MemDirtyBitmap { bitmap, page_size })
@@ -264,14 +261,14 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
         0
     };
 
-    for &(base_hva, size, _) in &backend.regions {
+    for &(base_host_virt_addr, size, _) in &backend.regions {
         if size == 0 {
             continue;
         }
 
         let mut wp = UffdioWriteProtect {
             range: UffdioRange {
-                start: base_hva,
+                start: base_host_virt_addr,
                 len: size,
             },
             mode,
@@ -289,7 +286,7 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
             bail!(
                 "Failed to {} UFFD-WP range at {:#x}: {}",
                 if enabled { "enable" } else { "disable" },
-                base_hva,
+                base_host_virt_addr,
                 std::io::Error::last_os_error()
             );
         }
@@ -363,7 +360,7 @@ fn create_uffd() -> Result<RawFd> {
 
 /// Connect to `socket_path`, send `fd` as SCM_RIGHTS ancillary data together
 /// with `json` as the message payload, and return the open `UnixStream` so the
-/// caller can read a ready-ACK byte from the daemon.
+/// caller can keep the handoff socket alive for the backend lifetime.
 fn send_fd_with_json(socket_path: &PathBuf, fd: RawFd, json: &[u8]) -> Result<UnixStream> {
     let stream = UnixStream::connect(socket_path)
         .with_context(|| format!("connect to UFFD socket {:?}", socket_path))?;
@@ -380,7 +377,6 @@ fn send_fd_with_json(socket_path: &PathBuf, fd: RawFd, json: &[u8]) -> Result<Un
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixListener;
     use std::thread;
@@ -392,13 +388,13 @@ mod tests {
         UffdMemoryBackend::new(socket_path).ok()
     }
 
-    /// Spawn a mock daemon thread that:
-    /// 1. Accepts one connection on `listener`.
-    /// 2. Drains the incoming sendmsg payload (SCM_RIGHTS fd auto-closed).
-    /// 3. Sends one ACK byte.
-    fn spawn_mock_daemon_with_ack(listener: UnixListener) -> thread::JoinHandle<()> {
+    /// Spawn a mock daemon thread that accepts one connection and drains the
+    /// incoming sendmsg payload (the ancillary SCM_RIGHTS fd is silently
+    /// discarded). It sends no ACK, mirroring the Firecracker-compatible
+    /// handoff where the sender does not wait for a ready byte.
+    fn spawn_mock_daemon_no_ack(listener: UnixListener) -> thread::JoinHandle<()> {
         thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("mock daemon: accept");
+            let (stream, _) = listener.accept().expect("mock daemon: accept");
             let mut buf = [0u8; 65536];
             // Drain the sendmsg payload; ancillary SCM_RIGHTS fd is silently discarded.
             // SAFETY: buf is a valid mutable slice on the stack; stream.as_raw_fd()
@@ -411,37 +407,27 @@ mod tests {
                     0,
                 )
             };
-            stream.write_all(&[1u8]).expect("mock daemon: send ACK");
-        })
-    }
-
-    /// Spawn a mock daemon thread that accepts a connection but closes it
-    /// without sending any ACK (simulates a daemon that crashes before ready).
-    fn spawn_mock_daemon_no_ack(listener: UnixListener) -> thread::JoinHandle<()> {
-        thread::spawn(move || {
-            let (_stream, _) = listener.accept().expect("mock daemon: accept");
-            // _stream drops here → EOF on the other side, no ACK sent.
         })
     }
 
     #[test]
-    fn test_send_to_external_uffd_daemon_receives_ack() {
-        let socket_path = "/tmp/sv_test_uffd_ack_ok.sock";
-        let Some(uffd) = try_new_uffd(socket_path) else {
+    fn test_send_to_external_uffd_daemon_keeps_handoff_socket() {
+        let socket_path = "/tmp/sv_test_uffd_handoff.sock";
+        let _ = std::fs::remove_file(socket_path);
+        let Some(mut uffd) = try_new_uffd(socket_path) else {
             eprintln!("skip: userfaultfd not available");
+            let _ = std::fs::remove_file(socket_path);
             return;
         };
-
-        let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path).expect("bind");
 
-        let handle = spawn_mock_daemon_with_ack(listener);
+        let handle = spawn_mock_daemon_no_ack(listener);
 
-        // regions is empty → sends `[]` as JSON; tests the ACK round-trip.
         assert!(
             uffd.send_to_external_uffd_daemon().is_ok(),
-            "should succeed after daemon sends ACK"
+            "should succeed without a daemon ACK"
         );
+        assert!(uffd.handoff_stream.is_some());
 
         handle.join().expect("daemon thread");
         let _ = std::fs::remove_file(socket_path);
@@ -453,6 +439,7 @@ mod tests {
             socket_path: PathBuf::from("/tmp/unused.sock"),
             regions: vec![(0x1000, 0x2000, 0), (0x8000, 0x1000, 0x2000)],
             uffd_fd: -1,
+            handoff_stream: None,
         };
 
         let mappings = backend.region_mappings(4096);
@@ -461,13 +448,13 @@ mod tests {
             mappings,
             vec![
                 RegionMapping {
-                    base_hva: 0x1000,
+                    base_host_virt_addr: 0x1000,
                     size: 0x2000,
                     offset: 0,
                     page_size_kib: 4096,
                 },
                 RegionMapping {
-                    base_hva: 0x8000,
+                    base_host_virt_addr: 0x8000,
                     size: 0x1000,
                     offset: 0x2000,
                     page_size_kib: 4096,
@@ -477,33 +464,10 @@ mod tests {
     }
 
     #[test]
-    fn test_send_to_external_uffd_daemon_no_ack_returns_error() {
-        let socket_path = "/tmp/sv_test_uffd_ack_err.sock";
-        let Some(uffd) = try_new_uffd(socket_path) else {
-            eprintln!("skip: userfaultfd not available");
-            return;
-        };
-
-        let _ = std::fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path).expect("bind");
-
-        let handle = spawn_mock_daemon_no_ack(listener);
-
-        // Daemon closes connection without ACK → read_exact gets EOF.
-        assert!(
-            uffd.send_to_external_uffd_daemon().is_err(),
-            "should fail when no ACK is received"
-        );
-
-        handle.join().expect("daemon thread");
-        let _ = std::fs::remove_file(socket_path);
-    }
-
-    #[test]
     fn test_send_to_external_uffd_daemon_socket_missing() {
         // Socket path does not exist → connect fails immediately.
         match try_new_uffd("/tmp/sv_test_uffd_nonexistent.sock") {
-            Some(uffd) => {
+            Some(mut uffd) => {
                 assert!(
                     uffd.send_to_external_uffd_daemon().is_err(),
                     "should fail when socket path does not exist"
@@ -511,5 +475,18 @@ mod tests {
             }
             None => eprintln!("skip: userfaultfd not available"),
         }
+    }
+
+    #[test]
+    fn test_region_mapping_serializes_base_host_virt_addr() {
+        let mapping = RegionMapping {
+            base_host_virt_addr: 0x1000,
+            size: 0x2000,
+            offset: 0,
+            page_size_kib: 4096,
+        };
+
+        let json = serde_json::to_value(mapping).unwrap();
+        assert_eq!(json["base_host_virt_addr"], 0x1000);
     }
 }
