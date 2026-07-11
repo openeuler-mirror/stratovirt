@@ -504,13 +504,11 @@ pub struct SerialPort {
 
 impl SerialPort {
     pub fn new(port_cfg: &VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Result<Self> {
-        // Console is default host connected. And pty chardev has opened by default in realize()
-        // function.
+        // Socket chardevs become connected after accept. Other backends are
+        // available after realize.
         let is_console = matches!(port_cfg.classtype.as_str(), "virtconsole");
-        let mut host_connected = is_console;
-        if let ChardevType::Pty { .. } = chardev_cfg.classtype {
-            host_connected = true;
-        }
+        let host_connected =
+            is_console || !matches!(&chardev_cfg.classtype, ChardevType::Socket { .. });
 
         Ok(SerialPort {
             name: Some(port_cfg.id.clone()),
