@@ -215,6 +215,15 @@ pub fn alloc_host_transfer(iso_packets: c_int) -> *mut libusb_transfer {
     unsafe { libusb1_sys::libusb_alloc_transfer(iso_packets) }
 }
 
+fn request_unlink(node: &Node<UsbHostRequest>) -> bool {
+    let request = &node.value;
+    let Some(requests) = request.requests.upgrade() else {
+        return false;
+    };
+    requests.lock().unwrap().unlink(node);
+    true
+}
+
 extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
     // SAFETY:
     // - `transfer` comes from libusb's async callback and is guaranteed valid.
@@ -222,21 +231,16 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
     //   , and have not yet taken it back.
     // - This is the only place where we reclaim the Box, so no double free occurs.
     let mut node = unsafe { get_node_from_transfer(host_transfer) };
-    let request = &mut node.value;
-    let requests = match request.requests.upgrade() {
-        Some(requests) => requests,
-        None => return,
-    };
+    if !request_unlink(&node) {
+        return;
+    }
 
-    // Before operating a node, lock requests to prevent multiple threads from operating
-    // the node at the same time.
-    let mut locked_requests = requests.lock().unwrap();
+    let request = &mut node.value;
     let packet = request.packet.clone();
     let mut locked_packet = packet.lock().unwrap();
 
     if !locked_packet.is_async {
         request.free();
-        locked_requests.unlink(&node);
         return;
     }
 
@@ -274,7 +278,6 @@ extern "system" fn req_complete(host_transfer: *mut libusb_transfer) {
     }
 
     request.free();
-    locked_requests.unlink(&node);
 }
 
 extern "system" fn req_complete_iso(host_transfer: *mut libusb_transfer) {
