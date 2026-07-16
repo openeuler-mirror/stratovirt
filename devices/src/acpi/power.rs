@@ -312,7 +312,7 @@ impl AmlBuilder for PowerDev {
         acpi_bat_dev.append_child(AmlNameDecl::new("_PCL", pcl_pkg));
 
         method = AmlMethod::new("_STA", 0, false);
-        method.append_child(AmlInteger(0x1F));
+        method.append_child(AmlReturn::with_value(AmlInteger(0x1F)));
         acpi_bat_dev.append_child(method);
 
         let mut bif_pkg = AmlPackage::new(13);

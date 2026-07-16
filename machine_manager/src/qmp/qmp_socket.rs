@@ -26,7 +26,7 @@ use vmm_sys_util::epoll::EventSet;
 use super::qmp_schema;
 use super::qmp_schema::QmpCommand;
 use super::{qmp_channel::QmpChannel, qmp_response::QmpGreeting, qmp_response::Response};
-use crate::config::{parse_incoming_uri, MigrateMode};
+use crate::config::{parse_migrate_uri, MigrateMode};
 use crate::event;
 use crate::event_loop::EventLoop;
 use crate::machine::{MachineExternalInterface, VmState};
@@ -469,7 +469,7 @@ fn is_snapshot(qmp_command: &QmpCommand, snapshot_id: &mut Option<String>) -> bo
         ref id,
     } = qmp_command
     {
-        if let Ok(incoming) = parse_incoming_uri(&arguments.uri) {
+        if let Ok(incoming) = parse_migrate_uri(&arguments.uri) {
             if incoming.mode == MigrateMode::File {
                 *snapshot_id = id.clone();
                 return true;
@@ -542,6 +542,9 @@ fn qmp_command_exec(
         (query_cpus, query_cpus),
         (query_balloon, query_balloon),
         (query_mem, query_mem),
+        (query_mem_mappings, query_mem_mappings),
+        (query_mem_page_state, query_mem_page_state),
+        (query_mem_dirty_bitmap, query_mem_dirty_bitmap),
         (query_vnc, query_vnc),
         (query_display_image, query_display_image),
         (query_ohui_status, query_ohui_status),
@@ -591,6 +594,7 @@ fn qmp_command_exec(
                 qmp_response = controller.lock().unwrap().getfd(arguments.fd_name, if_fd);
                 id
             }
+            #[cfg(feature = "trace")]
             QmpCommand::trace_get_state { arguments, id } => {
                 match trace::get_state_by_pattern(arguments.pattern) {
                     Ok(events) => {
@@ -612,6 +616,7 @@ fn qmp_command_exec(
                 }
                 id
             }
+            #[cfg(feature = "trace")]
             QmpCommand::trace_set_state { arguments, id } => {
                 if trace::set_state_by_pattern(arguments.pattern, arguments.enable).is_err() {
                     qmp_response = Response::create_error_response(
@@ -628,6 +633,22 @@ fn qmp_command_exec(
                     serde_json::to_value(detect_silent_audio()).unwrap(),
                     None,
                 );
+                id
+            }
+            QmpCommand::mmds_put { arguments, id } => {
+                qmp_response = controller.lock().unwrap().mmds_put(arguments);
+                id
+            }
+            QmpCommand::mmds_patch { arguments, id } => {
+                qmp_response = controller.lock().unwrap().mmds_patch(arguments);
+                id
+            }
+            QmpCommand::mmds_get { arguments: _, id } => {
+                qmp_response = controller.lock().unwrap().mmds_get();
+                id
+            }
+            QmpCommand::mmds_config { arguments, id } => {
+                qmp_response = controller.lock().unwrap().mmds_config(arguments);
                 id
             }
             _ => None,
@@ -673,6 +694,42 @@ mod tests {
     fn recover_unix_socket_environment(socket_id: &str) {
         let socket_name: String = format!("test_{}.sock", socket_id);
         std::fs::remove_file(socket_name).unwrap();
+    }
+
+    #[test]
+    fn test_is_snapshot_uses_save_side_migrate_uri_rules() {
+        let command = QmpCommand::migrate {
+            arguments: qmp_schema::migrate {
+                uri: "file:/tmp/snap,memory=external".to_string(),
+            },
+            id: Some("snapshot-id".to_string()),
+        };
+        let mut snapshot_id = None;
+
+        assert!(is_snapshot(&command, &mut snapshot_id));
+        assert_eq!(snapshot_id, Some("snapshot-id".to_string()));
+
+        let command = QmpCommand::migrate {
+            arguments: qmp_schema::migrate {
+                uri: "file:/tmp/snap,mapped=false".to_string(),
+            },
+            id: Some("snapshot-id".to_string()),
+        };
+        let mut snapshot_id = None;
+
+        assert!(is_snapshot(&command, &mut snapshot_id));
+        assert_eq!(snapshot_id, Some("snapshot-id".to_string()));
+
+        let command = QmpCommand::migrate {
+            arguments: qmp_schema::migrate {
+                uri: "tcp:127.0.0.1:2022".to_string(),
+            },
+            id: None,
+        };
+        let mut snapshot_id = None;
+
+        assert!(!is_snapshot(&command, &mut snapshot_id));
+        assert_eq!(snapshot_id, None);
     }
 
     #[test]

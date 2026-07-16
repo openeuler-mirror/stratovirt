@@ -12,7 +12,7 @@
 
 fn main() {
     println!(
-        "cargo:rerun-if-changed={}/hisysevent",
+        "cargo:rerun-if-changed={}/event_info",
         std::env::var("CARGO_MANIFEST_DIR").unwrap()
     );
 }

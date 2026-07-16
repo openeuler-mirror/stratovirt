@@ -18,13 +18,7 @@ pub mod standard_common;
 pub mod x86_64;
 
 mod micro_common;
-
 pub use crate::error::MachineError;
-#[cfg(feature = "usb_host")]
-use machine_manager::{
-    event,
-    qmp::{qmp_channel::QmpChannel, qmp_schema::UsbHostAddRes},
-};
 pub use micro_common::LightMachine;
 pub use standard_common::StdMachine;
 
@@ -35,10 +29,10 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixListener;
 #[cfg(any(feature = "windows_emu_pid", feature = "vfio_device"))]
 use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
-#[cfg(feature = "usb_host")]
-use std::thread;
 #[cfg(feature = "windows_emu_pid")]
 use std::time::Duration;
 
@@ -52,7 +46,7 @@ use vmm_sys_util::eventfd::EventFd;
 use address_space::FileBackend;
 use address_space::{
     create_backend_mem, create_default_mem, register_ram_list, AddressAttr, AddressSpace,
-    GuestAddress, Region,
+    AliasRegionState, GuestAddress, RamRegionState, Region, RegionType, DEFAULT_RAM_REGION_NAME,
 };
 #[cfg(target_arch = "aarch64")]
 use address_space::{register_ram_region, HostMemMapping};
@@ -75,45 +69,75 @@ use devices::pci::{
 };
 use devices::smbios::smbios_table::{build_smbios_ep30, SmbiosTable};
 use devices::smbios::{SMBIOS_ANCHOR_FILE, SMBIOS_TABLE_FILE};
-use devices::sysbus::{devices_register_sysbusdevops_type, to_sysbusdevops, SysBus, SysBusDevType};
+use devices::sysbus::{devices_register_sysbusdevops_type, SysBus};
+#[cfg(feature = "virtio_serial")]
+use devices::sysbus::{to_sysbusdevops, SysBusDevType};
 #[cfg(feature = "usb_camera")]
 use devices::usb::camera::{UsbCamera, UsbCameraConfig};
 #[cfg(feature = "usb_consumer")]
 use devices::usb::consumer::{UsbConsumer, UsbConsumerConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::keyboard::{UsbKeyboard, UsbKeyboardConfig};
+#[cfg(feature = "usb_storage")]
 use devices::usb::storage::{UsbStorage, UsbStorageConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_uas")]
 use devices::usb::uas::{UsbUas, UsbUasConfig};
-#[cfg(feature = "usb_host")]
-use devices::usb::usbhost::{UsbHost, UsbHostConfig};
+#[cfg(feature = "usb_base")]
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
+#[cfg(feature = "usb_base")]
 use devices::usb::UsbDevice;
+#[cfg(feature = "usb_host")]
+use devices::usb::{usbhost::UsbHostConfig, xhci::xhci_async::XhciAsyncCmd};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
-use devices::{convert_bus_ref, Bus, Device, PCI_BUS, SYS_BUS_DEVICE};
+#[cfg(feature = "virtio_serial")]
+use devices::SYS_BUS_DEVICE;
+use devices::{convert_bus_ref, Bus, Device, PCI_BUS};
 #[cfg(feature = "virtio_scsi")]
 use devices::{
     ScsiBus::get_scsi_key,
     ScsiDisk::{ScsiDevConfig, ScsiDevice},
 };
 use hypervisor::{kvm::KvmHypervisor, test::TestHypervisor, HypervisorOps};
+use machine_manager::check_arg_exist;
+#[cfg(any(
+    feature = "vhost_vsock",
+    feature = "virtio_balloon",
+    feature = "virtio_mem",
+    feature = "virtio_pmem",
+    feature = "virtio_serial",
+    feature = "virtio_input",
+    feature = "virtio_multitouch",
+    feature = "vhostuser_fs",
+    feature = "vhostuser_gpu"
+))]
+use machine_manager::check_arg_nonexist;
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_by_id;
 #[cfg(feature = "vhostuser_net")]
 use machine_manager::config::get_chardev_socket_path;
+#[cfg(feature = "usb_base")]
+use machine_manager::config::get_class_type;
+#[cfg(any(feature = "virtio_gpu", feature = "virtio_serial"))]
+use machine_manager::config::ConfigCheck;
 use machine_manager::config::{
-    complete_numa_node, get_class_type, get_pci_bdf, get_value_of_parameter, parse_numa_distance,
-    parse_numa_mem, str_slip_to_clap, BootIndexInfo, BootSource, ConfigCheck, DriveConfig,
-    DriveFile, IncomingConfig, MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode,
-    NumaNodes, PciBdf, SerialConfig, VirtioSerialInfo, VirtioSerialPortCfg, VmConfig,
-    FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
+    complete_numa_node, get_pci_bdf, get_value_of_parameter, parse_numa_distance, parse_numa_mem,
+    str_slip_to_clap, BootIndexInfo, BootSource, DriveConfig, DriveFile, IncomingConfig,
+    MachineMemConfig, MigrateMode, NetworkInterfaceConfig, NumaNode, NumaNodes, PciBdf,
+    SerialConfig, VmConfig, FAST_UNPLUG_ON, MAX_VIRTIO_QUEUE,
 };
+#[cfg(feature = "virtio_serial")]
+use machine_manager::config::{VirtioSerialInfo, VirtioSerialPortCfg};
 use machine_manager::event_loop::EventLoop;
 use machine_manager::machine::{HypervisorType, MachineInterface, MachineLifecycle, VmState};
+use machine_manager::mmds::{parse_ipv4, MmdsConfig, MmdsData, MmdsStore, MmdsVersion};
 use machine_manager::notifier::pause_notify;
-use machine_manager::{check_arg_exist, check_arg_nonexist};
-use migration::{MigrateOps, MigrationManager, MigrationStatus};
+use machine_manager::qmp::{qmp_response::Response, qmp_schema};
+use migration::protocol::FileFormat;
+use migration::snapshot::MEMORY_PATH_SUFFIX;
+use migration::{MigrateOps, MigrationManager, MigrationStatus, RestoreMode};
 #[cfg(feature = "windows_emu_pid")]
 use ui::console::{get_run_stage, VmRunningStage};
 use util::arg_parser;
@@ -122,8 +146,16 @@ use util::loop_context::{
     gen_delete_notifiers, EventNotifier, NotifierCallback, NotifierOperation,
 };
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
+use util::{
+    bitmap::set_dense_bitmap_bit,
+    unix::{host_page_size, PagemapBatchReader},
+};
 #[cfg(feature = "vfio_device")]
 use vfio::{vfio_register_pcidevops_type, VfioConfig, VfioDevice, VfioPciDevice, KVM_DEVICE_FD};
+#[cfg(feature = "vhostuser_fs")]
+use virtio::vhost;
+#[cfg(feature = "virtio_mem")]
+use virtio::MemoryConfig;
 #[cfg(feature = "virtio_scsi")]
 use virtio::ScsiCntlr::{scsi_cntlr_create_scsi_bus, ScsiCntlr, ScsiCntlrConfig};
 #[cfg(any(feature = "vhost_vsock", feature = "vhost_net"))]
@@ -134,22 +166,39 @@ use virtio::VhostKern;
     feature = "vhostuser_gpu"
 ))]
 use virtio::VhostUser;
+#[cfg(feature = "vhostuser_fs")]
 use virtio::VhostUser::FsState;
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use virtio::VirtioDeviceQuirk;
+#[cfg(any(
+    feature = "vhost_vsock",
+    feature = "virtio_pmem",
+    feature = "virtio_serial"
+))]
+use virtio::VirtioMmioState;
 use virtio::{
-    balloon_allow_list, find_port_by_nr, get_max_nr, vhost, virtio_register_pcidevops_type,
-    virtio_register_sysbusdevops_type, Balloon, BalloonConfig, BalloonState, Block, BlockState,
-    Input, InputConfig, MttState, Multitouch, MultitouchConfig, Serial, SerialPort,
-    VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioMmioState, VirtioNetState,
-    VirtioPciDevice, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+    balloon_allow_list, virtio_register_pcidevops_type, virtio_register_sysbusdevops_type, Block,
+    BlockState, VirtioBlkDevConfig, VirtioDevice, VirtioMmioDevice, VirtioNetState,
+    VirtioPciDevice,
 };
+#[cfg(feature = "virtio_serial")]
+use virtio::{
+    find_port_by_nr, get_max_nr, Serial, SerialPort, VirtioSerialState, VIRTIO_TYPE_CONSOLE,
+};
+#[cfg(feature = "virtio_balloon")]
+use virtio::{Balloon, BalloonConfig, BalloonState};
 #[cfg(feature = "virtio_gpu")]
-use virtio::{Gpu, GpuDevConfig};
+use virtio::{Gpu, GpuDevConfig, GpuState};
+#[cfg(feature = "virtio_input")]
+use virtio::{Input, InputConfig};
+#[cfg(feature = "virtio_multitouch")]
+use virtio::{MttState, Multitouch, MultitouchConfig};
 #[cfg(feature = "virtio_pmem")]
 use virtio::{Pmem, PmemState, VirtioPmemDevConfig};
 #[cfg(feature = "virtio_rng")]
 use virtio::{Rng, RngConfig, RngState};
+#[cfg(feature = "virtio_snd")]
+use virtio::{Sound, SoundConfig};
 
 #[cfg(feature = "windows_emu_pid")]
 const WINDOWS_EMU_PID_DEFAULT_INTERVAL: u64 = 4000;
@@ -192,8 +241,10 @@ pub struct MachineBase {
     hypervisor: Arc<Mutex<dyn HypervisorOps>>,
     /// migrate hypervisor.
     migration_hypervisor: Arc<Mutex<dyn MigrateOps>>,
-    /// virtio-net-pci devices.
-    net_devs: HashMap<String, Arc<Mutex<dyn VirtioDevice>>>,
+    /// virtio-net-pci devices (non-vhost only), keyed by interface ID.
+    pub(crate) net_devs: HashMap<String, Arc<Mutex<dyn VirtioDevice>>>,
+    /// MMDS data store shared across both standard VM and microvm.
+    pub(crate) mmds_store: Arc<Mutex<MmdsStore>>,
 }
 
 impl MachineBase {
@@ -268,6 +319,7 @@ impl MachineBase {
             hypervisor,
             migration_hypervisor,
             net_devs: HashMap::new(),
+            mmds_store: Arc::new(Mutex::new(MmdsStore::new_default())),
         })
     }
 
@@ -338,6 +390,91 @@ impl MachineBase {
             true
         }
     }
+
+    pub(crate) fn mmds_put(&self, args: qmp_schema::MmdsPutArgs) -> Response {
+        let data = MmdsData {
+            instance_id: args.instance_id,
+            env_id: args.env_id,
+            address: args.address,
+            access_token_hash: args.access_token_hash,
+        };
+        match self.mmds_store.lock().unwrap().put(data) {
+            Ok(_) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    pub(crate) fn mmds_patch(&self, args: qmp_schema::MmdsPatchArgs) -> Response {
+        let mut obj = serde_json::Map::new();
+        if let Some(v) = args.instance_id {
+            obj.insert("instanceID".to_string(), serde_json::Value::String(v));
+        }
+        if let Some(v) = args.env_id {
+            obj.insert("envID".to_string(), serde_json::Value::String(v));
+        }
+        if let Some(v) = args.address {
+            obj.insert("address".to_string(), serde_json::Value::String(v));
+        }
+        if let Some(v) = args.access_token_hash {
+            obj.insert("accessTokenHash".to_string(), serde_json::Value::String(v));
+        }
+        match self
+            .mmds_store
+            .lock()
+            .unwrap()
+            .patch(serde_json::Value::Object(obj))
+        {
+            Ok(_) => Response::create_empty_response(),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    pub(crate) fn mmds_get(&self) -> Response {
+        Response::create_response(self.mmds_store.lock().unwrap().get_json(), None)
+    }
+
+    pub(crate) fn parse_and_update_mmds_config(
+        &self,
+        args: &qmp_schema::MmdsConfigArgs,
+    ) -> Result<(), Response> {
+        let version = match MmdsVersion::from_str(&args.version) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                ))
+            }
+        };
+        let ipv4_address = if let Some(addr_str) = &args.ipv4_address {
+            match parse_ipv4(addr_str) {
+                Some(ip) => ip,
+                None => {
+                    return Err(Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(format!(
+                            "Invalid IPv4 address: {}",
+                            addr_str
+                        )),
+                        None,
+                    ))
+                }
+            }
+        } else {
+            [169, 254, 169, 254]
+        };
+        self.mmds_store.lock().unwrap().config = MmdsConfig {
+            version,
+            network_interfaces: args.network_interfaces.clone(),
+            ipv4_address,
+        };
+        Ok(())
+    }
 }
 
 macro_rules! create_device_add_matches {
@@ -363,10 +500,126 @@ macro_rules! create_device_add_matches {
     };
 }
 
+pub(crate) fn apply_mmds_to_net_dev(dev: &mut virtio::Net, store: Option<Arc<Mutex<MmdsStore>>>) {
+    match store {
+        Some(s) => {
+            *dev.mmds_tcp_stack.lock().unwrap() =
+                Some(machine_manager::mmds::tcp_stack::MmdsTcpStack::new(s));
+        }
+        None => {
+            *dev.mmds_tcp_stack.lock().unwrap() = None;
+        }
+    }
+}
+
+fn sorted_ram_regions(machine_ram: &Region) -> Vec<Region> {
+    let mut ram_regions: Vec<Region> = machine_ram
+        .subregions()
+        .into_iter()
+        .filter(|region| region.region_type() == RegionType::Ram)
+        .collect();
+    ram_regions.sort_by_key(|region| region.offset().raw_value());
+    ram_regions
+}
+
+fn region_page_size(region: &Region) -> u64 {
+    region
+        .get_region_page_size()
+        .filter(|size| *size != 0)
+        .unwrap_or_else(host_page_size)
+}
+
+pub(crate) fn build_mem_mappings(machine_ram: &Region) -> Result<qmp_schema::MemMappings> {
+    let ram_regions = sorted_ram_regions(machine_ram);
+    let mut next_offset = 0_u64;
+    let mut mappings = Vec::with_capacity(ram_regions.len());
+    for region in ram_regions {
+        // SAFETY: Machine RAM regions own valid host mappings for their whole region size.
+        let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
+            .with_context(|| format!("RAM region {} has no host address", region.name))?;
+        let size = region.size();
+        let page_size = region_page_size(&region);
+
+        mappings.push(qmp_schema::MemMapping {
+            base_host_virt_addr,
+            size,
+            offset: next_offset,
+            page_size,
+        });
+        next_offset = next_offset
+            .checked_add(size)
+            .with_context(|| "RAM mapping offset overflow")?;
+    }
+
+    Ok(qmp_schema::MemMappings { mappings })
+}
+
+pub(crate) fn build_mem_page_state(machine_ram: &Region) -> Result<qmp_schema::MemPageState> {
+    let ram_regions = sorted_ram_regions(machine_ram);
+    let page_size = host_page_size();
+    let mut pagemap = PagemapBatchReader::new()?;
+
+    let mut page_base = 0_u64;
+    let mut resident = Vec::new();
+    let mut empty = Vec::new();
+    for region in ram_regions {
+        let size = region.size();
+        let page_count = size.div_ceil(page_size);
+        // SAFETY: `sorted_ram_regions()` only returns RAM regions from the
+        // address space. The returned host address is validated below before
+        // being passed to pagemap scanning.
+        let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
+            .with_context(|| format!("RAM region {} has no host address", region.name))?;
+
+        pagemap.scan_range(base_host_virt_addr, size, page_size, |page_index, entry| {
+            if !entry.is_resident() {
+                return Ok(());
+            }
+            let bitmap_index = page_base
+                .checked_add(page_index)
+                .with_context(|| "resident bitmap index overflow")?;
+            set_dense_bitmap_bit(&mut resident, bitmap_index)?;
+
+            let page_offset = page_index
+                .checked_mul(page_size)
+                .with_context(|| "page offset overflow")?;
+            let bytes_left = size - page_offset;
+            let cmp_len = std::cmp::min(page_size, bytes_left);
+            let cmp_len_usize =
+                usize::try_from(cmp_len).with_context(|| "page comparison length overflow")?;
+            // SAFETY: page_offset and cmp_len are bounded by this RAM region's size.
+            let page = unsafe {
+                std::slice::from_raw_parts(
+                    (base_host_virt_addr + page_offset) as *const u8,
+                    cmp_len_usize,
+                )
+            };
+            if page.iter().all(|byte| *byte == 0) {
+                set_dense_bitmap_bit(&mut empty, bitmap_index)?;
+            }
+            Ok(())
+        })?;
+
+        page_base = page_base
+            .checked_add(page_count)
+            .with_context(|| "page-state bitmap index overflow")?;
+    }
+
+    Ok(qmp_schema::MemPageState {
+        resident,
+        empty,
+        page_size,
+    })
+}
+
 pub trait MachineOps: MachineLifecycle {
     fn machine_base(&self) -> &MachineBase;
 
     fn machine_base_mut(&mut self) -> &mut MachineBase;
+
+    fn is_migrating(&self) -> bool {
+        self.get_migrate_info().mode != MigrateMode::Unknown
+    }
 
     /// Build all SMBIOS tables and entry, link to fwcfg or write to memory.
     ///
@@ -394,6 +647,8 @@ pub trait MachineOps: MachineLifecycle {
             mem_array,
         );
 
+        drop(vmcfg_lock);
+
         let ep = build_smbios_ep30(
             #[cfg(target_arch = "x86_64")]
             ARCH_SMBIOS_BEGIN,
@@ -408,7 +663,7 @@ pub trait MachineOps: MachineLifecycle {
             locked_fw_cfg
                 .add_file_entry(SMBIOS_ANCHOR_FILE, ep)
                 .with_context(|| "Failed to add smbios anchor file entry")?;
-        } else {
+        } else if !self.is_migrating() {
             #[cfg(target_arch = "x86_64")]
             load_smbios_to_memory(&self.machine_base().sys_mem, table, ep)
                 .with_context(|| "Failed to load SMBIOS to guest memory")?;
@@ -442,11 +697,13 @@ pub trait MachineOps: MachineLifecycle {
             // go direct_boot if fwcfg is not present.
             prot64_mode: fwcfg.is_none(),
         };
+        let write_guest_mem = !self.is_migrating();
         let layout = load_linux(
             &bootloader_config,
             &self.machine_base().sys_mem,
             fwcfg,
             mem_rsdp,
+            write_guest_mem,
         )
         .with_context(|| MachineError::LoadKernErr)?;
 
@@ -480,8 +737,14 @@ pub trait MachineOps: MachineLifecycle {
             initrd,
             mem_start,
         };
-        let layout = load_linux(&bootloader_config, &self.machine_base().sys_mem, fwcfg)
-            .with_context(|| MachineError::LoadKernErr)?;
+        let write_guest_mem = !self.is_migrating();
+        let layout = load_linux(
+            &bootloader_config,
+            &self.machine_base().sys_mem,
+            fwcfg,
+            write_guest_mem,
+        )
+        .with_context(|| MachineError::LoadKernErr)?;
         if let Some(rd) = &mut boot_source.initrd {
             rd.initrd_addr = layout.initrd_start;
             rd.initrd_size = layout.initrd_size;
@@ -535,6 +798,92 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    fn expected_ram_region_states(
+        &self,
+        mem_config: &MachineMemConfig,
+    ) -> Result<Vec<RamRegionState>> {
+        let numa_nodes = self.get_numa_nodes();
+
+        if numa_nodes.is_none() || mem_config.membackend_objs.is_none() {
+            return Ok(vec![RamRegionState {
+                name: DEFAULT_RAM_REGION_NAME.to_string(),
+                offset: 0,
+                size: mem_config.mem_size,
+            }]);
+        }
+
+        let mb_objs = mem_config.membackend_objs.as_ref().unwrap();
+        let mut ram_states = Vec::new();
+        let mut offset = 0_u64;
+        for node in numa_nodes.as_ref().unwrap().iter() {
+            for mb_obj in mb_objs.iter() {
+                if mb_obj.id.eq(&node.1.mem_dev) {
+                    ram_states.push(RamRegionState {
+                        name: mb_obj.id.clone(),
+                        offset,
+                        size: mb_obj.size,
+                    });
+                    offset = offset
+                        .checked_add(mb_obj.size)
+                        .with_context(|| "total mem backend size overflow")?;
+                    break;
+                }
+            }
+        }
+
+        Ok(ram_states)
+    }
+
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState>;
+
+    fn restore_mapped_ram(
+        &self,
+        sys_mem: &Arc<AddressSpace>,
+        mem_config: &MachineMemConfig,
+    ) -> Result<()> {
+        let migrate_info = self.get_migrate_info();
+        let mut snapshot_path = PathBuf::from(&migrate_info.uri);
+        if !snapshot_path.is_dir() {
+            bail!("Invalid snapshot path {}", migrate_info.uri);
+        }
+
+        snapshot_path.push(MEMORY_PATH_SUFFIX);
+        let mut memory_file =
+            File::open(&snapshot_path).with_context(|| "Failed to open memory snapshot file")?;
+        let memory_header = MigrationManager::restore_header(&mut memory_file)?;
+        memory_header.check_header()?;
+        if memory_header.format != FileFormat::MemoryFull {
+            bail!("Invalid memory snapshot file");
+        }
+
+        sys_mem
+            .build_mapped_ram_from_snapshot(&mut memory_file)
+            .with_context(|| "Failed to restore mapped guest memory layout")?;
+        let expected_ram_states = self.expected_ram_region_states(mem_config)?;
+        let expected_alias_states = self.expected_alias_region_states(mem_config);
+        sys_mem
+            .validate_mapped_ram_from_snapshot(&expected_ram_states, &expected_alias_states)
+            .with_context(|| "Mapped guest memory layout does not match VM startup config")?;
+
+        let restored_mem_size =
+            self.get_vm_ram()
+                .subregions()
+                .iter()
+                .try_fold(0_u64, |size, region| {
+                    size.checked_add(region.size())
+                        .with_context(|| "Restored guest memory size overflow")
+                })?;
+        if restored_mem_size != mem_config.mem_size {
+            bail!(
+                "Snapshot memory size {} does not match configured guest memory size {}",
+                restored_mem_size,
+                mem_config.mem_size
+            );
+        }
+
+        Ok(())
+    }
+
     /// Init I/O & memory address space and mmap guest memory.
     ///
     /// # Arguments
@@ -550,7 +899,9 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<()> {
         trace::trace_scope_start!(init_memory);
         let migrate_info = self.get_migrate_info();
-        if migrate_info.mode != MigrateMode::File || !migrate_info.mapped {
+        if migrate_info.mode == MigrateMode::File && migrate_info.mapped {
+            self.restore_mapped_ram(sys_mem, mem_config)?;
+        } else {
             self.create_machine_ram(mem_config, nr_cpus)?;
             self.init_machine_ram(sys_mem, mem_config)?;
         }
@@ -862,6 +1213,7 @@ pub trait MachineOps: MachineLifecycle {
         bail!("Virtio mmio device Not supported!");
     }
 
+    #[cfg(feature = "virtio_balloon")]
     fn add_virtio_balloon(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         if vm_config.dev_name.contains_key("balloon") {
             bail!("Only one balloon device is supported for each vm.");
@@ -895,14 +1247,20 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_balloon"))]
+    fn add_virtio_balloon(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-balloon is not enabled")
+    }
+
     /// Add virtio memory device.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_mem")]
     fn add_virtio_mem(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
-        let option = virtio::MemoryConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let option = MemoryConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let memoption = vm_config
             .object
             .mem_object
@@ -944,6 +1302,11 @@ pub trait MachineOps: MachineLifecycle {
             }
         }
         Ok(())
+    }
+
+    #[cfg(not(feature = "virtio_mem"))]
+    fn add_virtio_mem(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-mem is not enabled")
     }
 
     /// Add virtio pmem device.
@@ -995,12 +1358,51 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    /// Add virtio sound device.
+    ///
+    /// # Arguments
+    ///
+    /// * `vm_config` - VM configuration.
+    /// * `cfg_args` - Device configuration args.
+    /// * `token_id` - Used for OHOS audio.
+    #[cfg(feature = "virtio_snd")]
+    fn add_virtio_sound(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        cfg_args: &str,
+        token_id: Option<Arc<RwLock<u64>>>,
+    ) -> Result<()> {
+        let config = SoundConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        let sound = Arc::new(Mutex::new(Sound::new(config.clone(), token_id)));
+
+        match config.classtype.as_str() {
+            "virtio-sound-device" => {
+                check_arg_nonexist!(
+                    ("bus", config.bus),
+                    ("addr", config.addr),
+                    ("multifunction", config.multifunction)
+                );
+                self.add_virtio_mmio_device(config.id.clone(), sound)?;
+            }
+            _ => {
+                check_arg_exist!(("bus", config.bus), ("addr", config.addr));
+                let bdf = PciBdf::new(config.bus.unwrap(), config.addr.unwrap());
+                let multi_func = config.multifunction.unwrap_or_default();
+                self.add_virtio_pci_device(&config.id, &bdf, sound, multi_func, false)
+                    .with_context(|| "Failed to add virtio pci sound device")?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Add virtio serial device.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_serial")]
     fn add_virtio_serial(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         if vm_config.virtio_serial.is_some() {
             bail!("Only one virtio serial device is supported");
@@ -1045,12 +1447,18 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_serial"))]
+    fn add_virtio_serial(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-serial is not enabled")
+    }
+
     /// Add virtio serial port.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `cfg_args` - Device configuration args.
+    #[cfg(feature = "virtio_serial")]
     fn add_virtio_serial_port(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let serial_cfg = vm_config
             .virtio_serial
@@ -1134,6 +1542,11 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_serial"))]
+    fn add_virtio_serial_port(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-serial is not enabled")
+    }
+
     /// Add virtio-rng device.
     ///
     /// # Arguments
@@ -1183,6 +1596,7 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `cfg_args` - Device configuration arguments.
+    #[cfg(feature = "virtio_input")]
     fn add_virtio_input(&mut self, cfg_args: &str) -> Result<()> {
         let cfg = InputConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let dev = Arc::new(Mutex::new(Input::new(cfg.clone())?));
@@ -1207,11 +1621,17 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_input"))]
+    fn add_virtio_input(&mut self, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-input is not enabled")
+    }
+
     /// Add virtio-multitouch input device
     ///
     /// # Arguments
     ///
     /// * `cfg_args` - Device configuration arguments.
+    #[cfg(feature = "virtio_multitouch")]
     fn add_virtio_multitouch(&mut self, cfg_args: &str) -> Result<()> {
         let cfg = MultitouchConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let dev = Arc::new(Mutex::new(Multitouch::new(cfg.clone())));
@@ -1239,12 +1659,18 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "virtio_multitouch"))]
+    fn add_virtio_multitouch(&mut self, _cfg_args: &str) -> Result<()> {
+        bail!("virtio-multitouch is not enabled")
+    }
+
     /// Add virtioFs device.
     ///
     /// # Arguments
     ///
     /// * 'vm_config' - VM configuration.
     /// * 'cfg_args' - Device configuration arguments.
+    #[cfg(feature = "vhostuser_fs")]
     fn add_virtio_fs(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let dev_cfg =
             vhost::user::FsConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -1298,6 +1724,11 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "vhostuser_fs"))]
+    fn add_virtio_fs(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("vhost-user-fs is not enabled")
+    }
+
     fn get_sysbus_devices(&self) -> BTreeMap<u64, Arc<Mutex<dyn Device>>> {
         self.machine_base().sysbus.lock().unwrap().child_devices()
     }
@@ -1326,6 +1757,7 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(feature = "usb_base")]
     fn check_id_existed_in_xhci(&mut self, id: &str) -> Result<bool> {
         let vm_config = self.get_vm_config();
         let locked_vmconfig = vm_config.lock().unwrap();
@@ -1340,6 +1772,11 @@ pub trait MachineOps: MachineLifecycle {
         let mut locked_xhci = xhci_pci.xhci.lock().unwrap();
         let port = locked_xhci.find_usb_port_by_id(id);
         Ok(port.is_some())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn check_id_existed_in_xhci(&mut self, _id: &str) -> Result<bool> {
+        Ok(false)
     }
 
     fn check_device_id_existed(&mut self, name: &str) -> Result<()> {
@@ -1679,6 +2116,16 @@ pub trait MachineOps: MachineLifecycle {
             self.reset_bus(&net_cfg.id)?;
         }
         if !is_vhost {
+            // Wire mmds_store if this interface was pre-configured before the device was added.
+            let store = self.machine_base().mmds_store.clone();
+            let configured = store.lock().unwrap().config.network_interfaces.clone();
+            if configured.contains(&id) {
+                if let Ok(mut dev) = device.lock() {
+                    if let Some(net) = dev.as_any_mut().downcast_mut::<virtio::Net>() {
+                        crate::apply_mmds_to_net_dev(net, Some(store));
+                    }
+                }
+            }
             self.machine_base_mut().net_devs.insert(id, device);
         }
         Ok(())
@@ -1850,7 +2297,10 @@ pub trait MachineOps: MachineLifecycle {
         let config = GpuDevConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         config.check();
         let bdf = PciBdf::new(config.bus.clone(), config.addr);
-        let device = Arc::new(Mutex::new(Gpu::new(config.clone())));
+        let device = Arc::new(Mutex::new(Gpu::new(
+            config.clone(),
+            self.get_sys_mem().clone(),
+        )));
 
         #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
         if device.lock().unwrap().device_quirk() == Some(VirtioDeviceQuirk::VirtioGpuEnableBar0)
@@ -1860,6 +2310,11 @@ pub trait MachineOps: MachineLifecycle {
             device.lock().unwrap().set_bar0_fb(self.get_ohui_fb());
         }
 
+        MigrationManager::register_device_instance(
+            GpuState::descriptor(),
+            device.clone(),
+            &config.id,
+        );
         self.add_virtio_pci_device(&config.id, &bdf, device, false, false)?;
         Ok(())
     }
@@ -2051,6 +2506,7 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `cfg_args` - XHCI Configuration.
+    #[cfg(feature = "usb_base")]
     fn add_usb_xhci(&mut self, cfg_args: &str) -> Result<()> {
         let device_cfg = XhciConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
         let bdf = PciBdf::new(device_cfg.bus.clone(), device_cfg.addr);
@@ -2062,6 +2518,11 @@ pub trait MachineOps: MachineLifecycle {
             .realize()
             .with_context(|| "Failed to realize usb xhci device")?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn add_usb_xhci(&mut self, _cfg_args: &str) -> Result<()> {
+        bail!("USB support is disabled")
     }
 
     /// Add scream sound based on ivshmem.
@@ -2153,6 +2614,7 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// * `vm_config` - VM configuration.
     /// * `usb_dev` - Usb device.
+    #[cfg(feature = "usb_base")]
     fn attach_usb_to_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -2171,12 +2633,22 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "usb_base"))]
+    fn attach_usb_to_xhci_controller(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        _usb_dev: Arc<Mutex<dyn Device>>,
+    ) -> Result<()> {
+        bail!("USB support is disabled")
+    }
+
     /// Detach usb device from xhci controller.
     ///
     /// # Arguments
     ///
     /// * `vm_config` - VM configuration.
     /// * `id` - id of the usb device.
+    #[cfg(feature = "usb_base")]
     fn detach_usb_from_xhci_controller(
         &mut self,
         vm_config: &mut VmConfig,
@@ -2195,12 +2667,22 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    #[cfg(not(feature = "usb_base"))]
+    fn detach_usb_from_xhci_controller(
+        &mut self,
+        _vm_config: &mut VmConfig,
+        _id: String,
+    ) -> Result<()> {
+        bail!("USB support is disabled")
+    }
+
     /// Add usb device.
     ///
     /// # Arguments
     ///
     /// * `driver` - USB device class.
     /// * `cfg_args` - USB device Configuration.
+    #[cfg(feature = "usb_base")]
     fn add_usb_device(&mut self, vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
         let usb_device = match get_class_type(cfg_args)?.as_str() {
             "usb-kbd" => {
@@ -2249,6 +2731,7 @@ pub trait MachineOps: MachineLifecycle {
                     .realize()
                     .with_context(|| "Failed to realize usb camera device")?
             }
+            #[cfg(feature = "usb_storage")]
             "usb-storage" => {
                 let device_cfg =
                     UsbStorageConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
@@ -2283,46 +2766,36 @@ pub trait MachineOps: MachineLifecycle {
 
                 let update_vm_config = self.get_vm_config();
 
-                thread::Builder::new()
-                    .name("usb host initialization".to_string())
-                    .spawn(move || {
-                        let dev_id = config.id.clone();
-                        match initialize_usb_host(config, parent_dev) {
-                            Ok(_) => {
-                                if QmpChannel::is_connected() {
-                                    let success_msg = UsbHostAddRes {
-                                        device: Some(dev_id),
-                                        state_msg: Some("Add usb host device success".to_string()),
-                                    };
-                                    event!(UsbHostAddRes; success_msg);
-                                }
-                            }
-                            Err(e) => {
-                                error!("Usb host device initialization failed: {:?}", e);
-                                let mut locked_vm_config = update_vm_config.lock().unwrap();
-                                locked_vm_config.del_device_by_id(dev_id.clone());
-                                if QmpChannel::is_connected() {
-                                    let fail_msg = UsbHostAddRes {
-                                        device: Some(dev_id),
-                                        state_msg: Some(format!(
-                                            "Usb host device initialization failed: {:?}",
-                                            e
-                                        )),
-                                    };
-                                    event!(UsbHostAddRes; fail_msg);
-                                }
-                            }
-                        }
-                    })
-                    .with_context(|| "Failed to spawn usb host initializer thread")?;
+                let cmd: XhciAsyncCmd = XhciAsyncCmd::UsbHostAdd {
+                    config,
+                    parent_dev: parent_dev.clone(),
+                    vm_config: update_vm_config,
+                };
 
-                return Ok(());
+                let parent = parent_dev.lock().unwrap();
+                let xhci = &parent
+                    .as_any()
+                    .downcast_ref::<XhciPciDevice>()
+                    .ok_or_else(|| anyhow!("Failed to downcast PciDevOps to XhciPciDevice"))?
+                    .xhci;
+
+                return xhci
+                    .lock()
+                    .unwrap()
+                    .async_cmd_tx
+                    .send(cmd)
+                    .with_context(|| "Failed to send usbhost add cmd");
             }
             _ => bail!("Unknown usb device classes."),
         };
 
         self.attach_usb_to_xhci_controller(vm_config, usb_device)?;
         Ok(())
+    }
+
+    #[cfg(not(feature = "usb_base"))]
+    fn add_usb_device(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        bail!("USB support is disabled")
     }
 
     /// Add peripheral devices.
@@ -2358,10 +2831,13 @@ pub trait MachineOps: MachineLifecycle {
         for dev in &cloned_vm_config.devices {
             let cfg_args = dev.1.as_str();
             // Check whether the device id exists to ensure device uniqueness.
-            let id = get_value_of_parameter("id", cfg_args)?;
+            // Some devices (e.g. virtio-serial-device) have an optional id with an
+            // empty default; fall back to "" so that microVM (no PCI bus) skips
+            // the uniqueness check rather than bailing out here.
+            let id = get_value_of_parameter("id", cfg_args).unwrap_or_default();
             self.check_device_id_existed(&id)
                 .with_context(|| format!("Failed to check device id: config {}", cfg_args))?;
-            #[cfg(feature = "scream")]
+            #[cfg(any(feature = "scream", feature = "virtio_snd"))]
             let token_id = self.get_token_id();
 
             create_device_add_matches!(
@@ -2392,6 +2868,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("virtio-rng-device" | "virtio-rng-pci", add_virtio_rng, vm_config, cfg_args),
                 #[cfg(feature = "virtio_pmem")]
                 ("virtio-pmem-device" | "virtio-pmem-pci", add_virtio_pmem, vm_config, cfg_args),
+                #[cfg(feature = "virtio_snd")]
+                ("virtio-sound-device" | "virtio-sound-pci", add_virtio_sound, vm_config, cfg_args, token_id),
                 #[cfg(feature = "vfio_device")]
                 ("vfio-pci", add_vfio_device, cfg_args, false),
                 #[cfg(feature = "virtio_gpu")]
@@ -2777,22 +3255,39 @@ pub fn vm_run(
             .run(cmd_args.is_present("freeze_cpu"))
             .with_context(|| "Failed to start VM.")?;
     } else {
-        start_incoming_migration(vm).with_context(|| "Failed to start migration.")?;
+        start_incoming_migration(vm, cmd_args.is_present("freeze_cpu"))
+            .with_context(|| "Failed to start migration.")?;
     }
 
     Ok(())
 }
 
 /// Start incoming migration from destination.
-fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Result<()> {
+///
+/// `freeze_cpu`: when true (i.e. `-S` was passed on the cmdline), the VM is
+/// kept paused after restore regardless of the VmState recorded in the snapshot.
+fn start_incoming_migration(
+    vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>,
+    freeze_cpu: bool,
+) -> Result<()> {
     let migrate_info = vm.lock().unwrap().get_migrate_info();
     let path = migrate_info.uri;
     match migrate_info.mode {
         MigrateMode::File => {
-            // Set status to `Active`
+            let restore_mode = if let Some(uffd_sock) = migrate_info.uffd_sock.as_ref() {
+                RestoreMode::Uffd {
+                    socket_path: uffd_sock.clone(),
+                    memory: migrate_info.memory,
+                }
+            } else if migrate_info.mapped {
+                RestoreMode::Mapped
+            } else {
+                RestoreMode::Copy
+            };
+
             MigrationManager::set_status(MigrationStatus::Active)?;
             MigrationManager::notify_status(false, MigrationStatus::Active)?;
-            let ret = MigrationManager::restore_snapshot(&path, migrate_info.mapped);
+            let ret = MigrationManager::restore_snapshot(&path, restore_mode);
             if ret.is_err() {
                 let _ = MigrationManager::set_status(MigrationStatus::Failed);
                 if let Err(e) = MigrationManager::notify_status(false, MigrationStatus::Failed) {
@@ -2800,9 +3295,10 @@ fn start_incoming_migration(vm: &Arc<Mutex<dyn MachineOps + Send + Sync>>) -> Re
                 }
                 ret.with_context(|| "Failed to restore snapshot")?;
             }
+
             let vm_locked = vm.lock().unwrap();
-            let pause = *vm_locked.get_vm_state().lock().unwrap() == VmState::Paused;
-            // Set status to `Completed`
+            // `-S` takes priority over the VmState recorded in the snapshot.
+            let pause = freeze_cpu || *vm_locked.get_vm_state().lock().unwrap() == VmState::Paused;
             MigrationManager::set_status(MigrationStatus::Completed)?;
             MigrationManager::notify_status(false, MigrationStatus::Completed)?;
             vm_locked
@@ -2975,23 +3471,86 @@ pub fn type_init() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "usb_host")]
-fn initialize_usb_host(config: UsbHostConfig, parent_dev: Arc<Mutex<dyn Device>>) -> Result<()> {
-    let usbhost = UsbHost::new(config).with_context(|| "Failed to create usb host device")?;
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
 
-    let usbhost = usbhost
-        .realize()
-        .with_context(|| "Failed to realize usb host device")?;
+    use address_space::{GuestAddress, HostMemMapping, Region};
 
-    let parent = parent_dev.lock().unwrap();
-    let xhci_pci = parent
-        .as_any()
-        .downcast_ref::<XhciPciDevice>()
-        .ok_or_else(|| anyhow!("Failed to downcast PciDevOps to XhciPciDevice"))?;
+    use super::*;
 
-    xhci_pci
-        .attach_device(&usbhost)
-        .with_context(|| "Failed to attach usb host device to xhci controller")?;
+    #[test]
+    fn test_build_mem_mappings_sorts_regions_and_assigns_contiguous_offsets() {
+        let root = Region::init_container_region(0x4000, "root");
+        let high = Arc::new(
+            HostMemMapping::new(
+                GuestAddress(0x2000),
+                None,
+                0x1000,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
+        );
+        let low = Arc::new(
+            HostMemMapping::new(GuestAddress(0), None, 0x2000, None, false, false, false).unwrap(),
+        );
 
-    Ok(())
+        root.add_subregion_not_update(Region::init_ram_region(high.clone(), "high"), 0x2000)
+            .unwrap();
+        root.add_subregion_not_update(Region::init_ram_region(low.clone(), "low"), 0)
+            .unwrap();
+
+        let mappings = build_mem_mappings(&root).unwrap();
+
+        assert_eq!(mappings.mappings.len(), 2);
+        assert_eq!(mappings.mappings[0].base_host_virt_addr, low.host_address());
+        assert_eq!(mappings.mappings[0].size, 0x2000);
+        assert_eq!(mappings.mappings[0].offset, 0);
+        assert_eq!(
+            mappings.mappings[1].base_host_virt_addr,
+            high.host_address()
+        );
+        assert_eq!(mappings.mappings[1].size, 0x1000);
+        assert_eq!(mappings.mappings[1].offset, 0x2000);
+    }
+
+    #[test]
+    fn test_build_mem_page_state_reports_resident_and_empty_pages() {
+        let page_size = host_page_size();
+        let root = Region::init_container_region(page_size * 3, "root");
+        let mem = Arc::new(
+            HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                page_size * 3,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap(),
+        );
+        let host_addr = mem.host_address();
+        // SAFETY: The mapping is valid for page_size * 3 bytes.
+        let first_page =
+            unsafe { std::slice::from_raw_parts_mut(host_addr as *mut u8, page_size as usize) };
+        first_page[0] = 1;
+        // SAFETY: The second page is valid and this write makes it resident while keeping it zero.
+        let second_page = unsafe {
+            std::slice::from_raw_parts_mut((host_addr + page_size) as *mut u8, page_size as usize)
+        };
+        second_page[0] = 0;
+
+        root.add_subregion_not_update(Region::init_ram_region(mem, "mem"), 0)
+            .unwrap();
+
+        let state = build_mem_page_state(&root).unwrap();
+
+        assert_eq!(state.page_size, page_size);
+        assert_eq!(state.resident, vec![0b11]);
+        assert_eq!(state.empty, vec![0b10]);
+    }
 }

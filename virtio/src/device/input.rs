@@ -319,7 +319,7 @@ pub struct InputIoHandler {
     /// multitouch type
     mt_type: Option<MultitouchType>,
     /// io inflight
-    pub io_inflight: Arc<IoRef>,
+    pub io_inflight: IoRef,
 }
 
 impl InputIoHandler {
@@ -551,7 +551,7 @@ pub struct Input {
     /// Event file fd.
     fd: Option<Arc<File>>,
     /// Indicate if io is inflight.
-    pub io_inflight: Arc<IoRef>,
+    pub io_inflight: IoRef,
 }
 
 impl Input {
@@ -562,7 +562,7 @@ impl Input {
             evdev_cfg,
             deactivate_evts: Vec::new(),
             fd: None,
-            io_inflight: Arc::new(IoRef::default()),
+            io_inflight: IoRef::default(),
         }
     }
 
@@ -586,7 +586,7 @@ impl Input {
             evdev_cfg,
             deactivate_evts: Vec::new(),
             fd: Some(Arc::new(fd)),
-            io_inflight: Arc::new(IoRef::default()),
+            io_inflight: IoRef::default(),
         })
     }
 

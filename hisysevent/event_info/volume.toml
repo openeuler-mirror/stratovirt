@@ -11,6 +11,12 @@ args = "ERRCODE: i32"
 enabled = true
 
 [[events]]
+name = "STRATOVIRT_SET_MUTE_FAILED"
+event_type = "Fault"
+args = "ERRCODE: i32"
+enabled = true
+
+[[events]]
 name = "STRATOVIRT_SET_VOLUME_FAILED"
 event_type = "Fault"
 args = "ERRCODE: i32"

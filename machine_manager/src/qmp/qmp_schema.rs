@@ -54,13 +54,14 @@ impl QmpErrorClass {
 }
 
 macro_rules! define_qmp_command_enum {
-    ($($command:ident($name:expr, $args_type:ty $(, $serde_default:ident)?)),*) => {
+    ($($(#[$command_attr:meta])* $command:ident($name:expr, $args_type:ty $(, $serde_default:ident)?)),* $(,)?) => {
         /// A enum to store all command struct
         #[derive(Debug, Clone, Serialize, Deserialize, EnumIter, EnumVariantNames, EnumString)]
         #[serde(tag = "execute")]
         #[serde(deny_unknown_fields)]
         pub enum QmpCommand {
             $(
+                $(#[$command_attr])*
                 #[serde(rename = $name)]
                 #[strum(serialize = $name)]
                 $command {
@@ -103,6 +104,9 @@ define_qmp_command_enum!(
     get_viomem("get-viomem", Box<get_viomem>),
     query_mem("query-mem", query_mem, default),
     query_mem_gpa("query-mem-gpa", query_mem_gpa, default),
+    query_mem_mappings("query-mem-mappings", query_mem_mappings, default),
+    query_mem_page_state("query-mem-page-state", query_mem_page_state, default),
+    query_mem_dirty_bitmap("query-mem-dirty-bitmap", query_mem_dirty_bitmap, default),
     query_balloon("query-balloon", query_balloon, default),
     query_vnc("query-vnc", query_vnc, default),
     query_display_image("query-display-image", query_display_image, default),
@@ -140,11 +144,17 @@ define_qmp_command_enum!(
     blockdev_snapshot_internal_sync("blockdev-snapshot-internal-sync", blockdev_snapshot_internal),
     blockdev_snapshot_delete_internal_sync("blockdev-snapshot-delete-internal-sync", blockdev_snapshot_internal),
     query_vcpu_reg("query-vcpu-reg", query_vcpu_reg),
+    #[cfg(feature = "trace")]
     trace_get_state("trace-get-state", trace_get_state),
+    #[cfg(feature = "trace")]
     trace_set_state("trace-set-state", trace_set_state),
     query_ohui_status("query-ohui-status", OhuiStatus, default),
     query_workloads("query-workloads", query_workloads),
-    detect_silent_audio("detect-silent-audio", DetectSilentAudio)
+    detect_silent_audio("detect-silent-audio", DetectSilentAudio),
+    mmds_put("put-mmds", MmdsPutArgs),
+    mmds_patch("patch-mmds", MmdsPatchArgs),
+    mmds_get("get-mmds", mmds_get, default),
+    mmds_config("put-mmds-config", MmdsConfigArgs)
 );
 
 /// Command trait for Deserialize and find back Response.
@@ -1871,6 +1881,69 @@ pub struct SnapshotInfo {
 pub struct query_mem {}
 generate_command_impl!(query_mem, Empty);
 
+/// query-mem-mappings
+///
+/// Query privileged host RAM mappings for external snapshot memory export.
+/// The VM must be paused. `offset` is the byte offset of each RAM region in
+/// the flat external guest RAM image, and `base-host-virt-addr` is an HVA that
+/// is only meaningful to the local management process.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem_mappings {}
+generate_command_impl!(query_mem_mappings, MemMappings);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemMappings {
+    pub mappings: Vec<MemMapping>,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemMapping {
+    #[serde(rename = "base-host-virt-addr")]
+    pub base_host_virt_addr: u64,
+    pub size: u64,
+    pub offset: u64,
+    #[serde(rename = "page-size")]
+    pub page_size: u64,
+}
+
+/// query-mem-page-state
+///
+/// Query resident and zero-page bitmaps for cold external memory export. The
+/// VM must be paused. `resident` includes pages present in RAM or swapped out;
+/// swapped pages are read back in before zero-page classification. Bitmap bits
+/// are indexed by the same flat guest RAM order returned by `query-mem-mappings`.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem_page_state {}
+generate_command_impl!(query_mem_page_state, MemPageState);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemPageState {
+    pub resident: Vec<u64>,
+    pub empty: Vec<u64>,
+    #[serde(rename = "page-size")]
+    pub page_size: u64,
+}
+
+/// query-mem-dirty-bitmap
+///
+/// Query dirty pages after UFFD restore and reset dirty tracking. The VM must
+/// be paused. The returned bitmap covers writes observed since the previous
+/// query/reset point; after the response is built, UFFD-WP is re-enabled for
+/// all registered RAM mappings.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_mem_dirty_bitmap {}
+generate_command_impl!(query_mem_dirty_bitmap, MemDirtyBitmap);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct MemDirtyBitmap {
+    pub bitmap: Vec<u64>,
+    #[serde(rename = "page-size")]
+    pub page_size: u64,
+}
+
 /// query-vcpu-reg
 ///
 /// Query vcpu register value.
@@ -2136,14 +2209,17 @@ pub struct DeviceDeleted {
 ///      "arguments": { "name": "event_name" } }
 /// <- { "return": [ { "name": "event_name", "state": "disabled" } ] }
 /// ```
+#[cfg(feature = "trace")]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct trace_get_state {
     #[serde(rename = "name")]
     pub pattern: String,
 }
+#[cfg(feature = "trace")]
 pub type TraceGetArgument = trace_get_state;
 
+#[cfg(feature = "trace")]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct TraceInfo {
     pub name: String,
@@ -2165,6 +2241,7 @@ pub struct TraceInfo {
 ///                     "enable": true } }
 /// <- { "return": {} }
 /// ```
+#[cfg(feature = "trace")]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct trace_set_state {
@@ -2173,6 +2250,7 @@ pub struct trace_set_state {
     #[serde(rename = "enable")]
     pub enable: bool,
 }
+#[cfg(feature = "trace")]
 pub type TraceSetArgument = trace_set_state;
 
 /// query_workloads
@@ -2203,6 +2281,53 @@ generate_command_impl!(query_workloads, Empty);
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DetectSilentAudio {}
+
+/// MMDS (Microvm Metadata Service) QMP command argument structs.
+/// Arguments for `put-mmds`: replace the entire MMDS data store.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MmdsPutArgs {
+    #[serde(rename = "instanceID")]
+    pub instance_id: String,
+    #[serde(rename = "envID")]
+    pub env_id: String,
+    pub address: String,
+    #[serde(rename = "accessTokenHash", skip_serializing_if = "Option::is_none")]
+    pub access_token_hash: Option<String>,
+}
+
+/// Arguments for `patch-mmds`: merge partial fields into the MMDS data store.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MmdsPatchArgs {
+    #[serde(rename = "instanceID", skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(rename = "envID", skip_serializing_if = "Option::is_none")]
+    pub env_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(rename = "accessTokenHash", skip_serializing_if = "Option::is_none")]
+    pub access_token_hash: Option<String>,
+}
+
+/// Arguments for `put-mmds-config`: configure the MMDS endpoint.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MmdsConfigArgs {
+    /// "V1" or "V2"
+    pub version: String,
+    /// List of network interface IDs that should intercept MMDS traffic.
+    #[serde(rename = "network-interfaces")]
+    pub network_interfaces: Vec<String>,
+    /// Optional IPv4 address override (default: "169.254.169.254").
+    #[serde(rename = "ipv4-address", skip_serializing_if = "Option::is_none")]
+    pub ipv4_address: Option<String>,
+}
+
+/// Empty arguments struct for `get-mmds` (no arguments required).
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct mmds_get {}
 
 /// VmNotifyEvent
 ///
@@ -2235,6 +2360,8 @@ pub const PVPANIC_TYPE: u32 = 3;
 
 #[cfg(test)]
 mod tests {
+    use strum::VariantNames;
+
     use super::*;
 
     #[test]
@@ -2694,6 +2821,58 @@ mod tests {
         };
         let part_msg = r#"ok"#;
         assert!(err_msg.contains(part_msg));
+    }
+
+    #[test]
+    fn test_qmp_snapshot_memory_commands() {
+        let json_msgs = [
+            r#"
+            {
+                "execute": "query-mem-mappings"
+            }
+            "#,
+            r#"
+            {
+                "execute": "query-mem-page-state"
+            }
+            "#,
+            r#"
+            {
+                "execute": "query-mem-dirty-bitmap"
+            }
+            "#,
+        ];
+
+        for json_msg in json_msgs {
+            let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+                Ok(_) => "ok".to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert_eq!(err_msg, "ok");
+        }
+    }
+
+    #[test]
+    fn test_qmp_snapshot_memory_commands_are_queryable() {
+        let command_names = QmpCommand::VARIANTS;
+        for name in [
+            "query-mem-mappings",
+            "query-mem-page-state",
+            "query-mem-dirty-bitmap",
+        ] {
+            assert!(command_names.contains(&name), "missing QMP command {name}");
+        }
+    }
+
+    #[test]
+    fn test_snapshot_debug_commands_are_not_public_qmp() {
+        let command_names = QmpCommand::VARIANTS;
+        for name in ["vmstate-save", "vmstate-load", "blockdev-drain"] {
+            assert!(
+                !command_names.contains(&name),
+                "debug command {name} should not be public QMP"
+            );
+        }
     }
 
     #[test]

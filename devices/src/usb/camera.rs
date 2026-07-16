@@ -809,12 +809,14 @@ impl UsbDevice for UsbCamera {
         self.register_cb();
 
         let camera = Arc::new(Mutex::new(self));
-        let cloned_camera = camera.clone();
-        let pause_notify = Arc::new(move |paused: bool| {
-            let locked_cam = cloned_camera.lock().unwrap();
-            locked_cam.camera_backend.lock().unwrap().pause(paused);
-        });
-        camera.lock().unwrap().notifier_id = register_vm_pause_notifier(pause_notify);
+        {
+            let mut locked_camera = camera.lock().unwrap();
+            let camera_backend = locked_camera.camera_backend.clone();
+            let pause_notify = Arc::new(move |paused: bool| {
+                camera_backend.lock().unwrap().pause(paused);
+            });
+            locked_camera.notifier_id = register_vm_pause_notifier(pause_notify);
+        }
 
         Ok(camera)
     }

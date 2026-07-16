@@ -27,7 +27,7 @@ use acpi::{
     AmlBuilder, AmlInteger, AmlNameDecl, AmlPackage, AmlScope, AmlScopeBuilder, TableLoader,
     IOAPIC_BASE_ADDR, LAPIC_BASE_ADDR,
 };
-use address_space::{AddressSpace, GuestAddress, HostMemMapping, Region};
+use address_space::{AddressSpace, AliasRegionState, GuestAddress, HostMemMapping, Region};
 use cpu::{CPUBootConfig, CPUInterface, CPUTopology, CPU};
 use devices::acpi::cpu_controller::{CpuConfig, CpuController};
 use devices::acpi::ged::{Ged, GedEvent};
@@ -61,6 +61,8 @@ use util::seccomp::SeccompCmpOpt;
 pub(crate) const VENDOR_ID_INTEL: u16 = 0x8086;
 const HOLE_640K_START: u64 = 0x000A_0000;
 const HOLE_640K_END: u64 = 0x0010_0000;
+type MemRange = (u64, u64);
+type BootSourceLayout = (MemRange, u32, u32, Option<MemRange>);
 
 /// The type of memory layout entry on x86_64
 #[repr(usize)]
@@ -173,23 +175,23 @@ impl StdMachine {
 
         // Must reload boot resource for direct kernel boot.
         if locked_vm.get_fwcfg_dev().is_none() {
-            // MEM_LAYOUT is defined statically, will not overflow.
-            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
-            let gap_range = (gap_start, gap_end - gap_start);
-            let ioapic_addr = MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32;
-            let lapic_addr = MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32;
-            let ident_tss_range = Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]);
-            locked_vm.load_boot_source(
-                None,
-                true,
-                gap_range,
-                ioapic_addr,
-                lapic_addr,
-                ident_tss_range,
-            )?;
+            let (gap_range, ioapic_addr, lapic_addr, ident_tss_range) = Self::boot_source_layout();
+            locked_vm
+                .load_boot_source(
+                    None,
+                    true,
+                    gap_range,
+                    ioapic_addr,
+                    lapic_addr,
+                    ident_tss_range,
+                )
+                .with_context(|| "Fail to reload direct boot resources")?;
+            locked_vm
+                .build_smbios(None, locked_vm.guest_memory_ranges())
+                .with_context(|| "Failed to rebuild SMBIOS")?;
+            locked_vm
+                .build_acpi_tables(None)
+                .with_context(|| "Failed to rebuild ACPI tables")?;
         }
 
         if QmpChannel::is_connected() {
@@ -205,6 +207,35 @@ impl StdMachine {
         }
 
         Ok(())
+    }
+
+    fn boot_source_layout() -> BootSourceLayout {
+        // MEM_LAYOUT is defined statically, will not overflow.
+        let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
+            + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
+        // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
+        let gap_range = (gap_start, gap_end - gap_start);
+        let ioapic_addr = MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32;
+        let lapic_addr = MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32;
+        let ident_tss_range = Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]);
+
+        (gap_range, ioapic_addr, lapic_addr, ident_tss_range)
+    }
+
+    fn guest_memory_ranges(&self) -> Vec<(u64, u64)> {
+        let vm_config = self.base.vm_config.lock().unwrap();
+        let mem_size = vm_config.machine_config.mem_config.mem_size;
+        let below4g_range = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize];
+        let above4g_range = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize];
+        let below_size = std::cmp::min(below4g_range.1, mem_size);
+        let mut mem_array = vec![(below4g_range.0, below_size)];
+
+        if mem_size > below_size {
+            mem_array.push((above4g_range.0, mem_size - below_size));
+        }
+
+        mem_array
     }
 
     fn init_ich9_lpc(&self, vm: Arc<Mutex<StdMachine>>) -> Result<()> {
@@ -429,6 +460,28 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState> {
+        let mut alias_states = Vec::new();
+        let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        alias_states.push(AliasRegionState {
+            name: "below4g_ram".to_string(),
+            alias_offset: 0,
+            offset: MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+            size: std::cmp::min(below4g_size, mem_config.mem_size),
+        });
+
+        if mem_config.mem_size > below4g_size {
+            alias_states.push(AliasRegionState {
+                name: "above4g_ram".to_string(),
+                alias_offset: below4g_size,
+                offset: MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                size: mem_config.mem_size - below4g_size,
+            });
+        }
+
+        alias_states
+    }
+
     fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
         let mut plug_base = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
         let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
@@ -531,16 +584,8 @@ impl MachineOps for StdMachine {
 
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus, max_cpus)?;
         let migrate = locked_vm.get_migrate_info();
-        let boot_config = if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
-            // MEM_LAYOUT is defined statically, will not overflow.
-            let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
-                + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
-            let gap_end = MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0;
-            // gap_end is bigger than gap_start, as MEM_LAYOUT is defined statically.
-            let gap_range = (gap_start, gap_end - gap_start);
-            let ioapic_addr = MEM_LAYOUT[LayoutEntryType::IoApic as usize].0 as u32;
-            let lapic_addr = MEM_LAYOUT[LayoutEntryType::LocalApic as usize].0 as u32;
-            let ident_tss_range = Some(MEM_LAYOUT[LayoutEntryType::IdentTss as usize]);
+        let boot_config = {
+            let (gap_range, ioapic_addr, lapic_addr, ident_tss_range) = Self::boot_source_layout();
             Some(locked_vm.load_boot_source(
                 fwcfg.as_ref(),
                 // If no fwcfg, will load ACPI to memory.
@@ -550,8 +595,6 @@ impl MachineOps for StdMachine {
                 lapic_addr,
                 ident_tss_range,
             )?)
-        } else {
-            None
         };
         let topology = CPUTopology::new().set_topology((
             vm_config.machine_config.nr_threads,
@@ -572,22 +615,8 @@ impl MachineOps for StdMachine {
             locked_vm.init_cpu_controller(boot_config.unwrap(), topology, vm.clone())?;
         }
 
-        let mut mem_array = Vec::new();
-        let mem_size = vm_config.machine_config.mem_config.mem_size;
-        let below_size =
-            std::cmp::min(MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1, mem_size);
-        mem_array.push((
-            MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
-            below_size,
-        ));
-        if mem_size > below_size {
-            mem_array.push((
-                MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
-                mem_size - below_size,
-            ));
-        }
         locked_vm
-            .build_smbios(fwcfg.as_ref(), mem_array)
+            .build_smbios(fwcfg.as_ref(), locked_vm.guest_memory_ranges())
             .with_context(|| "Failed to build SMBIOS")?;
 
         locked_vm
@@ -728,8 +757,11 @@ impl MachineOps for StdMachine {
 pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
     bpf_rule
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_PIT2() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_PIT2() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_CLOCK() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_CLOCK() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_IRQCHIP() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_IRQCHIP() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XSAVE() as u32)

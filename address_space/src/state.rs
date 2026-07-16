@@ -15,11 +15,15 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use machine_manager::config::SnapshotMemoryMode;
 use serde::{Deserialize, Serialize};
 
+use crate::uffd::{store_uffd_backend, UffdMemoryBackend};
 use crate::{AddressAttr, AddressSpace, FileBackend, GuestAddress, HostMemMapping, Region};
-use migration::{DeviceStateDesc, MemBlock, MigrationError, MigrationHook, StateTransfer};
+use migration::{
+    DeviceStateDesc, MemBlock, MigrationError, MigrationHook, RestoreMode, StateTransfer,
+};
 use migration_derive::DescSerde;
 use util::aio::ALIGNMENT_SIZE;
 use util::num_ops::round_up;
@@ -72,6 +76,347 @@ pub struct AddressSpaceState {
     alias_region_state: Vec<AliasRegionState>,
 }
 
+fn build_mapped_ram_regions(
+    machine_ram: &Region,
+    ram_states: &[RamRegionState],
+    memfile_arc: &Arc<File>,
+    first_region_offset: u64,
+) -> Result<()> {
+    for ram_state in ram_states.iter() {
+        let file_backend = FileBackend {
+            file: memfile_arc.clone(),
+            offset: ram_state.offset + first_region_offset,
+            page_size: host_page_size(),
+        };
+        let host_mmap = Arc::new(
+            HostMemMapping::new(
+                GuestAddress(0),
+                None,
+                ram_state.size,
+                Some(file_backend),
+                false,
+                false,
+                false,
+            )
+            .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?,
+        );
+
+        machine_ram
+            .add_subregion_not_update(
+                Region::init_ram_region(host_mmap, &ram_state.name),
+                ram_state.offset,
+            )
+            .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
+    }
+
+    Ok(())
+}
+
+fn build_alias_regions(
+    root: &Region,
+    machine_ram: &Arc<Region>,
+    alias_states: &[AliasRegionState],
+) -> Result<()> {
+    for alias_state in alias_states.iter() {
+        let ram = Region::init_alias_region(
+            machine_ram.clone(),
+            alias_state.alias_offset,
+            alias_state.size,
+            &alias_state.name,
+        );
+        root.add_subregion(ram, alias_state.offset)?;
+    }
+
+    Ok(())
+}
+
+fn validate_ram_regions(
+    snapshot_machine_ram: &Region,
+    expected_ram_states: &[RamRegionState],
+) -> Result<()> {
+    let snapshot_regions = snapshot_machine_ram.subregions();
+    if snapshot_regions.len() != expected_ram_states.len() {
+        bail!(
+            "Mapped ram region count mismatch: snapshot {}, expected {}",
+            snapshot_regions.len(),
+            expected_ram_states.len()
+        );
+    }
+
+    for expected_ram_state in expected_ram_states.iter() {
+        let snapshot_region = snapshot_regions
+            .iter()
+            .find(|region| region.name == expected_ram_state.name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Expected ram region {} is missing from snapshot layout",
+                    expected_ram_state.name
+                )
+            })?;
+
+        if snapshot_region.size() != expected_ram_state.size {
+            bail!(
+                "Mapped ram region {} size mismatch: snapshot {}, expected {}",
+                expected_ram_state.name,
+                snapshot_region.size(),
+                expected_ram_state.size
+            );
+        }
+        if snapshot_region.offset().raw_value() != expected_ram_state.offset {
+            bail!(
+                "Mapped ram region {} offset mismatch: snapshot {}, expected {}",
+                expected_ram_state.name,
+                snapshot_region.offset().raw_value(),
+                expected_ram_state.offset
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_alias_regions(
+    snapshot_root: &Region,
+    expected_alias_states: &[AliasRegionState],
+) -> Result<()> {
+    let snapshot_root_subregions = snapshot_root.subregions();
+    let snapshot_alias_count = snapshot_root_subregions
+        .iter()
+        .filter(|region| region.alias_name().is_some())
+        .count();
+    if snapshot_alias_count != expected_alias_states.len() {
+        bail!(
+            "Mapped alias region count mismatch: snapshot {}, expected {}",
+            snapshot_alias_count,
+            expected_alias_states.len()
+        );
+    }
+
+    for expected_alias_state in expected_alias_states.iter() {
+        let snapshot_region = snapshot_root_subregions
+            .iter()
+            .find(|region| region.name == expected_alias_state.name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Expected alias region {} is missing from snapshot layout",
+                    expected_alias_state.name
+                )
+            })?;
+        if snapshot_region.alias_name().is_none() {
+            bail!(
+                "Snapshot region {} is no longer an alias region",
+                expected_alias_state.name
+            );
+        }
+        if snapshot_region.alias_offset() != expected_alias_state.alias_offset {
+            bail!(
+                "Mapped alias region {} alias offset mismatch: snapshot {}, expected {}",
+                expected_alias_state.name,
+                snapshot_region.alias_offset(),
+                expected_alias_state.alias_offset
+            );
+        }
+        if snapshot_region.offset().raw_value() != expected_alias_state.offset {
+            bail!(
+                "Mapped alias region {} offset mismatch: snapshot {}, expected {}",
+                expected_alias_state.name,
+                snapshot_region.offset().raw_value(),
+                expected_alias_state.offset
+            );
+        }
+        if snapshot_region.size() != expected_alias_state.size {
+            bail!(
+                "Mapped alias region {} size mismatch: snapshot {}, expected {}",
+                expected_alias_state.name,
+                snapshot_region.size(),
+                expected_alias_state.size
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn read_address_space_state(memory: &mut File) -> Result<AddressSpaceState> {
+    let data_slice = read_state_slice(memory)
+        .with_context(|| "Failed to read state slice while restoring state")?;
+    serde_json::from_slice(&data_slice).with_context(|| MigrationError::FromBytesError("MEMORY"))
+}
+
+impl AddressSpace {
+    pub fn build_mapped_ram_from_snapshot(&self, memory: &mut File) -> Result<()> {
+        let address_space_state = read_address_space_state(memory)?;
+        let first_region_offset = memory.stream_position()?;
+        let cloned_file = match memory.try_clone() {
+            Ok(file) => file,
+            Err(e) => bail!("Failed to clone memory file: {:?}", e),
+        };
+        let memfile_arc = Arc::new(cloned_file);
+
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+        if !machine_ram.subregions().is_empty() {
+            bail!("Mapped ram layout has already been initialized");
+        }
+
+        build_mapped_ram_regions(
+            machine_ram,
+            &address_space_state.ram_region_state,
+            &memfile_arc,
+            first_region_offset,
+        )?;
+        build_alias_regions(
+            self.root(),
+            machine_ram,
+            &address_space_state.alias_region_state,
+        )?;
+
+        Ok(())
+    }
+
+    pub fn validate_mapped_ram_from_snapshot(
+        &self,
+        expected_ram_states: &[RamRegionState],
+        expected_alias_states: &[AliasRegionState],
+    ) -> Result<()> {
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+        if machine_ram.subregions().is_empty() {
+            bail!("Mapped ram layout has not been initialized");
+        }
+
+        validate_ram_regions(machine_ram, expected_ram_states)?;
+        validate_alias_regions(self.root(), expected_alias_states)?;
+
+        Ok(())
+    }
+
+    pub fn skip_mapped_ram_from_snapshot(&self, memory: &mut File) -> Result<()> {
+        let address_space_state = read_address_space_state(memory)?;
+        let first_region_offset = memory.stream_position()?;
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+        if machine_ram.subregions().is_empty() {
+            bail!("Mapped ram layout has not been initialized");
+        }
+
+        let region_data_end = first_region_offset
+            .checked_add(address_space_state.total_region_size)
+            .with_context(|| {
+                format!(
+                    "Restore memory add overflow: {} + {}",
+                    first_region_offset, address_space_state.total_region_size
+                )
+            })?;
+        memory.seek(SeekFrom::Start(region_data_end))?;
+
+        Ok(())
+    }
+
+    /// Hand guest RAM over to the external uffd daemon instead of copying it
+    /// from the snapshot memory file.
+    ///
+    /// Registers every machine RAM subregion with a userfaultfd, sends the fd
+    /// together with each region's offset within the snapshot memory file to
+    /// the daemon. On return the file cursor is positioned past the RAM data,
+    /// so the ram list section that follows can be restored from the file as
+    /// usual.
+    pub fn restore_uffd_ram_from_snapshot(
+        &self,
+        memory: &mut File,
+        socket_path: &str,
+        snapshot_memory: SnapshotMemoryMode,
+    ) -> Result<()> {
+        let address_space_state = read_address_space_state(memory)?;
+        let ram_data_file_offset = memory.stream_position()?;
+
+        let machine_ram = self
+            .get_machine_ram()
+            .with_context(|| "This address space does not support migration.")?;
+
+        let mut uffd = UffdMemoryBackend::new(socket_path)
+            .with_context(|| "UFFD restore: failed to create userfaultfd")?;
+        let registered_offset_base = match snapshot_memory {
+            SnapshotMemoryMode::Full => ram_data_file_offset,
+            SnapshotMemoryMode::External => 0,
+        };
+        let mut registered_offset = registered_offset_base;
+        for region in machine_ram.subregions().iter() {
+            let state = address_space_state
+                .ram_region_state
+                .iter()
+                .find(|state| state.name == region.name)
+                .with_context(|| format!("Can not find ram region {:?}", region.name))?;
+            if state.size != region.size() {
+                bail!(
+                    "Size of ram region {} changed, saved size {}, now {}.",
+                    region.name,
+                    state.size,
+                    region.size()
+                );
+            }
+
+            let offset = registered_offset_base
+                .checked_add(state.offset)
+                .with_context(|| {
+                    format!(
+                        "Restore memory overflow: {} + {}",
+                        registered_offset_base, state.offset
+                    )
+                })?;
+
+            // SAFETY: the region comes from the machine RAM subregion list; its
+            // host mapping stays alive for the VM's lifetime.
+            if let Some(host_addr) = unsafe { region.get_host_address(AddressAttr::Ram) } {
+                uffd.register_region(host_addr, region.size(), offset)
+                    .with_context(|| {
+                        format!(
+                            "UFFD restore: register region '{}' host={:#x} size={:#x}",
+                            region.name,
+                            host_addr,
+                            region.size()
+                        )
+                    })?;
+                registered_offset += region.size();
+            }
+        }
+
+        // The daemon serves page faults using the file offsets registered
+        // above; a size mismatch means the snapshot layout does not match the
+        // current RAM layout and pages would be served from wrong offsets.
+        let registered_size = registered_offset - registered_offset_base;
+        if registered_size != address_space_state.total_region_size {
+            bail!(
+                "UFFD restore: registered RAM size {:#x} does not match snapshot region size {:#x}",
+                registered_size,
+                address_space_state.total_region_size
+            );
+        }
+
+        uffd.send_to_external_uffd_daemon()
+            .with_context(|| "UFFD restore: send_to_external_uffd_daemon failed")?;
+        store_uffd_backend(uffd);
+
+        if snapshot_memory == SnapshotMemoryMode::Full {
+            // Skip the RAM data so the caller can restore the ram list section.
+            let region_data_end = ram_data_file_offset
+                .checked_add(address_space_state.total_region_size)
+                .with_context(|| {
+                    format!(
+                        "Restore memory add overflow: {} + {}",
+                        ram_data_file_offset, address_space_state.total_region_size
+                    )
+                })?;
+            memory.seek(SeekFrom::Start(region_data_end))?;
+        }
+
+        Ok(())
+    }
+}
+
 impl StateTransfer for AddressSpace {
     fn get_state_vec(&self) -> Result<Vec<u8>> {
         let mut state = AddressSpaceState::default();
@@ -109,12 +454,16 @@ impl StateTransfer for AddressSpace {
 }
 
 impl MigrationHook for AddressSpace {
-    fn save_memory(&self, fd: &mut File) -> Result<()> {
+    fn save_memory(&self, fd: &mut File, memory: SnapshotMemoryMode) -> Result<()> {
         // Save address space header.
         let ram_state = self.get_state_vec()?;
         let data_slice = get_state_slice(&ram_state)
             .with_context(|| "Failed to get state slice while saving state")?;
         fd.write_all(&data_slice)?;
+
+        if memory == SnapshotMemoryMode::External {
+            return Ok(());
+        }
 
         // Save address space region.
         if let Some(machine_ram) = self.get_machine_ram() {
@@ -129,77 +478,27 @@ impl MigrationHook for AddressSpace {
         Ok(())
     }
 
-    fn restore_memory(&self, memory: &mut File, mapped: bool) -> Result<()> {
-        let data_slice = read_state_slice(memory)
-            .with_context(|| "Failed to read state slice while restoring state")?;
-        let address_space_state: AddressSpaceState = serde_json::from_slice(&data_slice)
-            .with_context(|| MigrationError::FromBytesError("MEMORY"))?;
-
-        if mapped {
-            // Get the start pos for saved ram region.
-            let first_region_offset = memory.stream_position()?;
-            let cloned_file = match memory.try_clone() {
-                Ok(file) => file,
-                Err(e) => bail!("Failed to clone memory file: {:?}", e),
-            };
-            let memfile_arc = Arc::new(cloned_file);
-
-            if let Some(machine_ram) = self.get_machine_ram() {
-                let mut offset = 0_u64;
-                for ram_state in address_space_state.ram_region_state.iter() {
-                    let file_backend = FileBackend {
-                        file: memfile_arc.clone(),
-                        offset: ram_state.offset + first_region_offset,
-                        page_size: host_page_size(),
-                    };
-                    let host_mmap = Arc::new(
-                        HostMemMapping::new(
-                            GuestAddress(0),
-                            None,
-                            ram_state.size,
-                            Some(file_backend),
-                            false,
-                            false,
-                            false,
-                        )
-                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?,
-                    );
-
-                    machine_ram
-                        .add_subregion_not_update(
-                            Region::init_ram_region(host_mmap.clone(), &ram_state.name),
-                            offset,
-                        )
-                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
-                    offset += ram_state.size;
-                }
-                for alias_state in address_space_state.alias_region_state.iter() {
-                    let ram = Region::init_alias_region(
-                        machine_ram.clone(),
-                        alias_state.alias_offset,
-                        alias_state.size,
-                        &alias_state.name,
-                    );
-                    self.root().add_subregion(ram, alias_state.offset)?;
+    fn restore_memory(&self, memory: &mut File, mode: &RestoreMode) -> Result<()> {
+        match mode {
+            // The memory file is already mmap'ed as the RAM backend; just move
+            // the cursor past the RAM data.
+            RestoreMode::Mapped => self.skip_mapped_ram_from_snapshot(memory)?,
+            RestoreMode::Copy => {
+                if let Some(machine_ram) = self.get_machine_ram() {
+                    let _ = read_address_space_state(memory)?;
+                    for region in machine_ram.subregions().iter() {
+                        if let Some(base_addr) = region.start_addr() {
+                            region
+                                .write(memory, base_addr, 0, region.size())
+                                .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
+                        }
+                    }
                 }
             }
-            let region_data_end = first_region_offset
-                .checked_add(address_space_state.total_region_size)
-                .with_context(|| {
-                    format!(
-                        "Restore memory add overflow: {} + {}",
-                        first_region_offset, address_space_state.total_region_size
-                    )
-                })?;
-            memory.seek(SeekFrom::Start(region_data_end))?;
-        } else if let Some(machine_ram) = self.get_machine_ram() {
-            for region in machine_ram.subregions().iter() {
-                if let Some(base_addr) = region.start_addr() {
-                    region
-                        .write(memory, base_addr, 0, region.size())
-                        .map_err(|e| MigrationError::RestoreVmMemoryErr(e.to_string()))?;
-                }
-            }
+            RestoreMode::Uffd {
+                socket_path,
+                memory: snapshot_memory,
+            } => self.restore_uffd_ram_from_snapshot(memory, socket_path, *snapshot_memory)?,
         }
 
         Ok(())
@@ -255,4 +554,47 @@ pub fn read_state_slice(file: &mut File) -> Result<Vec<u8>> {
     }
 
     Ok(data_slice[..state_len as usize].to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::io::Seek;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_save_memory_external_skips_guest_ram_bytes() {
+        let root = Region::init_container_region(0x1000, "root");
+        let machine_ram = Arc::new(Region::init_container_region(0x1000, "machine-ram"));
+        let mem = Arc::new(
+            HostMemMapping::new(GuestAddress(0), None, 0x1000, None, false, false, false).unwrap(),
+        );
+        let ram_region = Region::init_ram_region(mem, "ram");
+        machine_ram.add_subregion_not_update(ram_region, 0).unwrap();
+        let space = AddressSpace::new(root, "space", Some(machine_ram)).unwrap();
+        let metadata_path = std::env::temp_dir().join(format!(
+            "stratovirt-address-space-metadata-{}",
+            std::process::id()
+        ));
+        let full_path = std::env::temp_dir().join(format!(
+            "stratovirt-address-space-full-{}",
+            std::process::id()
+        ));
+        let mut metadata_file = File::create(&metadata_path).unwrap();
+        let mut full_file = File::create(&full_path).unwrap();
+
+        space
+            .save_memory(&mut metadata_file, SnapshotMemoryMode::External)
+            .unwrap();
+        space
+            .save_memory(&mut full_file, SnapshotMemoryMode::Full)
+            .unwrap();
+
+        let metadata_len = metadata_file.stream_position().unwrap();
+        let full_len = full_file.stream_position().unwrap();
+        let _ = std::fs::remove_file(metadata_path);
+        let _ = std::fs::remove_file(full_path);
+        assert_eq!(full_len - metadata_len, 0x1000);
+    }
 }

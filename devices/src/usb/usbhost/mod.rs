@@ -54,6 +54,7 @@ use crate::usb::{
         USB_TOKEN_IN, USB_TOKEN_OUT,
     },
     descriptor::USB_MAX_INTERFACES,
+    quirks::{get_device_quirks, UsbQuirk},
     xhci::xhci_controller::XhciDevice,
     UsbDevice, UsbDeviceBase, UsbDeviceRequest, UsbEndpoint, UsbPacket, UsbPacketStatus,
 };
@@ -558,6 +559,7 @@ pub struct UsbHost {
     oh_dev: OhUsbDev,
     /// Indicate whether default state.
     is_default_state: bool,
+    quirks: UsbQuirk,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for util::link_list::List.
@@ -602,6 +604,7 @@ impl UsbHost {
             #[cfg(all(target_arch = "aarch64", target_env = "ohos"))]
             oh_dev,
             is_default_state: false,
+            quirks: UsbQuirk::empty(),
         })
     }
 
@@ -685,11 +688,26 @@ impl UsbHost {
     }
 
     fn detach_kernel(&mut self, reset: bool) -> Result<()> {
-        let conf = self.libdev.as_ref().unwrap().active_config_descriptor()?;
+        // set it to default state
+        if reset {
+            self.reset();
+        }
 
-        self.ifs_num = conf.num_interfaces();
+        let num_interface = match self.libdev.as_ref().unwrap().active_config_descriptor() {
+            Ok(conf) => {
+                self.ifs_num = conf.num_interfaces();
+                conf.num_interfaces()
+            }
+            Err(e) => {
+                warn!(
+                    "Current USB host device is in unconfigured state, with calling ret: {:?}",
+                    e
+                );
+                USB_MAX_INTERFACES as u8
+            }
+        };
 
-        for i in 0..self.ifs_num {
+        for i in 0..num_interface {
             if !match self.handle.as_ref().unwrap().kernel_driver_active(i) {
                 Ok(rc) => {
                     if !rc {
@@ -698,7 +716,7 @@ impl UsbHost {
                     rc
                 }
                 Err(e) => {
-                    error!("Failed to kernel driver active: {:?}", e);
+                    error!("Failed to detect kernel driver active status: {:?}", e);
                     false
                 }
             } {
@@ -713,17 +731,12 @@ impl UsbHost {
             self.ifs[i as usize].detached = true;
         }
 
-        // set it to default state
-        if reset {
-            self.reset();
-        }
-
         Ok(())
     }
 
     fn attach_kernel(&mut self) {
         if let Err(e) = self.libdev.as_ref().unwrap().active_config_descriptor() {
-            warn!("Failed to active config descriptor: {:?}.", e);
+            warn!("Failed to get active config descriptor: {:?}.", e);
             return;
         }
         for i in 0..self.ifs_num {
@@ -836,6 +849,9 @@ impl UsbHost {
         self.detach_kernel(true)?;
 
         self.ddesc = self.libdev.as_ref().unwrap().device_descriptor().ok();
+        self.config.vendorid = self.ddesc.as_ref().unwrap().vendor_id();
+        self.config.productid = self.ddesc.as_ref().unwrap().product_id();
+        self.quirks = get_device_quirks(self.config.vendorid, self.config.productid);
 
         self.ep_update();
 
@@ -921,7 +937,20 @@ impl UsbHost {
         trace::usb_host_set_config(self.config.hostbus, self.config.hostaddr, config);
         self.release_interfaces();
 
-        if self.ddesc.is_some() && self.ddesc.as_ref().unwrap().num_configurations() != 1 {
+        let current_config = self
+            .handle
+            .as_mut()
+            .unwrap()
+            .active_configuration()
+            .unwrap_or(0);
+
+        let needs_set = if current_config == config {
+            self.quirks.always_set_config()
+        } else {
+            !self.quirks.ignore_set_config()
+        };
+
+        if needs_set {
             if let Err(e) = self
                 .handle
                 .as_mut()

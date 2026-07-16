@@ -22,7 +22,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::manager::{Instance, MIGRATION_MANAGER};
 use crate::protocol::{
     DeviceStateDesc, FileFormat, MigrationHeader, MigrationStatus, VersionCheck, HEADER_LENGTH,
-    MAX_DEVICE_STATE_SIZE,
+    MAX_DEVICE_STATE_SIZE, MAX_LARGE_DEVICE_STATE_SIZE,
 };
 use crate::{MigrationError, MigrationManager};
 use machine_manager::machine::VmState;
@@ -44,7 +44,9 @@ impl MigrationManager {
             header.format = format;
             header.desc_len = match format {
                 FileFormat::Device => Self::desc_db_len()?,
-                FileFormat::MemoryFull => (host_page_size() as usize) * 2 - HEADER_LENGTH,
+                FileFormat::MemoryFull | FileFormat::MemoryExternal => {
+                    (host_page_size() as usize) * 2 - HEADER_LENGTH
+                }
             };
         } else {
             header.desc_len = Self::desc_db_len()?;
@@ -191,7 +193,12 @@ impl MigrationManager {
                 snap_desc.name,
                 instance.size
             );
-            if instance.size > MAX_DEVICE_STATE_SIZE as u64 {
+            let max_state_size = if snap_desc.name == "GpuState" {
+                MAX_LARGE_DEVICE_STATE_SIZE
+            } else {
+                MAX_DEVICE_STATE_SIZE
+            };
+            if instance.size > max_state_size as u64 {
                 bail!(
                     "Invalid instance size {} for {:?}",
                     instance.size,

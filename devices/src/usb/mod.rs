@@ -14,20 +14,29 @@
 pub mod camera;
 #[cfg(feature = "usb_camera")]
 pub mod camera_media_type_guid;
+#[cfg(feature = "usb_base")]
 pub mod config;
 #[cfg(feature = "usb_consumer")]
 pub mod consumer;
 pub mod error;
+#[cfg(feature = "usb_base")]
 pub mod hid;
+#[cfg(feature = "usb_base")]
 pub mod keyboard;
+#[cfg(feature = "usb_host")]
+mod quirks;
+#[cfg(feature = "usb_storage")]
 pub mod storage;
+#[cfg(feature = "usb_base")]
 pub mod tablet;
 #[cfg(feature = "usb_uas")]
 pub mod uas;
 #[cfg(feature = "usb_host")]
 pub mod usbhost;
+#[cfg(feature = "usb_base")]
 pub mod xhci;
 
+#[cfg(feature = "usb_base")]
 mod descriptor;
 
 pub use error::UsbError;

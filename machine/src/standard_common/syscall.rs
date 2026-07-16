@@ -45,6 +45,14 @@ const FUTEX_WAKE_PRIVATE: u32 = FUTEX_WAKE | FUTEX_PRIVATE_FLAG;
 const FUTEX_CMP_REQUEUE_PRIVATE: u32 = FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAKE_OP_PRIVATE: u32 = FUTEX_WAKE_OP | FUTEX_PRIVATE_FLAG;
 const FUTEX_WAIT_BITSET_PRIVATE: u32 = FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG;
+const FUTEX_WAKE_BITSET: u32 = 10;
+const FUTEX_WAKE_BITSET_PRIVATE: u32 = FUTEX_WAKE_BITSET | FUTEX_PRIVATE_FLAG;
+const FUTEX_REQUEUE: u32 = 3;
+const FUTEX_REQUEUE_PRIVATE: u32 = FUTEX_REQUEUE | FUTEX_PRIVATE_FLAG;
+#[cfg(target_env = "gnu")]
+const FUTEX_LOCK_PI2: u32 = 13;
+#[cfg(target_env = "gnu")]
+const FUTEX_LOCK_PI2_PRIVATE: u32 = FUTEX_LOCK_PI2 | FUTEX_PRIVATE_FLAG;
 
 // See: https://elixir.bootlin.com/linux/v4.19.123/source/include/uapi/asm-generic/ioctls.h
 const TCGETS: u32 = 0x5401;
@@ -54,6 +62,10 @@ const FIONREAD: u32 = 0x541B;
 const FIOCLEX: u32 = 0x5451;
 const FIONBIO: u32 = 0x5421;
 const KVM_RUN: u32 = 0xae80;
+// userfaultfd ioctl numbers used only by the seccomp allowlist.
+const UFFDIO_API_IOCTL: u32 = 0xc018aa3f;
+const UFFDIO_REGISTER_IOCTL: u32 = 0xc020aa00;
+const UFFDIO_WRITEPROTECT_IOCTL: u32 = 0xc018aa06;
 
 /// Create a syscall allowlist for seccomp.
 ///
@@ -79,6 +91,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_epoll_ctl),
         BpfRule::new(libc::SYS_ppoll),
         BpfRule::new(libc::SYS_fdatasync),
+        BpfRule::new(libc::SYS_fsync),
         BpfRule::new(libc::SYS_recvmsg),
         BpfRule::new(libc::SYS_sendmsg),
         BpfRule::new(libc::SYS_sendto),
@@ -101,6 +114,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_sigaltstack),
         BpfRule::new(libc::SYS_mmap),
         BpfRule::new(libc::SYS_mprotect),
+        BpfRule::new(libc::SYS_userfaultfd),
         BpfRule::new(libc::SYS_munmap),
         BpfRule::new(libc::SYS_accept4),
         BpfRule::new(libc::SYS_lseek),
@@ -127,6 +141,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_msync),
         BpfRule::new(libc::SYS_readlinkat),
         BpfRule::new(libc::SYS_renameat),
+        BpfRule::new(libc::SYS_userfaultfd),
         BpfRule::new(libc::SYS_socket),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_bind),
@@ -236,7 +251,10 @@ fn ioctl_allow_list() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_VCPU_EVENTS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_DIRTY_LOG() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_MP_STATE() as u32)
-        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32);
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_VCPU_EVENTS() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_API_IOCTL)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_REGISTER_IOCTL)
+        .add_constraint(SeccompCmpOpt::Eq, 1, UFFDIO_WRITEPROTECT_IOCTL);
 
     #[cfg(feature = "vfio_device")]
     let bpf_rule = bpf_rule
@@ -296,7 +314,9 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_OP_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE);
     #[cfg(target_env = "gnu")]
     return BpfRule::new(libc::SYS_futex)
         .add_constraint(
@@ -309,5 +329,8 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_CMP_REQUEUE_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_OP_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_LOCK_PI2_PRIVATE);
 }

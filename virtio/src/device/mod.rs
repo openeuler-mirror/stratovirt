@@ -10,12 +10,16 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+#[cfg(feature = "virtio_balloon")]
 pub mod balloon;
 pub mod block;
 #[cfg(feature = "virtio_gpu")]
 pub mod gpu;
+#[cfg(feature = "virtio_input")]
 pub mod input;
+#[cfg(feature = "virtio_mem")]
 pub mod memory;
+#[cfg(feature = "virtio_multitouch")]
 pub mod multitouch;
 pub mod net;
 #[cfg(feature = "virtio_pmem")]
@@ -24,4 +28,7 @@ pub mod pmem;
 pub mod rng;
 #[cfg(feature = "virtio_scsi")]
 pub mod scsi_cntlr;
+#[cfg(feature = "virtio_serial")]
 pub mod serial;
+#[cfg(feature = "virtio_snd")]
+pub mod sound;

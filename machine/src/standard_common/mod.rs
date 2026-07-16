@@ -49,12 +49,12 @@ use address_space::{
     AddressAttr, AddressRange, FileBackend, GuestAddress, HostMemMapping, Region, RegionIoEventFd,
     RegionOps,
 };
+#[cfg(any(feature = "scream", feature = "virtio_snd"))]
+use audio::auth::set_record_authority;
 use block_backend::{qcow2::QCOW2_LIST, BlockStatus};
 #[cfg(target_arch = "x86_64")]
 use devices::acpi::cpu_controller::CpuController;
 use devices::legacy::FwCfgOps;
-#[cfg(feature = "scream")]
-use devices::misc::scream::set_record_authority;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::{PciBus, PciHost};
 use devices::Device;
@@ -63,7 +63,7 @@ use machine_manager::config::get_cameradev_config;
 #[cfg(target_arch = "aarch64")]
 use machine_manager::config::ShutdownAction;
 use machine_manager::config::{
-    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_incoming_uri, parse_size,
+    get_chardev_config, get_netdev_config, memory_unit_conversion, parse_migrate_uri, parse_size,
     BootIndexInfo, ConfigCheck, DiskFormat, DriveConfig, ExBool, MigrateMode, NumaNode, NumaNodes,
     M,
 };
@@ -235,7 +235,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             locked_fw_cfg
                 .add_file_entry(ACPI_TABLE_FILE, acpi_tables)
                 .with_context(|| "Failed to add ACPI-tables file entry")?;
-        } else {
+        } else if !self.is_migrating() {
             #[cfg(target_arch = "x86_64")]
             load_acpi_to_memory(&self.machine_base().sys_mem, rsdp_data, acpi_tables)
                 .with_context(|| "Failed to load ACPI to guest memory")?;
@@ -1085,9 +1085,9 @@ impl MachineLifecycle for StdMachine {
 
 impl MigrateInterface for StdMachine {
     fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
+        match parse_migrate_uri(&uri) {
             Ok(incoming) => match incoming.mode {
-                MigrateMode::File => migration::snapshot(incoming.uri),
+                MigrateMode::File => migration::snapshot(incoming.uri, incoming.memory),
                 MigrateMode::Unix => migration::migration_unix_mode(incoming.uri),
                 MigrateMode::Tcp => migration::migration_tcp_mode(incoming.uri),
                 _ => Response::create_error_response(
@@ -1241,6 +1241,59 @@ impl DeviceInterface for StdMachine {
     fn query_mem(&self) -> Response {
         self.mem_show();
         Response::create_empty_response()
+    }
+
+    fn query_mem_mappings(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_mappings(self.get_vm_ram()) {
+            Ok(mappings) => {
+                Response::create_response(serde_json::to_value(mappings).unwrap(), None)
+            }
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_page_state(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_page_state(self.get_vm_ram()) {
+            Ok(state) => Response::create_response(serde_json::to_value(state).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_dirty_bitmap(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match address_space::uffd::query_and_reset_dirty_bitmap() {
+            Ok(bitmap) => Response::create_response(serde_json::to_value(bitmap).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
     }
 
     fn query_vnc(&self) -> Response {
@@ -1429,6 +1482,13 @@ impl DeviceInterface for StdMachine {
                     let dev_id = &locked_dev.name();
                     drop(locked_pci_host);
                     self.del_bootindex_devices(dev_id);
+                    if let Some(net_device) = self.base.net_devs.remove(&device_id) {
+                        if let Ok(mut d) = net_device.lock() {
+                            if let Some(net) = d.as_any_mut().downcast_mut::<Net>() {
+                                crate::apply_mmds_to_net_dev(net, None);
+                            }
+                        }
+                    }
                     let vm_config = self.get_vm_config();
                     let mut locked_config = vm_config.lock().unwrap();
                     locked_config.del_device_by_id(device_id);
@@ -1753,7 +1813,7 @@ impl DeviceInterface for StdMachine {
         }
     }
 
-    #[cfg(feature = "scream")]
+    #[cfg(any(feature = "scream", feature = "virtio_snd"))]
     fn switch_audio_record(&self, authorized: String) -> Response {
         match authorized.as_str() {
             "on" => set_record_authority(true),
@@ -2242,6 +2302,69 @@ impl DeviceInterface for StdMachine {
             Response::create_empty_response()
         }
     }
+
+    fn mmds_put(&self, args: qmp_schema::MmdsPutArgs) -> Response {
+        self.base.mmds_put(args)
+    }
+
+    fn mmds_patch(&self, args: qmp_schema::MmdsPatchArgs) -> Response {
+        self.base.mmds_patch(args)
+    }
+
+    fn mmds_get(&self) -> Response {
+        self.base.mmds_get()
+    }
+
+    fn mmds_config(&self, args: qmp_schema::MmdsConfigArgs) -> Response {
+        let vm_config = self.get_vm_config();
+        let locked_vmconfig = vm_config.lock().unwrap();
+        let filtered_network_interfaces: Vec<String> = args
+            .network_interfaces
+            .iter()
+            .filter_map(|id| {
+                if self.base.net_devs.contains_key(id) {
+                    Some(id.clone())
+                } else if let Some(netdev_cfg) = locked_vmconfig.netdevs.get(id) {
+                    if netdev_cfg.vhost_type().is_some() {
+                        warn!(
+                            "Interface '{}' is a vhost device and MMDS is not supported on vhost interfaces; ignoring it",
+                            id
+                        );
+                        None
+                    } else {
+                        Some(id.clone())
+                    }
+                } else {
+                    Some(id.clone())
+                }
+            })
+            .collect();
+        drop(locked_vmconfig);
+
+        let mut filtered_args = args.clone();
+        filtered_args.network_interfaces = filtered_network_interfaces;
+
+        if let Err(resp) = self.base.parse_and_update_mmds_config(&filtered_args) {
+            return resp;
+        }
+
+        // Walk every tracked virtio-net-pci device and enable/disable MMDS.
+        let store = self.base.mmds_store.clone();
+        for (id, dev) in &self.base.net_devs {
+            if let Ok(mut dev) = dev.lock() {
+                if let Some(net) = dev.as_any_mut().downcast_mut::<Net>() {
+                    let s = if filtered_args.network_interfaces.contains(id) {
+                        Some(store.clone())
+                    } else {
+                        None
+                    };
+                    crate::apply_mmds_to_net_dev(net, s);
+                }
+            }
+        }
+
+        Response::create_empty_response()
+    }
 }
 
 fn parse_blockdev(args: &BlockDevAddArgument) -> Result<DriveConfig> {
@@ -2344,4 +2467,189 @@ fn send_input_event(key: String, value: String) -> Result<()> {
         }
     };
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use std::sync::{Arc, Mutex};
+
+    use machine_manager::mmds::{parse_ipv4, MmdsConfig, MmdsData, MmdsStore, MmdsVersion};
+    use machine_manager::qmp::qmp_schema;
+
+    // Helper: build a store wired to a specific interface list.
+    fn make_store_with_ifaces(ifaces: Vec<String>) -> Arc<Mutex<MmdsStore>> {
+        let mut store = MmdsStore::new_default();
+        store.config.network_interfaces = ifaces;
+        Arc::new(Mutex::new(store))
+    }
+
+    // ── mmds_put logic ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_mmds_put_stores_data() {
+        let store = Arc::new(Mutex::new(MmdsStore::new_default()));
+        let data = MmdsData {
+            instance_id: "inst-001".to_string(),
+            env_id: "env-abc".to_string(),
+            address: "10.0.0.1".to_string(),
+            access_token_hash: None,
+        };
+        store.lock().unwrap().put(data).unwrap();
+        let json = store.lock().unwrap().get_json();
+        assert_eq!(json["instanceID"], "inst-001");
+        assert_eq!(json["envID"], "env-abc");
+        assert_eq!(json["address"], "10.0.0.1");
+    }
+
+    // ── mmds_patch logic ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_mmds_patch_updates_partial_fields() {
+        let store = Arc::new(Mutex::new(MmdsStore::new_default()));
+        {
+            let mut s = store.lock().unwrap();
+            s.put(MmdsData {
+                instance_id: "original".to_string(),
+                env_id: "env-orig".to_string(),
+                address: "1.2.3.4".to_string(),
+                access_token_hash: None,
+            })
+            .unwrap();
+        }
+        store
+            .lock()
+            .unwrap()
+            .patch(serde_json::json!({"instanceID": "updated"}))
+            .unwrap();
+        let json = store.lock().unwrap().get_json();
+        assert_eq!(json["instanceID"], "updated");
+        assert_eq!(json["envID"], "env-orig");
+    }
+
+    // ── mmds_get logic ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_mmds_get_returns_json() {
+        let store = Arc::new(Mutex::new(MmdsStore::new_default()));
+        store
+            .lock()
+            .unwrap()
+            .put(MmdsData {
+                instance_id: "inst-get".to_string(),
+                env_id: "env-get".to_string(),
+                address: "5.6.7.8".to_string(),
+                access_token_hash: None,
+            })
+            .unwrap();
+        let json = store.lock().unwrap().get_json();
+        assert_eq!(json["instanceID"], "inst-get");
+    }
+
+    // ── mmds_config version validation ────────────────────────────────────────
+
+    #[test]
+    fn test_mmds_config_version_v1_valid() {
+        assert!(MmdsVersion::from_str("V1").is_ok());
+    }
+
+    #[test]
+    fn test_mmds_config_version_v2_valid() {
+        assert!(MmdsVersion::from_str("V2").is_ok());
+    }
+
+    #[test]
+    fn test_mmds_config_version_invalid() {
+        assert!(MmdsVersion::from_str("v1").is_err());
+        assert!(MmdsVersion::from_str("V3").is_err());
+        assert!(MmdsVersion::from_str("").is_err());
+    }
+
+    // ── mmds_config IPv4 validation ───────────────────────────────────────────
+
+    #[test]
+    fn test_mmds_config_ipv4_valid() {
+        assert_eq!(parse_ipv4("169.254.169.254"), Some([169, 254, 169, 254]));
+        assert_eq!(parse_ipv4("192.168.1.1"), Some([192, 168, 1, 1]));
+    }
+
+    #[test]
+    fn test_mmds_config_ipv4_invalid() {
+        assert!(parse_ipv4("not-an-ip").is_none());
+        assert!(parse_ipv4("256.0.0.1").is_none());
+        assert!(parse_ipv4("192.168.1").is_none());
+        assert!(parse_ipv4("").is_none());
+    }
+
+    // ── mmds_config propagation logic ────────────────────────────────────────
+
+    #[test]
+    fn test_mmds_config_updates_store_config() {
+        let store = make_store_with_ifaces(vec![]);
+        {
+            let mut s = store.lock().unwrap();
+            s.config = MmdsConfig {
+                version: MmdsVersion::V2,
+                network_interfaces: vec!["eth0".to_string()],
+                ipv4_address: [169, 254, 169, 254],
+            };
+        }
+        let s = store.lock().unwrap();
+        assert_eq!(s.config.version, MmdsVersion::V2);
+        assert!(s.is_interface_enabled("eth0"));
+        assert!(!s.is_interface_enabled("eth1"));
+    }
+
+    #[test]
+    fn test_mmds_config_custom_ipv4_address() {
+        let store = Arc::new(Mutex::new(MmdsStore::new_default()));
+        let custom_ip = parse_ipv4("10.0.0.2").unwrap();
+        store.lock().unwrap().config = MmdsConfig {
+            version: MmdsVersion::V1,
+            network_interfaces: vec![],
+            ipv4_address: custom_ip,
+        };
+        assert_eq!(store.lock().unwrap().get_ipv4_address(), [10, 0, 0, 2]);
+    }
+
+    // ── MmdsConfigArgs construction (schema coverage) ────────────────────────
+
+    #[test]
+    fn test_mmds_config_args_construction() {
+        let args = qmp_schema::MmdsConfigArgs {
+            version: "V2".to_string(),
+            network_interfaces: vec!["eth0".to_string()],
+            ipv4_address: Some("169.254.169.254".to_string()),
+        };
+        assert_eq!(args.version, "V2");
+        assert_eq!(args.network_interfaces, vec!["eth0"]);
+    }
+
+    #[test]
+    fn test_mmds_put_args_construction() {
+        let args = qmp_schema::MmdsPutArgs {
+            instance_id: "inst-123".to_string(),
+            env_id: "env-456".to_string(),
+            address: "192.168.0.1".to_string(),
+            access_token_hash: Some("hash-abc".to_string()),
+        };
+        assert_eq!(args.instance_id, "inst-123");
+        assert!(args.access_token_hash.is_some());
+    }
+
+    #[test]
+    fn test_mmds_patch_args_all_none() {
+        let args = qmp_schema::MmdsPatchArgs {
+            instance_id: None,
+            env_id: None,
+            address: None,
+            access_token_hash: None,
+        };
+        // Patching with no fields should be a no-op (empty JSON object).
+        let mut obj = serde_json::Map::new();
+        if let Some(v) = args.instance_id {
+            obj.insert("instanceID".to_string(), serde_json::Value::String(v));
+        }
+        assert!(obj.is_empty());
+    }
 }

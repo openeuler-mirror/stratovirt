@@ -16,13 +16,13 @@ use anyhow::{bail, Context, Result};
 
 use crate::micro_common::syscall::syscall_whitelist;
 use crate::{register_shutdown_event, LightMachine, MachineBase, MachineOps};
-use address_space::{AddressSpace, Region};
+use address_space::{AddressSpace, AliasRegionState, Region};
 use cpu::CPUTopology;
 use devices::legacy::{Serial, SERIAL_ADDR};
 use devices::Device;
 use hypervisor::kvm::x86_64::*;
 use hypervisor::kvm::*;
-use machine_manager::config::{MachineMemConfig, MigrateMode, SerialConfig, VmConfig};
+use machine_manager::config::{MachineMemConfig, SerialConfig, VmConfig};
 use migration::{MigrationManager, MigrationStatus};
 use util::gen_base_func;
 use util::seccomp::{BpfRule, SeccompCmpOpt};
@@ -79,6 +79,28 @@ impl MachineOps for LightMachine {
             sys_mem.root().add_subregion(above4g_ram, above4g_start)?;
         }
         Ok(())
+    }
+
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState> {
+        let mut alias_states = Vec::new();
+        let below4g_size = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
+        alias_states.push(AliasRegionState {
+            name: "below4g_ram".to_string(),
+            alias_offset: 0,
+            offset: MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0,
+            size: std::cmp::min(below4g_size, mem_config.mem_size),
+        });
+
+        if mem_config.mem_size > below4g_size {
+            alias_states.push(AliasRegionState {
+                name: "above4g_ram".to_string(),
+                alias_offset: below4g_size,
+                offset: MEM_LAYOUT[LayoutEntryType::MemAbove4g as usize].0,
+                size: mem_config.mem_size - below4g_size,
+            });
+        }
+
+        alias_states
     }
 
     fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
@@ -142,8 +164,7 @@ impl MachineOps for LightMachine {
         locked_vm.add_devices(vm_config)?;
         trace::replaceable_info(&locked_vm.replaceable_info);
 
-        let migrate_info = locked_vm.get_migrate_info();
-        let boot_config = if migrate_info.mode == MigrateMode::Unknown {
+        let boot_config = {
             // MEM_LAYOUT is defined statically, will not overflow.
             let gap_start = MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].0
                 + MEM_LAYOUT[LayoutEntryType::MemBelow4g as usize].1;
@@ -161,8 +182,6 @@ impl MachineOps for LightMachine {
                 lapic_addr,
                 None,
             )?)
-        } else {
-            None
         };
         let hypervisor = locked_vm.base.hypervisor.clone();
         locked_vm.base.cpus.extend(<Self as MachineOps>::init_vcpu(
@@ -211,8 +230,11 @@ impl MachineOps for LightMachine {
 pub(crate) fn arch_ioctl_allow_list(bpf_rule: BpfRule) -> BpfRule {
     bpf_rule
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_PIT2() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_PIT2() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_CLOCK() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_CLOCK() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_IRQCHIP() as u32)
+        .add_constraint(SeccompCmpOpt::Eq, 1, KVM_SET_IRQCHIP() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_REGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_SREGS() as u32)
         .add_constraint(SeccompCmpOpt::Eq, 1, KVM_GET_XSAVE() as u32)

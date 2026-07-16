@@ -16,11 +16,14 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
+use machine_manager::config::SnapshotMemoryMode;
 use serde::{Deserialize, Serialize};
 
 use crate::state::{get_state_slice, read_state_slice};
 use crate::{HostMemMapping, RamRegionState};
-use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
+use migration::{
+    DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, RestoreMode, StateTransfer,
+};
 use migration_derive::DescSerde;
 
 struct RamList {
@@ -93,7 +96,7 @@ impl StateTransfer for RamList {
 }
 
 impl MigrationHook for RamList {
-    fn save_memory(&self, file: &mut File) -> Result<()> {
+    fn save_memory(&self, file: &mut File, _memory: SnapshotMemoryMode) -> Result<()> {
         let state_header = self.get_state_vec()?;
         let data_slice = get_state_slice(&state_header)
             .with_context(|| "Failed to get state slice while saving ramlist")?;
@@ -115,7 +118,9 @@ impl MigrationHook for RamList {
         Ok(())
     }
 
-    fn restore_memory(&self, file: &mut File, _mapped: bool) -> Result<()> {
+    // Ram list regions are always copied from the snapshot file, regardless
+    // of how guest RAM is provided (`_mode` is ignored).
+    fn restore_memory(&self, file: &mut File, _mode: &RestoreMode) -> Result<()> {
         let data_slice = read_state_slice(file)
             .with_context(|| "Failed to read state slice while restoring ramlist")?;
         let state_header: RamRegionStateHeader = serde_json::from_slice(&data_slice)

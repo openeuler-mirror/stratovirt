@@ -39,7 +39,7 @@ use acpi::{
 };
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
-use address_space::{AddressAttr, AddressSpace, GuestAddress, Region};
+use address_space::{AddressAttr, AddressSpace, AliasRegionState, GuestAddress, Region};
 use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
@@ -61,8 +61,7 @@ use machine_manager::config::str_slip_to_clap;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
 use machine_manager::config::{
-    BootIndexInfo, DriveConfig, MachineMemConfig, MigrateMode, NumaNode, Param, SerialConfig,
-    VmConfig,
+    BootIndexInfo, DriveConfig, MachineMemConfig, NumaNode, Param, SerialConfig, VmConfig,
 };
 use machine_manager::event;
 use machine_manager::machine::{MachineLifecycle, VmState};
@@ -199,6 +198,23 @@ impl StdMachine {
             if cpu_index == 0 {
                 fdt_addr = cpu.arch().lock().unwrap().core_regs().regs.regs[0];
             }
+        }
+
+        // Must reload boot resource for direct kernel boot.
+        if locked_vm.get_fwcfg_dev().is_none() {
+            locked_vm
+                .load_boot_source(None, MEM_LAYOUT[LayoutEntryType::Mem as usize].0)
+                .with_context(|| "Fail to reload direct boot resources")?;
+            let vm_config = locked_vm.base.vm_config.lock().unwrap();
+            let mem_size = vm_config.machine_config.mem_config.mem_size;
+            drop(vm_config);
+            let mem_array = vec![(MEM_LAYOUT[LayoutEntryType::Mem as usize].0, mem_size)];
+            locked_vm
+                .build_smbios(None, mem_array)
+                .with_context(|| "Failed to rebuild SMBIOS")?;
+            locked_vm
+                .build_acpi_tables(None)
+                .with_context(|| "Failed to rebuild ACPI tables")?;
         }
 
         locked_vm
@@ -425,6 +441,18 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    fn expected_alias_region_states(&self, mem_config: &MachineMemConfig) -> Vec<AliasRegionState> {
+        vec![AliasRegionState {
+            name: "pc_ram".to_string(),
+            alias_offset: 0,
+            offset: MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
+            size: std::cmp::min(
+                MEM_LAYOUT[LayoutEntryType::Mem as usize].1,
+                mem_config.mem_size,
+            ),
+        }]
+    }
+
     fn get_plug_addr_base(&self, mem_config: &MachineMemConfig) -> u64 {
         MEM_LAYOUT[LayoutEntryType::Mem as usize]
             .0
@@ -576,16 +604,10 @@ impl MachineOps for StdMachine {
             .with_context(|| MachineError::InitPCIeHostErr)?;
         let fwcfg = locked_vm.add_fwcfg_device(nr_cpus)?;
 
-        let migrate = locked_vm.get_migrate_info();
-        let boot_config =
-            if migrate.mode == MigrateMode::Unknown || !migrate.mapped {
-                Some(locked_vm.load_boot_source(
-                    fwcfg.as_ref(),
-                    MEM_LAYOUT[LayoutEntryType::Mem as usize].0,
-                )?)
-            } else {
-                None
-            };
+        let boot_config = Some(
+            locked_vm
+                .load_boot_source(fwcfg.as_ref(), MEM_LAYOUT[LayoutEntryType::Mem as usize].0)?,
+        );
         let cpu_config = locked_vm.load_cpu_features(vm_config)?;
 
         let hypervisor = locked_vm.base.hypervisor.clone();
@@ -622,16 +644,18 @@ impl MachineOps for StdMachine {
                 .with_context(|| MachineError::GenFdtErr)?;
             let fdt_vec = fdt_helper.finish()?;
             locked_vm.dtb_vec = fdt_vec.clone();
-            locked_vm
-                .base
-                .sys_mem
-                .write(
-                    &mut fdt_vec.as_slice(),
-                    GuestAddress(boot_cfg.fdt_addr),
-                    fdt_vec.len() as u64,
-                    AddressAttr::Ram,
-                )
-                .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+            if !locked_vm.is_migrating() {
+                locked_vm
+                    .base
+                    .sys_mem
+                    .write(
+                        &mut fdt_vec.as_slice(),
+                        GuestAddress(boot_cfg.fdt_addr),
+                        fdt_vec.len() as u64,
+                        AddressAttr::Ram,
+                    )
+                    .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
+            }
         }
 
         let mut mem_array = Vec::new();

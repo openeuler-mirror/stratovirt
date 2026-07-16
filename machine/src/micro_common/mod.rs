@@ -57,7 +57,7 @@ use machine_manager::config::get_chardev_socket_path;
 #[cfg(target_arch = "x86_64")]
 use machine_manager::config::Param;
 use machine_manager::config::{
-    parse_incoming_uri, parse_size, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
+    parse_migrate_uri, parse_size, str_slip_to_clap, ConfigCheck, DriveConfig, MigrateMode,
     NetDevcfg, NetworkInterfaceConfig, VmConfig,
 };
 use machine_manager::machine::{
@@ -345,6 +345,20 @@ impl LightMachine {
             bail!("Unsupported replaceable device type.");
         };
 
+        // Read the MMDS whitelist before acquiring the devices lock to keep lock
+        // ordering consistent with mmds_config (mmds_store → devices).
+        let mmds_ifaces = if index >= MMIO_REPLACEABLE_BLK_NR {
+            self.base
+                .mmds_store
+                .lock()
+                .unwrap()
+                .config
+                .network_interfaces
+                .clone()
+        } else {
+            Vec::new()
+        };
+
         // Find the replaceable device and replace it.
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
         if let Some(device_info) = replaceable_devices.get_mut(index) {
@@ -361,6 +375,19 @@ impl LightMachine {
                 .update_config(configs)
                 .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
         }
+
+        // Propagate mmds_store if this is a net slot and mmds_config already named it.
+        // Reuse the already-held replaceable_devices guard instead of re-locking.
+        if mmds_ifaces.contains(&id) {
+            if let Some(info) = replaceable_devices.get(index) {
+                if let Ok(mut dev) = info.device.lock() {
+                    if let Some(net_dev) = dev.as_any_mut().downcast_mut::<Net>() {
+                        crate::apply_mmds_to_net_dev(net_dev, Some(self.base.mmds_store.clone()));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -393,6 +420,12 @@ impl LightMachine {
                     .unwrap()
                     .update_config(Vec::new())
                     .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
+                // Clear mmds_store so the slot doesn't leak it to the next device.
+                if let Ok(mut dev) = device_info.device.lock() {
+                    if let Some(net_dev) = dev.as_any_mut().downcast_mut::<Net>() {
+                        crate::apply_mmds_to_net_dev(net_dev, None);
+                    }
+                }
             }
         }
 
@@ -729,6 +762,59 @@ impl DeviceInterface for LightMachine {
     fn query_mem(&self) -> Response {
         self.mem_show();
         Response::create_empty_response()
+    }
+
+    fn query_mem_mappings(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_mappings(self.get_vm_ram()) {
+            Ok(mappings) => {
+                Response::create_response(serde_json::to_value(mappings).unwrap(), None)
+            }
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_page_state(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match crate::build_mem_page_state(self.get_vm_ram()) {
+            Ok(state) => Response::create_response(serde_json::to_value(state).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
+    }
+
+    fn query_mem_dirty_bitmap(&self) -> Response {
+        if *self.get_vm_state().lock().unwrap() != VmState::Paused {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("VM must be paused".to_string()),
+                None,
+            );
+        }
+
+        match address_space::uffd::query_and_reset_dirty_bitmap() {
+            Ok(bitmap) => Response::create_response(serde_json::to_value(bitmap).unwrap(), None),
+            Err(e) => Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                None,
+            ),
+        }
     }
 
     /// VNC is not supported by light machine currently.
@@ -1076,13 +1162,51 @@ impl DeviceInterface for LightMachine {
             }
         }
     }
+
+    fn mmds_put(&self, args: qmp_schema::MmdsPutArgs) -> Response {
+        self.base.mmds_put(args)
+    }
+
+    fn mmds_patch(&self, args: qmp_schema::MmdsPatchArgs) -> Response {
+        self.base.mmds_patch(args)
+    }
+
+    fn mmds_get(&self) -> Response {
+        self.base.mmds_get()
+    }
+
+    fn mmds_config(&self, args: qmp_schema::MmdsConfigArgs) -> Response {
+        if let Err(resp) = self.base.parse_and_update_mmds_config(&args) {
+            return resp;
+        }
+
+        // Walk all used replaceable net devices and enable/disable MMDS.
+        let devices = self.replaceable_info.devices.lock().unwrap();
+        for info in devices.iter() {
+            if !info.used {
+                continue;
+            }
+            if let Ok(mut dev) = info.device.lock() {
+                if let Some(net_dev) = dev.as_any_mut().downcast_mut::<Net>() {
+                    let store = if args.network_interfaces.contains(&info.id) {
+                        Some(self.base.mmds_store.clone())
+                    } else {
+                        None
+                    };
+                    crate::apply_mmds_to_net_dev(net_dev, store);
+                }
+            }
+        }
+
+        Response::create_empty_response()
+    }
 }
 
 impl MigrateInterface for LightMachine {
     fn migrate(&self, uri: String) -> Response {
-        match parse_incoming_uri(&uri) {
+        match parse_migrate_uri(&uri) {
             Ok(incoming) => match incoming.mode {
-                MigrateMode::File => migration::snapshot(incoming.uri),
+                MigrateMode::File => migration::snapshot(incoming.uri, incoming.memory),
                 MigrateMode::Unix | MigrateMode::Tcp => Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(
                         "MicroVM does not support migration".to_string(),

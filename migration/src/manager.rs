@@ -26,8 +26,9 @@ use crate::migration::DirtyBitmap;
 use crate::protocol::{
     DeviceStateDesc, MemBlock, MigrationStatus, StateTransfer, MAX_DEVICE_STATE_SIZE,
 };
+use crate::snapshot::RestoreMode;
 use crate::MigrateOps;
-use machine_manager::config::VmConfig;
+use machine_manager::config::{SnapshotMemoryMode, VmConfig};
 use machine_manager::machine::MachineLifecycle;
 use util::byte_code::ByteCode;
 
@@ -61,7 +62,7 @@ pub trait MigrationHook: StateTransfer {
             .get_state_vec()
             .with_context(|| "Failed to get device state")?;
 
-        if state_data.len() > MAX_DEVICE_STATE_SIZE {
+        if state_data.len() > self.max_state_size() {
             bail!("Invalid state length {}, id {}", state_data.len(), id);
         }
 
@@ -78,6 +79,11 @@ pub trait MigrationHook: StateTransfer {
             .with_context(|| "Failed to write device state")?;
 
         Ok(())
+    }
+
+    /// Return the maximum state vector length accepted for this device.
+    fn max_state_size(&self) -> usize {
+        MAX_DEVICE_STATE_SIZE
     }
 
     /// Restore device state from `[u8]` to `Device`.
@@ -105,7 +111,7 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * _file - The file object object to save memory data.
-    fn save_memory(&self, _file: &mut File) -> Result<()> {
+    fn save_memory(&self, _file: &mut File, _memory: SnapshotMemoryMode) -> Result<()> {
         Ok(())
     }
 
@@ -114,8 +120,8 @@ pub trait MigrationHook: StateTransfer {
     /// # Arguments
     ///
     /// * _memory - The file of memory data, this parameter is optional.
-    /// * _mapped - Whether to directly mmap the memory file as the backend.
-    fn restore_memory(&self, _memory: &mut File, _mapped: bool) -> Result<()> {
+    /// * _mode - How guest memory is provided (see [`RestoreMode`]).
+    fn restore_memory(&self, _memory: &mut File, _mode: &RestoreMode) -> Result<()> {
         Ok(())
     }
 

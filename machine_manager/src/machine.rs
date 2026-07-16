@@ -254,6 +254,32 @@ pub trait DeviceInterface {
     /// Query machine mem size.
     fn query_mem(&self) -> Response;
 
+    /// Query stable memory mappings used by external memory export.
+    fn query_mem_mappings(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query-mem-mappings not implemented".to_string()),
+            None,
+        )
+    }
+
+    /// Query resident and zero page bitmaps for cold snapshot export.
+    /// Swapped guest RAM pages are treated as resident and read back in before
+    /// zero-page classification.
+    fn query_mem_page_state(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query-mem-page-state not implemented".to_string()),
+            None,
+        )
+    }
+
+    /// Query UFFD-WP dirty bitmap after state restore.
+    fn query_mem_dirty_bitmap(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("query-mem-dirty-bitmap not implemented".to_string()),
+            None,
+        )
+    }
+
     /// Query the info of vnc server.
     fn query_vnc(&self) -> Response;
 
@@ -389,10 +415,15 @@ pub trait DeviceInterface {
             ("iothread", "object"),
             #[cfg(target_arch = "aarch64")]
             ("gpex-pcihost", "pcie-host-bridge"),
+            #[cfg(feature = "usb_base")]
             ("nec-usb-xhci", "base-xhci"),
+            #[cfg(feature = "usb_base")]
             ("usb-tablet", "usb-hid"),
+            #[cfg(feature = "usb_base")]
             ("usb-kbd", "usb-hid"),
+            #[cfg(feature = "usb_consumer")]
             ("usb-consumer", "usb-hid"),
+            #[cfg(feature = "usb_storage")]
             ("usb-storage", "usb-storage-dev"),
             ("virtio-gpu-pci", "virtio-gpu"),
         ];
@@ -567,6 +598,40 @@ pub trait DeviceInterface {
     fn query_mem_gpa(&self, _args: QueryMemGpaArgument) -> Response {
         Response::create_error_response(
             QmpErrorClass::GenericError("query_mem_gpa is not supported yet".to_string()),
+            None,
+        )
+    }
+
+    /// Write the entire MMDS data store (put-mmds).
+    fn mmds_put(&self, _args: crate::qmp::qmp_schema::MmdsPutArgs) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("put-mmds not supported for this VM type".to_string()),
+            None,
+        )
+    }
+
+    /// Merge partial fields into the MMDS data store (patch-mmds).
+    fn mmds_patch(&self, _args: crate::qmp::qmp_schema::MmdsPatchArgs) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("patch-mmds not supported for this VM type".to_string()),
+            None,
+        )
+    }
+
+    /// Read the entire MMDS data store (get-mmds).
+    fn mmds_get(&self) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("get-mmds not supported for this VM type".to_string()),
+            None,
+        )
+    }
+
+    /// Configure the MMDS endpoint (put-mmds-config).
+    fn mmds_config(&self, _args: crate::qmp::qmp_schema::MmdsConfigArgs) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError(
+                "put-mmds-config not supported for this VM type".to_string(),
+            ),
             None,
         )
     }

@@ -23,7 +23,11 @@ pub mod snapshot;
 
 pub use error::MigrationError;
 pub use manager::{MigrationHook, MigrationManager};
-pub use protocol::{DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer};
+pub use protocol::{
+    DeviceStateDesc, FieldDesc, MemBlock, MigrationStatus, StateTransfer,
+    MAX_LARGE_DEVICE_STATE_SIZE,
+};
+pub use snapshot::RestoreMode;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -53,8 +57,8 @@ pub struct MigrateMemSlot {
 /// # Arguments
 ///
 /// * `path` - snapshot dir path. If path dir not exists, will create it.
-pub fn snapshot(path: String) -> Response {
-    if let Err(e) = MigrationManager::save_snapshot(&path) {
+pub fn snapshot(path: String, memory: machine_manager::config::SnapshotMemoryMode) -> Response {
+    if let Err(e) = MigrationManager::save_snapshot(&path, memory) {
         error!("Failed to migrate to path \'{:?}\': {:?}", path, e);
         let _ = MigrationManager::set_status(MigrationStatus::Failed);
         if let Err(e) = MigrationManager::notify_status(true, MigrationStatus::Failed) {
