@@ -616,9 +616,10 @@ impl SerialPortHandler {
         loop {
             if let Some(port) = self.port.as_ref() {
                 let locked_port = port.lock().unwrap();
-                let locked_cdev = locked_port.chardev.lock().unwrap();
+                let mut locked_cdev = locked_port.chardev.lock().unwrap();
                 if locked_cdev.outbuf_is_full() {
                     // disable further notifications until space appears
+                    locked_cdev.set_outbuf_listener(Some(self.output_queue_evt.clone()));
                     queue_lock
                         .vring
                         .suppress_queue_notify(self.driver_features, true)
