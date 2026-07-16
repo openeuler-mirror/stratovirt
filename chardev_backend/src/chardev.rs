@@ -13,6 +13,7 @@
 use std::collections::VecDeque;
 use std::fs::{read_link, File, OpenOptions};
 use std::io::{ErrorKind, Stdin, Stdout};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -47,6 +48,8 @@ use util::socket::{SocketListener, SocketStream};
 use util::unix::limit_permission;
 
 const BUF_QUEUE_SIZE: usize = 128;
+
+type PipeFile = Arc<Mutex<File>>;
 
 /// Provide the trait that helps handle the input data.
 pub trait InputReceiver: Send {
@@ -84,6 +87,8 @@ pub struct Chardev {
     pub output: Option<Arc<Mutex<dyn CommunicatOutInterface>>>,
     /// Fd of socket stream.
     stream_fd: Option<i32>,
+    /// Fd of pipe output.
+    pipe_output_fd: Option<RawFd>,
     /// Input receiver.
     receiver: Option<Arc<Mutex<dyn InputReceiver>>>,
     /// Used to notify device the socket is opened or closed.
@@ -111,6 +116,7 @@ impl Chardev {
             input: None,
             output: None,
             stream_fd: None,
+            pipe_output_fd: None,
             receiver: None,
             dev: None,
             wait_port: false,
@@ -190,6 +196,13 @@ impl Chardev {
                 ));
                 self.output = Some(file);
             }
+            ChardevType::Pipe { path, .. } => {
+                let (input, output) = open_pipe_backend(path)?;
+                self.pipe_output_fd = Some(output.lock().unwrap().as_raw_fd());
+                self.input = Some(input);
+                self.output = Some(output);
+            }
+            ChardevType::Null { .. } => (),
             ChardevType::RedirectToLog { .. } => {
                 let (sender, receiver) = channel::<u8>();
                 self.output = Some(Arc::new(Mutex::new(SenderWrapper(sender))));
@@ -314,7 +327,8 @@ impl Chardev {
                 }
                 return write_buffer_sync(self.output.as_ref().unwrap().clone(), buf);
             }
-            ChardevType::Socket { .. } => (),
+            ChardevType::Socket { .. } | ChardevType::Pipe { .. } => (),
+            ChardevType::Null { .. } => return Ok(()),
             ChardevType::RedirectToLog { .. } => {
                 if self.output.is_none() {
                     bail!("Channel has no sender");
@@ -436,6 +450,28 @@ fn set_pty_raw_mode() -> Result<(i32, PathBuf)> {
     Ok((master, path))
 }
 
+fn open_pipe_file(path: &str) -> Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .with_context(|| format!("Failed to open pipe file {path}"))?;
+    Ok(file)
+}
+
+fn open_pipe_backend(path: &str) -> Result<(PipeFile, PipeFile)> {
+    let input_path = format!("{path}.in");
+    let output_path = format!("{path}.out");
+
+    if let (Ok(input), Ok(output)) = (open_pipe_file(&input_path), open_pipe_file(&output_path)) {
+        return Ok((Arc::new(Mutex::new(input)), Arc::new(Mutex::new(output))));
+    }
+
+    let file = Arc::new(Mutex::new(open_pipe_file(path)?));
+    Ok((file.clone(), file))
+}
+
 // Notification handling in case of stdio or pty usage.
 fn get_terminal_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> {
     let locked_chardev = chardev.lock().unwrap();
@@ -501,6 +537,185 @@ fn get_terminal_notifier(chardev: Arc<Mutex<Chardev>>) -> Option<EventNotifier> 
         EventSet::IN,
         vec![event_handler],
     ))
+}
+
+// Notification handling in case of pipe usage.
+fn get_pipe_notifiers(chardev: Arc<Mutex<Chardev>>) -> Vec<EventNotifier> {
+    let locked_chardev = chardev.lock().unwrap();
+    let input = locked_chardev.input.clone();
+    if input.is_none() || locked_chardev.output.is_none() {
+        error!(
+            "Failed to initialize pipe events for chardev \'{}\', chardev not initialized",
+            &locked_chardev.id
+        );
+        return Vec::new();
+    }
+
+    let input_fd = input.unwrap().lock().unwrap().as_raw_fd();
+    let output_fd = match locked_chardev.pipe_output_fd {
+        Some(fd) => fd,
+        None => {
+            error!("Failed to initialize pipe output event, output fd is missing");
+            return Vec::new();
+        }
+    };
+    let kick_out_fd = locked_chardev.kick_out_evt.as_ref().as_raw_fd();
+    drop(locked_chardev);
+
+    let handling_chardev = chardev.clone();
+    let send_buffers = Rc::new(move || {
+        let mut locked_chardev = handling_chardev.lock().unwrap();
+
+        if let Err(e) = locked_chardev.consume_outbuf() {
+            error!("Failed to consume outbuf with error {:?}", e);
+            locked_chardev.clear_outbuf();
+            return Some(vec![EventNotifier::new(
+                NotifierOperation::DeleteEvents,
+                output_fd,
+                None,
+                EventSet::OUT,
+                Vec::new(),
+            )]);
+        }
+
+        if locked_chardev.output_listener_fd.is_some() {
+            let fd = locked_chardev.output_listener_fd.as_ref().unwrap();
+            if let Err(e) = fd.write(1) {
+                error!("Failed to write eventfd with error {:?}", e);
+                return None;
+            }
+            locked_chardev.output_listener_fd = None;
+        }
+
+        if locked_chardev.outbuf.is_empty() {
+            Some(vec![EventNotifier::new(
+                NotifierOperation::DeleteEvents,
+                output_fd,
+                None,
+                EventSet::OUT,
+                Vec::new(),
+            )])
+        } else {
+            Some(vec![EventNotifier::new(
+                NotifierOperation::AddEvents,
+                output_fd,
+                None,
+                EventSet::OUT,
+                Vec::new(),
+            )])
+        }
+    });
+
+    let handling_chardev = chardev.clone();
+    let input_handler: Rc<NotifierCallback> = Rc::new(move |event, _| {
+        if event & EventSet::IN != EventSet::IN {
+            return None;
+        }
+
+        let mut locked_chardev = handling_chardev.lock().unwrap();
+        locked_chardev.cancel_unpause_timer();
+
+        if locked_chardev.receiver.is_none() {
+            let wait_port = locked_chardev.wait_for_port(input_fd);
+            return Some(vec![wait_port]);
+        }
+
+        let receiver = locked_chardev.receiver.clone().unwrap();
+        let input = locked_chardev.input.clone().unwrap();
+        drop(locked_chardev);
+
+        let mut locked_receiver = receiver.lock().unwrap();
+        let buff_size = locked_receiver.remain_size();
+        if buff_size == 0 {
+            locked_receiver.set_paused();
+
+            return Some(vec![EventNotifier::new(
+                NotifierOperation::DeleteEvents,
+                input_fd,
+                None,
+                EventSet::IN,
+                vec![],
+            )]);
+        }
+
+        let mut buffer = vec![0_u8; buff_size];
+        let mut locked_input = input.lock().unwrap();
+        match locked_input.chr_read_raw(&mut buffer) {
+            Ok(bytes_count) => {
+                if bytes_count > 0 {
+                    locked_receiver.receive(&buffer[..bytes_count]);
+                } else {
+                    return Some(vec![EventNotifier::new(
+                        NotifierOperation::DeleteEvents,
+                        input_fd,
+                        None,
+                        EventSet::IN,
+                        vec![],
+                    )]);
+                }
+            }
+            Err(_) => {
+                let os_error = std::io::Error::last_os_error();
+                if os_error.kind() != std::io::ErrorKind::WouldBlock {
+                    let locked_chardev = handling_chardev.lock().unwrap();
+                    error!(
+                        "Failed to read input data from chardev \'{}\', {}",
+                        &locked_chardev.id, &os_error
+                    );
+                }
+            }
+        }
+
+        None
+    });
+
+    let send_buffers_cb = send_buffers.clone();
+    let outavail_handler = Rc::new(move |event, _| {
+        if event & EventSet::OUT != EventSet::OUT {
+            return None;
+        }
+        send_buffers_cb()
+    });
+
+    let send_handler = Rc::new(move |_event, fd| {
+        read_fd(fd);
+        send_buffers()
+    });
+
+    let mut handlers = vec![input_handler];
+    if input_fd == output_fd {
+        handlers.push(outavail_handler.clone());
+    }
+
+    let mut notifiers = vec![
+        EventNotifier::new(
+            NotifierOperation::AddShared,
+            input_fd,
+            None,
+            EventSet::IN | EventSet::HANG_UP,
+            handlers,
+        ),
+        EventNotifier::new(
+            NotifierOperation::AddShared,
+            kick_out_fd,
+            None,
+            EventSet::IN,
+            vec![send_handler],
+        ),
+    ];
+    if input_fd != output_fd {
+        // Keep the output fd registered so EPOLLOUT can be toggled with
+        // AddEvents/DeleteEvents. HANG_UP is not used to track the FIFO peer.
+        notifiers.push(EventNotifier::new(
+            NotifierOperation::AddShared,
+            output_fd,
+            None,
+            EventSet::HANG_UP,
+            vec![outavail_handler],
+        ));
+    }
+
+    notifiers
 }
 
 // Notification handling in case of listening (server) socket.
@@ -727,6 +942,8 @@ impl EventNotifierHelper for Chardev {
                 ChardevType::Stdio { .. } => get_terminal_notifier(chardev),
                 ChardevType::Pty { .. } => get_terminal_notifier(chardev),
                 ChardevType::Socket { .. } => get_socket_notifier(chardev),
+                ChardevType::Pipe { .. } => return get_pipe_notifiers(chardev),
+                ChardevType::Null { .. } => None,
                 ChardevType::File { .. } => None,
                 ChardevType::RedirectToLog { .. } => None,
             }
@@ -772,5 +989,76 @@ impl std::io::Write for SenderWrapper {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    fn test_dir() -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "stratovirt-chardev-pipe-{}-{}",
+            std::process::id(),
+            now
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    fn mkfifo(path: &Path) {
+        let path = CString::new(path.to_str().unwrap()).unwrap();
+        let ret = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+        assert_eq!(ret, 0);
+    }
+
+    #[test]
+    fn test_open_pipe_backend_prefers_split_paths() {
+        let dir = test_dir();
+        let base = dir.join("charpipe");
+        let input = PathBuf::from(format!("{}.in", base.to_str().unwrap()));
+        let output = PathBuf::from(format!("{}.out", base.to_str().unwrap()));
+        mkfifo(&input);
+        mkfifo(&output);
+
+        let (input, output) = open_pipe_backend(base.to_str().unwrap()).unwrap();
+        let input_fd = input.lock().unwrap().as_raw_fd();
+        let output_fd = output.lock().unwrap().as_raw_fd();
+        assert_ne!(input_fd, output_fd);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_open_pipe_backend_falls_back_to_single_path() {
+        let dir = test_dir();
+        let base = dir.join("charpipe");
+        mkfifo(&base);
+
+        let (input, output) = open_pipe_backend(base.to_str().unwrap()).unwrap();
+        let input_fd = input.lock().unwrap().as_raw_fd();
+        let output_fd = output.lock().unwrap().as_raw_fd();
+        assert_eq!(input_fd, output_fd);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_open_pipe_backend_missing_path_fails() {
+        let dir = test_dir();
+        let base = dir.join("charpipe");
+
+        assert!(open_pipe_backend(base.to_str().unwrap()).is_err());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }
