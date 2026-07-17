@@ -40,6 +40,8 @@ pub enum BootLoaderError {
     KernelOverflow(u64, u64),
     #[error("Failed to load initrd image {0} to memory {1}.")]
     InitrdOverflow(u64, u64),
+    #[error("FwCfg entry {0} value 0x{1:x} exceeds 32-bit limit")]
+    FwCfgValueOverflow(String, u64),
     #[error("Failed to open kernel image")]
     BootLoaderOpenKernel,
     #[error("Failed to open initrd image")]
