@@ -26,6 +26,11 @@ use util::byte_code::ByteCode;
 /// Linux requires kernel offset aligned to 2MB.
 const AARCH64_KERNEL_OFFSET: u64 = 0x20_0000;
 
+fn fw_cfg_u32(entry: &str, value: u64) -> Result<u32> {
+    u32::try_from(value)
+        .map_err(|_| anyhow!(BootLoaderError::FwCfgValueOverflow(entry.to_string(), value)))
+}
+
 /// Boot loader config used for aarch64.
 #[derive(Default, Debug)]
 pub struct AArch64BootLoaderConfig {
@@ -68,7 +73,7 @@ fn load_kernel(
         lock_dev
             .add_data_entry(
                 FwCfgEntryType::KernelSize,
-                (kernel_size as u32).as_bytes().to_vec(),
+                fw_cfg_u32("KernelSize", kernel_size)?.as_bytes().to_vec(),
             )
             .with_context(|| FwcfgErrorKind::AddEntryErr("KernelSize".to_string()))?;
         lock_dev
@@ -125,13 +130,13 @@ fn load_initrd(
         lock_dev
             .add_data_entry(
                 FwCfgEntryType::InitrdAddr,
-                (initrd_start as u32).as_bytes().to_vec(),
+                fw_cfg_u32("InitrdAddr", initrd_start)?.as_bytes().to_vec(),
             )
             .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdAddr".to_string()))?;
         lock_dev
             .add_data_entry(
                 FwCfgEntryType::InitrdSize,
-                (initrd_size as u32).as_bytes().to_vec(),
+                fw_cfg_u32("InitrdSize", initrd_size)?.as_bytes().to_vec(),
             )
             .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdSize".to_string()))?;
         lock_dev
@@ -235,4 +240,20 @@ pub fn load_linux(
         initrd_size,
         dtb_start: dtb_addr,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fw_cfg_u32;
+
+    #[test]
+    fn fw_cfg_u32_accepts_valid_values() {
+        assert_eq!(fw_cfg_u32("KernelAddr", 0x4020_0000).unwrap(), 0x4020_0000);
+        assert_eq!(fw_cfg_u32("InitrdAddr", 0xffff_ffff).unwrap(), 0xffff_ffff);
+    }
+
+    #[test]
+    fn fw_cfg_u32_rejects_overflow() {
+        assert!(fw_cfg_u32("InitrdAddr", 0x1_0000_0000).is_err());
+    }
 }
