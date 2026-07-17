@@ -397,7 +397,10 @@ impl StdMachineOps for StdMachine {
         fwcfg
             .add_data_entry(
                 FwCfgEntryType::CmdlineSize,
-                (cmdline.len() + 1).as_bytes().to_vec(),
+                u32::try_from(cmdline.len() + 1)
+                    .with_context(|| "Kernel command line is too long")?
+                    .as_bytes()
+                    .to_vec(),
             )
             .with_context(|| DevErrorKind::AddEntryErr("CmdlineSize".to_string()))?;
         fwcfg
@@ -1380,12 +1383,14 @@ impl CompileFDTHelper for StdMachine {
         fdt.set_property_string("stdout-path", &pl011_property_string)?;
 
         if let Some(initrd) = &boot_source.initrd {
-            fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
-            let initrd_end = initrd
-                .initrd_addr
-                .checked_add(initrd.initrd_size)
-                .with_context(|| "initrd end overflow")?;
-            fdt.set_property_u64("linux,initrd-end", initrd_end)?;
+            if initrd.initrd_addr != 0 {
+                fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
+                let initrd_end = initrd
+                    .initrd_addr
+                    .checked_add(initrd.initrd_size)
+                    .with_context(|| "initrd end overflow")?;
+                fdt.set_property_u64("linux,initrd-end", initrd_end)?;
+            }
         }
         fdt.end_node(chosen_node_dep)
     }
