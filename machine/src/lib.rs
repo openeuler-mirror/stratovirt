@@ -1808,7 +1808,7 @@ pub trait MachineOps: MachineLifecycle {
         let exists = vm_config.lock().unwrap().check_device_exists_by_id(name);
 
         if exists {
-            bail!("Device with ID '{}' already exists", name);
+            bail!("Device id {} existed", name);
         }
 
         Ok(())
