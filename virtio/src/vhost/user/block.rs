@@ -233,7 +233,8 @@ impl VirtioDevice for Block {
             Some(client) => client.lock().unwrap(),
             None => return Err(anyhow!("Failed to get client for vhost-user blk")),
         };
-        client.features = self.base.driver_features;
+        // Add VHOST_USER_F_PROTOCOL_FEATURES bit for enabling protocol features.
+        client.features = self.base.driver_features | (1 << VHOST_USER_F_PROTOCOL_FEATURES);
         client.protocol_features = self.protocol_features;
         client.set_queues(&self.base.queues);
         client.set_queue_evts(&queue_evts);

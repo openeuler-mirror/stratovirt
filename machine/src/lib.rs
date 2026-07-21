@@ -111,6 +111,7 @@ use machine_manager::check_arg_exist;
     feature = "virtio_input",
     feature = "virtio_multitouch",
     feature = "vhostuser_fs",
+    feature = "vhostuser_block",
     feature = "vhostuser_gpu"
 ))]
 use machine_manager::check_arg_nonexist;
