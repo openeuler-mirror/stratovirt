@@ -84,15 +84,13 @@ use devices::usb::storage::{UsbStorage, UsbStorageConfig};
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_uas")]
 use devices::usb::uas::{UsbUas, UsbUasConfig};
+#[cfg(feature = "usb_host")]
+use devices::usb::usbhost::UsbHostConfig;
+use devices::usb::xhci::xhci_async::{send_async_xhci_cmd, XhciAsyncCmd};
 #[cfg(feature = "usb_base")]
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
 #[cfg(feature = "usb_base")]
 use devices::usb::UsbDevice;
-#[cfg(feature = "usb_host")]
-use devices::usb::{
-    usbhost::UsbHostConfig,
-    xhci::xhci_async::{send_async_xhci_cmd, XhciAsyncCmd},
-};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 #[cfg(feature = "virtio_serial")]
