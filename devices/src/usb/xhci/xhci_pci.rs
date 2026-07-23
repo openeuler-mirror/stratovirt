@@ -245,8 +245,8 @@ impl XhciPciDevice {
                 locked_port.slot_id
             };
 
-            locked_xhci.detach_slot(slot_id)?;
             locked_xhci.port_update(&usb_port, true)?;
+            locked_xhci.detach_slot(slot_id)?;
 
             usb_port
         };

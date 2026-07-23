@@ -86,6 +86,7 @@ use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 use devices::usb::uas::{UsbUas, UsbUasConfig};
 #[cfg(feature = "usb_host")]
 use devices::usb::usbhost::UsbHostConfig;
+#[cfg(any(feature = "usb_base", feature = "usb_host"))]
 use devices::usb::xhci::xhci_async::{send_async_xhci_cmd, XhciAsyncCmd};
 #[cfg(feature = "usb_base")]
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
@@ -2684,7 +2685,7 @@ pub trait MachineOps: MachineLifecycle {
     #[cfg(not(feature = "usb_base"))]
     fn detach_usb_from_xhci_controller(
         &mut self,
-        _vm_config: &mut VmConfig,
+        _vm_config: Arc<Mutex<VmConfig>>,
         _id: String,
     ) -> Result<()> {
         bail!("USB support is disabled")
