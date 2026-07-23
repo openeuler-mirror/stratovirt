@@ -981,8 +981,7 @@ pub(crate) trait AcpiBuilder {
 impl StdMachine {
     fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
         let vm_config = self.get_vm_config();
-        let mut locked_vmconfig = vm_config.lock().unwrap();
-        self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)
+        self.detach_usb_from_xhci_controller(vm_config, id)
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1324,7 +1323,7 @@ impl DeviceInterface for StdMachine {
     }
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
-        if let Err(e) = self.check_device_id_existed(&args.id) {
+        if let Err(e) = self.check_device_id_existed_simple(&args.id) {
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
@@ -1340,7 +1339,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_blk(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add virtio pci blk: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1353,7 +1352,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_scsi(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add virtio scsi controller: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1366,7 +1365,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vhost_user_blk_pci(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add vhost user blk pci: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1378,7 +1377,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_net(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add virtio pci net: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1391,7 +1390,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vfio_device(&cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
@@ -1403,7 +1402,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_usb_device(&mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
@@ -1491,7 +1490,7 @@ impl DeviceInterface for StdMachine {
                     }
                     let vm_config = self.get_vm_config();
                     let mut locked_config = vm_config.lock().unwrap();
-                    locked_config.del_device_by_id(device_id);
+                    locked_config.del_device_by_id(&device_id);
                     drop(locked_config);
                     Response::create_empty_response()
                 }

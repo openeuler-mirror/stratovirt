@@ -89,7 +89,10 @@ use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
 #[cfg(feature = "usb_base")]
 use devices::usb::UsbDevice;
 #[cfg(feature = "usb_host")]
-use devices::usb::{usbhost::UsbHostConfig, xhci::xhci_async::XhciAsyncCmd};
+use devices::usb::{
+    usbhost::UsbHostConfig,
+    xhci::xhci_async::{send_async_xhci_cmd, XhciAsyncCmd},
+};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 #[cfg(feature = "virtio_serial")]
@@ -1800,6 +1803,18 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    fn check_device_id_existed_simple(&mut self, name: &str) -> Result<()> {
+        let vm_config = self.get_vm_config();
+
+        let exists = vm_config.lock().unwrap().check_device_exists_by_id(name);
+
+        if exists {
+            bail!("Device with ID '{}' already exists", name);
+        }
+
+        Ok(())
+    }
+
     fn reset_fwcfg_boot_order(&mut self) -> Result<()> {
         // SAFETY: unwrap is safe because stand machine always make sure it not return null.
         let boot_order_vec = self.get_boot_order_list().unwrap();
@@ -2652,20 +2667,20 @@ pub trait MachineOps: MachineLifecycle {
     #[cfg(feature = "usb_base")]
     fn detach_usb_from_xhci_controller(
         &mut self,
-        vm_config: &mut VmConfig,
+        vm_config: Arc<Mutex<VmConfig>>,
         id: String,
     ) -> Result<()> {
         let parent_dev = self
-            .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
+            .get_pci_dev_by_id_and_type(&vm_config.lock().unwrap(), None, "nec-usb-xhci")
             .with_context(|| "Can not find parent device from pci bus")?;
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev
-            .as_any()
-            .downcast_ref::<XhciPciDevice>()
-            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
-        xhci_pci.detach_device(id)?;
 
-        Ok(())
+        let cmd = XhciAsyncCmd::DeviceDetach {
+            id,
+            parent_dev,
+            vm_config,
+        };
+
+        send_async_xhci_cmd(cmd).with_context(|| "Failed to send device detach cmd")
     }
 
     #[cfg(not(feature = "usb_base"))]
@@ -2769,23 +2784,11 @@ pub trait MachineOps: MachineLifecycle {
 
                 let cmd: XhciAsyncCmd = XhciAsyncCmd::UsbHostAdd {
                     config,
-                    parent_dev: parent_dev.clone(),
+                    parent_dev,
                     vm_config: update_vm_config,
                 };
 
-                let parent = parent_dev.lock().unwrap();
-                let xhci = &parent
-                    .as_any()
-                    .downcast_ref::<XhciPciDevice>()
-                    .ok_or_else(|| anyhow!("Failed to downcast PciDevOps to XhciPciDevice"))?
-                    .xhci;
-
-                return xhci
-                    .lock()
-                    .unwrap()
-                    .async_cmd_tx
-                    .send(cmd)
-                    .with_context(|| "Failed to send usbhost add cmd");
+                return send_async_xhci_cmd(cmd).with_context(|| "Failed to send usbhost add cmd");
             }
             _ => bail!("Unknown usb device classes."),
         };

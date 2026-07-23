@@ -129,14 +129,20 @@ impl VmConfig {
         Ok(())
     }
 
-    pub fn del_device_by_id(&mut self, dev_id: String) {
+    pub fn del_device_by_id(&mut self, dev_id: &str) {
         for (index, (_, dev_info)) in self.devices.iter().enumerate() {
-            if device_info_has_id(dev_info, &dev_id) {
+            if device_info_has_id(dev_info, dev_id) {
                 self.devices.remove(index);
                 return;
             }
         }
 
         error!("Device ID {} not found", dev_id);
+    }
+
+    pub fn check_device_exists_by_id(&self, dev_id: &str) -> bool {
+        self.devices
+            .iter()
+            .any(|(_, dev_info)| device_info_has_id(dev_info, dev_id))
     }
 }

@@ -18,7 +18,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 
-use super::xhci_async::XhciAsyncCmd;
+use super::xhci_async::{send_async_xhci_cmd, XhciAsyncCmd};
 use super::xhci_controller::dma_write_bytes;
 use super::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
 use super::xhci_ring::XhciTRB;
@@ -887,12 +887,7 @@ fn xhci_portsc_write(port: &Arc<Mutex<UsbPort>>, value: u32) -> Result<()> {
             warm: is_wpr,
         };
 
-        return xhci
-            .lock()
-            .unwrap()
-            .async_cmd_tx
-            .send(cmd)
-            .with_context(|| "Failed to send port reset cmd");
+        return send_async_xhci_cmd(cmd).with_context(|| "Failed to send port reset cmd");
     }
 
     // Lock controller first.
