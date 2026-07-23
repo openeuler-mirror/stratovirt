@@ -16,29 +16,30 @@ use std::thread::{Builder, JoinHandle};
 
 use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
-use log::{error, info};
+use log::error;
 
 use crate::usb::config::{
     PLS_U0, PORTSC_PED, PORTSC_PR, PORTSC_PRC, PORTSC_WRC, USB_SPEED_FULL, USB_SPEED_HIGH,
     USB_SPEED_LOW, USB_SPEED_SUPER,
 };
-use crate::usb::XhciDevice;
+
+use crate::usb::xhci::xhci_pci::XhciPciDevice;
+use crate::usb::{UsbResp, XhciDevice, USB_DEL_RESP};
+use crate::Device;
 
 #[cfg(feature = "usb_host")]
-use crate::{
-    usb::{
-        usbhost::{UsbHost, UsbHostConfig},
-        xhci::xhci_pci::XhciPciDevice,
-        UsbDevice,
-    },
-    Device,
+use crate::usb::{
+    usbhost::{UsbHost, UsbHostConfig, USBHOST_ADD_RESP},
+    UsbDevice,
 };
 
-#[cfg(feature = "usb_host")]
 use machine_manager::{
     config::VmConfig,
     event,
-    qmp::{qmp_channel::QmpChannel, qmp_schema::UsbHostAddRes},
+    qmp::{
+        qmp_channel::QmpChannel,
+        qmp_schema::{DeviceClassSubType, VmNotifyEvent, DEVICE_CLASS_ID},
+    },
 };
 
 static ASYNC_CMD_SENDER: OnceLock<Sender<XhciAsyncCmd>> = OnceLock::new();
@@ -54,6 +55,7 @@ pub enum XhciAsyncCmd {
         parent_dev: Arc<Mutex<dyn Device + 'static>>,
         vm_config: Arc<Mutex<VmConfig>>,
     },
+    #[cfg(feature = "usb_host")]
     UsbHostAdd {
         config: UsbHostConfig,
         parent_dev: Arc<Mutex<dyn Device + 'static>>,
@@ -177,17 +179,40 @@ impl AsyncCmdHandler {
         parent_dev: Arc<Mutex<dyn Device + 'static>>,
         vm_config: Arc<Mutex<VmConfig>>,
     ) -> Result<()> {
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev
-            .as_any()
-            .downcast_ref::<XhciPciDevice>()
-            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        let detach_result = {
+            let locked_parent_dev = parent_dev.lock().unwrap();
+            let xhci_pci = locked_parent_dev
+                .as_any()
+                .downcast_ref::<XhciPciDevice>()
+                .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+
+            xhci_pci.detach_device(&id)
+        };
+
         vm_config.lock().unwrap().del_device_by_id(&id);
-        xhci_pci.detach_device(&id)?;
+        let state_msg = match detach_result {
+            Ok(_) => "Detach usb device success".to_string(),
+            Err(ref e) => {
+                format!("Detach usb device failed: {:?}", e)
+            }
+        };
 
-        info!("successfully detach usb device {}", id);
+        let detail = UsbResp {
+            device: Some(id.clone()),
+            state_msg: Some(state_msg),
+        };
 
-        Ok(())
+        let message_str =
+            serde_json::to_string(&detail).expect("failed to serialize usb host response detail");
+
+        let resp = VmNotifyEvent {
+            klass: DEVICE_CLASS_ID,
+            type_t: DeviceClassSubType::USBHOST.into(),
+            code: USB_DEL_RESP,
+            message: Some(message_str),
+        };
+        event!(VmNotifyEvent; resp);
+        detach_result.with_context(|| format!("failed to handle detach for device {}", id))
     }
 
     #[cfg(feature = "usb_host")]
@@ -198,25 +223,33 @@ impl AsyncCmdHandler {
         vm_config: Arc<Mutex<VmConfig>>,
     ) -> Result<()> {
         let dev_id = config.id.clone();
-        match initialize_usb_host(config, parent_dev) {
-            Ok(_) => {
-                let success_msg = UsbHostAddRes {
-                    device: Some(dev_id),
-                    state_msg: Some("Add usb host device success".to_string()),
-                };
-                event!(UsbHostAddRes; success_msg);
-            }
+
+        let state_msg = match initialize_usb_host(config, parent_dev) {
+            Ok(_) => "Add usb host device success".to_string(),
             Err(e) => {
                 error!("Usb host device initialization failed: {:?}", e);
                 vm_config.lock().unwrap().del_device_by_id(&dev_id);
-
-                let fail_msg = UsbHostAddRes {
-                    device: Some(dev_id),
-                    state_msg: Some(format!("Usb host device initialization failed: {:?}", e)),
-                };
-                event!(UsbHostAddRes; fail_msg);
+                format!("Usb host device initialization failed: {:?}", e)
             }
-        }
+        };
+
+        let detail = UsbResp {
+            device: Some(dev_id),
+            state_msg: Some(state_msg),
+        };
+
+        let message_str =
+            serde_json::to_string(&detail).expect("failed to serialize usb host response detail");
+
+        let resp = VmNotifyEvent {
+            klass: DEVICE_CLASS_ID,
+            type_t: DeviceClassSubType::USBHOST.into(),
+            code: USBHOST_ADD_RESP,
+            message: Some(message_str),
+        };
+
+        event!(VmNotifyEvent; resp);
+
         Ok(())
     }
 }

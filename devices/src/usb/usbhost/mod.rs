@@ -78,6 +78,8 @@ const USB_HOST_BUFFER_LEN: usize = 12 * 1024;
 const USBHOST_ADDR_MAX: i64 = 127;
 const USBHOST_DEV_MEM_SIZE: usize = 1 << 20;
 
+pub const USBHOST_ADD_RESP: u32 = 0;
+
 #[derive(Default, Copy, Clone)]
 struct InterfaceStatus {
     detached: bool,
