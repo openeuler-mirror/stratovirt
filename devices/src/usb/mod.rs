@@ -67,11 +67,8 @@ pub const USB_DEL_RESP: u32 = 1;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct UsbResp {
-    /// Device name.
-    #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
-    #[serde(rename = "state_msg", default, skip_serializing_if = "Option::is_none")]
-    pub state_msg: Option<String>,
+    pub device: String,
+    pub state_msg: String,
 }
 
 /// USB packet return status.

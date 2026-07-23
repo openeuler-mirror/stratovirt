@@ -1035,6 +1035,8 @@ impl UsbHost {
             )
         });
         self.attach_kernel();
+
+        self.handle = None;
     }
 
     fn clear_iso_queues(&mut self) {
@@ -1466,6 +1468,9 @@ impl UsbDevice for UsbHost {
     fn unrealize(&mut self) -> Result<()> {
         TempCleaner::remove_exit_notifier(self.device_id());
         unregister_event_helper(None, &mut self.libevt)?;
+
+        self.release_dev_to_host();
+
         info!("Usb Host device {} is unrealized", self.device_id());
         Ok(())
     }

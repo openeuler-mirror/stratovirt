@@ -22,7 +22,6 @@ use crate::usb::config::{
     PLS_U0, PORTSC_PED, PORTSC_PR, PORTSC_PRC, PORTSC_WRC, USB_SPEED_FULL, USB_SPEED_HIGH,
     USB_SPEED_LOW, USB_SPEED_SUPER,
 };
-
 use crate::usb::xhci::xhci_pci::XhciPciDevice;
 use crate::usb::{UsbResp, XhciDevice, USB_DEL_RESP};
 use crate::Device;
@@ -191,19 +190,19 @@ impl AsyncCmdHandler {
 
         vm_config.lock().unwrap().del_device_by_id(&id);
         let state_msg = match detach_result {
-            Ok(_) => "Detach usb device success".to_string(),
+            Ok(_) => "".to_string(),
             Err(ref e) => {
                 format!("Detach usb device failed: {:?}", e)
             }
         };
 
         let detail = UsbResp {
-            device: Some(id.clone()),
-            state_msg: Some(state_msg),
+            device: id.clone(),
+            state_msg,
         };
 
-        let message_str =
-            serde_json::to_string(&detail).expect("failed to serialize usb host response detail");
+        let message_str = serde_json::to_string(&detail)
+            .with_context(|| "failed to serialize usb response detail")?;
 
         let resp = VmNotifyEvent {
             klass: DEVICE_CLASS_ID,
@@ -225,7 +224,7 @@ impl AsyncCmdHandler {
         let dev_id = config.id.clone();
 
         let state_msg = match initialize_usb_host(config, parent_dev) {
-            Ok(_) => "Add usb host device success".to_string(),
+            Ok(_) => "".to_string(),
             Err(e) => {
                 error!("Usb host device initialization failed: {:?}", e);
                 vm_config.lock().unwrap().del_device_by_id(&dev_id);
@@ -234,12 +233,12 @@ impl AsyncCmdHandler {
         };
 
         let detail = UsbResp {
-            device: Some(dev_id),
-            state_msg: Some(state_msg),
+            device: dev_id,
+            state_msg,
         };
 
-        let message_str =
-            serde_json::to_string(&detail).expect("failed to serialize usb host response detail");
+        let message_str = serde_json::to_string(&detail)
+            .with_context(|| "failed to serialize usb host response detail")?;
 
         let resp = VmNotifyEvent {
             klass: DEVICE_CLASS_ID,
