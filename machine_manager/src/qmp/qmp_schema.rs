@@ -2353,10 +2353,23 @@ pub struct VmNotifyEvent {
 
 // VmNotifyEvent klass
 pub const DEVICE_CLASS_ID: u32 = 1;
+pub const VCPU_CLASS_ID: u32 = 3;
 // types for DEVICE_CLASS_ID
-pub const CAMERA_TYPE: u32 = 1;
-pub const VIRTIO_NET_TYPE: u32 = 2;
-pub const PVPANIC_TYPE: u32 = 3;
+#[repr(u32)]
+pub enum DeviceClassSubType {
+    CAMERA = 1,
+    VIRTIO_NET,
+    PVPANIC,
+}
+
+impl From<DeviceClassSubType> for u32 {
+    fn from(value: DeviceClassSubType) -> Self {
+        value as u32
+    }
+}
+
+// types for VCPU_CLASS_ID
+pub const SMP_STATE: u32 = 1;
 
 #[cfg(test)]
 mod tests {

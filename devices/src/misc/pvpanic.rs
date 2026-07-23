@@ -40,7 +40,7 @@ use machine_manager::{
     config::{get_pci_df, valid_id},
     event,
     qmp::qmp_channel::QmpChannel,
-    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, PVPANIC_TYPE},
+    qmp::qmp_schema::{DeviceClassSubType, VmNotifyEvent, DEVICE_CLASS_ID},
 };
 use migration::{DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
@@ -206,7 +206,7 @@ impl PvPanicState {
             if QmpChannel::is_connected() {
                 let panicked_msg = VmNotifyEvent {
                     klass: DEVICE_CLASS_ID,
-                    type_t: PVPANIC_TYPE,
+                    type_t: DeviceClassSubType::PVPANIC.into(),
                     code: PVPANIC_PANICKED as u32,
                     message: None,
                 };
@@ -226,7 +226,7 @@ impl PvPanicState {
             if QmpChannel::is_connected() {
                 let crashloaded_msg = VmNotifyEvent {
                     klass: DEVICE_CLASS_ID,
-                    type_t: PVPANIC_TYPE,
+                    type_t: DeviceClassSubType::PVPANIC.into(),
                     code: PVPANIC_CRASHLOADED as u32,
                     message: None,
                 };
