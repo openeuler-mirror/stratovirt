@@ -13,7 +13,6 @@
 use std::collections::{HashMap, LinkedList};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -23,7 +22,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
-use super::xhci_async::{AsyncCmdHandler, XhciAsyncCmd};
+use super::xhci_async::AsyncCmdHandler;
 use super::xhci_pci::XhciConfig;
 use super::xhci_regs::{
     XhciInterrupter, XhciInterrupterState, XhciOperReg, XhciOperRegState, XHCI_MAX_STREAMS_EXP,
@@ -1178,7 +1177,6 @@ pub struct XhciDevice {
     pub cmd_ring: XhciCommandRing,
     pub mem_space: Arc<AddressSpace>,
     pub enable_streams: bool,
-    pub async_cmd_tx: Sender<XhciAsyncCmd>,
     /// Runtime Register.
     mfindex_start: Duration,
     mfwrap_timer_id: Option<u64>,
@@ -1244,9 +1242,7 @@ impl XhciDevice {
             config.streams.unwrap_or(true)
         };
 
-        let (cmd_tx, cmd_rx) = channel::<XhciAsyncCmd>();
-
-        if let Err(e) = AsyncCmdHandler::init(cmd_rx) {
+        if let Err(e) = AsyncCmdHandler::init() {
             panic!("failed to create async, {:?}", e);
         };
 
@@ -1261,7 +1257,6 @@ impl XhciDevice {
             cmd_ring: XhciCommandRing::new(mem_space),
             mem_space: mem_space.clone(),
             enable_streams: streams,
-            async_cmd_tx: cmd_tx,
             mfindex_start: EventLoop::get_ctx(None).unwrap().get_virtual_clock(),
             mfwrap_timer_id: None,
             bme: bme.clone(),

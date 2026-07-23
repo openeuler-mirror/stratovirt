@@ -10,11 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{Builder, JoinHandle};
 
-#[cfg(feature = "usb_host")]
 use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
 use log::{error, info};
@@ -23,7 +22,6 @@ use crate::usb::config::{
     PLS_U0, PORTSC_PED, PORTSC_PR, PORTSC_PRC, PORTSC_WRC, USB_SPEED_FULL, USB_SPEED_HIGH,
     USB_SPEED_LOW, USB_SPEED_SUPER,
 };
-use crate::usb::UsbPort;
 use crate::usb::XhciDevice;
 
 #[cfg(feature = "usb_host")]
@@ -43,6 +41,8 @@ use machine_manager::{
     qmp::{qmp_channel::QmpChannel, qmp_schema::UsbHostAddRes},
 };
 
+static ASYNC_CMD_SENDER: OnceLock<Sender<XhciAsyncCmd>> = OnceLock::new();
+
 pub enum XhciAsyncCmd {
     PortReset {
         xhci: Arc<Mutex<XhciDevice>>,
@@ -50,10 +50,10 @@ pub enum XhciAsyncCmd {
         warm: bool,
     },
     DeviceDetach {
-        xhci: Arc<Mutex<XhciDevice>>,
-        port: Arc<Mutex<UsbPort>>,
+        id: String,
+        parent_dev: Arc<Mutex<dyn Device + 'static>>,
+        vm_config: Arc<Mutex<VmConfig>>,
     },
-    #[cfg(feature = "usb_host")]
     UsbHostAdd {
         config: UsbHostConfig,
         parent_dev: Arc<Mutex<dyn Device + 'static>>,
@@ -61,13 +61,29 @@ pub enum XhciAsyncCmd {
     },
 }
 
+pub fn send_async_xhci_cmd(cmd: XhciAsyncCmd) -> Result<()> {
+    let sender = ASYNC_CMD_SENDER
+        .get()
+        .ok_or_else(|| anyhow!("xhci async sender is not initialized"))?;
+
+    sender
+        .send(cmd)
+        .map_err(|e| anyhow!("failed to send xhci async cmd: {:?}", e))
+}
+
 pub struct AsyncCmdHandler {
     reader: Receiver<XhciAsyncCmd>,
 }
 
 impl AsyncCmdHandler {
-    pub fn init(reader: Receiver<XhciAsyncCmd>) -> Result<JoinHandle<()>> {
-        let handler = AsyncCmdHandler { reader };
+    pub fn init() -> Result<JoinHandle<()>> {
+        let (cmd_tx, cmd_rx) = channel::<XhciAsyncCmd>();
+
+        if ASYNC_CMD_SENDER.set(cmd_tx).is_err() {
+            bail!("xhci async sender has already been initialized");
+        }
+
+        let handler = AsyncCmdHandler { reader: cmd_rx };
         Self::run_thread(handler)
     }
 
@@ -85,8 +101,12 @@ impl AsyncCmdHandler {
                             .handle_port_reset(xhci, port_id, warm)
                             .with_context(|| "failed to hand port reset"),
 
-                        XhciAsyncCmd::DeviceDetach { xhci, port } => handler
-                            .handle_device_detach(xhci, port)
+                        XhciAsyncCmd::DeviceDetach {
+                            id,
+                            parent_dev,
+                            vm_config,
+                        } => handler
+                            .handle_device_detach(id, parent_dev, vm_config)
                             .with_context(|| "failed to handle device detach"),
 
                         #[cfg(feature = "usb_host")]
@@ -153,31 +173,19 @@ impl AsyncCmdHandler {
 
     fn handle_device_detach(
         &self,
-        xhci: Arc<Mutex<XhciDevice>>,
-        port: Arc<Mutex<UsbPort>>,
+        id: String,
+        parent_dev: Arc<Mutex<dyn Device + 'static>>,
+        vm_config: Arc<Mutex<VmConfig>>,
     ) -> Result<()> {
-        let dev = port
-            .lock()
-            .unwrap()
-            .dev
-            .as_ref()
-            .map(Clone::clone)
-            .with_context(|| "no device attached to port")?;
+        let locked_parent_dev = parent_dev.lock().unwrap();
+        let xhci_pci = locked_parent_dev
+            .as_any()
+            .downcast_ref::<XhciPciDevice>()
+            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
+        vm_config.lock().unwrap().del_device_by_id(&id);
+        xhci_pci.detach_device(&id)?;
 
-        let dev_id = {
-            let mut locked_dev = dev.lock().unwrap();
-            locked_dev.usb_device_base_mut().unplugged = true;
-            locked_dev.unrealize()?;
-            locked_dev.device_id().to_string()
-        };
-
-        let mut locked_port = port.lock().unwrap();
-
-        trace::usb_xhci_detach_device(&locked_port.port_id, &dev_id);
-
-        xhci.lock().unwrap().discharge_usb_port(&mut locked_port);
-
-        info!("successfully detach usb device {}", dev_id);
+        info!("successfully detach usb device {}", id);
 
         Ok(())
     }
@@ -200,7 +208,7 @@ impl AsyncCmdHandler {
             }
             Err(e) => {
                 error!("Usb host device initialization failed: {:?}", e);
-                vm_config.lock().unwrap().del_device_by_id(dev_id.clone());
+                vm_config.lock().unwrap().del_device_by_id(&dev_id);
 
                 let fail_msg = UsbHostAddRes {
                     device: Some(dev_id),
@@ -215,16 +223,16 @@ impl AsyncCmdHandler {
 
 #[cfg(feature = "usb_host")]
 fn initialize_usb_host(config: UsbHostConfig, parent_dev: Arc<Mutex<dyn Device>>) -> Result<()> {
+    let usbhost = UsbHost::new(config).with_context(|| "failed to create usb host device")?;
+    let usbhost = usbhost
+        .realize()
+        .with_context(|| "failed to realize usb host device")?;
+
     let parent = parent_dev.lock().unwrap();
     let xhci_pci = parent
         .as_any()
         .downcast_ref::<XhciPciDevice>()
         .ok_or_else(|| anyhow!("failed to downcast PciDevOps to XhciPciDevice"))?;
-
-    let usbhost = UsbHost::new(config).with_context(|| "failed to create usb host device")?;
-    let usbhost = usbhost
-        .realize()
-        .with_context(|| "failed to realize usb host device")?;
 
     xhci_pci
         .attach_device(&usbhost)
