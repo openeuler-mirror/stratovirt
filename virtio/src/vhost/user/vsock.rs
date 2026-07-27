@@ -264,7 +264,7 @@ impl VirtioDevice for VhostUserVsock {
         }
         drop(locked_client);
 
-        self.base.device_features = (1_u64 << VIRTIO_F_VERSION_1);
+        self.base.device_features = 1_u64 << VIRTIO_F_VERSION_1;
         self.base.device_features &= features;
 
         Ok(())
