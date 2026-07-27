@@ -399,6 +399,7 @@ pub enum VhostBackendType {
     TypeBlock,
     TypeFs,
     TypeGpu,
+    TypeVsock,
 }
 
 impl std::fmt::Display for VhostBackendType {
@@ -408,6 +409,7 @@ impl std::fmt::Display for VhostBackendType {
             VhostBackendType::TypeBlock => write!(f, "block"),
             VhostBackendType::TypeFs => write!(f, "fs"),
             VhostBackendType::TypeGpu => write!(f, "gpu"),
+            VhostBackendType::TypeVsock => write!(f, "vsock"),
         }
     }
 }
@@ -609,7 +611,7 @@ impl VhostUserClient {
 
         if matches!(
             self.backend_type,
-            VhostBackendType::TypeBlock | VhostBackendType::TypeGpu
+            VhostBackendType::TypeBlock | VhostBackendType::TypeGpu | VhostBackendType::TypeVsock
         ) {
             // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
             // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.

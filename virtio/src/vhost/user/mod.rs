@@ -22,6 +22,8 @@ mod message;
 #[cfg(feature = "vhostuser_net")]
 mod net;
 mod sock;
+#[cfg(feature = "vhostuser_vsock")]
+mod vsock;
 
 #[cfg(feature = "vhostuser_block")]
 pub use self::block::{Block, VhostUserBlkDevConfig};
@@ -34,6 +36,8 @@ pub use self::message::*;
 #[cfg(feature = "vhostuser_net")]
 pub use self::net::Net;
 pub use self::sock::*;
+#[cfg(feature = "vhostuser_vsock")]
+pub use self::vsock::{VhostUserVsock, VhostUserVsockDevConfig};
 
 use std::sync::{Arc, Mutex};
 
