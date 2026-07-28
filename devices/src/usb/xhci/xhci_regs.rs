@@ -17,8 +17,9 @@ use anyhow::{bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-use super::xhci_async::XhciAsyncCmd;
+use super::xhci_async::{send_async_xhci_cmd, XhciAsyncCmd};
 use super::xhci_controller::dma_write_bytes;
 use super::xhci_controller::{UsbPort, XhciDevice, XhciEvent};
 use super::xhci_ring::XhciTRB;
@@ -778,37 +779,66 @@ pub fn build_runtime_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     }
 }
 
+#[derive(Error, Debug)]
+enum DoorbellError {
+    #[error("Failed to read data as u32")]
+    ReadDataFailed,
+    #[error("XHCI is not running")]
+    XhciNotRunning,
+    #[error("Invalid slot id 0")]
+    InvalidSlotId,
+    #[error("Failed to kick endpoint: {0}")]
+    KickEndpointFailed(String),
+}
+
+impl XhciDevice {
+    fn handle_doorbell_write(&mut self, val: u32, slot_id: u32) -> Result<(), DoorbellError> {
+        if !self.running() {
+            return Err(DoorbellError::XhciNotRunning);
+        }
+
+        if slot_id == 0 {
+            return Err(DoorbellError::InvalidSlotId);
+        }
+
+        let ep_id = val & DB_TARGET_MASK;
+        let stream_id = (val >> DB_STREAM_ID_SHIFT) & DB_STREAM_ID_MASK;
+        if let Err(e) = self.kick_endpoint(slot_id, ep_id, stream_id) {
+            self.host_controller_error();
+            return Err(DoorbellError::KickEndpointFailed(format!("{:?}", e)));
+        }
+
+        Ok(())
+    }
+}
+
 /// Build doorbell region ops.
 pub fn build_doorbell_ops(xhci_dev: &Arc<Mutex<XhciDevice>>) -> RegionOps {
     let doorbell_read = move |data: &mut [u8], addr: GuestAddress, offset: u64| -> bool {
         trace::usb_xhci_doorbell_read(&addr.0, &offset, &0);
-        write_data_u32(data, 0)
+        if !write_data_u32(data, 0) {
+            error!("Doorbell read failed: {}", DoorbellError::ReadDataFailed);
+        }
+        true
     };
+
     let xhci = xhci_dev.clone();
     let doorbell_write = move |data: &[u8], addr: GuestAddress, offset: u64| -> bool {
         let mut value = 0;
         if !read_data_u32(data, &mut value) {
-            return false;
+            error!("Doorbell write failed: {}", DoorbellError::ReadDataFailed);
+            return true;
         }
-        let mut xhci = xhci.lock().unwrap();
-        if !xhci.running() {
-            error!("Failed to write doorbell, XHCI is not running");
-            return false;
-        }
+
         let slot_id = (offset >> 2) as u32;
-        if slot_id == 0 {
-            error!("Invalid slot id 0 !");
-            return false;
+        let mut xhci_lock = xhci.lock().unwrap();
+
+        if let Err(e) = xhci_lock.handle_doorbell_write(value, slot_id) {
+            error!("Doorbell write bypassed with error: {}", e);
         } else {
-            let ep_id = value & DB_TARGET_MASK;
-            let stream_id = (value >> DB_STREAM_ID_SHIFT) & DB_STREAM_ID_MASK;
-            if let Err(e) = xhci.kick_endpoint(slot_id, ep_id, stream_id) {
-                error!("Failed to kick endpoint: {:?}", e);
-                xhci.host_controller_error();
-                return false;
-            }
+            trace::usb_xhci_doorbell_write(&addr.0, &offset, &value);
         }
-        trace::usb_xhci_doorbell_write(&addr.0, &offset, &value);
+
         true
     };
 
@@ -887,12 +917,7 @@ fn xhci_portsc_write(port: &Arc<Mutex<UsbPort>>, value: u32) -> Result<()> {
             warm: is_wpr,
         };
 
-        return xhci
-            .lock()
-            .unwrap()
-            .async_cmd_tx
-            .send(cmd)
-            .with_context(|| "Failed to send port reset cmd");
+        return send_async_xhci_cmd(cmd).with_context(|| "Failed to send port reset cmd");
     }
 
     // Lock controller first.

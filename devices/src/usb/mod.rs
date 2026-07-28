@@ -63,6 +63,14 @@ const USB_MAX_ADDRESS: u8 = 127;
 /// USB device default buffer length.
 pub const USB_DEVICE_BUFFER_DEFAULT_LEN: usize = 4096;
 
+pub const USB_DEL_RESP: u32 = 1;
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct UsbResp {
+    pub device: String,
+    pub state_msg: String,
+}
+
 /// USB packet return status.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum UsbPacketStatus {

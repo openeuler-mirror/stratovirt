@@ -58,7 +58,7 @@ use machine_manager::state_query::{
 use machine_manager::{
     event,
     qmp::qmp_channel::QmpChannel,
-    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
+    qmp::qmp_schema::{DeviceClassSubType, VmNotifyEvent, DEVICE_CLASS_ID},
 };
 use migration::{
     migration::Migratable, DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer,
@@ -1553,7 +1553,7 @@ impl Net {
 
         let event = VmNotifyEvent {
             klass: DEVICE_CLASS_ID,
-            type_t: VIRTIO_NET_TYPE,
+            type_t: DeviceClassSubType::VIRTIO_NET.into(),
             code: VIRTIO_NET_DEV_STATUS_CODE,
             message: Some(msg),
         };

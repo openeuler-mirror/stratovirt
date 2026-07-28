@@ -449,15 +449,16 @@ pub fn get_dpy_standing() -> bool {
 fn display_refresh() {
     let mut dcl_interval: u64;
     let mut interval: u64 = DISPLAY_UPDATE_INTERVAL_MAX;
+    let valid_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = DISPLAY_STATE
+        .lock()
+        .unwrap()
+        .listeners
+        .iter()
+        .flatten()
+        .map(Arc::clone)
+        .collect();
 
-    let mut locked_state = DISPLAY_STATE.lock().unwrap();
-    let mut related_listeners: Vec<Arc<Mutex<DisplayChangeListener>>> = vec![];
-    for dcl in &mut locked_state.listeners.iter_mut().flatten() {
-        related_listeners.push(dcl.clone());
-    }
-    drop(locked_state);
-
-    for dcl in &mut related_listeners.iter() {
+    for dcl in valid_listeners.iter() {
         let dcl_opts = dcl.lock().unwrap().dpy_opts.clone();
         if let Err(e) = (*dcl_opts).dpy_refresh(dcl) {
             error!("{:?}", e);

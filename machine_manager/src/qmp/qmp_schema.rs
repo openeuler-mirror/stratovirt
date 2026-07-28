@@ -2035,7 +2035,6 @@ define_qmp_event_enum!(
     CpuResize("CPU_RESIZE", CpuResize, default),
     DeviceDeleted("DEVICE_DELETED", DeviceDeleted),
     BalloonChanged("BALLOON_CHANGED", BalloonInfo),
-    UsbHostAddRes("USB_HOST_ADD_RES", UsbHostAddRes),
     AudioChanged("AUDIO_CHANGED", AudioState),
     VmNotifyEvent("VM_NOTIFY_EVENT", VmNotifyEvent)
 );
@@ -2148,28 +2147,6 @@ pub struct Powerdown {}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CpuResize {}
-
-/// UsbHostAddRes
-///
-/// Emitted whenever the usb host device add completion is acknowledged.
-/// At this point, it's safe to reuse the specified device ID.
-///
-/// # Examples
-///
-/// ```text
-/// <- { "event": "USB_HOST_ADD_RES",
-///      "data": { "device": "hw_vid_pid" },
-///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct UsbHostAddRes {
-    /// Device name.
-    #[serde(rename = "device", default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
-    #[serde(rename = "state_msg", default, skip_serializing_if = "Option::is_none")]
-    pub state_msg: Option<String>,
-}
 
 /// DeviceDeleted
 ///
@@ -2353,10 +2330,24 @@ pub struct VmNotifyEvent {
 
 // VmNotifyEvent klass
 pub const DEVICE_CLASS_ID: u32 = 1;
+pub const VCPU_CLASS_ID: u32 = 3;
 // types for DEVICE_CLASS_ID
-pub const CAMERA_TYPE: u32 = 1;
-pub const VIRTIO_NET_TYPE: u32 = 2;
-pub const PVPANIC_TYPE: u32 = 3;
+#[repr(u32)]
+pub enum DeviceClassSubType {
+    CAMERA = 1,
+    VIRTIO_NET,
+    PVPANIC,
+    USBHOST,
+}
+
+impl From<DeviceClassSubType> for u32 {
+    fn from(value: DeviceClassSubType) -> Self {
+        value as u32
+    }
+}
+
+// types for VCPU_CLASS_ID
+pub const SMP_STATE: u32 = 1;
 
 #[cfg(test)]
 mod tests {
