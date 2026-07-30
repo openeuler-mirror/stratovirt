@@ -609,13 +609,17 @@ impl VhostUserClient {
                 })?;
         }
 
-        if matches!(
-            self.backend_type,
-            VhostBackendType::TypeBlock | VhostBackendType::TypeGpu | VhostBackendType::TypeVsock
-        ) {
-            // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
-            // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.
-            // Currently, only vhost-user-blk device support negotiate VHOST_USER_F_PROTOCOL_FEATURES.
+        // Per the vhost-user spec, when VHOST_USER_F_PROTOCOL_FEATURES has been
+        // negotiated the rings start disabled and must be explicitly enabled
+        // with SET_VRING_ENABLE. Backends that do NOT negotiate the feature
+        // (e.g. legacy vhost-user-net/fs) enable all rings by default upon
+        // SET_FEATURES, so SET_VRING_ENABLE must not be sent to them.
+        //
+        // Gate on the negotiated feature bit rather than on the device type so
+        // that the decision stays correct for every backend that negotiates
+        // PROTOCOL_FEATURES (blk, gpu, vsock, ...) without having to extend a
+        // device-type allowlist whenever a new vhost-user device is added.
+        if virtio_has_feature(self.features, VHOST_USER_F_PROTOCOL_FEATURES) {
             for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
                 if !queue_mutex.lock().unwrap().is_enabled() {
                     continue;
@@ -744,7 +748,13 @@ impl VhostUserClient {
         let res = client
             .wait_ack_msg::<VhostUserConfig<T>>(request)
             .with_context(|| "Failed to wait ack msg for getting virtio blk config")?;
-        Ok(res.config)
+        // SAFETY: `VhostUserConfig` is `#[repr(C, packed)]`, so `res.config` may
+        // be misaligned; a plain field access would be UB. `read_unaligned`
+        // copies the value out without requiring alignment. `res` is a fully
+        // initialized local (decoded from the backend's reply), so the pointer
+        // is valid and dereferenceable.
+        let config = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(res.config)) };
+        Ok(config)
     }
 
     /// Set virtio config to vhost.

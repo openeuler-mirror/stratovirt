@@ -166,7 +166,8 @@ use virtio::VhostKern;
 #[cfg(any(
     feature = "vhostuser_block",
     feature = "vhostuser_net",
-    feature = "vhostuser_gpu"
+    feature = "vhostuser_gpu",
+    feature = "vhostuser_vsock"
 ))]
 use virtio::VhostUser;
 #[cfg(feature = "vhostuser_fs")]
@@ -2266,6 +2267,83 @@ pub trait MachineOps: MachineLifecycle {
             .with_context(|| "Failed to add vhost user block device")?;
         Ok(())
     }
+
+    /// Add a vhost-user-vsock device on the PCI bus.
+    ///
+    /// The device is a pure passthrough: the guest CID is fetched from the
+    /// backend through the config space (negotiated during `realize`), and all
+    /// three virtqueues (rx/tx/event) are handed to the backend.
+    #[cfg(feature = "vhostuser_vsock")]
+    fn add_vhost_user_vsock_pci(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserVsockDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user vsock",
+                    &device_cfg.chardev
+                )
+            })?;
+
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserVsock::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, false, true)
+            .with_context(|| {
+                format!(
+                    "Failed to add virtio pci vsock device, device id: {}",
+                    &device_cfg.id
+                )
+            })?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
+        Ok(())
+    }
+
+    /// Add a vhost-user-vsock device on the mmio bus (microvm).
+    ///
+    /// Mirrors `add_vhost_user_blk_device`: there is no bus/addr on mmio, so
+    /// those args must be absent, and the device is attached via
+    /// `add_virtio_mmio_device` (overridden by the microvm machine to actually
+    /// register the mmio transport).
+    #[cfg(feature = "vhostuser_vsock")]
+    fn add_vhost_user_vsock_device(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserVsockDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_nonexist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user vsock",
+                    &device_cfg.chardev
+                )
+            })?;
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserVsock::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_mmio_device(device_cfg.id.clone(), device)
+            .with_context(|| "Failed to add vhost user vsock mmio device")?;
+        Ok(())
+    }
     #[cfg(feature = "vfio_device")]
     fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
         let hypervisor = self.get_hypervisor();
@@ -2865,6 +2943,10 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 #[cfg(feature = "vhostuser_gpu")]
                 ("vhost-user-gpu-pci", add_vhost_user_gpu_pci, vm_config, cfg_args),
+                #[cfg(feature = "vhostuser_vsock")]
+                ("vhost-user-vsock-pci", add_vhost_user_vsock_pci, vm_config, cfg_args, false),
+                #[cfg(feature = "vhostuser_vsock")]
+                ("vhost-user-vsock-device", add_vhost_user_vsock_device, vm_config, cfg_args),
                 #[cfg(feature = "vhost_vsock")]
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]
