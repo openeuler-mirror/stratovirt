@@ -247,6 +247,10 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tadd virtio pci console: -device virtio-serial-pci,id=<virtio-serial0>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off] -device virtconsole,id=<console_id>,chardev=<virtioconsole1>; \
                    \n\t\tadd vhost mmio vsock: -device vhost-vsock-device,id=<vsock_id>,guest-cid=<N>; \
                    \n\t\tadd vhost pci vsock: -device vhost-vsock-pci,id=<vsock_id>,guest-cid=<N>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off]; \
+                   \n\t\tadd vhost user pci vsock: -device vhost-user-vsock-pci,id=<vsock_id>,guest-cid=<N>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off]; \
+                   \n\t\tadd vhost user mmio vsock: -device vhost-user-vsock-device,id=<vsock_id>,guest-cid=<N>,chardev=<chardev_id>; \
+                   \n\t\tadd vhost user pci input: -device vhost-user-input-pci,id=<input_id>,chardev=<chardev_id>,bus=<pcie.0>,addr=<0x3>[,multifunction=on|off]; \
+                   \n\t\tadd vhost user mmio input: -device vhost-user-input-device,id=<input_id>,chardev=<chardev_id>; \
                    \n\t\tadd virtio mmio balloon: -device virtio-balloon-device[,deflate-on-oom=true|false][,free-page-reporting=true|false]; \
                    \n\t\tadd virtio pci balloon: -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom=true|false][,free-page-reporting=true|false][,multifunction=on|off]; \
                    \n\t\tadd virtio mmio mem: -device virtio-mem-device,id=<viomem_id>,memdev=<objmem0>[,memaddr=<68719476736>][,requested-size=<68719476736>][,block-size=<4096>][,node=<0>]; \

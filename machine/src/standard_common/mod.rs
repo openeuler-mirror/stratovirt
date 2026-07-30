@@ -1373,6 +1373,34 @@ impl DeviceInterface for StdMachine {
                     );
                 }
             }
+            #[cfg(feature = "vhostuser_vsock")]
+            "vhost-user-vsock-pci" => {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_vhost_user_vsock_pci(&mut vm_config_clone, &cfg_args, true)
+                {
+                    error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(&args.id);
+                    let err_str = format!("Failed to add vhost user vsock pci: {}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            #[cfg(feature = "vhostuser_input")]
+            "vhost-user-input-pci" => {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_vhost_user_input_pci(&mut vm_config_clone, &cfg_args, true)
+                {
+                    error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(&args.id);
+                    let err_str = format!("Failed to add vhost user input pci: {}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
             "virtio-net-pci" => {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_net(&mut vm_config_clone, &cfg_args, true) {

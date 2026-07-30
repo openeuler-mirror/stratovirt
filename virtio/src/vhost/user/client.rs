@@ -400,6 +400,7 @@ pub enum VhostBackendType {
     TypeFs,
     TypeGpu,
     TypeVsock,
+    TypeInput,
 }
 
 impl std::fmt::Display for VhostBackendType {
@@ -410,6 +411,7 @@ impl std::fmt::Display for VhostBackendType {
             VhostBackendType::TypeFs => write!(f, "fs"),
             VhostBackendType::TypeGpu => write!(f, "gpu"),
             VhostBackendType::TypeVsock => write!(f, "vsock"),
+            VhostBackendType::TypeInput => write!(f, "input"),
         }
     }
 }
@@ -609,13 +611,17 @@ impl VhostUserClient {
                 })?;
         }
 
-        if matches!(
-            self.backend_type,
-            VhostBackendType::TypeBlock | VhostBackendType::TypeGpu | VhostBackendType::TypeVsock
-        ) {
-            // If VHOST_USER_F_PROTOCOL_FEATURES has been negotiated, it should call
-            // set_vring_enable to enable vring. Otherwise, the ring is enabled by default.
-            // Currently, only vhost-user-blk device support negotiate VHOST_USER_F_PROTOCOL_FEATURES.
+        // Per the vhost-user spec, when VHOST_USER_F_PROTOCOL_FEATURES has been
+        // negotiated the rings start disabled and must be explicitly enabled
+        // with SET_VRING_ENABLE. Backends that do NOT negotiate the feature
+        // (e.g. legacy vhost-user-net/fs) enable all rings by default upon
+        // SET_FEATURES, so SET_VRING_ENABLE must not be sent to them.
+        //
+        // Gate on the negotiated feature bit rather than on the device type so
+        // that the decision stays correct for every backend that negotiates
+        // PROTOCOL_FEATURES (blk, gpu, vsock, ...) without having to extend a
+        // device-type allowlist whenever a new vhost-user device is added.
+        if virtio_has_feature(self.features, VHOST_USER_F_PROTOCOL_FEATURES) {
             for (queue_index, queue_mutex) in self.queues.iter().enumerate() {
                 if !queue_mutex.lock().unwrap().is_enabled() {
                     continue;
@@ -744,7 +750,13 @@ impl VhostUserClient {
         let res = client
             .wait_ack_msg::<VhostUserConfig<T>>(request)
             .with_context(|| "Failed to wait ack msg for getting virtio blk config")?;
-        Ok(res.config)
+        // SAFETY: `VhostUserConfig` is `#[repr(C, packed)]`, so `res.config` may
+        // be misaligned; a plain field access would be UB. `read_unaligned`
+        // copies the value out without requiring alignment. `res` is a fully
+        // initialized local (decoded from the backend's reply), so the pointer
+        // is valid and dereferenceable.
+        let config = unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(res.config)) };
+        Ok(config)
     }
 
     /// Set virtio config to vhost.
@@ -759,6 +771,33 @@ impl VhostUserClient {
             .sock
             .send_msg(Some(&hdr), Some(&config), payload_opt, &[])
             .with_context(|| "Failed to send msg for getting virtio blk config")?;
+        Ok(())
+    }
+
+    /// Set a *range* of the virtio config space (partial `SET_CONFIG`).
+    ///
+    /// Unlike [`set_virtio_config`], which always writes the whole struct at
+    /// offset 0, this preserves the guest's exact write `offset` and `data`
+    /// length. Required by virtio-input, whose Linux driver issues separate
+    /// one-byte writes to `select` (offset 0) and `subsel` (offset 1) — a
+    /// whole-struct write at offset 0 would carry a stale `subsel`.
+    ///
+    /// Wire format: the 12-byte `VhostUserConfig` header (offset | size |
+    /// flags, with `size = data.len()`) as the body, followed by `data` as the
+    /// payload — symmetric to `GET_CONFIG`. The message is fire-and-forget
+    /// (no `NeedReply`), matching `set_virtio_config`.
+    pub fn set_virtio_config_range(&self, offset: u32, data: &[u8]) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::SetConfig as u32;
+        // `VhostUserConfig<()>` is exactly the 12-byte header (no inline config).
+        let header = VhostUserConfig::<()>::new_with_size(offset, data.len() as u32, 0)?;
+        let header_len = size_of::<VhostUserConfig<()>>();
+        let hdr = VhostUserMsgHdr::new(request, 0, (header_len + data.len()) as u32);
+        let payload_opt: Option<&[u8]> = Some(data);
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&header), payload_opt, &[])
+            .with_context(|| "Failed to send msg for setting virtio config range")?;
         Ok(())
     }
 
