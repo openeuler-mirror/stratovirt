@@ -195,7 +195,6 @@ impl QmpChannel {
         }
     }
 
-    #[allow(clippy::unused_io_amount)]
     fn do_send_event(event: &schema::QmpEvent) {
         if Self::is_connected() {
             let mut event_str = serde_json::to_string(&event).unwrap();
@@ -208,7 +207,7 @@ impl QmpChannel {
                 return;
             }
             event_str.push_str("\r\n");
-            if let Err(e) = writer.write(event_str.as_bytes()) {
+            if let Err(e) = writer.write_all(event_str.as_bytes()) {
                 error!("write err, {:?}", e);
             }
         }
