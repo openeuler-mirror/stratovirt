@@ -176,7 +176,19 @@ impl Default for VhostUserMsgHdr {
 }
 
 /// Struct for get and set config to vhost user.
-#[repr(C)]
+///
+/// Wire layout (vhost-user `GET_CONFIG`/`SET_CONFIG`): the 12-byte header
+/// `offset | size | flags` is followed immediately by the `size`-byte config
+/// data, with **no padding**. The struct is therefore `#[repr(C, packed)]`:
+/// a plain `#[repr(C)]` would insert alignment padding before `config` when
+/// `T`'s alignment exceeds 4 (e.g. `T = u64` has align 8), pushing `config` to
+/// offset 16 and corrupting the message — the rust-vmm backend then rejects it
+/// as an "invalid message".
+///
+/// Because the struct is `packed`, a reference to `config` may be unaligned;
+/// readers must copy it out with `ptr::read_unaligned` instead of a plain
+/// field access.
+#[repr(C, packed)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct VhostUserConfig<T: Default + Sized> {
     offset: u32,

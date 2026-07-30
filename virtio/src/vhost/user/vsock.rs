@@ -24,7 +24,6 @@ use super::super::VhostOps;
 use super::client::VhostUserClient;
 use crate::VhostUser::client::{
     VhostBackendType, VHOST_USER_PROTOCOL_F_CONFIG, VHOST_USER_PROTOCOL_F_MQ,
-    VHOST_USER_PROTOCOL_F_REPLY_ACK,
 };
 use crate::VhostUser::listen_guest_notifier;
 use crate::VhostUser::message::VHOST_USER_F_PROTOCOL_FEATURES;
@@ -214,12 +213,16 @@ impl VirtioDevice for VhostUserVsock {
         let protocol_features = locked_client
             .get_protocol_features()
             .with_context(|| "Failed to get protocol features for vhost-user vsock")?;
-        // Negotiate MQ | CONFIG | REPLY_ACK as required by the vhost-user-vsock
-        // contract. REPLY_ACK lets the frontend detect backend errors on
-        // SET_VRING_ENABLE and other commands that would otherwise be fire-and-forget.
-        let supported_protocol_features = (1 << VHOST_USER_PROTOCOL_F_MQ)
-            | (1 << VHOST_USER_PROTOCOL_F_CONFIG)
-            | (1 << VHOST_USER_PROTOCOL_F_REPLY_ACK);
+        // Negotiate MQ | CONFIG as required by the vhost-user-vsock contract.
+        // The rust-vmm vhost-device-vsock backend advertises exactly MQ | CONFIG
+        // (it does not offer REPLY_ACK), so those are the only bits that survive
+        // the intersection below. REPLY_ACK is intentionally not requested: this
+        // frontend never sets VHOST_USER_NEED_REPLY on its requests
+        // (SET_VRING_ENABLE, GET_CONFIG, ...), so the feature would be negotiated
+        // but unused. Fire-and-forget semantics are acceptable here because a
+        // failed SET_VRING_ENABLE already surfaces as a broken device at runtime.
+        let supported_protocol_features =
+            (1 << VHOST_USER_PROTOCOL_F_MQ) | (1 << VHOST_USER_PROTOCOL_F_CONFIG);
         self.protocol_features = supported_protocol_features & protocol_features;
         locked_client
             .set_protocol_features(self.protocol_features)
