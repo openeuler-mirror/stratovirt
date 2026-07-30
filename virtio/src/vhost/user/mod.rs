@@ -18,6 +18,8 @@ mod block;
 mod client;
 #[cfg(feature = "vhostuser_gpu")]
 mod gpu;
+#[cfg(feature = "vhostuser_input")]
+mod input;
 mod message;
 #[cfg(feature = "vhostuser_net")]
 mod net;
@@ -32,6 +34,8 @@ pub use self::client::*;
 pub use self::fs::*;
 #[cfg(feature = "vhostuser_gpu")]
 pub use self::gpu::{VhostUserGpu, VhostUserGpuDevConfig};
+#[cfg(feature = "vhostuser_input")]
+pub use self::input::{VhostUserInput, VhostUserInputDevConfig};
 pub use self::message::*;
 #[cfg(feature = "vhostuser_net")]
 pub use self::net::Net;

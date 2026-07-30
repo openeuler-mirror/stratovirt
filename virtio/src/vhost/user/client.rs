@@ -400,6 +400,7 @@ pub enum VhostBackendType {
     TypeFs,
     TypeGpu,
     TypeVsock,
+    TypeInput,
 }
 
 impl std::fmt::Display for VhostBackendType {
@@ -410,6 +411,7 @@ impl std::fmt::Display for VhostBackendType {
             VhostBackendType::TypeFs => write!(f, "fs"),
             VhostBackendType::TypeGpu => write!(f, "gpu"),
             VhostBackendType::TypeVsock => write!(f, "vsock"),
+            VhostBackendType::TypeInput => write!(f, "input"),
         }
     }
 }
@@ -769,6 +771,33 @@ impl VhostUserClient {
             .sock
             .send_msg(Some(&hdr), Some(&config), payload_opt, &[])
             .with_context(|| "Failed to send msg for getting virtio blk config")?;
+        Ok(())
+    }
+
+    /// Set a *range* of the virtio config space (partial `SET_CONFIG`).
+    ///
+    /// Unlike [`set_virtio_config`], which always writes the whole struct at
+    /// offset 0, this preserves the guest's exact write `offset` and `data`
+    /// length. Required by virtio-input, whose Linux driver issues separate
+    /// one-byte writes to `select` (offset 0) and `subsel` (offset 1) — a
+    /// whole-struct write at offset 0 would carry a stale `subsel`.
+    ///
+    /// Wire format: the 12-byte `VhostUserConfig` header (offset | size |
+    /// flags, with `size = data.len()`) as the body, followed by `data` as the
+    /// payload — symmetric to `GET_CONFIG`. The message is fire-and-forget
+    /// (no `NeedReply`), matching `set_virtio_config`.
+    pub fn set_virtio_config_range(&self, offset: u32, data: &[u8]) -> Result<()> {
+        let client = self.client.lock().unwrap();
+        let request = VhostUserMsgReq::SetConfig as u32;
+        // `VhostUserConfig<()>` is exactly the 12-byte header (no inline config).
+        let header = VhostUserConfig::<()>::new_with_size(offset, data.len() as u32, 0)?;
+        let header_len = size_of::<VhostUserConfig<()>>();
+        let hdr = VhostUserMsgHdr::new(request, 0, (header_len + data.len()) as u32);
+        let payload_opt: Option<&[u8]> = Some(data);
+        client
+            .sock
+            .send_msg(Some(&hdr), Some(&header), payload_opt, &[])
+            .with_context(|| "Failed to send msg for setting virtio config range")?;
         Ok(())
     }
 

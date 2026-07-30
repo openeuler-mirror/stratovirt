@@ -199,6 +199,10 @@ pub struct VhostUserConfig<T: Default + Sized> {
 
 impl<T: Default + Sized> VhostUserConfig<T> {
     /// Create a new instance of `VhostUserConfig`.
+    ///
+    /// `size` is derived from `size_of::<T>()`: the whole inline `config` field
+    /// is sent, so this is used for `GET_CONFIG` requests and whole-struct
+    /// `SET_CONFIG` writes (block, gpu, vsock).
     pub fn new(offset: u32, flags: u32, config: T) -> Result<Self> {
         let size = size_of::<T>() as u32;
         if size > VHOST_USER_MAX_CONFIG_SIZE {
@@ -209,6 +213,24 @@ impl<T: Default + Sized> VhostUserConfig<T> {
             size,
             flags,
             config,
+        })
+    }
+
+    /// Create a header-only instance with an explicit `size`, for ranged
+    /// `SET_CONFIG` writes where the config data does not match a fixed `T`
+    /// (e.g. virtio-input: the Linux driver writes `select` and `subsel` as
+    /// separate one-byte writes at distinct offsets). Used with `T = ()` so no
+    /// inline config bytes are emitted; the real config bytes travel as the
+    /// message payload alongside this 12-byte header.
+    pub fn new_with_size(offset: u32, size: u32, flags: u32) -> Result<Self> {
+        if size > VHOST_USER_MAX_CONFIG_SIZE {
+            bail!("Failed to create VhostUserConfig: exceed max config size.")
+        }
+        Ok(VhostUserConfig {
+            offset,
+            size,
+            flags,
+            config: T::default(),
         })
     }
 }

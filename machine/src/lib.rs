@@ -167,7 +167,8 @@ use virtio::VhostKern;
     feature = "vhostuser_block",
     feature = "vhostuser_net",
     feature = "vhostuser_gpu",
-    feature = "vhostuser_vsock"
+    feature = "vhostuser_vsock",
+    feature = "vhostuser_input"
 ))]
 use virtio::VhostUser;
 #[cfg(feature = "vhostuser_fs")]
@@ -2344,6 +2345,82 @@ pub trait MachineOps: MachineLifecycle {
             .with_context(|| "Failed to add vhost user vsock mmio device")?;
         Ok(())
     }
+
+    /// Add a vhost-user-input device on the PCI bus.
+    ///
+    /// Pure passthrough: the config space is served over `GET_CONFIG`/
+    /// `SET_CONFIG` (read fresh, write forwarded with the exact offset), and
+    /// both virtqueues (event + status) are handed to the backend. The frontend
+    /// never touches an evdev device.
+    #[cfg(feature = "vhostuser_input")]
+    fn add_vhost_user_input_pci(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserInputDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user input",
+                    &device_cfg.chardev
+                )
+            })?;
+
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserInput::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, false, true)
+            .with_context(|| {
+                format!(
+                    "Failed to add virtio pci input device, device id: {}",
+                    &device_cfg.id
+                )
+            })?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
+        Ok(())
+    }
+
+    /// Add a vhost-user-input device on the mmio bus (microvm).
+    ///
+    /// Mirrors `add_vhost_user_vsock_device`: no bus/addr on mmio, attached
+    /// via `add_virtio_mmio_device` (overridden by the microvm machine).
+    #[cfg(feature = "vhostuser_input")]
+    fn add_vhost_user_input_device(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserInputDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_nonexist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user input",
+                    &device_cfg.chardev
+                )
+            })?;
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserInput::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_mmio_device(device_cfg.id.clone(), device)
+            .with_context(|| "Failed to add vhost user input mmio device")?;
+        Ok(())
+    }
     #[cfg(feature = "vfio_device")]
     fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
         let hypervisor = self.get_hypervisor();
@@ -2947,6 +3024,10 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-user-vsock-pci", add_vhost_user_vsock_pci, vm_config, cfg_args, false),
                 #[cfg(feature = "vhostuser_vsock")]
                 ("vhost-user-vsock-device", add_vhost_user_vsock_device, vm_config, cfg_args),
+                #[cfg(feature = "vhostuser_input")]
+                ("vhost-user-input-pci", add_vhost_user_input_pci, vm_config, cfg_args, false),
+                #[cfg(feature = "vhostuser_input")]
+                ("vhost-user-input-device", add_vhost_user_input_device, vm_config, cfg_args),
                 #[cfg(feature = "vhost_vsock")]
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]
