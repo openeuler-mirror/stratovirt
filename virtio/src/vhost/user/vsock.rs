@@ -364,6 +364,10 @@ mod tests {
     use crate::tests::address_space_init;
     use machine_manager::config::str_slip_to_clap;
 
+    // =====================================================================
+    // Helpers
+    // =====================================================================
+
     /// Base CID used for registry tests. Kept in a clearly test-only range so it
     /// can never collide with a real guest CID produced by `create_test_vsock`
     /// (which never claims anything) or with another parallel test case.
@@ -393,10 +397,18 @@ mod tests {
     }
 
     /// Parse a vhost-user-vsock command line into its config struct.
-    fn parse_vsock_config(
-        cmd: &str,
-    ) -> std::result::Result<VhostUserVsockDevConfig, clap::Error> {
+    fn parse_vsock_config(cmd: &str) -> std::result::Result<VhostUserVsockDevConfig, clap::Error> {
         VhostUserVsockDevConfig::try_parse_from(str_slip_to_clap(cmd, true, false))
+    }
+
+    /// Build a minimal *valid* PCI command line parameterised by `guest_cid`.
+    /// Used to keep the boundary table-driven tests compact and focused on the
+    /// value under test rather than the boilerplate of a well-formed command.
+    fn vsock_pci_cmd(guest_cid: u64) -> String {
+        format!(
+            "vhost-user-vsock-pci,id=v,guest-cid={},chardev=c",
+            guest_cid
+        )
     }
 
     /// RAII guard that automatically releases a claimed CID on drop, so a
@@ -427,9 +439,9 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Command-line parsing
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // 1. Command-line parsing
+    // =====================================================================
 
     #[test]
     fn test_config_parse_valid_variants() {
@@ -459,11 +471,11 @@ mod tests {
             ("typical", 42_u64),
         ];
         for (label, cid) in valid {
-            let cmd = format!("vhost-user-vsock-pci,id=v,guest-cid={},chardev=c", cid);
             assert!(
-                parse_vsock_config(&cmd).is_ok(),
+                parse_vsock_config(&vsock_pci_cmd(cid)).is_ok(),
                 "guest-cid={} ({}) should be accepted",
-                cid, label
+                cid,
+                label
             );
         }
 
@@ -474,13 +486,26 @@ mod tests {
             ("above-max", MAX_GUEST_CID + 1),
         ];
         for (label, cid) in invalid {
-            let cmd = format!("vhost-user-vsock-pci,id=v,guest-cid={},chardev=c", cid);
             assert!(
-                parse_vsock_config(&cmd).is_err(),
+                parse_vsock_config(&vsock_pci_cmd(cid)).is_err(),
                 "guest-cid={} ({}) should be rejected",
-                cid, label
+                cid,
+                label
             );
         }
+    }
+
+    #[test]
+    fn test_config_parse_optional_fields_default() {
+        // `bus`, `addr` and `multifunction` are optional: a minimal command
+        // must parse and leave them at their `None` defaults.
+        let cfg = parse_vsock_config(&vsock_pci_cmd(3)).expect("minimal config should parse");
+        assert!(cfg.bus.is_none(), "bus defaults to None");
+        assert!(cfg.addr.is_none(), "addr defaults to None");
+        assert!(
+            cfg.multifunction.is_none(),
+            "multifunction defaults to None"
+        );
     }
 
     #[test]
@@ -494,14 +519,74 @@ mod tests {
     #[test]
     fn test_config_parse_invalid_classtype() {
         // Only the `pci` and `device` classtypes are accepted.
-        assert!(
-            parse_vsock_config("vhost-user-vsock-foobar,id=v,guest-cid=3,chardev=c").is_err()
-        );
+        assert!(parse_vsock_config("vhost-user-vsock-foobar,id=v,guest-cid=3,chardev=c").is_err());
     }
 
-    // ---------------------------------------------------------------------
-    // Device construction
-    // ---------------------------------------------------------------------
+    #[test]
+    fn test_config_parse_optional_fields_populated() {
+        // All optional fields can be populated at once: `bus`, `addr` (in
+        // `slot.function` form) and `multifunction`.
+        let cfg = parse_vsock_config(
+            "vhost-user-vsock-pci,id=v,guest-cid=3,chardev=c,bus=pci.0,addr=2.5,multifunction=on",
+        )
+        .expect("config with all optional fields should parse");
+        assert_eq!(cfg.bus.as_deref(), Some("pci.0"));
+        assert_eq!(cfg.addr, Some((2_u8, 5_u8)));
+        assert_eq!(cfg.multifunction, Some(true));
+    }
+
+    #[test]
+    fn test_config_parse_addr_invalid() {
+        // `get_pci_df` rejects slots > 31, functions > 7 and malformed input.
+        let invalid_addrs = [
+            "32.0",  // slot 32 out of range [0, 31]
+            "0.8",   // function 8 out of range [0, 7]
+            "a.b",   // non-numeric
+            "1.2.3", // too many components
+        ];
+        for addr in invalid_addrs {
+            let cmd = format!(
+                "vhost-user-vsock-pci,id=v,guest-cid=3,chardev=c,addr={}",
+                addr
+            );
+            assert!(
+                parse_vsock_config(&cmd).is_err(),
+                "addr={} must be rejected",
+                addr
+            );
+        }
+    }
+
+    #[test]
+    fn test_config_parse_multifunction_bool_aliases() {
+        // `parse_bool` accepts true/on/yes and false/off/no. Verify each alias
+        // round-trips through the parser into the `multifunction` field.
+        for &(alias, expected) in &[
+            ("true", true),
+            ("on", true),
+            ("yes", true),
+            ("false", false),
+            ("off", false),
+            ("no", false),
+        ] {
+            let cmd = format!(
+                "vhost-user-vsock-pci,id=v,guest-cid=3,chardev=c,multifunction={}",
+                alias
+            );
+            let cfg = parse_vsock_config(&cmd).expect("alias must parse");
+            assert_eq!(
+                cfg.multifunction,
+                Some(expected),
+                "multifunction={} must map to {}",
+                alias,
+                expected
+            );
+        }
+    }
+
+    // =====================================================================
+    // 2. Device construction
+    // =====================================================================
 
     #[test]
     fn test_construction_seeds_config_space() {
@@ -514,6 +599,22 @@ mod tests {
         // A freshly created device has not yet connected or claimed a CID.
         assert!(!vsock.cid_claimed);
         assert!(vsock.client.is_none());
+    }
+
+    #[test]
+    fn test_construction_guest_cid_boundaries() {
+        // The constructor must accept the extreme *valid* guest CIDs and seed
+        // them byte-for-byte into the config space (little-endian).
+        for &cid in &[MIN_GUEST_CID, MAX_GUEST_CID] {
+            let vsock = create_test_vsock(cid);
+            assert_eq!(vsock.guest_cid(), cid, "guest_cid accessor for {}", cid);
+            assert_eq!(
+                LittleEndian::read_u64(&vsock.config_space),
+                cid,
+                "config space LE u64 for {}",
+                cid
+            );
+        }
     }
 
     #[test]
@@ -540,9 +641,44 @@ mod tests {
         assert_eq!(vsock.queue_size_max(), DEFAULT_VIRTQUEUE_SIZE);
     }
 
-    // ---------------------------------------------------------------------
-    // Config-space read (`read_config`)
-    // ---------------------------------------------------------------------
+    #[test]
+    fn test_construction_preserves_vsock_cfg() {
+        // The CLI config struct must be cloned verbatim into the device so it
+        // is available for later diagnostics / reconfiguration.
+        let cid = 1234_u64;
+        let vsock = create_test_vsock(cid);
+        assert_eq!(vsock.vsock_cfg.guest_cid, cid);
+        assert_eq!(vsock.vsock_cfg.classtype, "vhost-user-vsock-pci");
+        assert_eq!(vsock.vsock_cfg.id, "test_vsock");
+        assert_eq!(vsock.vsock_cfg.chardev, "test_chardev");
+    }
+
+    #[test]
+    fn test_construction_preserves_chardev_cfg() {
+        // The chardev config drives the backend socket path; it must survive
+        // construction unchanged.
+        let vsock = create_test_vsock(3);
+        assert_eq!(vsock.chardev_cfg.id(), "test_chardev");
+    }
+
+    #[test]
+    fn test_construction_default_runtime_state() {
+        // A freshly constructed device is in a well-defined pre-realize
+        // state: no client, irqfd disabled, no protocol features negotiated,
+        // no CID claim held.
+        let vsock = create_test_vsock(7);
+        assert!(vsock.client.is_none(), "client must be None pre-realize");
+        assert!(!vsock.enable_irqfd, "enable_irqfd must default to false");
+        assert_eq!(
+            vsock.protocol_features, 0,
+            "protocol_features must default to 0"
+        );
+        assert!(!vsock.cid_claimed, "cid_claimed must default to false");
+    }
+
+    // =====================================================================
+    // 3. Config space (read / write)
+    // =====================================================================
 
     #[test]
     fn test_read_config_within_bounds() {
@@ -562,9 +698,9 @@ mod tests {
         ];
         for (offset, len, expected) in cases {
             let mut buf = vec![0_u8; *len];
-            vsock.read_config(*offset, &mut buf).unwrap_or_else(|_| {
-                panic!("read at offset={} len={} should succeed", offset, len)
-            });
+            vsock
+                .read_config(*offset, &mut buf)
+                .unwrap_or_else(|_| panic!("read at offset={} len={} should succeed", offset, len));
             let value = match *len {
                 1 => u64::from(buf[0]),
                 2 => u64::from(LittleEndian::read_u16(&buf)),
@@ -583,7 +719,7 @@ mod tests {
         // space (or whose arithmetic overflows) must be rejected.
         let oob: &[(u64, usize)] = &[
             (5, 4),        // 5 + 4 = 9 > 8
-            (8, 4),        // 8 + 4 = 12 > 8
+            (8, 4),        // 8 + 4 = 12 > 8 (start at the exact end)
             (1, 8),        // 1 + 8 = 9 > 8
             (7, 2),        // 7 + 2 = 9 > 8
             (u64::MAX, 1), // offset arithmetic overflows
@@ -593,7 +729,8 @@ mod tests {
             assert!(
                 vsock.read_config(*offset, &mut buf).is_err(),
                 "read at offset={} len={} must be rejected",
-                offset, len
+                offset,
+                len
             );
         }
     }
@@ -602,8 +739,8 @@ mod tests {
     fn test_read_config_empty_is_allowed() {
         let vsock = create_test_vsock(42);
         // A zero-length read never touches the buffer and is always within
-        // bounds, even at the very end of the config space.
-        for offset in [0_u64, 8] {
+        // bounds, even at the very end of the config space (offset == len).
+        for offset in [0_u64, 7, 8] {
             let mut buf: [u8; 0] = [];
             assert!(
                 vsock.read_config(offset, &mut buf).is_ok(),
@@ -613,9 +750,138 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // CID registry (claim / release / uniqueness)
-    // ---------------------------------------------------------------------
+    #[test]
+    fn test_read_config_matches_guest_cid_accessor() {
+        // A full 8-byte read from offset 0 must agree with the `guest_cid()`
+        // accessor — they observe the same underlying config space.
+        for &cid in &[MIN_GUEST_CID, 42_u64, MAX_GUEST_CID] {
+            let vsock = create_test_vsock(cid);
+            let mut buf = [0_u8; VSOCK_CONFIG_SPACE_SIZE];
+            vsock
+                .read_config(0, &mut buf)
+                .expect("full read must succeed");
+            assert_eq!(
+                LittleEndian::read_u64(&buf),
+                vsock.guest_cid(),
+                "read_config and guest_cid disagree for {}",
+                cid
+            );
+        }
+    }
+
+    #[test]
+    fn test_read_config_is_deterministic() {
+        // Repeated reads at the same offset must yield identical results: the
+        // config space is read-only post-construction, so reads have no
+        // observable side effects.
+        let vsock = create_test_vsock(0x0901_0203_0405_0607);
+        let mut first = [0_u8; VSOCK_CONFIG_SPACE_SIZE];
+        let mut second = [0_u8; VSOCK_CONFIG_SPACE_SIZE];
+        vsock.read_config(0, &mut first).unwrap();
+        vsock.read_config(0, &mut second).unwrap();
+        assert_eq!(first, second, "repeated reads must be stable");
+    }
+
+    #[test]
+    fn test_write_config_is_noop() {
+        // The virtio-vsock config space (guest CID) is read-only for the
+        // driver: `write_config` must accept the call without error and leave
+        // the config space byte-for-byte unchanged.
+        let cid = 0x1122_3344_5566_7788;
+        let mut vsock = create_test_vsock(cid);
+        let original = vsock.config_space;
+
+        let payload = [0xFF_u8; VSOCK_CONFIG_SPACE_SIZE];
+        vsock
+            .write_config(0, &payload)
+            .expect("write_config must not error");
+
+        assert_eq!(
+            vsock.config_space, original,
+            "config space must not be mutated by write_config"
+        );
+        assert_eq!(vsock.guest_cid(), cid, "guest_cid must be unchanged");
+    }
+
+    #[test]
+    fn test_write_config_zero_length_is_noop() {
+        // A zero-length write carries no payload and must be a no-op.
+        let cid = 42_u64;
+        let mut vsock = create_test_vsock(cid);
+        let original = vsock.config_space;
+
+        vsock
+            .write_config(0, &[])
+            .expect("empty write_config must not error");
+        assert_eq!(vsock.config_space, original);
+        assert_eq!(vsock.guest_cid(), cid);
+    }
+
+    #[test]
+    fn test_write_config_at_high_offset_is_noop() {
+        // `write_config` ignores offset entirely: even an offset past the
+        // end of the config space must not error or mutate state.
+        let cid = 42_u64;
+        let mut vsock = create_test_vsock(cid);
+        let original = vsock.config_space;
+
+        vsock
+            .write_config(u64::MAX, &[0xAA, 0xBB])
+            .expect("write_config at high offset must not error");
+        assert_eq!(vsock.config_space, original);
+        assert_eq!(vsock.guest_cid(), cid);
+    }
+
+    #[test]
+    fn test_write_config_does_not_affect_subsequent_read() {
+        // A write must not leak into a subsequent read: reading after writing
+        // still yields the original seeded CID.
+        let cid = 0x0011_2233_4455_6677;
+        let mut vsock = create_test_vsock(cid);
+        vsock.write_config(0, &[0xFF; 8]).unwrap();
+
+        let mut buf = [0_u8; VSOCK_CONFIG_SPACE_SIZE];
+        vsock.read_config(0, &mut buf).unwrap();
+        assert_eq!(LittleEndian::read_u64(&buf), cid);
+    }
+
+    #[test]
+    fn test_read_config_byte_wise() {
+        // Read each of the 8 bytes individually and verify against the
+        // little-endian decomposition of the seed CID.
+        let cid: u64 = 0xDEAD_BEEF_CAFE_BABE;
+        let vsock = create_test_vsock(cid);
+        let expected_le = cid.to_le_bytes();
+
+        for offset in 0..VSOCK_CONFIG_SPACE_SIZE {
+            let mut byte = [0_u8; 1];
+            vsock
+                .read_config(offset as u64, &mut byte)
+                .unwrap_or_else(|_| panic!("read at offset {} should succeed", offset));
+            assert_eq!(
+                byte[0], expected_le[offset],
+                "byte at offset {} must match LE decomposition",
+                offset
+            );
+        }
+    }
+
+    // =====================================================================
+    // 4. CID registry (claim / release / uniqueness)
+    // =====================================================================
+
+    #[test]
+    fn test_cid_claim_returns_bool() {
+        // `claim_cid` returns `true` on the first claim of a free CID and
+        // `false` on a duplicate — the boolean contract that `ClaimedCid`
+        // builds on. Tested here directly at the primitive level.
+        let cid = TEST_CID_BASE + 10;
+        release_cid(cid); // clean slate
+
+        assert!(claim_cid(cid), "first claim of a free CID must succeed");
+        assert!(!claim_cid(cid), "duplicate claim must return false");
+        release_cid(cid);
+    }
 
     #[test]
     fn test_cid_claim_uniqueness() {
@@ -654,8 +920,8 @@ mod tests {
         // release them independently (a `Vec` index only yields a `&ClaimedCid`,
         // whose `drop` would be a no-op).
         let g0 = ClaimedCid::new(cids[0]);
-        let g1 = ClaimedCid::new(cids[1]);
-        let g2 = ClaimedCid::new(cids[2]);
+        let _g1 = ClaimedCid::new(cids[1]);
+        let _g2 = ClaimedCid::new(cids[2]);
 
         // None of the held CIDs can be re-claimed.
         for &c in &cids {
@@ -692,6 +958,26 @@ mod tests {
     }
 
     #[test]
+    fn test_cid_release_unclaimed_does_not_corrupt() {
+        // Releasing a CID that was never claimed must not release or corrupt a
+        // *different* CID that is currently held.
+        let held = TEST_CID_BASE + 6;
+        let other = TEST_CID_BASE + 7;
+        release_cid(held);
+        release_cid(other);
+
+        let _guard = ClaimedCid::new(held);
+        // Releasing an unrelated CID: `held` must still be locked.
+        release_cid(other);
+        assert!(
+            ClaimedCid::try_new(held).is_none(),
+            "releasing unrelated CID {} must not free held CID {}",
+            other,
+            held
+        );
+    }
+
+    #[test]
     fn test_cid_claim_boundary_values() {
         // The registry keys on raw u64 CIDs; the valid range is enforced
         // upstream by the config parser, not here. Verify the extreme *valid*
@@ -700,5 +986,119 @@ mod tests {
             release_cid(cid);
             let _guard = ClaimedCid::new(cid);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // 4b. Drop integration: a claimed device releases its CID on drop
+    // ---------------------------------------------------------------------
+    //
+    // These tests simulate the post-`realize` state by manually setting
+    // `cid_claimed = true` and pre-claiming the CID through `claim_cid`
+    // (the same primitive `realize` uses). They verify the `Drop` impl
+    // releases exactly the CID stored in the config space and never
+    // double-releases or releases an unclaimed CID.
+
+    /// Build a `VhostUserVsock` whose state mirrors the end of a successful
+    /// `realize`: the config-space CID has been registered with the
+    /// process-wide CID registry and `cid_claimed` is `true`. Dropping the
+    /// returned device must release `cid` exactly once.
+    fn vsock_with_claimed_cid(cid: u64) -> VhostUserVsock {
+        release_cid(cid); // clean slate for isolation
+        assert!(claim_cid(cid), "precondition: CID {} must be free", cid);
+        let mut vsock = create_test_vsock(cid);
+        vsock.cid_claimed = true;
+        vsock
+    }
+
+    #[test]
+    fn test_drop_releases_claimed_cid() {
+        let cid = TEST_CID_BASE + 100;
+        release_cid(cid); // clean slate
+
+        // Dropping the device must release the CID.
+        {
+            let _vsock = vsock_with_claimed_cid(cid);
+            assert!(!claim_cid(cid), "device must hold CID while in scope");
+        }
+
+        // After drop, the CID is free again.
+        assert!(claim_cid(cid), "CID must be free after device is dropped");
+        release_cid(cid);
+    }
+
+    #[test]
+    fn test_drop_without_claim_is_safe() {
+        // A device that never claimed a CID (e.g. dropped before `realize`)
+        // must not release anything from the registry on drop.
+        let cid = TEST_CID_BASE + 101;
+        release_cid(cid);
+
+        // Pre-claim the CID with a guard so it is held by *another owner*.
+        let _guard = ClaimedCid::new(cid);
+
+        // A separately constructed (unclaimed) device sharing the same CID
+        // value must not steal or release the other owner's claim on drop.
+        let vsock = create_test_vsock(cid);
+        assert!(!vsock.cid_claimed, "fixture: device never claimed");
+        drop(vsock);
+
+        assert!(
+            ClaimedCid::try_new(cid).is_none(),
+            "unrelated owner's CID must remain held after device drop"
+        );
+    }
+
+    #[test]
+    fn test_drop_does_not_release_after_manual_reset() {
+        // If `cid_claimed` was already cleared (e.g. by an explicit
+        // `deactivate` call), the subsequent `Drop` must not release again —
+        // mirroring the double-release protection in `deactivate`.
+        let cid = TEST_CID_BASE + 102;
+        let mut vsock = vsock_with_claimed_cid(cid);
+
+        // Simulate `deactivate` having already released the CID.
+        release_cid(cid);
+        vsock.cid_claimed = false;
+        drop(vsock);
+
+        // A fresh claim must succeed (the explicit release already freed it;
+        // Drop must not have re-inserted or double-freed anything).
+        assert!(
+            claim_cid(cid),
+            "CID must be claimable after explicit release + drop"
+        );
+        release_cid(cid);
+    }
+
+    #[test]
+    fn test_drop_releases_correct_cid_after_config_change() {
+        // `Drop` reads the CID from the *current* config space, not the
+        // originally-seeded one. If the config space were mutated post-realize
+        // (only possible through the backend `GET_CONFIG` path in production),
+        // Drop must release exactly the CID currently stored, not a stale one.
+        //
+        // We simulate this by rewriting the config space directly before drop.
+        let original_cid = TEST_CID_BASE + 103;
+        let backend_cid = TEST_CID_BASE + 104;
+        release_cid(original_cid);
+        release_cid(backend_cid);
+
+        // Pre-claim the *backend* CID (the one that would be authoritative
+        // post-GET_CONFIG).
+        assert!(claim_cid(backend_cid));
+
+        let mut vsock = create_test_vsock(original_cid);
+        // Simulate the config-space override from `init_config_features`.
+        LittleEndian::write_u64(&mut vsock.config_space, backend_cid);
+        vsock.cid_claimed = true;
+
+        drop(vsock);
+
+        // Drop released `backend_cid` (read from config_space), not `original_cid`.
+        assert!(
+            claim_cid(backend_cid),
+            "Drop must release the CID currently in config_space"
+        );
+        release_cid(backend_cid);
     }
 }
