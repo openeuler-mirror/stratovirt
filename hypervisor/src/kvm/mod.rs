@@ -992,7 +992,7 @@ mod test {
     }
 
     impl MachineLifecycle for TestVm {
-        fn notify_lifecycle(&self, _old: VmState, _new: VmState) -> bool {
+        fn notify_lifecycle(&self, _new: VmState) -> bool {
             true
         }
     }

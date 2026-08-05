@@ -178,13 +178,8 @@ impl MachineLifecycle for GICv3 {
         true
     }
 
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        let state = self.state.lock().unwrap();
-        if *state != old {
-            error!("GICv3 lifecycle error: state check failed.");
-            return false;
-        }
-        drop(state);
+    fn notify_lifecycle(&self, new: VmState) -> bool {
+        let old = *self.state.lock().unwrap();
 
         match (old, new) {
             (VmState::Running, VmState::Paused) => self.pause(),
