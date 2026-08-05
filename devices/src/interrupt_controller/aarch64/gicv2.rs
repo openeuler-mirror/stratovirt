@@ -14,7 +14,6 @@ use std::marker::{Send, Sync};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
-use log::error;
 
 use super::{GICConfig, GICDevice};
 use crate::interrupt_controller::InterruptError;
@@ -128,13 +127,8 @@ impl MachineLifecycle for GICv2 {
         }
     }
 
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        let state = self.state.lock().unwrap();
-        if *state != old {
-            error!("GICv2 lifecycle error: state check failed.");
-            return false;
-        }
-        drop(state);
+    fn notify_lifecycle(&self, new: VmState) -> bool {
+        let old = *self.state.lock().unwrap();
 
         match (old, new) {
             (VmState::Running, VmState::Paused) => self.pause(),

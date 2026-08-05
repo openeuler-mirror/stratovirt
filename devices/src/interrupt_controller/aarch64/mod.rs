@@ -121,7 +121,7 @@ impl InterruptController {
 
     /// Change `InterruptController` lifecycle state to `Stopped`.
     pub fn stop(&self) {
-        self.gic.notify_lifecycle(VmState::Running, VmState::Paused);
+        self.gic.notify_lifecycle(VmState::Paused);
     }
 
     pub fn get_redist_count(&self) -> u8 {

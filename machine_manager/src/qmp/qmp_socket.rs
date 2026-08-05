@@ -451,7 +451,7 @@ fn stop(controller: &Arc<Mutex<dyn MachineExternalInterface>>) -> Response {
             controller
                 .lock()
                 .unwrap()
-                .notify_lifecycle(VmState::Paused, VmState::Running);
+                .notify_lifecycle(VmState::Running);
             qmp_response = Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError("Failed to pause VM".to_string()),
                 None,
@@ -659,7 +659,7 @@ fn qmp_command_exec(
         controller
             .lock()
             .unwrap()
-            .notify_lifecycle(VmState::Paused, VmState::Running);
+            .notify_lifecycle(VmState::Running);
     }
 
     // Change response id with input qmp message
