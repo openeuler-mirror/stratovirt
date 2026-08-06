@@ -500,7 +500,14 @@ pub fn remove_block_backend(id: &str) {
 
 pub fn drain_request(id: &str, incomplete: Arc<AtomicU64>) {
     trace::block_drain_request(id);
+    info!(
+        "Drain io {} for device {}",
+        incomplete.load(Ordering::SeqCst),
+        id
+    );
+
     while incomplete.load(Ordering::SeqCst) != 0 {
         yield_now();
     }
+    info!("Drain io finished for device {}", id);
 }
