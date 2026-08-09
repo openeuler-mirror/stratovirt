@@ -600,6 +600,8 @@ struct BlockIoHandler {
     migrating: Arc<AtomicBool>,
     /// If there is a queue in processing.
     processing_queue: Arc<AtomicBool>,
+    /// If the device has been stopped.
+    stopped: Arc<AtomicBool>,
 }
 
 impl BlockIoHandler {
@@ -655,7 +657,7 @@ impl BlockIoHandler {
         let mut done = false;
 
         loop {
-            if self.migrating.load(Ordering::SeqCst) {
+            if self.migrating.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -761,7 +763,7 @@ impl BlockIoHandler {
                 break;
             }
 
-            if self.migrating.load(Ordering::SeqCst) {
+            if self.migrating.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -919,6 +921,7 @@ impl EventNotifierHelper for BlockIoHandler {
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst)
                 || h_lock.migrating.load(Ordering::SeqCst)
+                || h_lock.stopped.load(Ordering::SeqCst)
             {
                 return None;
             }
@@ -932,6 +935,7 @@ impl EventNotifierHelper for BlockIoHandler {
             let mut h_lock = h_clone.lock().unwrap();
             if h_lock.device_broken.load(Ordering::SeqCst)
                 || h_lock.migrating.load(Ordering::SeqCst)
+                || h_lock.stopped.load(Ordering::SeqCst)
             {
                 return None;
             }
@@ -963,6 +967,7 @@ impl EventNotifierHelper for BlockIoHandler {
                 let mut h_lock = h_clone.lock().unwrap();
                 if h_lock.device_broken.load(Ordering::SeqCst)
                     || h_lock.migrating.load(Ordering::SeqCst)
+                    || h_lock.stopped.load(Ordering::SeqCst)
                 {
                     return None;
                 }
@@ -1083,6 +1088,8 @@ pub struct Block {
     processing_queue: Arc<AtomicBool>,
     /// The queue notify events for handling IO.
     queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
+    /// If the device has been stopped,
+    stopped: Arc<AtomicBool>,
 }
 
 impl Block {
@@ -1103,6 +1110,7 @@ impl Block {
             migrating: Arc::new(AtomicBool::new(false)),
             processing_queue: Arc::new(AtomicBool::new(false)),
             queue_evts: Arc::new(Mutex::new(Vec::new())),
+            stopped: Arc::new(AtomicBool::new(false)),
             ..Default::default()
         }
     }
@@ -1309,6 +1317,7 @@ impl VirtioDevice for Block {
                 write_zeroes: self.drive_cfg.write_zeroes,
                 migrating: self.migrating.clone(),
                 processing_queue: self.processing_queue.clone(),
+                stopped: self.stopped.clone(),
             };
 
             let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
@@ -1334,11 +1343,13 @@ impl VirtioDevice for Block {
             );
         }
         self.base.broken.store(false, Ordering::SeqCst);
+        self.stopped.store(false, Ordering::SeqCst);
 
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
+        self.stopped.store(true, Ordering::SeqCst);
         // Stop receiving virtqueue requests and drain incomplete IO.
         unregister_event_helper(
             self.blk_cfg.iothread.as_ref(),
