@@ -1021,7 +1021,7 @@ impl StdMachine {
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
-        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
+        if self.notify_lifecycle(VmState::Paused) {
             event!(Stop);
             true
         } else {
@@ -1030,7 +1030,7 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn resume(&self) -> bool {
-        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
+        if !self.notify_lifecycle(VmState::Running) {
             return false;
         }
         event!(Resume);
@@ -1073,8 +1073,8 @@ impl MachineLifecycle for StdMachine {
         true
     }
 
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(old, new) {
+    fn notify_lifecycle(&self, new: VmState) -> bool {
+        if let Err(e) = self.vm_state_transfer(new) {
             error!("VM state transfer failed: {:?}", e);
             return false;
         }

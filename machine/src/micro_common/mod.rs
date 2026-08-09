@@ -570,7 +570,7 @@ impl LightMachine {
 
 impl MachineLifecycle for LightMachine {
     fn pause(&self) -> bool {
-        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
+        if self.notify_lifecycle(VmState::Paused) {
             event!(Stop);
             true
         } else {
@@ -579,7 +579,7 @@ impl MachineLifecycle for LightMachine {
     }
 
     fn resume(&self) -> bool {
-        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
+        if !self.notify_lifecycle(VmState::Running) {
             return false;
         }
 
@@ -606,8 +606,8 @@ impl MachineLifecycle for LightMachine {
         self.destroy()
     }
 
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(old, new) {
+    fn notify_lifecycle(&self, new: VmState) -> bool {
+        if let Err(e) = self.vm_state_transfer(new) {
             error!("VM state transfer failed: {:?}", e);
             return false;
         }

@@ -3317,9 +3317,8 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
-    fn vm_state_transfer(&self, old_state: VmState, new_state: VmState) -> Result<()> {
+    fn vm_state_transfer(&self, new_state: VmState) -> Result<()> {
         use VmState::*;
 
         let mut vm_state = self.get_vm_state().lock().unwrap();
@@ -3327,21 +3326,26 @@ pub trait MachineOps: MachineLifecycle {
             *vm_state = new_state;
             return Ok(());
         }
+        let old_state = *vm_state;
 
         match (old_state, new_state) {
+            (Shutdown, _) => {
+                info!("Vm is shutdown, vm state can not changed.");
+                return Ok(());
+            }
             (Created, Running) => self
                 .vm_start(&mut vm_state, false)
                 .with_context(|| "Failed to start vm.")?,
-            (Running, Paused) => self
-                .vm_pause(&mut vm_state)
-                .with_context(|| "Failed to pause vm.")?,
             (Paused, Running) => self
                 .vm_resume(&mut vm_state)
                 .with_context(|| "Failed to resume vm.")?,
+            (Running, Paused) | (Created, Paused) => self
+                .vm_pause(&mut vm_state)
+                .with_context(|| "Failed to pause vm.")?,
+            (Paused, Paused) | (Running, Running) => return Ok(()),
             (_, Shutdown) => self
                 .vm_destroy(&mut vm_state)
                 .with_context(|| "Failed to destroy vm.")?,
-            (Paused, Paused) => return Ok(()),
             (_, _) => {
                 bail!("Vm lifecycle error: this transform is illegal.");
             }
@@ -3389,12 +3393,7 @@ fn register_shutdown_event(
 
 fn handle_destroy_request(vm: &Arc<Mutex<dyn MachineOps>>) -> bool {
     let locked_vm = vm.lock().unwrap();
-    let vmstate: VmState = {
-        let state = locked_vm.get_vm_state().lock().unwrap();
-        *state
-    };
-
-    if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
+    if !locked_vm.notify_lifecycle(VmState::Shutdown) {
         return false;
     }
 

@@ -321,7 +321,7 @@ impl StdMachine {
             let (cpu_state, _) = vcpu.state();
             let cpu_state = *cpu_state.lock().unwrap();
             if cpu_state != CpuLifecycleState::Paused && !self.pause() {
-                self.notify_lifecycle(VmState::Paused, VmState::Running);
+                self.notify_lifecycle(VmState::Running);
                 return None;
             }
 

@@ -92,42 +92,41 @@ impl FromStr for HypervisorType {
 pub trait MachineLifecycle {
     /// Start VM or Device, VM or Device enter running state after this call return.
     fn start(&self) -> bool {
-        self.notify_lifecycle(VmState::Created, VmState::Paused)
+        self.notify_lifecycle(VmState::Paused)
     }
 
     /// Pause VM or Device, VM or Device will temporarily stored in memory until it resumed
     /// or destroyed.
     fn pause(&self) -> bool {
-        self.notify_lifecycle(VmState::Running, VmState::Paused)
+        self.notify_lifecycle(VmState::Paused)
     }
 
     /// Resume VM or Device, resume VM state to running state after this call return.
     fn resume(&self) -> bool {
-        self.notify_lifecycle(VmState::Paused, VmState::Running)
+        self.notify_lifecycle(VmState::Running)
     }
 
     /// Close VM or Device, stop running.
     fn destroy(&self) -> bool {
-        self.notify_lifecycle(VmState::Running, VmState::Shutdown)
+        self.notify_lifecycle(VmState::Shutdown)
     }
 
     /// Close VM by power_button.
     fn powerdown(&self) -> bool {
-        self.notify_lifecycle(VmState::Running, VmState::Shutdown)
+        self.notify_lifecycle(VmState::Shutdown)
     }
 
     /// Reset VM, stop running and restart a new VM.
     fn reset(&mut self) -> bool {
-        self.notify_lifecycle(VmState::Running, VmState::Shutdown)
+        self.notify_lifecycle(VmState::Shutdown)
     }
 
     /// When VM or Device life state changed, notify concerned entry.
     ///
     /// # Arguments
     ///
-    /// * `old` - The current `VmState`.
     /// * `new` - The new `VmState` expected to transform.
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool;
+    fn notify_lifecycle(&self, new: VmState) -> bool;
 
     /// Get shutdown_action to determine the poweroff operation.
     fn get_shutdown_action(&self) -> ShutdownAction {
