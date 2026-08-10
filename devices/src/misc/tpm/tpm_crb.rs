@@ -11,6 +11,7 @@
 // See the Mulan PSL v2 for more details.
 
 use std::cmp;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -408,14 +409,13 @@ impl SysBusDevOps for TpmCrb {
         let mut offset: u32 = offset as u32;
         let read_len: usize = data.len();
 
-        if offset >= CRB_DATA_BUFFER
-            && (offset + read_len as u32) < (CRB_DATA_BUFFER + self.data_buff.len() as u32)
-        {
+        let crb_data_range = CRB_DATA_BUFFER..(CRB_DATA_BUFFER + self.data_buff.len() as u32);
+        if contains_range(&crb_data_range, &(offset..offset + read_len as u32)) {
             let start: usize = (offset as usize) - (CRB_DATA_BUFFER as usize);
             let end: usize = start + read_len;
-            data[..].clone_from_slice(&self.data_buff[start..end]);
+            data.clone_from_slice(&self.data_buff[start..end]);
         } else {
-            offset &= 0xff;
+            offset &= 0x7f;
             let mut val = self.regs[offset as usize];
 
             if offset == CRB_LOC_STATE && !self.backend.get_established_flag().is_ok_and(|v| v) {
@@ -458,9 +458,8 @@ impl SysBusDevOps for TpmCrb {
         let locality = locality_from_addr(offset) as u32;
         let write_len = data.len();
 
-        if offset >= CRB_DATA_BUFFER
-            && (offset + write_len as u32) < (CRB_DATA_BUFFER + self.data_buff.len() as u32)
-        {
+        let crb_data_range = CRB_DATA_BUFFER..(CRB_DATA_BUFFER + self.data_buff.len() as u32);
+        if contains_range(&crb_data_range, &(offset..offset + write_len as u32)) {
             let start: usize = (offset as usize) - (CRB_DATA_BUFFER as usize);
             if start == 0 {
                 self.data_buff_len = 0;
@@ -482,7 +481,8 @@ impl SysBusDevOps for TpmCrb {
             }
 
             let mut input: [u8; 4] = [0; 4];
-            input[..write_len].copy_from_slice(&data[..write_len]);
+            let copy_len = std::cmp::min(write_len, 4);
+            input[..copy_len].copy_from_slice(&data[..copy_len]);
             let v = u32::from_le_bytes(input);
 
             match offset {
@@ -613,6 +613,10 @@ impl AmlBuilder for TpmCrb {
 
         tpm2_dev.aml_bytes()
     }
+}
+
+fn contains_range<T: PartialOrd>(r1: &Range<T>, r2: &Range<T>) -> bool {
+    r1.start <= r2.start && r1.end >= r2.end
 }
 
 #[cfg(test)]
