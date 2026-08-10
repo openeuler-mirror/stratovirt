@@ -365,6 +365,18 @@ impl StdMachineOps for StdMachine {
             )
             .with_context(|| "Failed to register ECAM in memory space.")?;
 
+        let pio_region_ops = PciHost::build_pio_addr_ops();
+        let pio_region = Region::init_io_region(
+            MEM_LAYOUT[LayoutEntryType::PciePio as usize].1,
+            pio_region_ops,
+            "PciePio",
+        );
+        self.base
+            .sys_mem
+            .root()
+            .add_subregion(pio_region, MEM_LAYOUT[LayoutEntryType::PciePio as usize].0)
+            .with_context(|| "Failed to register PCIE PIO in memory space.")?;
+
         let pcihost_root = PciHostRoot::new(root_bus);
         pcihost_root
             .realize()
