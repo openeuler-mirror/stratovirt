@@ -45,11 +45,9 @@ use crate::{
 };
 use machine_manager::notifier::vm_paused;
 
-fn trans_mouse_pos(x: f64, y: f64, w: f64, h: f64) -> (u32, u32) {
-    if x < 0.0 || y < 0.0 || x > w || y > h {
-        error!("incorrect mouse pos info, ({}, {}) of {} * {}", x, y, w, h);
-        return (0, 0);
-    }
+fn trans_mouse_pos(mut x: f64, mut y: f64, w: f64, h: f64) -> (u32, u32) {
+    x = x.clamp(0.0, w);
+    y = y.clamp(0.0, h);
     // TODO: we don't take the situation that image is scaled into consideration
     //
     // The horizontal and vertical directions of the USB tablet are mapped as follows:

@@ -131,12 +131,6 @@ fn test_kernel_initrd_cmdlint() {
     let read_data = test_state.fw_cfg_read_u32(FwCfgEntryType::KernelSize as u16);
     assert_eq!(read_data, 10 * 1024 * 1024);
 
-    // Select InitrdAddr entry and read it.
-    let read_data = test_state.fw_cfg_read_u32(FwCfgEntryType::InitrdAddr as u16);
-    // Initrd addr = (mem start) + (mem end) - (initrd size)
-    let initrd_addr = 0x4000_0000 + 0x4000_0000 - 0x10_0000;
-    assert_eq!(read_data, initrd_addr);
-
     // Select CmdlineSize entry and read it.
     let read_data = test_state.fw_cfg_read_u32(FwCfgEntryType::CmdlineSize as u16);
     // cmdline size = cmdline - "-append".

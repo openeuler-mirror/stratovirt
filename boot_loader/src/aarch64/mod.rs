@@ -23,8 +23,41 @@ use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use devices::legacy::{error::LegacyError as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
 
-/// Linux requires kernel offset aligned to 2MB.
-const AARCH64_KERNEL_OFFSET: u64 = 0x20_0000;
+const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
+const AARCH64_INITRD_MAX_OFFSET: u64 = 128 * 1024 * 1024;
+
+fn fw_cfg_u32(entry: &str, value: u64) -> Result<u32> {
+    u32::try_from(value).map_err(|_| {
+        anyhow!(BootLoaderError::FwCfgValueOverflow(
+            entry.to_string(),
+            value
+        ))
+    })
+}
+
+fn initrd_start_for_direct_boot(
+    mem_start: u64,
+    mem_end: u64,
+    kernel_end: u64,
+    initrd_size: u64,
+) -> Result<u64> {
+    let mem_size = mem_end
+        .checked_sub(mem_start)
+        .with_context(|| BootLoaderError::InitrdOverflow(kernel_end, initrd_size))?;
+    let preferred_start = mem_start
+        .checked_add(std::cmp::min(mem_size / 2, AARCH64_INITRD_MAX_OFFSET))
+        .with_context(|| BootLoaderError::InitrdOverflow(kernel_end, initrd_size))?;
+    let initrd_start = std::cmp::max(preferred_start, kernel_end)
+        .checked_add(0xfff)
+        .map(|addr| addr & !0xfff_u64)
+        .with_context(|| BootLoaderError::InitrdOverflow(kernel_end, initrd_size))?;
+
+    mem_end
+        .checked_sub(initrd_start)
+        .filter(|available| available >= &initrd_size)
+        .map(|_| initrd_start)
+        .with_context(|| BootLoaderError::InitrdOverflow(kernel_end, initrd_size))
+}
 
 /// Boot loader config used for aarch64.
 #[derive(Default, Debug)]
@@ -68,7 +101,7 @@ fn load_kernel(
         lock_dev
             .add_data_entry(
                 FwCfgEntryType::KernelSize,
-                (kernel_size as u32).as_bytes().to_vec(),
+                fw_cfg_u32("KernelSize", kernel_size)?.as_bytes().to_vec(),
             )
             .with_context(|| FwcfgErrorKind::AddEntryErr("KernelSize".to_string()))?;
         lock_dev
@@ -104,6 +137,7 @@ fn load_initrd(
     fwcfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
     initrd_path: &Path,
     sys_mem: &Arc<AddressSpace>,
+    mem_start: u64,
     kernel_end: u64,
     write_guest_mem: bool,
 ) -> Result<(u64, u64)> {
@@ -111,12 +145,17 @@ fn load_initrd(
         File::open(initrd_path).with_context(|| BootLoaderError::BootLoaderOpenInitrd)?;
     let initrd_size = initrd_image.metadata().unwrap().len();
 
-    let initrd_start = sys_mem
-        .memory_end_address()
-        .raw_value()
-        .checked_sub(initrd_size)
-        .filter(|addr| addr >= &kernel_end)
-        .with_context(|| BootLoaderError::InitrdOverflow(kernel_end, initrd_size))?;
+    // ArmVirtPkg allocates the initrd buffer itself when booting from fw_cfg.
+    let initrd_start = if fwcfg.is_some() {
+        0
+    } else {
+        initrd_start_for_direct_boot(
+            mem_start,
+            sys_mem.memory_end_address().raw_value(),
+            kernel_end,
+            initrd_size,
+        )?
+    };
 
     if let Some(fw_cfg) = fwcfg {
         let mut initrd_data = Vec::new();
@@ -124,14 +163,8 @@ fn load_initrd(
         let mut lock_dev = fw_cfg.lock().unwrap();
         lock_dev
             .add_data_entry(
-                FwCfgEntryType::InitrdAddr,
-                (initrd_start as u32).as_bytes().to_vec(),
-            )
-            .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdAddr".to_string()))?;
-        lock_dev
-            .add_data_entry(
                 FwCfgEntryType::InitrdSize,
-                (initrd_size as u32).as_bytes().to_vec(),
+                fw_cfg_u32("InitrdSize", initrd_size)?.as_bytes().to_vec(),
             )
             .with_context(|| FwcfgErrorKind::AddEntryErr("InitrdSize".to_string()))?;
         lock_dev
@@ -177,7 +210,7 @@ pub fn load_linux(
     // The memory layout is as follow:
     // 1. dtb address: memory start
     // 2. kernel address: memory start + AARCH64_KERNEL_OFFSET
-    // 3. initrd address: memory end - inird_size
+    // 3. initrd address: allocated by firmware (fw_cfg) or low memory (direct boot)
     let dtb_addr = config.mem_start;
     if sys_mem
         .memory_end_address()
@@ -219,6 +252,7 @@ pub fn load_linux(
             fwcfg,
             config.initrd.as_ref().unwrap(),
             sys_mem,
+            config.mem_start,
             kernel_end,
             write_guest_mem,
         )
@@ -235,4 +269,44 @@ pub fn load_linux(
         initrd_size,
         dtb_start: dtb_addr,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fw_cfg_u32, initrd_start_for_direct_boot};
+
+    #[test]
+    fn fw_cfg_u32_accepts_valid_values() {
+        assert_eq!(fw_cfg_u32("KernelSize", 0x4020_0000).unwrap(), 0x4020_0000);
+        assert_eq!(fw_cfg_u32("InitrdSize", 0xffff_ffff).unwrap(), 0xffff_ffff);
+    }
+
+    #[test]
+    fn fw_cfg_u32_rejects_overflow() {
+        assert!(fw_cfg_u32("InitrdSize", 0x1_0000_0000).is_err());
+    }
+
+    #[test]
+    fn direct_boot_places_initrd_at_qemu_low_memory_offset() {
+        let mem_start = 0x4000_0000;
+        let mem_end = mem_start + 1024 * 1024 * 1024;
+        let kernel_end = mem_start + 32 * 1024 * 1024;
+        assert_eq!(
+            initrd_start_for_direct_boot(mem_start, mem_end, kernel_end, 128 * 1024 * 1024)
+                .unwrap(),
+            mem_start + 128 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn direct_boot_places_initrd_after_large_kernel() {
+        let mem_start = 0x4000_0000;
+        let mem_end = mem_start + 1024 * 1024 * 1024;
+        let kernel_end = mem_start + 160 * 1024 * 1024 + 1;
+        assert_eq!(
+            initrd_start_for_direct_boot(mem_start, mem_end, kernel_end, 128 * 1024 * 1024)
+                .unwrap(),
+            (kernel_end + 0xfff) & !0xfff
+        );
+    }
 }
