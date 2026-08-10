@@ -23,7 +23,8 @@ use address_space::{AddressAttr, AddressSpace, GuestAddress};
 use devices::legacy::{error::LegacyError as FwcfgErrorKind, FwCfgEntryType, FwCfgOps};
 use util::byte_code::ByteCode;
 
-const AARCH64_KERNEL_OFFSET: u64 = 0x8_0000;
+// Linux requires kernel offset aligned to 2MB.
+const AARCH64_KERNEL_OFFSET: u64 = 0x20_0000;
 const AARCH64_INITRD_MAX_OFFSET: u64 = 128 * 1024 * 1024;
 
 fn fw_cfg_u32(entry: &str, value: u64) -> Result<u32> {
