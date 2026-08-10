@@ -846,3 +846,46 @@ impl IoHandler for VmPauseCtrlHandler {
         unreachable!()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a minimal VirtQ for testing purposes.
+    fn create_test_virtq() -> VirtQ {
+        use crate::{Queue, QueueConfig, VirtioInterrupt, VirtioInterruptType};
+        use address_space::Region;
+        use std::sync::Arc;
+
+        let root = Region::init_container_region(u64::MAX, "test_root");
+        let mem_space = AddressSpace::new(root, "test", None).unwrap();
+
+        let driver_features = 0u64;
+        let queue_config = QueueConfig::new(256);
+        let queue = Arc::new(Mutex::new(
+            Queue::new(queue_config, crate::QUEUE_TYPE_SPLIT_VRING).unwrap(),
+        ));
+        let device_broken = Arc::new(AtomicBool::new(false));
+
+        let interrupt_cb: VirtioInterrupt =
+            Box::new(|_: &VirtioInterruptType, _: Option<&Queue>, _: bool| Ok(()));
+
+        VirtQ::new(
+            driver_features,
+            mem_space,
+            queue,
+            device_broken,
+            Arc::new(interrupt_cb),
+        )
+    }
+
+    #[test]
+    fn test_stream_new() {
+        let vq = create_test_virtq();
+        let stream = Stream::new(VIRTIO_SND_D_OUTPUT, vq);
+        assert_eq!(stream.info.direction, VIRTIO_SND_D_OUTPUT);
+        assert_eq!(stream.info.channels_min, 2);
+        assert_eq!(stream.info.channels_max, 2);
+        assert!(!stream.active.load(Ordering::Relaxed));
+    }
+}

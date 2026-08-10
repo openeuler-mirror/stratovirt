@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fmt;
 use std::sync::{
     Arc, Mutex, RwLock,
     atomic::{AtomicBool, Ordering},
@@ -43,6 +44,17 @@ pub struct Alsa {
     period_bytes: usize,
     /// Period duration in milliseconds.
     period_ms: u64,
+}
+
+impl fmt::Debug for Alsa {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Alsa")
+            .field("direction", &self.direction)
+            .field("period_bytes", &self.period_bytes)
+            .field("period_ms", &self.period_ms)
+            .field("running", &self.running)
+            .finish_non_exhaustive()
+    }
 }
 
 // SAFETY: all fields are safe to send between threads.
