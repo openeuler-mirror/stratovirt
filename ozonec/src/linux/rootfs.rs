@@ -17,6 +17,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use log::info;
 use nix::{
     fcntl::{open, OFlag},
     mount::{umount2, MntFlags, MsFlags},
@@ -121,7 +122,15 @@ impl Rootfs {
     // dev/stdin -> /proc/self/fd/0
     // dev/stdout -> /proc/self/fd/1
     // dev/stderr -> /proc/self/fd/2
-    fn set_default_symlinks(&self) -> Result<()> {
+    fn set_default_symlinks(&self, config: &RuntimeConfig) -> Result<()> {
+        if config.need_setup_dev() {
+            self.set_default_symlinks_dev()?;
+            info!("Succeed to set default symlinks for /dev");
+        }
+        Ok(())
+    }
+
+    fn set_default_symlinks_dev(&self) -> Result<()> {
         let link_pairs = vec![
             ((self.path).join("dev/fd"), "/proc/self/fd"),
             ((self.path).join("dev/stdin"), "/proc/self/fd/0"),
@@ -184,7 +193,7 @@ impl Rootfs {
         self.make_parent_mount_private()
             .with_context(|| "Failed to make parent mount private")?;
         self.do_mounts(config)?;
-        self.set_default_symlinks()?;
+        self.set_default_symlinks(config)?;
 
         let old_mode = umask(Mode::from_bits_truncate(0o000));
         self.create_default_devices(self.mknod_device)?;
@@ -326,7 +335,7 @@ mod tests {
 
         #[test]
         #[ignore = "unshare may not be permitted"]
-        fn test_set_default_symlinks() {
+        fn test_set_default_symlinks_dev() {
             remove_dir_all("/tmp/ozonec").unwrap_or_default();
 
             set_namespace(NamespaceType::Mount);
@@ -354,7 +363,7 @@ mod tests {
                 },
             ];
             let rootfs = init_rootfs(
-                "/tmp/ozonec/test_set_default_symlinks",
+                "/tmp/ozonec/test_set_default_symlinks_dev",
                 Some(String::from("shared")),
                 mounts,
             );
@@ -364,7 +373,7 @@ mod tests {
             config.root.path = rootfs.path.to_string_lossy().to_string();
             rootfs.do_mounts(&config).unwrap();
 
-            assert!(rootfs.set_default_symlinks().is_ok());
+            assert!(rootfs.set_default_symlinks_dev().is_ok());
             chdir(&rootfs.path).unwrap();
             let mut path = PathBuf::from("dev/fd");
             let mut metadata = fs::symlink_metadata(&path).unwrap();

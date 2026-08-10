@@ -89,6 +89,15 @@ impl RuntimeConfig {
         let reader = BufReader::new(file);
         serde_json::from_reader(reader).map_err(|e| anyhow!("Failed to load config.json: {:?}", e))
     }
+
+    pub fn need_setup_dev(&self) -> bool {
+        for mount in &self.mounts {
+            if mount.destination == "/dev" && mount.fs_type == Some("bind".to_string()) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[cfg(test)]

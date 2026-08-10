@@ -425,6 +425,13 @@ impl LinuxContainer {
         if let Some(readonly_paths) = self.config.linux.as_ref().unwrap().readonlyPaths.clone() {
             for p in readonly_paths {
                 let path = Path::new(&p);
+                // According to OCI spec, readonlyPaths must be absolute; this also prevents chroot escape.
+                if !path.is_absolute() {
+                    bail!(
+                        "The path {} to be set as read-only is not an absolute path.",
+                        p
+                    );
+                }
                 if let Err(e) = nix::mount::mount(
                     Some(path),
                     path,
@@ -461,6 +468,13 @@ impl LinuxContainer {
         if let Some(masked_paths) = linux.maskedPaths.clone() {
             for p in masked_paths {
                 let path = Path::new(&p);
+                // According to OCI spec, maskedPaths must be absolute; this also prevents chroot escape.
+                if !path.is_absolute() {
+                    bail!(
+                        "The path {} to be set as masked is not an absolute path.",
+                        p
+                    );
+                }
                 if let Err(e) = nix::mount::mount(
                     Some(Path::new("/dev/null")),
                     path,
