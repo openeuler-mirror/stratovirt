@@ -1029,18 +1029,6 @@ impl GpuIoHandler {
             }
         }
 
-        // Windows front-end driver does not deliver data in format sequence.
-        // So we fix it in back-end.
-        // TODO: Fix front-end driver is a better solution.
-        if res.format == VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM
-            || res.format == VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM
-        {
-            let mut i = 0;
-            while i < mse_data_size {
-                mse.data.swap(i, i + 2);
-                i += 4;
-            }
-        }
         scanout.cursor_visible = true;
     }
 
