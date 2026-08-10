@@ -291,14 +291,6 @@ pub trait DeviceInterface {
     /// Get information of a virtio-mem device.
     fn get_viomem(&self, args: Box<GetViomemArgument>) -> Response;
 
-    /// Query state.
-    fn query_workloads(&self) -> Response {
-        Response::create_error_response(
-            QmpErrorClass::GenericError("query_workloads not supported for VM".to_string()),
-            None,
-        )
-    }
-
     /// Set balloon's size.
     fn balloon(&self, size: u64) -> Response;
 
