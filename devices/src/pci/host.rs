@@ -150,6 +150,20 @@ impl PciHost {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    pub fn build_pio_addr_ops() -> RegionOps {
+        let read = move |data: &mut [u8], _addr: GuestAddress, _offset: u64| -> bool {
+            data.iter_mut().for_each(|byte| *byte = 0xff);
+            true
+        };
+        let write = move |_data: &[u8], _addr: GuestAddress, _offset: u64| -> bool { true };
+
+        RegionOps {
+            read: Arc::new(read),
+            write: Arc::new(write),
+        }
+    }
+
     /// Build RegionOps for access at 0xCF8.
     ///
     /// # Arguments
