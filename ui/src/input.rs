@@ -761,7 +761,7 @@ impl MultiTouchDevice {
             MultiTouchEventKind::END => locked_ops.send_event(evt)?,
             MultiTouchEventKind::UPDATE => {
                 if self.slots[slot_id].tracking_id == -1 {
-                    bail!("UPDATE is only valid after the pointer was pressed");
+                    return Ok(());
                 }
                 evt.scale_axis(ui_width, ui_height, self.x_max, self.y_max)?;
             }
