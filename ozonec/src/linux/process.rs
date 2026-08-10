@@ -213,7 +213,7 @@ impl Process {
 
     pub fn set_additional_gids(&self) -> Result<()> {
         if let Some(additional_gids) = &self.oci.user.additionalGids {
-            let setgroups = read_to_string("proc/self/setgroups")
+            let setgroups = read_to_string("/proc/self/setgroups")
                 .with_context(|| "Failed to read setgroups")?;
             if setgroups.trim() == "deny" {
                 bail!("Cannot set additional gids as setgroup is disabled");

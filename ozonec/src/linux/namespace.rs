@@ -18,7 +18,6 @@ use nix::{
     fcntl::{self, OFlag},
     sched::{setns, unshare, CloneFlags},
     sys::stat::Mode,
-    unistd,
 };
 use oci_spec::linux::{Namespace, NamespaceType};
 
