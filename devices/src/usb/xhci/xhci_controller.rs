@@ -355,8 +355,11 @@ struct XhciEpContextState {
     state: u32,
     interval: u32,
     mfindex_last: u64,
+    #[serde(default)]
     max_pstreams: u32,
+    #[serde(default)]
     lsa: bool,
+    #[serde(default)]
     stream_array: Option<XhciStreamArrayState>,
 }
 
@@ -1195,6 +1198,7 @@ pub struct XhciDevState {
     cmd_ring_state: XhciCommandRingState,
     mfindex_secs: u64,
     mfindex_nanos: u32,
+    #[serde(alias = "timer_id")]
     mfwrap_timer_id: u64,
     bme: u8,
 }

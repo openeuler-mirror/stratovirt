@@ -50,6 +50,8 @@ const RTC_MIS: u64 = 0x18;
 const RTC_ICR: u64 = 0x1c;
 /// Peripheral ID registers, default value.
 const RTC_PERIPHERAL_ID: [u8; 8] = [0x31, 0x10, 0x14, 0x00, 0x0d, 0xf0, 0x05, 0xb1];
+/// Constant to convert between seconds and nanoseconds.
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
 #[allow(clippy::upper_case_acronyms)]
 /// Status of `PL031` device.
@@ -74,7 +76,7 @@ pub struct PL031 {
     /// State of device PL031.
     state: PL031State,
     /// The duplicate of Load register value.
-    tick_offset: u32,
+    tick_offset: u128,
     /// Record the real time.
     base_time: Instant,
 }
@@ -88,7 +90,7 @@ impl PL031 {
             tick_offset: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("time wrong")
-                .as_secs() as u32,
+                .as_nanos(),
             base_time: Instant::now(),
         };
         pl031.base.interrupt_evt = Some(Arc::new(create_new_eventfd()?));
@@ -102,7 +104,7 @@ impl PL031 {
 
     /// Get current clock value.
     fn get_current_value(&self) -> u32 {
-        (u128::from(self.base_time.elapsed().as_secs()) + u128::from(self.tick_offset)) as u32
+        ((self.base_time.elapsed().as_nanos() + self.tick_offset) / NANOS_PER_SECOND) as u32
     }
 }
 
@@ -167,7 +169,10 @@ impl SysBusDevOps for PL031 {
             }
             RTC_LR => {
                 self.state.lr = value;
-                self.tick_offset = value;
+                // SAFETY: value is from ops like SystemTime::now().duration_since(UNIX_EPOCH).as_secs()
+                // which is guaranteed to be <= u32::MAX. Therefore, the multiplication with
+                // NANOS_PER_SECOND (1_000_000_000) will not exceed u128::MAX.
+                self.tick_offset = unsafe { u128::from(value).unchecked_mul(NANOS_PER_SECOND) };
                 self.base_time = Instant::now();
             }
             RTC_IMSC => {
