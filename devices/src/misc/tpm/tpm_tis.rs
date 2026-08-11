@@ -198,6 +198,65 @@ pub struct TpmTisSnapshot {
     pub swtpm_blob: Vec<u8>,
 }
 
+impl TpmTisSnapshot {
+    /// Validate snapshot fields to prevent OOB caused by corrupted migration
+    /// data.
+    ///
+    /// In normal operation the invariant
+    /// `buffer.len() == TPM_TIS_BUFFER_MAX >= backend_buff_size >= rw_offset`
+    /// holds, and all locality fields are 0-4 or 0xFF. `set_state_mut`
+    /// restores fields independently from untrusted JSON and is the only code
+    /// path that can break this invariant. This method checks the invariant
+    /// so that hot-path code does not need extra branches for migration edge
+    /// cases.
+    ///
+    /// All fields with no legitimate out-of-range values are rejected on
+    /// violation.
+    fn validate(&self) -> Result<()> {
+        if self.valid_buffer_data.len() != TPM_TIS_BUFFER_MAX {
+            return Err(anyhow!(
+                "TpmTis migration: buffer size {} != expected {}",
+                self.valid_buffer_data.len(),
+                TPM_TIS_BUFFER_MAX
+            ));
+        }
+
+        if self.backend_buff_size > TPM_TIS_BUFFER_MAX {
+            return Err(anyhow!(
+                "TpmTis migration: backend_buff_size {} exceeds max {}",
+                self.backend_buff_size,
+                TPM_TIS_BUFFER_MAX
+            ));
+        }
+
+        if (self.rw_offset as usize) > TPM_TIS_BUFFER_MAX {
+            return Err(anyhow!(
+                "TpmTis migration: rw_offset {} exceeds max {}",
+                self.rw_offset,
+                TPM_TIS_BUFFER_MAX
+            ));
+        }
+
+        let validate_locty = |locty: u8, name: &str| -> Result<()> {
+            if locty < TPM_TIS_NUM_LOCALITIES as u8 || locty == TPM_TIS_NO_LOCALITY {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "TpmTis migration: {}={} is invalid (not 0-4 or 0xFF)",
+                    name,
+                    locty
+                ))
+            }
+        };
+
+        validate_locty(self.active_locty, "active_locty")?;
+        validate_locty(self.aborting_locty, "aborting_locty")?;
+        validate_locty(self.next_locty, "next_locty")?;
+
+        Ok(())
+    }
+}
+
 pub struct TpmTis {
     base: SysBusDevBase,
     buffer: Option<Vec<u8>>,
@@ -1168,6 +1227,7 @@ impl StateTransfer for TpmTisMigration {
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
         let snapshot: TpmTisSnapshot = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("TpmTis"))?;
+        snapshot.validate()?;
 
         let mut tpm = self.tpm.lock().unwrap();
 
