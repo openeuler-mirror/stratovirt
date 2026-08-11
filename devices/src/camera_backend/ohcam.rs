@@ -26,7 +26,7 @@ use crate::camera_backend::{
 use machine_manager::{
     event,
     qmp::qmp_channel::QmpChannel,
-    qmp::qmp_schema::{VmNotifyEvent, CAMERA_TYPE, DEVICE_CLASS_ID},
+    qmp::qmp_schema::{DeviceClassSubType, VmNotifyEvent, DEVICE_CLASS_ID},
 };
 #[cfg(any(
     feature = "trace_to_logger",
@@ -233,7 +233,7 @@ impl OhCamCallBack {
         if QmpChannel::is_connected() {
             let success_msg = VmNotifyEvent {
                 klass: DEVICE_CLASS_ID,
-                type_t: CAMERA_TYPE,
+                type_t: DeviceClassSubType::CAMERA.into(),
                 code: status.into(),
                 message: Some(self.camid.to_owned()),
             };

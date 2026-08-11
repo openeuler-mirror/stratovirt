@@ -10,6 +10,7 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fmt;
 use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -71,6 +72,22 @@ pub struct OhAudio {
     sample_rate: u32,
     /// Audio format: number of channels.
     channels: u8,
+}
+
+impl fmt::Debug for OhAudio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OhAudio")
+            .field("scene", &self.scene)
+            .field("direction", &self.direction)
+            .field("status", &self.status)
+            .field("period_bytes", &self.period_bytes)
+            .field("period_ms", &self.period_ms)
+            .field("play_concurrency", &self.play_concurrency)
+            .field("sample_size", &self.sample_size)
+            .field("sample_rate", &self.sample_rate)
+            .field("channels", &self.channels)
+            .finish_non_exhaustive()
+    }
 }
 
 // SAFETY: It's a kind of implementation of audio backend which is maintained just by

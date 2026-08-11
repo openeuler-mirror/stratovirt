@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
+use serde_json::json;
 use vmm_sys_util::epoll::EventSet;
 
 use super::qmp_schema;
@@ -32,7 +33,7 @@ use crate::event_loop::EventLoop;
 use crate::machine::{MachineExternalInterface, VmState};
 use crate::socket::SocketHandler;
 use crate::socket::SocketRWHandler;
-use crate::state_query::detect_silent_audio;
+use crate::state_query::{detect_silent_audio, query_workloads};
 use util::leak_bucket::LeakBucket;
 use util::loop_context::{
     gen_delete_notifiers, read_fd, EventNotifier, EventNotifierHelper, NotifierCallback,
@@ -412,9 +413,8 @@ fn handle_qmp(
 
     match qmp_service.decode_line() {
         (Ok(None), _) => Ok(()),
-        (Ok(buffer), if_fd) => {
-            info!("QMP: --> {:?}", buffer);
-            let qmp_command: QmpCommand = buffer.unwrap();
+        (Ok(Some(qmp_command)), if_fd) => {
+            info!("QMP: --> {:?}", qmp_command);
             let (return_msg, shutdown_flag) = qmp_command_exec(qmp_command, controller, if_fd);
             info!("QMP: <-- {:?}", return_msg);
             qmp_service.send_str(&return_msg)?;
@@ -451,7 +451,7 @@ fn stop(controller: &Arc<Mutex<dyn MachineExternalInterface>>) -> Response {
             controller
                 .lock()
                 .unwrap()
-                .notify_lifecycle(VmState::Paused, VmState::Running);
+                .notify_lifecycle(VmState::Running);
             qmp_response = Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError("Failed to pause VM".to_string()),
                 None,
@@ -549,8 +549,7 @@ fn qmp_command_exec(
         (query_display_image, query_display_image),
         (query_ohui_status, query_ohui_status),
         (list_type, list_type),
-        (query_hotpluggable_cpus, query_hotpluggable_cpus),
-        (query_workloads, query_workloads);
+        (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (input_event, input_event, key, value),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
@@ -628,6 +627,21 @@ fn qmp_command_exec(
                 }
                 id
             }
+            QmpCommand::query_workloads { arguments: _, id } => {
+                let workloads = query_workloads();
+                qmp_response = if !workloads.is_empty() {
+                    let status = workloads
+                        .iter()
+                        .map(|(module, state)| json!({ "module": module, "state": state }))
+                        .collect();
+
+                    Response::create_response(serde_json::Value::Array(status), None)
+                } else {
+                    Response::create_empty_response()
+                };
+
+                id
+            }
             QmpCommand::detect_silent_audio { arguments: _, id } => {
                 qmp_response = Response::create_response(
                     serde_json::to_value(detect_silent_audio()).unwrap(),
@@ -659,7 +673,7 @@ fn qmp_command_exec(
         controller
             .lock()
             .unwrap()
-            .notify_lifecycle(VmState::Paused, VmState::Running);
+            .notify_lifecycle(VmState::Running);
     }
 
     // Change response id with input qmp message

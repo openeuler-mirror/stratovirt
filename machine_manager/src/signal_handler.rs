@@ -88,12 +88,11 @@ pub fn handle_signal() {
 extern "C" fn receive_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
     hisysevent::STRATOVIRT_KILLED(num as u32);
     set_signal(num);
-    write!(
+    let _ = write!(
         &mut std::io::stderr(),
         "Received kill signal, signal number: {} \r\n",
         num
-    )
-    .expect("Failed to write to stderr");
+    );
 }
 
 extern "C" fn receive_signal_sys(num: c_int, info: *mut siginfo_t, _: *mut c_void) {
@@ -107,12 +106,11 @@ extern "C" fn receive_signal_sys(num: c_int, info: *mut siginfo_t, _: *mut c_voi
 
         // SAFETY: the pointer is not null.
         let badcall = unsafe { *(info.cast::<i32>().offset(SYSTEMCALL_OFFSET)) };
-        write!(
+        let _ = write!(
             &mut std::io::stderr(),
             "Received a bad system call, number: {} \r\n",
             badcall
-        )
-        .expect("Failed to write to stderr");
+        );
     }
 }
 

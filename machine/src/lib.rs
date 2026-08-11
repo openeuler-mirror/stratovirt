@@ -84,12 +84,14 @@ use devices::usb::storage::{UsbStorage, UsbStorageConfig};
 use devices::usb::tablet::{UsbTablet, UsbTabletConfig};
 #[cfg(feature = "usb_uas")]
 use devices::usb::uas::{UsbUas, UsbUasConfig};
+#[cfg(feature = "usb_host")]
+use devices::usb::usbhost::UsbHostConfig;
+#[cfg(any(feature = "usb_base", feature = "usb_host"))]
+use devices::usb::xhci::xhci_async::{send_async_xhci_cmd, XhciAsyncCmd};
 #[cfg(feature = "usb_base")]
 use devices::usb::xhci::xhci_pci::{XhciConfig, XhciPciDevice};
 #[cfg(feature = "usb_base")]
 use devices::usb::UsbDevice;
-#[cfg(feature = "usb_host")]
-use devices::usb::{usbhost::UsbHostConfig, xhci::xhci_async::XhciAsyncCmd};
 #[cfg(target_arch = "aarch64")]
 use devices::InterruptController;
 #[cfg(feature = "virtio_serial")]
@@ -111,6 +113,7 @@ use machine_manager::check_arg_exist;
     feature = "virtio_input",
     feature = "virtio_multitouch",
     feature = "vhostuser_fs",
+    feature = "vhostuser_block",
     feature = "vhostuser_gpu"
 ))]
 use machine_manager::check_arg_nonexist;
@@ -163,7 +166,9 @@ use virtio::VhostKern;
 #[cfg(any(
     feature = "vhostuser_block",
     feature = "vhostuser_net",
-    feature = "vhostuser_gpu"
+    feature = "vhostuser_gpu",
+    feature = "vhostuser_vsock",
+    feature = "vhostuser_input"
 ))]
 use virtio::VhostUser;
 #[cfg(feature = "vhostuser_fs")]
@@ -1799,6 +1804,18 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    fn check_device_id_existed_simple(&mut self, name: &str) -> Result<()> {
+        let vm_config = self.get_vm_config();
+
+        let exists = vm_config.lock().unwrap().check_device_exists_by_id(name);
+
+        if exists {
+            bail!("Device id {} existed", name);
+        }
+
+        Ok(())
+    }
+
     fn reset_fwcfg_boot_order(&mut self) -> Result<()> {
         // SAFETY: unwrap is safe because stand machine always make sure it not return null.
         let boot_order_vec = self.get_boot_order_list().unwrap();
@@ -2251,6 +2268,159 @@ pub trait MachineOps: MachineLifecycle {
             .with_context(|| "Failed to add vhost user block device")?;
         Ok(())
     }
+
+    /// Add a vhost-user-vsock device on the PCI bus.
+    ///
+    /// The device is a pure passthrough: the guest CID is fetched from the
+    /// backend through the config space (negotiated during `realize`), and all
+    /// three virtqueues (rx/tx/event) are handed to the backend.
+    #[cfg(feature = "vhostuser_vsock")]
+    fn add_vhost_user_vsock_pci(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserVsockDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user vsock",
+                    &device_cfg.chardev
+                )
+            })?;
+
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserVsock::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, false, true)
+            .with_context(|| {
+                format!(
+                    "Failed to add virtio pci vsock device, device id: {}",
+                    &device_cfg.id
+                )
+            })?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
+        Ok(())
+    }
+
+    /// Add a vhost-user-vsock device on the mmio bus (microvm).
+    ///
+    /// Mirrors `add_vhost_user_blk_device`: there is no bus/addr on mmio, so
+    /// those args must be absent, and the device is attached via
+    /// `add_virtio_mmio_device` (overridden by the microvm machine to actually
+    /// register the mmio transport).
+    #[cfg(feature = "vhostuser_vsock")]
+    fn add_vhost_user_vsock_device(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserVsockDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_nonexist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user vsock",
+                    &device_cfg.chardev
+                )
+            })?;
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserVsock::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_mmio_device(device_cfg.id.clone(), device)
+            .with_context(|| "Failed to add vhost user vsock mmio device")?;
+        Ok(())
+    }
+
+    /// Add a vhost-user-input device on the PCI bus.
+    ///
+    /// Pure passthrough: the config space is served over `GET_CONFIG`/
+    /// `SET_CONFIG` (read fresh, write forwarded with the exact offset), and
+    /// both virtqueues (event + status) are handed to the backend. The frontend
+    /// never touches an evdev device.
+    #[cfg(feature = "vhostuser_input")]
+    fn add_vhost_user_input_pci(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+        hotplug: bool,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserInputDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_exist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let bdf = PciBdf::new(device_cfg.bus.clone().unwrap(), device_cfg.addr.unwrap());
+
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user input",
+                    &device_cfg.chardev
+                )
+            })?;
+
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserInput::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_pci_device(&device_cfg.id, &bdf, device, false, true)
+            .with_context(|| {
+                format!(
+                    "Failed to add virtio pci input device, device id: {}",
+                    &device_cfg.id
+                )
+            })?;
+        if !hotplug {
+            self.reset_bus(&device_cfg.id)?;
+        }
+        Ok(())
+    }
+
+    /// Add a vhost-user-input device on the mmio bus (microvm).
+    ///
+    /// Mirrors `add_vhost_user_vsock_device`: no bus/addr on mmio, attached
+    /// via `add_virtio_mmio_device` (overridden by the microvm machine).
+    #[cfg(feature = "vhostuser_input")]
+    fn add_vhost_user_input_device(
+        &mut self,
+        vm_config: &mut VmConfig,
+        cfg_args: &str,
+    ) -> Result<()> {
+        let device_cfg = VhostUser::VhostUserInputDevConfig::try_parse_from(str_slip_to_clap(
+            cfg_args, true, false,
+        ))?;
+        check_arg_nonexist!(("bus", device_cfg.bus), ("addr", device_cfg.addr));
+        let chardev_cfg = vm_config
+            .chardev
+            .remove(&device_cfg.chardev)
+            .with_context(|| {
+                format!(
+                    "Chardev: {:?} not found for vhost user input",
+                    &device_cfg.chardev
+                )
+            })?;
+        let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+            VhostUser::VhostUserInput::new(&device_cfg, chardev_cfg, self.get_sys_mem()),
+        ));
+        self.add_virtio_mmio_device(device_cfg.id.clone(), device)
+            .with_context(|| "Failed to add vhost user input mmio device")?;
+        Ok(())
+    }
     #[cfg(feature = "vfio_device")]
     fn add_vfio_device(&mut self, cfg_args: &str, hotplug: bool) -> Result<()> {
         let hypervisor = self.get_hypervisor();
@@ -2651,26 +2821,26 @@ pub trait MachineOps: MachineLifecycle {
     #[cfg(feature = "usb_base")]
     fn detach_usb_from_xhci_controller(
         &mut self,
-        vm_config: &mut VmConfig,
+        vm_config: Arc<Mutex<VmConfig>>,
         id: String,
     ) -> Result<()> {
         let parent_dev = self
-            .get_pci_dev_by_id_and_type(vm_config, None, "nec-usb-xhci")
+            .get_pci_dev_by_id_and_type(&vm_config.lock().unwrap(), None, "nec-usb-xhci")
             .with_context(|| "Can not find parent device from pci bus")?;
-        let locked_parent_dev = parent_dev.lock().unwrap();
-        let xhci_pci = locked_parent_dev
-            .as_any()
-            .downcast_ref::<XhciPciDevice>()
-            .with_context(|| "PciDevOps can not downcast to XhciPciDevice")?;
-        xhci_pci.detach_device(id)?;
 
-        Ok(())
+        let cmd = XhciAsyncCmd::DeviceDetach {
+            id,
+            parent_dev,
+            vm_config,
+        };
+
+        send_async_xhci_cmd(cmd).with_context(|| "Failed to send device detach cmd")
     }
 
     #[cfg(not(feature = "usb_base"))]
     fn detach_usb_from_xhci_controller(
         &mut self,
-        _vm_config: &mut VmConfig,
+        _vm_config: Arc<Mutex<VmConfig>>,
         _id: String,
     ) -> Result<()> {
         bail!("USB support is disabled")
@@ -2768,23 +2938,11 @@ pub trait MachineOps: MachineLifecycle {
 
                 let cmd: XhciAsyncCmd = XhciAsyncCmd::UsbHostAdd {
                     config,
-                    parent_dev: parent_dev.clone(),
+                    parent_dev,
                     vm_config: update_vm_config,
                 };
 
-                let parent = parent_dev.lock().unwrap();
-                let xhci = &parent
-                    .as_any()
-                    .downcast_ref::<XhciPciDevice>()
-                    .ok_or_else(|| anyhow!("Failed to downcast PciDevOps to XhciPciDevice"))?
-                    .xhci;
-
-                return xhci
-                    .lock()
-                    .unwrap()
-                    .async_cmd_tx
-                    .send(cmd)
-                    .with_context(|| "Failed to send usbhost add cmd");
+                return send_async_xhci_cmd(cmd).with_context(|| "Failed to send usbhost add cmd");
             }
             _ => bail!("Unknown usb device classes."),
         };
@@ -2862,6 +3020,14 @@ pub trait MachineOps: MachineLifecycle {
                 ("vhost-user-blk-pci",add_vhost_user_blk_pci, vm_config, cfg_args, false),
                 #[cfg(feature = "vhostuser_gpu")]
                 ("vhost-user-gpu-pci", add_vhost_user_gpu_pci, vm_config, cfg_args),
+                #[cfg(feature = "vhostuser_vsock")]
+                ("vhost-user-vsock-pci", add_vhost_user_vsock_pci, vm_config, cfg_args, false),
+                #[cfg(feature = "vhostuser_vsock")]
+                ("vhost-user-vsock-device", add_vhost_user_vsock_device, vm_config, cfg_args),
+                #[cfg(feature = "vhostuser_input")]
+                ("vhost-user-input-pci", add_vhost_user_input_pci, vm_config, cfg_args, false),
+                #[cfg(feature = "vhostuser_input")]
+                ("vhost-user-input-device", add_vhost_user_input_device, vm_config, cfg_args),
                 #[cfg(feature = "vhost_vsock")]
                 ("vhost-vsock-pci" | "vhost-vsock-device", add_virtio_vsock, cfg_args),
                 #[cfg(feature = "virtio_rng")]
@@ -3151,9 +3317,8 @@ pub trait MachineOps: MachineLifecycle {
     ///
     /// # Arguments
     ///
-    /// * `old_state` - Old vm state want to leave.
     /// * `new_state` - New vm state want to transfer to.
-    fn vm_state_transfer(&self, old_state: VmState, new_state: VmState) -> Result<()> {
+    fn vm_state_transfer(&self, new_state: VmState) -> Result<()> {
         use VmState::*;
 
         let mut vm_state = self.get_vm_state().lock().unwrap();
@@ -3161,21 +3326,26 @@ pub trait MachineOps: MachineLifecycle {
             *vm_state = new_state;
             return Ok(());
         }
+        let old_state = *vm_state;
 
         match (old_state, new_state) {
+            (Shutdown, _) => {
+                info!("Vm is shutdown, vm state can not changed.");
+                return Ok(());
+            }
             (Created, Running) => self
                 .vm_start(&mut vm_state, false)
                 .with_context(|| "Failed to start vm.")?,
-            (Running, Paused) => self
-                .vm_pause(&mut vm_state)
-                .with_context(|| "Failed to pause vm.")?,
             (Paused, Running) => self
                 .vm_resume(&mut vm_state)
                 .with_context(|| "Failed to resume vm.")?,
+            (Running, Paused) | (Created, Paused) => self
+                .vm_pause(&mut vm_state)
+                .with_context(|| "Failed to pause vm.")?,
+            (Paused, Paused) | (Running, Running) => return Ok(()),
             (_, Shutdown) => self
                 .vm_destroy(&mut vm_state)
                 .with_context(|| "Failed to destroy vm.")?,
-            (Paused, Paused) => return Ok(()),
             (_, _) => {
                 bail!("Vm lifecycle error: this transform is illegal.");
             }
@@ -3223,12 +3393,7 @@ fn register_shutdown_event(
 
 fn handle_destroy_request(vm: &Arc<Mutex<dyn MachineOps>>) -> bool {
     let locked_vm = vm.lock().unwrap();
-    let vmstate: VmState = {
-        let state = locked_vm.get_vm_state().lock().unwrap();
-        *state
-    };
-
-    if !locked_vm.notify_lifecycle(vmstate, VmState::Shutdown) {
+    if !locked_vm.notify_lifecycle(VmState::Shutdown) {
         return false;
     }
 

@@ -49,7 +49,7 @@ use devices::legacy::{
 #[cfg(feature = "ramfb")]
 use devices::legacy::{Ramfb, RamfbConfig};
 use devices::pci::intx::PciIntxCountState;
-use devices::pci::{PciBus, PciHost, PciIntxState};
+use devices::pci::{PciBus, PciHost, PciIntxState, PCI_PIN_NUM};
 use devices::sysbus::{to_sysbusdevops, SysBusDevType};
 use devices::{
     convert_bus_mut, Device, ICGICConfig, ICGICv3Config, GIC_IRQ_MAX, MUT_PCI_BUS, SYS_BUS_DEVICE,
@@ -132,6 +132,11 @@ const IRQ_MAP: &[(i32, i32)] = &[
     (5, 15),  // Sysbus
     (16, 19), // Pcie
 ];
+
+const PCI_DEVFN_SLOT_SHIFT: u32 = 3;
+const PCI_FDT_DEVFN_SHIFT: u32 = 8;
+const PCI_INTX_PIN_MASK: u32 = 0x7;
+const PCI_INTX_MAP_ENTRY_CELLS: usize = 10;
 
 impl StdMachine {
     pub fn new(vm_config: &VmConfig) -> Result<Self> {
@@ -316,7 +321,7 @@ impl StdMachine {
             let (cpu_state, _) = vcpu.state();
             let cpu_state = *cpu_state.lock().unwrap();
             if cpu_state != CpuLifecycleState::Paused && !self.pause() {
-                self.notify_lifecycle(VmState::Paused, VmState::Running);
+                self.notify_lifecycle(VmState::Running);
                 return None;
             }
 
@@ -360,6 +365,18 @@ impl StdMachineOps for StdMachine {
             )
             .with_context(|| "Failed to register ECAM in memory space.")?;
 
+        let pio_region_ops = PciHost::build_pio_addr_ops();
+        let pio_region = Region::init_io_region(
+            MEM_LAYOUT[LayoutEntryType::PciePio as usize].1,
+            pio_region_ops,
+            "PciePio",
+        );
+        self.base
+            .sys_mem
+            .root()
+            .add_subregion(pio_region, MEM_LAYOUT[LayoutEntryType::PciePio as usize].0)
+            .with_context(|| "Failed to register PCIE PIO in memory space.")?;
+
         let pcihost_root = PciHostRoot::new(root_bus);
         pcihost_root
             .realize()
@@ -392,7 +409,10 @@ impl StdMachineOps for StdMachine {
         fwcfg
             .add_data_entry(
                 FwCfgEntryType::CmdlineSize,
-                (cmdline.len() + 1).as_bytes().to_vec(),
+                u32::try_from(cmdline.len() + 1)
+                    .with_context(|| "Kernel command line is too long")?
+                    .as_bytes()
+                    .to_vec(),
             )
             .with_context(|| DevErrorKind::AddEntryErr("CmdlineSize".to_string()))?;
         fwcfg
@@ -1247,6 +1267,7 @@ impl CompileFDTHelper for StdMachine {
         fdt.set_property_u32("linux,pci-domain", 0)?;
         fdt.set_property_u32("#address-cells", 3)?;
         fdt.set_property_u32("#size-cells", 2)?;
+        fdt.set_property_u32("#interrupt-cells", 1)?;
 
         let high_pcie_mmio_base = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].0;
         let high_pcie_mmio_size = MEM_LAYOUT[LayoutEntryType::HighPcieMmio as usize].1;
@@ -1299,6 +1320,33 @@ impl CompileFDTHelper for StdMachine {
             ],
         )?;
 
+        let pcie_irq_base = IRQ_MAP[IrqEntryType::Pcie as usize].0 as u32;
+        let pin_num = u32::from(PCI_PIN_NUM);
+        let map_len =
+            usize::from(PCI_PIN_NUM) * usize::from(PCI_PIN_NUM) * PCI_INTX_MAP_ENTRY_CELLS;
+        let mut irq_map = Vec::with_capacity(map_len);
+        for slot in 0..pin_num {
+            let devfn = slot << PCI_DEVFN_SLOT_SHIFT;
+            for pin in 0..pin_num {
+                let irq = pcie_irq_base + ((pin + slot) % pin_num);
+                irq_map.extend_from_slice(&[
+                    devfn << PCI_FDT_DEVFN_SHIFT,
+                    0,
+                    0,
+                    pin + 1,
+                    device_tree::GIC_PHANDLE,
+                    0,
+                    0,
+                    device_tree::GIC_FDT_IRQ_TYPE_SPI,
+                    irq,
+                    device_tree::IRQ_TYPE_LEVEL_HIGH,
+                ]);
+            }
+        }
+        fdt.set_property_array_u32("interrupt-map", &irq_map)?;
+        let slot_mask = (pin_num - 1) << (PCI_DEVFN_SLOT_SHIFT + PCI_FDT_DEVFN_SHIFT);
+        fdt.set_property_array_u32("interrupt-map-mask", &[slot_mask, 0, 0, PCI_INTX_PIN_MASK])?;
+
         fdt.set_property_u32("msi-parent", device_tree::GIC_ITS_PHANDLE)?;
         fdt.end_node(pci_node_dep)
     }
@@ -1347,12 +1395,14 @@ impl CompileFDTHelper for StdMachine {
         fdt.set_property_string("stdout-path", &pl011_property_string)?;
 
         if let Some(initrd) = &boot_source.initrd {
-            fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
-            let initrd_end = initrd
-                .initrd_addr
-                .checked_add(initrd.initrd_size)
-                .with_context(|| "initrd end overflow")?;
-            fdt.set_property_u64("linux,initrd-end", initrd_end)?;
+            if initrd.initrd_addr != 0 {
+                fdt.set_property_u64("linux,initrd-start", initrd.initrd_addr)?;
+                let initrd_end = initrd
+                    .initrd_addr
+                    .checked_add(initrd.initrd_size)
+                    .with_context(|| "initrd end overflow")?;
+                fdt.set_property_u64("linux,initrd-end", initrd_end)?;
+            }
         }
         fdt.end_node(chosen_node_dep)
     }

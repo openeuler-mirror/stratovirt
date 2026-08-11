@@ -40,7 +40,6 @@ use crate::pci::config::{
 use crate::pci::{
     init_intx, init_msix, le_write_u16, PciBus, PciConfig, PciDevBase, PciDevOps, PciState,
 };
-use crate::usb::xhci::xhci_async::XhciAsyncCmd;
 use crate::usb::UsbDevice;
 use crate::{convert_bus_ref, Bus, Device, DeviceBase, PCI_BUS};
 use address_space::{AddressRange, AddressSpace, Region, RegionIoEventFd};
@@ -117,7 +116,7 @@ pub struct XhciPciDevice {
 }
 
 #[derive(Clone, DescSerde, Serialize, Deserialize)]
-#[desc_version(current_version = "0.1.0")]
+#[desc_version(current_version = "0.2.0")]
 struct XhciPciDevState {
     pci_state: PciState,
     dev_id: u16,
@@ -233,12 +232,12 @@ impl XhciPciDevice {
         Ok(())
     }
 
-    pub fn detach_device(&self, id: String) -> Result<()> {
+    pub fn detach_device(&self, id: &str) -> Result<()> {
         let port = {
             let mut locked_xhci = self.xhci.lock().unwrap();
 
             let usb_port = locked_xhci
-                .find_usb_port_by_id(&id)
+                .find_usb_port_by_id(id)
                 .ok_or_else(|| anyhow!("Failed to detach device: id {} not found", id))?;
 
             let slot_id = {
@@ -246,22 +245,37 @@ impl XhciPciDevice {
                 locked_port.slot_id
             };
 
-            locked_xhci.detach_slot(slot_id)?;
             locked_xhci.port_update(&usb_port, true)?;
+            locked_xhci.detach_slot(slot_id)?;
 
             usb_port
         };
 
-        let cmd = XhciAsyncCmd::DeviceDetach {
-            xhci: self.xhci.clone(),
-            port,
+        let dev = port
+            .lock()
+            .unwrap()
+            .dev
+            .as_ref()
+            .map(Clone::clone)
+            .with_context(|| "no device attached to port")?;
+
+        let dev_id = {
+            let mut locked_dev = dev.lock().unwrap();
+            locked_dev.usb_device_base_mut().unplugged = true;
+            locked_dev.unrealize()?;
+            locked_dev.device_id().to_string()
         };
+
+        let mut locked_port = port.lock().unwrap();
+
+        trace::usb_xhci_detach_device(&locked_port.port_id, &dev_id);
+
         self.xhci
             .lock()
             .unwrap()
-            .async_cmd_tx
-            .send(cmd)
-            .with_context(|| "Failed to send device detach cmd")
+            .discharge_usb_port(&mut locked_port);
+
+        Ok(())
     }
 }
 
@@ -426,7 +440,15 @@ impl StateTransfer for XhciPciDevice {
         Ok(serde_json::to_vec(&state)?)
     }
 
-    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+    fn set_state_mut(&mut self, state: &[u8], version: u32) -> Result<()> {
+        let current_version = XhciPciDevState::descriptor().current_version;
+        if current_version < version {
+            bail!(
+                "Unable to restore a new version snapshot (v{}) on an older version StratoVirt (v{}).",
+                version, current_version
+            );
+        }
+
         let xhci_pci_state: XhciPciDevState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("XHCI"))?;
 

@@ -293,10 +293,7 @@ pub trait Lifecycle {
                 thread::sleep(Duration::from_millis(5));
                 if now.elapsed() > Duration::from_secs(2) {
                     // Not use resume() to avoid unnecessary qmp event.
-                    locked_vm
-                        .lock()
-                        .unwrap()
-                        .notify_lifecycle(VmState::Paused, VmState::Running);
+                    locked_vm.lock().unwrap().notify_lifecycle(VmState::Running);
                     bail!("Failed to pause VM");
                 }
             }

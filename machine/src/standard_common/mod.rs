@@ -25,7 +25,6 @@ use anyhow::{bail, Context, Result};
 #[cfg(target_arch = "x86_64")]
 use boot_loader::{load_acpi_to_memory, ARCH_RSDP_BEGIN};
 use log::{error, warn};
-use serde_json::json;
 use util::{any_typecast_mut, set_termi_canon_mode};
 use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
@@ -79,7 +78,6 @@ use machine_manager::qmp::qmp_schema::{
     BlockDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, UpdateRegionArgument,
 };
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_response::Response, qmp_schema};
-use machine_manager::state_query::query_workloads;
 #[cfg(feature = "gtk")]
 use ui::gtk::qmp_query_display_image;
 use ui::input::{input_button, input_move_abs, input_point_sync, key_event, Axis};
@@ -981,8 +979,7 @@ pub(crate) trait AcpiBuilder {
 impl StdMachine {
     fn handle_unplug_usb_request(&mut self, id: String) -> Result<()> {
         let vm_config = self.get_vm_config();
-        let mut locked_vmconfig = vm_config.lock().unwrap();
-        self.detach_usb_from_xhci_controller(&mut locked_vmconfig, id)
+        self.detach_usb_from_xhci_controller(vm_config, id)
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1022,7 +1019,7 @@ impl StdMachine {
 
 impl MachineLifecycle for StdMachine {
     fn pause(&self) -> bool {
-        if self.notify_lifecycle(VmState::Running, VmState::Paused) {
+        if self.notify_lifecycle(VmState::Paused) {
             event!(Stop);
             true
         } else {
@@ -1031,7 +1028,7 @@ impl MachineLifecycle for StdMachine {
     }
 
     fn resume(&self) -> bool {
-        if !self.notify_lifecycle(VmState::Paused, VmState::Running) {
+        if !self.notify_lifecycle(VmState::Running) {
             return false;
         }
         event!(Resume);
@@ -1074,8 +1071,8 @@ impl MachineLifecycle for StdMachine {
         true
     }
 
-    fn notify_lifecycle(&self, old: VmState, new: VmState) -> bool {
-        if let Err(e) = self.vm_state_transfer(old, new) {
+    fn notify_lifecycle(&self, new: VmState) -> bool {
+        if let Err(e) = self.vm_state_transfer(new) {
             error!("VM state transfer failed: {:?}", e);
             return false;
         }
@@ -1324,7 +1321,7 @@ impl DeviceInterface for StdMachine {
     }
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
-        if let Err(e) = self.check_device_id_existed(&args.id) {
+        if let Err(e) = self.check_device_id_existed_simple(&args.id) {
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                 None,
@@ -1340,7 +1337,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_blk(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add virtio pci blk: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1353,7 +1350,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_scsi(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add virtio scsi controller: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1366,8 +1363,36 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vhost_user_blk_pci(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add vhost user blk pci: {}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            #[cfg(feature = "vhostuser_vsock")]
+            "vhost-user-vsock-pci" => {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_vhost_user_vsock_pci(&mut vm_config_clone, &cfg_args, true)
+                {
+                    error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(&args.id);
+                    let err_str = format!("Failed to add vhost user vsock pci: {}", e);
+                    return Response::create_error_response(
+                        qmp_schema::QmpErrorClass::GenericError(err_str),
+                        None,
+                    );
+                }
+            }
+            #[cfg(feature = "vhostuser_input")]
+            "vhost-user-input-pci" => {
+                let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
+                if let Err(e) = self.add_vhost_user_input_pci(&mut vm_config_clone, &cfg_args, true)
+                {
+                    error!("{:?}", e);
+                    locked_vmconfig.del_device_by_id(&args.id);
+                    let err_str = format!("Failed to add vhost user input pci: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
                         None,
@@ -1378,7 +1403,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_virtio_pci_net(&mut vm_config_clone, &cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     let err_str = format!("Failed to add virtio pci net: {}", e);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(err_str),
@@ -1391,7 +1416,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_vfio_device(&cfg_args, true) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
@@ -1403,7 +1428,7 @@ impl DeviceInterface for StdMachine {
                 let cfg_args = locked_vmconfig.add_device_config(args.as_ref());
                 if let Err(e) = self.add_usb_device(&mut vm_config_clone, &cfg_args) {
                     error!("{:?}", e);
-                    locked_vmconfig.del_device_by_id(args.id);
+                    locked_vmconfig.del_device_by_id(&args.id);
                     return Response::create_error_response(
                         qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                         None,
@@ -1491,7 +1516,7 @@ impl DeviceInterface for StdMachine {
                     }
                     let vm_config = self.get_vm_config();
                     let mut locked_config = vm_config.lock().unwrap();
-                    locked_config.del_device_by_id(device_id);
+                    locked_config.del_device_by_id(&device_id);
                     drop(locked_config);
                     Response::create_empty_response()
                 }
@@ -2285,21 +2310,6 @@ impl DeviceInterface for StdMachine {
                 ),
                 None,
             ),
-        }
-    }
-
-    fn query_workloads(&self) -> Response {
-        let workloads = query_workloads();
-
-        if !workloads.is_empty() {
-            let status = workloads
-                .iter()
-                .map(|(module, state)| json!({ "module": module, "state": state }))
-                .collect();
-
-            Response::create_response(serde_json::Value::Array(status), None)
-        } else {
-            Response::create_empty_response()
         }
     }
 

@@ -79,6 +79,7 @@ const DEFAULT_PORT_QUEUE_SIZE: u16 = 128;
 const DEFAULT_CTRL_QUEUE_SIZE: u16 = 32;
 const CTRL_IN_QUEUE_IDX: usize = 2;
 const CTRL_OUT_QUEUE_IDX: usize = 3;
+const CTRL_QUEUE_INDICES: &[usize] = &[CTRL_IN_QUEUE_IDX, CTRL_OUT_QUEUE_IDX];
 
 /// If the driver negotiated the VIRTIO_CONSOLE_F_MULTIPORT, the two control queues are used.
 /// The layout of the control message is VirtioConsoleControl.
@@ -168,6 +169,8 @@ pub struct Serial {
     processing_queue: Arc<AtomicBool>,
     /// The queue notify events for handling IO.
     queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
+    /// Whether control queues have been activated before DRIVER_OK.
+    ctrl_queues_activated: bool,
 }
 
 impl Serial {
@@ -328,13 +331,16 @@ impl VirtioDevice for Serial {
             }
         }
 
-        self.control_queues_activate(
-            mem_space,
-            interrupt_cb,
-            &queues,
-            queue_evts,
-            self.base.broken.clone(),
-        )?;
+        if !self.ctrl_queues_activated {
+            self.control_queues_activate(
+                mem_space,
+                interrupt_cb,
+                &queues,
+                queue_evts,
+                self.base.broken.clone(),
+            )?;
+            self.ctrl_queues_activated = true;
+        }
 
         Ok(())
     }
@@ -345,7 +351,50 @@ impl VirtioDevice for Serial {
         }
         unregister_event_helper(None, &mut self.base.deactivate_evts)?;
         self.queue_evts.lock().unwrap().clear();
+        self.ctrl_queues_activated = false;
 
+        Ok(())
+    }
+
+    fn early_queue_indices(&self) -> &'static [usize] {
+        if !self.ctrl_queues_activated
+            && self.base.driver_features & (1_u64 << VIRTIO_CONSOLE_F_MULTIPORT) != 0
+            && CTRL_QUEUE_INDICES.iter().all(|idx| {
+                self.base
+                    .queues_config
+                    .get(*idx)
+                    .map(|cfg| cfg.ready)
+                    .unwrap_or(false)
+            })
+        {
+            CTRL_QUEUE_INDICES
+        } else {
+            &[]
+        }
+    }
+
+    fn activate_early_queues(
+        &mut self,
+        mem_space: Arc<AddressSpace>,
+        interrupt_cb: Arc<VirtioInterrupt>,
+        queue_evts: Vec<Arc<EventFd>>,
+    ) -> Result<()> {
+        let queues = self.base.queues.clone();
+        if queues.len() != self.queue_num() {
+            return Err(anyhow!(VirtioError::IncorrectQueueNum(
+                self.queue_num(),
+                queues.len()
+            )));
+        }
+
+        self.control_queues_activate(
+            mem_space,
+            interrupt_cb,
+            &queues,
+            queue_evts,
+            self.base.broken.clone(),
+        )?;
+        self.ctrl_queues_activated = true;
         Ok(())
     }
 }
@@ -455,13 +504,11 @@ pub struct SerialPort {
 
 impl SerialPort {
     pub fn new(port_cfg: &VirtioSerialPortCfg, chardev_cfg: ChardevConfig) -> Result<Self> {
-        // Console is default host connected. And pty chardev has opened by default in realize()
-        // function.
+        // Socket chardevs become connected after accept. Other backends are
+        // available after realize.
         let is_console = matches!(port_cfg.classtype.as_str(), "virtconsole");
-        let mut host_connected = is_console;
-        if let ChardevType::Pty { .. } = chardev_cfg.classtype {
-            host_connected = true;
-        }
+        let host_connected =
+            is_console || !matches!(&chardev_cfg.classtype, ChardevType::Socket { .. });
 
         Ok(SerialPort {
             name: Some(port_cfg.id.clone()),
@@ -569,9 +616,10 @@ impl SerialPortHandler {
         loop {
             if let Some(port) = self.port.as_ref() {
                 let locked_port = port.lock().unwrap();
-                let locked_cdev = locked_port.chardev.lock().unwrap();
+                let mut locked_cdev = locked_port.chardev.lock().unwrap();
                 if locked_cdev.outbuf_is_full() {
                     // disable further notifications until space appears
+                    locked_cdev.set_outbuf_listener(Some(self.output_queue_evt.clone()));
                     queue_lock
                         .vring
                         .suppress_queue_notify(self.driver_features, true)
@@ -836,12 +884,12 @@ impl InputReceiver for SerialPortHandler {
             return;
         }
 
-        if self.port.as_ref().unwrap().lock().unwrap().guest_connected {
-            self.enable_inputqueue_notify(true);
-        }
-
         let mut locked_port = self.port.as_ref().unwrap().lock().unwrap();
         locked_port.paused = true;
+        if locked_port.guest_connected {
+            drop(locked_port);
+            self.enable_inputqueue_notify(true);
+        }
     }
 }
 
@@ -917,10 +965,10 @@ impl SerialControlHandler {
                 return;
             }
 
-            let cloned_ports = self.ports.clone();
-            let mut locked_ports = cloned_ports.lock().unwrap();
-            for (_, port) in locked_ports.iter_mut() {
-                self.send_control_event(port.lock().unwrap().nr, VIRTIO_CONSOLE_PORT_ADD, 1);
+            let mut port_ids: Vec<u32> = self.ports.lock().unwrap().keys().copied().collect();
+            port_ids.sort_unstable();
+            for port_id in port_ids {
+                self.send_control_event(port_id, VIRTIO_CONSOLE_PORT_ADD, 1);
             }
             return;
         }

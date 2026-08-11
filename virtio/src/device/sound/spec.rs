@@ -526,3 +526,135 @@ impl PcmStatus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_snd_hdr() {
+        let hdr = SndHdr {
+            code: VIRTIO_SND_S_OK.to_le(),
+        };
+        assert_eq!(u32::from_le(hdr.code), VIRTIO_SND_S_OK);
+    }
+
+    #[test]
+    fn test_pcm_status_new() {
+        let status = PcmStatus::new(VIRTIO_SND_S_OK, 1024);
+        assert_eq!(u32::from_le(status.status), VIRTIO_SND_S_OK);
+        assert_eq!(u32::from_le(status.latency_bytes), 1024);
+    }
+
+    #[test]
+    fn test_ctl_event_new_le() {
+        let event = CtlEvent::new_le(VIRTIO_SND_EVT_CTL_NOTIFY, 0, 1);
+        assert_eq!(u32::from_le(event.hdr.code), VIRTIO_SND_EVT_CTL_NOTIFY);
+        assert_eq!(u16::from_le(event.control_id), 0);
+        assert_eq!(u16::from_le(event.mask), 1);
+    }
+
+    #[test]
+    fn test_snd_event_new_le() {
+        let event = SndEvent::new_le(VIRTIO_SND_EVT_JACK_CONNECTED, 0);
+        assert_eq!(u32::from_le(event.hdr.code), VIRTIO_SND_EVT_JACK_CONNECTED);
+        assert_eq!(u32::from_le(event.data), 0);
+    }
+
+    #[test]
+    fn test_snd_event_new_je_le_connected() {
+        let event = SndEvent::new_je_le(true, 0);
+        assert_eq!(u32::from_le(event.hdr.code), VIRTIO_SND_EVT_JACK_CONNECTED);
+    }
+
+    #[test]
+    fn test_snd_event_new_je_le_disconnected() {
+        let event = SndEvent::new_je_le(false, 0);
+        assert_eq!(
+            u32::from_le(event.hdr.code),
+            VIRTIO_SND_EVT_JACK_DISCONNECTED
+        );
+    }
+
+    #[test]
+    fn test_pcm_hdr_from_le() {
+        let hdr = PcmHdr {
+            hdr: SndHdr {
+                code: VIRTIO_SND_R_PCM_INFO.to_le(),
+            },
+            stream_id: 1u32.to_le(),
+        };
+        let converted = PcmHdr::from_le(&hdr);
+        assert_eq!(u32::from_le(converted.hdr.code), VIRTIO_SND_R_PCM_INFO);
+        assert_eq!(u32::from_le(converted.stream_id), 1);
+    }
+
+    #[test]
+    fn test_pcm_set_params_from_le() {
+        let params = PcmSetParams {
+            hdr: PcmHdr {
+                hdr: SndHdr {
+                    code: VIRTIO_SND_R_PCM_SET_PARAMS.to_le(),
+                },
+                stream_id: 0u32.to_le(),
+            },
+            buffer_bytes: 4096u32.to_le(),
+            period_bytes: 1024u32.to_le(),
+            features: 0u32.to_le(),
+            channels: 2,
+            format: VIRTIO_SND_PCM_FMT_S16,
+            rate: VIRTIO_SND_PCM_RATE_44100,
+            padding: 0,
+        };
+        let converted = PcmSetParams::from_le(&params);
+        assert_eq!(u32::from_le(converted.hdr.stream_id), 0);
+        assert_eq!(converted.buffer_bytes, 4096);
+        assert_eq!(converted.period_bytes, 1024);
+        assert_eq!(converted.channels, 2);
+        assert_eq!(converted.format, VIRTIO_SND_PCM_FMT_S16);
+        assert_eq!(converted.rate, VIRTIO_SND_PCM_RATE_44100);
+    }
+
+    #[test]
+    fn test_jack_info_to_le() {
+        let info = JackInfo {
+            hdr: SoundInfo { hda_fn_nid: 1 },
+            features: 0,
+            hda_reg_defconf: 0x40a00000,
+            hda_reg_caps: 0x20,
+            connected: 1,
+            padding: [0u8; 7],
+        };
+        let le_info = info.to_le();
+        assert_eq!(u32::from_le(le_info.hdr.hda_fn_nid), 1);
+        assert_eq!(u32::from_le(le_info.hda_reg_defconf), 0x40a00000);
+        assert_eq!(u32::from_le(le_info.hda_reg_caps), 0x20);
+        assert_eq!(u16::from(u8::from_le(le_info.connected)), 1);
+    }
+
+    #[test]
+    fn test_pcm_info_to_le() {
+        let info = PcmInfo {
+            hdr: SoundInfo { hda_fn_nid: 0 },
+            features: 0,
+            formats: (1 << VIRTIO_SND_PCM_FMT_S16 as u64),
+            rates: (1 << VIRTIO_SND_PCM_RATE_44100 as u64),
+            direction: VIRTIO_SND_D_OUTPUT,
+            channels_min: 2,
+            channels_max: 2,
+            padding: [0u8; 5],
+        };
+        let le_info = info.to_le();
+        assert_eq!(u32::from_le(le_info.hdr.hda_fn_nid), 0);
+        assert_eq!(le_info.direction, VIRTIO_SND_D_OUTPUT);
+    }
+
+    #[test]
+    fn test_ctl_value_default() {
+        let val = CtlValue::default();
+        assert_eq!(val.integer.len(), CTL_VAL_INT_SIZE);
+        for v in val.integer.iter() {
+            assert_eq!(*v, 0);
+        }
+    }
+}

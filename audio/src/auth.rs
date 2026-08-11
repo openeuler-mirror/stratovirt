@@ -213,6 +213,19 @@ mod tests {
     }
 
     #[test]
+    fn test_record_authority_initial_false() {
+        let auth = RecordAuthority::new(false);
+        assert!(!auth.has_authority());
+
+        auth.set_authority(true);
+        assert!(auth.has_authority());
+
+        // Setting to same value should not trigger notification (no notifiers registered)
+        auth.set_authority(true);
+        assert!(auth.has_authority());
+    }
+
+    #[test]
     fn test_authority_notifier() {
         let auth = RecordAuthority::new(true);
         let call_count = Arc::new(AtomicUsize::new(0));
@@ -250,6 +263,32 @@ mod tests {
     }
 
     #[test]
+    fn test_authority_notifier_receives_correct_state() {
+        let auth = RecordAuthority::new(true);
+        let last_state = Arc::new(AtomicBool::new(false));
+
+        struct StateNotifier {
+            last_state: Arc<AtomicBool>,
+        }
+        impl AuthorityNotifier for StateNotifier {
+            fn on_authority_changed(&self, has_authority: bool) {
+                self.last_state.store(has_authority, Ordering::SeqCst);
+            }
+        }
+
+        let notifier: Arc<dyn AuthorityNotifier> = Arc::new(StateNotifier {
+            last_state: last_state.clone(),
+        });
+        auth.register_notifier(notifier.clone());
+
+        auth.set_authority(false);
+        assert!(!last_state.load(Ordering::SeqCst));
+
+        auth.set_authority(true);
+        assert!(last_state.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn test_multiple_notifiers() {
         let auth = RecordAuthority::new(true);
         let counter = Arc::new(AtomicUsize::new(0));
@@ -282,8 +321,49 @@ mod tests {
     }
 
     #[test]
+    fn test_clear_notifiers() {
+        let auth = RecordAuthority::new(true);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        struct CountNotifier {
+            counter: Arc<AtomicUsize>,
+        }
+        impl AuthorityNotifier for CountNotifier {
+            fn on_authority_changed(&self, _has_authority: bool) {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let n1: Arc<dyn AuthorityNotifier> = Arc::new(CountNotifier {
+            counter: counter.clone(),
+        });
+        auth.register_notifier(n1);
+
+        auth.set_authority(false);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+        auth.clear_notifiers();
+        auth.set_authority(true);
+        // After clearing, the notifier should not be called again
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_send_sync_bounds() {
+        // Verify that RecordAuthority satisfies Send + Sync
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<RecordAuthority>();
+
+        // Verify that Arc<RecordAuthority> is also Send + Sync
+        fn assert_arc_send_sync<T: Send + Sync>() {}
+        assert_arc_send_sync::<Arc<RecordAuthority>>();
+    }
+
+    #[test]
     fn test_global_instance() {
-        // Reset to known state
+        // Reset global state to avoid interference from other tests
+        let global = global_record_authority();
+        global.clear_notifiers();
         set_record_authority(true);
 
         let counter = Arc::new(AtomicUsize::new(0));
@@ -310,5 +390,38 @@ mod tests {
         unregister_authority_notifier(&notifier);
         set_record_authority(true);
         assert_eq!(counter.load(Ordering::SeqCst), 1); // No change after unregister
+
+        // Clean up global state for subsequent tests
+        global.clear_notifiers();
+    }
+
+    #[test]
+    fn test_global_notifier_called() {
+        // Reset global state for this test
+        let global = global_record_authority();
+        global.clear_notifiers();
+        set_record_authority(true);
+
+        let notifier_called = Arc::new(AtomicBool::new(false));
+
+        struct TestGlobalNotifier {
+            called: Arc<AtomicBool>,
+        }
+        impl AuthorityNotifier for TestGlobalNotifier {
+            fn on_authority_changed(&self, _has_authority: bool) {
+                self.called.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let notifier: Arc<dyn AuthorityNotifier> = Arc::new(TestGlobalNotifier {
+            called: notifier_called.clone(),
+        });
+        register_authority_notifier(notifier);
+
+        set_record_authority(false);
+        assert!(notifier_called.load(Ordering::SeqCst));
+
+        // Reset for next tests
+        global.clear_notifiers();
     }
 }

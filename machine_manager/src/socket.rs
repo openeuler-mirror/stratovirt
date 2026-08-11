@@ -16,8 +16,9 @@ use std::os::unix::io::RawFd;
 
 use anyhow::{bail, Result};
 use libc::{
-    c_void, iovec, msghdr, recvmsg, sendmsg, CMSG_DATA, CMSG_FIRSTHDR, CMSG_LEN, CMSG_NXTHDR,
-    MSG_DONTWAIT, MSG_NOSIGNAL, SCM_RIGHTS, SOL_SOCKET,
+    c_void, iovec, msghdr, poll, pollfd, recvmsg, sendmsg, CMSG_DATA, CMSG_FIRSTHDR, CMSG_LEN,
+    CMSG_NXTHDR, MSG_DONTWAIT, MSG_NOSIGNAL, POLLERR, POLLHUP, POLLNVAL, POLLOUT, SCM_RIGHTS,
+    SOL_SOCKET,
 };
 use serde::Deserialize;
 
@@ -186,40 +187,97 @@ impl SocketRWHandler {
     /// Use [sendmsg(2)](https://linux.die.net/man/2/sendmsg) to send messages
     /// to `socket_fd`.
     /// Message is `self::buf`: Vec<u8> with `self::pos` and length.
+    /// If the socket would block, this call waits for `POLLOUT` without a timeout.
     ///
     /// # Arguments
     ///
     /// * `length` - Length of the buf to write.
     ///
     /// # Errors
-    /// The socket file descriptor is broken.
-    fn write_fd(&mut self, length: usize) -> std::io::Result<()> {
+    /// Returns the underlying I/O error if no data can be sent.
+    fn write_fd(&mut self, length: usize) -> std::io::Result<usize> {
+        if length == 0 {
+            return Ok(0);
+        }
+
+        let start = self
+            .pos
+            .checked_sub(length)
+            .ok_or(ErrorKind::InvalidInput)?;
+        if self.pos > self.buf.len() {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+
+        let remaining = &self.buf[start..self.pos];
         let mut iov = iovec {
-            iov_base: self.buf.as_slice()[(self.pos - length)..(self.pos - 1)].as_ptr()
-                as *mut c_void,
-            iov_len: length,
+            iov_base: remaining.as_ptr() as *mut c_void,
+            iov_len: remaining.len(),
         };
 
-        // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
-        // initialized in normal way.
-        // SAFETY: The member variables of mhdr have been initialization later.
-        let mut mhdr: msghdr = unsafe { std::mem::zeroed() };
-        mhdr.msg_name = std::ptr::null_mut();
-        mhdr.msg_namelen = 0;
-        mhdr.msg_iov = &mut iov as *mut iovec;
-        mhdr.msg_iovlen = 1;
-        mhdr.msg_control = std::ptr::null_mut();
-        mhdr.msg_controllen = 0;
-        mhdr.msg_flags = 0;
+        loop {
+            // In `musl` toolchain, msghdr has private member `__pad0` and `__pad1`, it can't be
+            // initialized in normal way.
+            // SAFETY: The member variables of mhdr have been initialization later.
+            let mut mhdr: msghdr = unsafe { std::mem::zeroed() };
+            mhdr.msg_name = std::ptr::null_mut();
+            mhdr.msg_namelen = 0;
+            mhdr.msg_iov = &mut iov as *mut iovec;
+            mhdr.msg_iovlen = 1;
+            mhdr.msg_control = std::ptr::null_mut();
+            mhdr.msg_controllen = 0;
+            mhdr.msg_flags = 0;
 
-        // SAFETY: The buffer address and length recorded in mhdr are both legal.
-        if unsafe { sendmsg(self.socket_fd, &mhdr, MSG_NOSIGNAL) } == -1 {
-            Err(Error::new(
-                ErrorKind::BrokenPipe,
-                "The socket pipe is broken!",
-            ))
-        } else {
-            Ok(())
+            // SAFETY: The buffer address and length recorded in mhdr are both legal.
+            let ret = unsafe { sendmsg(self.socket_fd, &mhdr, MSG_NOSIGNAL) };
+            if ret > 0 {
+                let sent = ret as usize;
+                if sent > remaining.len() {
+                    return Err(ErrorKind::InvalidData.into());
+                }
+                return Ok(sent);
+            }
+            if ret == 0 {
+                return Err(ErrorKind::WriteZero.into());
+            }
+
+            let error = Error::last_os_error();
+            match error.kind() {
+                ErrorKind::Interrupted => continue,
+                ErrorKind::WouldBlock => {
+                    self.wait_until_writable()?;
+                }
+                _ => return Err(error),
+            }
+        }
+    }
+
+    /// Wait until the socket can accept more data.
+    fn wait_until_writable(&self) -> std::io::Result<()> {
+        let mut poll_fd = pollfd {
+            fd: self.socket_fd,
+            events: POLLOUT,
+            revents: 0,
+        };
+
+        loop {
+            poll_fd.revents = 0;
+            // SAFETY: poll_fd points to one initialized pollfd for the duration of the call.
+            let ret = unsafe { poll(&mut poll_fd, 1, -1) };
+            if ret > 0 {
+                if poll_fd.revents & (POLLOUT | POLLERR | POLLHUP | POLLNVAL) != 0 {
+                    // Retry sendmsg so that socket errors are returned with their original errno.
+                    return Ok(());
+                }
+                continue;
+            }
+            if ret == 0 {
+                continue;
+            }
+
+            let error = Error::last_os_error();
+            if error.kind() != ErrorKind::Interrupted {
+                return Err(error);
+            }
         }
     }
 
@@ -243,15 +301,28 @@ impl Read for SocketRWHandler {
 
 impl Write for SocketRWHandler {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buf.extend(buf);
-        if let Some(pos) = self.pos.checked_add(buf.len()) {
-            self.pos = pos;
-        } else {
-            return Err(ErrorKind::InvalidInput.into());
-        }
+        let start = self.pos;
+        let end = start
+            .checked_add(buf.len())
+            .ok_or(ErrorKind::InvalidInput)?;
 
-        self.write_fd(buf.len())?;
-        Ok(buf.len())
+        self.buf.extend(buf);
+        self.pos = end;
+
+        match self.write_fd(buf.len()) {
+            Ok(written) => {
+                if written < buf.len() {
+                    self.pos = start + written;
+                    self.buf.truncate(self.pos);
+                }
+                Ok(written)
+            }
+            Err(error) => {
+                self.pos = start;
+                self.buf.truncate(start);
+                Err(error)
+            }
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -305,7 +376,7 @@ impl SocketHandler {
     pub fn get_line(&mut self) -> Result<Option<String>> {
         self.buffer.clear();
         self.stream.clear();
-        self.stream.read_fd().unwrap();
+        self.stream.read_fd()?;
         self.stream.get_buf_string().map(|buffer| {
             self.buffer = buffer;
             if self.stream.pos == 0 {
@@ -326,7 +397,9 @@ impl SocketHandler {
     ) -> (Result<Option<D>>, Option<RawFd>) {
         self.buffer.clear();
         self.stream.clear();
-        self.stream.read_fd().unwrap();
+        if let Err(e) = self.stream.read_fd() {
+            return (Err(e.into()), None);
+        }
         match self.stream.get_buf_string() {
             Ok(buffer) => {
                 self.buffer = buffer;
@@ -360,30 +433,64 @@ impl SocketHandler {
     /// * `s` - The `String` send to `socket_fd`.
     ///
     /// # Errors
-    /// The socket file descriptor is broken.
+    /// Returns the underlying I/O error when the response cannot be sent.
     pub fn send_str(&mut self, s: &str) -> std::io::Result<()> {
         self.stream.flush().unwrap();
         let msg = s.to_string() + "\r\n";
-        match self.stream.write_all(msg.as_bytes()) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(Error::new(
-                ErrorKind::BrokenPipe,
-                "The socket pipe is broken!",
-            )),
-        }
+        self.stream.write_all(msg.as_bytes())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
+    use std::net::Shutdown;
     use std::os::unix::io::{AsRawFd, RawFd};
     use std::os::unix::net::{UnixListener, UnixStream};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
+    use libc::{c_void, poll, pollfd, setsockopt, socklen_t, POLLOUT, SOL_SOCKET, SO_SNDBUF};
     use serde::{Deserialize, Serialize};
 
     use crate::socket::{SocketHandler, SocketRWHandler};
+
+    fn set_send_buffer_size(stream: &UnixStream, size: libc::c_int) {
+        // SAFETY: The value pointer refers to an initialized c_int and its length is correct.
+        let ret = unsafe {
+            setsockopt(
+                stream.as_raw_fd(),
+                SOL_SOCKET,
+                SO_SNDBUF,
+                &size as *const libc::c_int as *const c_void,
+                std::mem::size_of_val(&size) as socklen_t,
+            )
+        };
+        assert_eq!(ret, 0, "failed to set send buffer size");
+    }
+
+    fn wait_until_send_buffer_is_full(stream: &UnixStream) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut poll_fd = pollfd {
+            fd: stream.as_raw_fd(),
+            events: POLLOUT,
+            revents: 0,
+        };
+
+        loop {
+            poll_fd.revents = 0;
+            // SAFETY: poll_fd points to one initialized pollfd for the duration of the call.
+            let ret = unsafe { poll(&mut poll_fd, 1, 10) };
+            assert!(ret >= 0, "failed to inspect socket writability");
+            if ret == 0 || poll_fd.revents & POLLOUT == 0 {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "socket send buffer did not become full"
+            );
+            std::thread::yield_now();
+        }
+    }
 
     // Environment Preparation for UnixSocket
     fn prepare_unix_socket_environment(socket_id: &str) -> (UnixListener, UnixStream, UnixStream) {
@@ -495,6 +602,93 @@ mod tests {
 
         // After test. Environment Recover
         recover_unix_socket_environment("02");
+    }
+
+    #[test]
+    fn test_socket_handler_sends_full_response_after_partial_write() {
+        let (sender, mut receiver) = UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        set_send_buffer_size(&sender, 4096);
+        let sender_probe = sender.try_clone().unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+
+        let response = format!(
+            r#"{{"return":"{}","id":"large-response"}}"#,
+            "x".repeat(1024 * 1024)
+        );
+        let mut expected = response.as_bytes().to_vec();
+        expected.extend_from_slice(b"\r\n");
+
+        let writer = std::thread::spawn(move || {
+            let mut handler = SocketHandler::new(sender.as_raw_fd());
+            let write_result = handler.send_str(&response);
+            let shutdown_result = sender.shutdown(Shutdown::Write);
+            (write_result, shutdown_result)
+        });
+
+        wait_until_send_buffer_is_full(&sender_probe);
+        let mut received = Vec::new();
+        receiver.read_to_end(&mut received).unwrap();
+
+        let (write_result, shutdown_result) = writer.join().unwrap();
+        write_result.unwrap();
+        shutdown_result.unwrap();
+        assert_eq!(received.len(), expected.len());
+        assert!(received == expected, "response contents differ");
+    }
+
+    #[test]
+    fn test_socket_handler_preserves_disconnect_error_after_partial_write() {
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        set_send_buffer_size(&sender, 4096);
+        let sender_probe = sender.try_clone().unwrap();
+
+        let closer = std::thread::spawn(move || {
+            wait_until_send_buffer_is_full(&sender_probe);
+            drop(receiver);
+        });
+
+        let mut handler = SocketHandler::new(sender.as_raw_fd());
+        let error = handler.send_str(&"x".repeat(1024 * 1024)).unwrap_err();
+        closer.join().unwrap();
+
+        assert_eq!(error.raw_os_error(), Some(libc::EPIPE));
+    }
+
+    #[test]
+    fn test_socket_rw_handler_reports_progress_before_disconnect_error() {
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        set_send_buffer_size(&sender, 4096);
+        let sender_probe = sender.try_clone().unwrap();
+
+        let closer = std::thread::spawn(move || {
+            wait_until_send_buffer_is_full(&sender_probe);
+            drop(receiver);
+        });
+
+        let data = vec![0_u8; 1024 * 1024];
+        let mut handler = SocketRWHandler::new(sender.as_raw_fd());
+        let written = handler.write(&data).unwrap();
+        closer.join().unwrap();
+
+        assert!(written > 0 && written < data.len());
+        assert_eq!(handler.pos, written);
+        assert_eq!(handler.buf, data[..written]);
+
+        let error = handler.write(&data[written..]).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EPIPE));
+    }
+
+    #[test]
+    fn test_socket_handler_empty_write() {
+        let (sender, _receiver) = UnixStream::pair().unwrap();
+        let mut handler = SocketRWHandler::new(sender.as_raw_fd());
+
+        assert_eq!(handler.write(&[]).unwrap(), 0);
     }
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]

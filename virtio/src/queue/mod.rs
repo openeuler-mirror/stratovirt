@@ -63,6 +63,7 @@ pub struct ElemIovec {
 }
 
 /// IO request element.
+#[derive(Default)]
 pub struct Element {
     /// Index of the descriptor in the table.
     pub index: u16,
@@ -267,6 +268,11 @@ impl Queue {
     /// * `sys_mem` - Address space to which the vring belongs.
     pub fn is_valid(&self, sys_mem: &Arc<AddressSpace>) -> bool {
         self.vring.is_valid(sys_mem)
+    }
+
+    /// Return whether the queue has the same guest-visible layout as `config`.
+    pub fn matches_config(&self, config: &QueueConfig) -> bool {
+        self.vring.get_queue_config().has_same_layout(config)
     }
 }
 

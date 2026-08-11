@@ -443,20 +443,24 @@ impl VirtioPciDevice {
         Ok(write_start)
     }
 
-    fn activate_device(&mut self) -> bool {
-        info!("func: activate_device, id: {:?}", &self.base.base.id);
+    fn prepare_queues(&mut self) -> bool {
         let mut locked_dev = self.device.lock().unwrap();
-        if locked_dev.device_activated() {
-            return true;
-        }
-
         let queue_type = locked_dev.queue_type();
         let features = locked_dev.virtio_base().driver_features;
         let broken = locked_dev.virtio_base().broken.clone();
+        let queue_num = locked_dev.queue_num();
+        let old_queues = locked_dev.virtio_base().queues.clone();
 
-        let mut queues = Vec::new();
+        let mut queues = Vec::with_capacity(queue_num);
         let queues_config = &mut locked_dev.virtio_base_mut().queues_config;
-        for q_config in queues_config.iter_mut() {
+        for (queue_idx, q_config) in queues_config.iter_mut().enumerate() {
+            if let Some(old_queue) = old_queues.get(queue_idx) {
+                if old_queue.lock().unwrap().matches_config(q_config) {
+                    queues.push(old_queue.clone());
+                    continue;
+                }
+            }
+
             if !q_config.ready {
                 debug!("queue is not ready, please check your init process");
             } else {
@@ -467,18 +471,71 @@ impl VirtioPciDevice {
                     &broken,
                 );
             }
+
             let queue = Queue::new(*q_config, queue_type).unwrap();
             if q_config.ready && !queue.is_valid(&self.sys_mem) {
                 error!(
-                    "Failed to activate device {}: Invalid queue",
+                    "Failed to prepare device {}: Invalid queue",
                     self.base.base.id
                 );
                 return false;
             }
-            let arc_queue = Arc::new(Mutex::new(queue));
-            queues.push(arc_queue.clone());
+            queues.push(Arc::new(Mutex::new(queue)));
         }
         locked_dev.virtio_base_mut().queues = queues;
+
+        true
+    }
+
+    fn try_activate_early_queues(&mut self) {
+        let locked_dev = self.device.lock().unwrap();
+        if locked_dev.device_activated()
+            || !locked_dev.check_device_status(
+                CONFIG_STATUS_ACKNOWLEDGE | CONFIG_STATUS_DRIVER | CONFIG_STATUS_FEATURES_OK,
+                CONFIG_STATUS_DRIVER_OK | CONFIG_STATUS_FAILED,
+            )
+        {
+            return;
+        }
+        let early_queue_indices = locked_dev.early_queue_indices();
+        if early_queue_indices.is_empty() {
+            return;
+        }
+        drop(locked_dev);
+
+        if !self.prepare_queues() {
+            return;
+        }
+
+        let queue_evts = (*self.notify_eventfds).clone().events;
+        let mut locked_dev = self.device.lock().unwrap();
+        let result = locked_dev.activate_early_queues(
+            self.sys_mem.clone(),
+            self.interrupt_cb.clone().unwrap(),
+            queue_evts,
+        );
+        drop(locked_dev);
+        if let Err(e) = result {
+            error!(
+                "Failed to activate early queues for device {}, error is {:?}",
+                self.base.base.id, e
+            );
+        }
+    }
+
+    fn activate_device(&mut self) -> bool {
+        info!("func: activate_device, id: {:?}", &self.base.base.id);
+        let mut locked_dev = self.device.lock().unwrap();
+        if locked_dev.device_activated() {
+            return true;
+        }
+        drop(locked_dev);
+
+        if !self.prepare_queues() {
+            return false;
+        }
+
+        locked_dev = self.device.lock().unwrap();
 
         let bus = self.parent_bus().unwrap().upgrade().unwrap();
         PCI_BUS!(bus, locked_bus, pci_bus);
@@ -705,6 +762,9 @@ impl VirtioPciDevice {
                 } else if old_status != 0 && locked_device.device_status() == 0 {
                     drop(locked_device);
                     self.deactivate_device();
+                } else {
+                    drop(locked_device);
+                    self.try_activate_early_queues();
                 }
             }
             COMMON_Q_SELECT_REG => {
@@ -726,6 +786,8 @@ impl VirtioPciDevice {
                 locked_device
                     .queue_config_mut(true)
                     .map(|config| config.ready = true)?;
+                drop(locked_device);
+                self.try_activate_early_queues();
             }
             COMMON_Q_MSIX_REG => {
                 let val = if self.base.config.revise_msix_vector(value) {

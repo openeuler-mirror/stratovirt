@@ -66,6 +66,8 @@ vhostuser_fs = ["machine/vhostuser_fs"]
 vhostuser_block = ["machine/vhostuser_block"]
 vhostuser_gpu = ["machine/vhostuser_gpu"]
 vhostuser_net = ["machine/vhostuser_net"]
+vhostuser_vsock = ["machine/vhostuser_vsock"]
+vhostuser_input = ["machine/vhostuser_input"]
 vhost_net = ["machine/vhost_net"]
 
 [package.metadata.rpm.cargo]

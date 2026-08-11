@@ -1611,6 +1611,70 @@ mod test {
     }
 
     #[test]
+    fn test_large_entry_dma_read_in_one_mb_chunks() {
+        const CHUNK_SIZE: usize = 1024 * 1024;
+        const CHUNK_COUNT: usize = 128;
+        const DMA_BUFFER_START: u64 = 0x0800_0000;
+
+        let sys_mem = address_space_init();
+        let mut fwcfg_common = FwCfgCommon::new(sys_mem);
+        fwcfg_common.common_realize().unwrap();
+
+        let mut initrd_data = vec![0_u8; CHUNK_SIZE * CHUNK_COUNT];
+        for (index, chunk) in initrd_data.chunks_exact_mut(CHUNK_SIZE).enumerate() {
+            chunk.fill(index as u8);
+        }
+        fwcfg_common
+            .add_entry(FwCfgEntryType::InitrdData, None, None, initrd_data, false)
+            .unwrap();
+
+        for index in 0..CHUNK_COUNT {
+            let mut control = FW_CFG_DMA_CTL_READ;
+            if index == 0 {
+                control |=
+                    FW_CFG_DMA_CTL_SELECT | (u32::from(FwCfgEntryType::InitrdData as u16) << 16);
+            }
+            let mut dma_req = FwCfgDmaAccess {
+                control: control.to_be(),
+                length: (CHUNK_SIZE as u32).to_be(),
+                address: (DMA_BUFFER_START + (index * CHUNK_SIZE) as u64).to_be(),
+            };
+            let dma_request = dma_req.as_mut_bytes();
+            let descriptor_addr = GuestAddress(0);
+            fwcfg_common
+                .mem_space
+                .write(
+                    &mut dma_request.as_ref(),
+                    descriptor_addr,
+                    dma_request.len() as u64,
+                    AddressAttr::Ram,
+                )
+                .unwrap();
+            fwcfg_common.dma_addr = descriptor_addr;
+            fwcfg_common.handle_dma_request().unwrap();
+
+            let first = fwcfg_common
+                .mem_space
+                .read_object::<u8>(
+                    GuestAddress(DMA_BUFFER_START + (index * CHUNK_SIZE) as u64),
+                    AddressAttr::Ram,
+                )
+                .unwrap();
+            let last = fwcfg_common
+                .mem_space
+                .read_object::<u8>(
+                    GuestAddress(DMA_BUFFER_START + ((index + 1) * CHUNK_SIZE - 1) as u64),
+                    AddressAttr::Ram,
+                )
+                .unwrap();
+            assert_eq!(first, index as u8);
+            assert_eq!(last, index as u8);
+        }
+
+        assert_eq!(fwcfg_common.cur_offset, (CHUNK_SIZE * CHUNK_COUNT) as u32);
+    }
+
+    #[test]
     #[cfg(target_arch = "aarch64")]
     fn test_read_write_aarch64() {
         let mut sys_bus = sysbus_init();

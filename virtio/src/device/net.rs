@@ -58,7 +58,7 @@ use machine_manager::state_query::{
 use machine_manager::{
     event,
     qmp::qmp_channel::QmpChannel,
-    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, VIRTIO_NET_TYPE},
+    qmp::qmp_schema::{DeviceClassSubType, VmNotifyEvent, DEVICE_CLASS_ID},
 };
 use migration::{
     migration::Migratable, DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer,
@@ -821,19 +821,21 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
 
             // Read the data from the tap device.
             let locked_tap = tap.read().unwrap();
+
             let size = if locked_tap.is_some() {
                 locked_tap.as_ref().unwrap().receive_packets(&iovecs)
             } else {
-                -1
+                queue.vring.push_back();
+                break;
             };
-            let tap_mac = locked_tap.as_ref().unwrap().get_mac();
-            drop(locked_tap);
-
             let len = self.rx_min_bytes();
             if size < len as isize {
                 queue.vring.push_back();
                 break;
             }
+
+            let tap_mac = locked_tap.as_ref().unwrap().get_mac();
+            drop(locked_tap);
 
             if self.process_rx_packet(&iovecs, len, tap_mac.as_ref())? {
                 queue.vring.push_back();
@@ -1553,7 +1555,7 @@ impl Net {
 
         let event = VmNotifyEvent {
             klass: DEVICE_CLASS_ID,
-            type_t: VIRTIO_NET_TYPE,
+            type_t: DeviceClassSubType::VIRTIO_NET.into(),
             code: VIRTIO_NET_DEV_STATUS_CODE,
             message: Some(msg),
         };

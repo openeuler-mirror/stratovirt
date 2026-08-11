@@ -11,13 +11,13 @@
 // See the Mulan PSL v2 for more details.
 
 use std::collections::HashMap;
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
 
 use anyhow::{Context, Result};
 use nix::{
     fcntl::{self, OFlag},
     sched::{setns, unshare, CloneFlags},
     sys::stat::Mode,
-    unistd,
 };
 use oci_spec::linux::{Namespace, NamespaceType};
 
@@ -48,10 +48,12 @@ impl NsController {
         if let Some(ns) = self.get(ns_type)? {
             match ns.path.clone() {
                 Some(path) => {
-                    let fd = fcntl::open(&path, OFlag::empty(), Mode::empty())
+                    let raw_fd = fcntl::open(&path, OFlag::empty(), Mode::empty())
                         .with_context(|| format!("fcntl error at opening {}", path.display()))?;
-                    setns(fd, ns_type.try_into()?).with_context(|| "Failed to setns")?;
-                    unistd::close(fd).with_context(|| "Close fcntl fd error")?;
+                    //SAFETY: raw_fd is guaranteed to be valid and exclusively owned by this call.
+                    let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+                    setns(fd.as_raw_fd(), ns_type.try_into()?)
+                        .with_context(|| "Failed to setns")?;
                 }
                 None => unshare(ns_type.try_into()?).with_context(|| "Failed to unshare")?,
             }
