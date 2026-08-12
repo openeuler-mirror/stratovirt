@@ -33,7 +33,7 @@ use machine_manager::config::{
     get_pci_df, parse_bool, valid_id, MemBackendObjConfig, MemoryBackend, DEFAULT_VIRTQUEUE_SIZE,
     MEM_BACKEND_TYPE_FILE,
 };
-use machine_manager::event_loop::{register_event_helper, unregister_event_helper};
+use machine_manager::event_loop::{register_event_helper, unregister_event_helper, EventLoop};
 use migration::{
     DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, MigrationStatus,
     StateTransfer,
@@ -72,6 +72,8 @@ pub struct VirtioPmemDevConfig {
     pub memaddr: Option<u64>,
     #[arg(long)]
     pub memdev: String,
+    #[arg(long)]
+    pub iothread: Option<String>,
 }
 
 #[derive(Default, Clone)]
@@ -219,6 +221,8 @@ pub struct Pmem {
     io_inflight: IoRef,
     /// The queue notify events for handling IO.
     queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
+    /// The iothread used to handle IO events.
+    iothread: Option<String>,
 }
 
 impl Pmem {
@@ -239,6 +243,7 @@ impl Pmem {
             migrating: Arc::new(AtomicBool::new(false)),
             io_inflight: IoRef::default(),
             queue_evts: Arc::new(Mutex::new(Vec::new())),
+            iothread: config.iothread.clone(),
         }
     }
 }
@@ -247,6 +252,14 @@ impl VirtioDevice for Pmem {
     gen_base_func!(virtio_base, virtio_base_mut, VirtioBase, base);
 
     fn realize(&mut self) -> Result<()> {
+        // If iothread is configured but not found, return err.
+        if self.iothread.is_some() && EventLoop::get_ctx(self.iothread.as_ref()).is_none() {
+            bail!(
+                "IOThread {:?} of virtio-pmem is not configured in params.",
+                self.iothread,
+            );
+        }
+
         if self.config.start == INVALID_ADDR {
             bail!("Invalid maddr configuration options");
         }
@@ -350,15 +363,19 @@ impl VirtioDevice for Pmem {
         };
 
         let notifiers = EventNotifierHelper::internal_notifiers(Arc::new(Mutex::new(handler)));
-        register_event_helper(notifiers, None, &mut self.base.deactivate_evts)
-            .with_context(|| "Failed to register pmem event notifier to MainLoop")?;
+        register_event_helper(
+            notifiers,
+            self.iothread.as_ref(),
+            &mut self.base.deactivate_evts,
+        )
+        .with_context(|| "Failed to register pmem event notifier to MainLoop")?;
         self.base.broken.store(false, Ordering::SeqCst);
         Ok(())
     }
 
     fn deactivate(&mut self) -> Result<()> {
         info!("virtio-pmem@{} deactivate", self.id);
-        unregister_event_helper(None, &mut self.base.deactivate_evts)?;
+        unregister_event_helper(self.iothread.as_ref(), &mut self.base.deactivate_evts)?;
         if let Some(mem_space) = &self.mem_space {
             if let Some(mem_region) = self.mem_region.take() {
                 mem_space.root().delete_subregion(&mem_region)?;
