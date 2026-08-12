@@ -1260,7 +1260,11 @@ impl MigrationHook for Balloon {
                     info!("Drain the request for balloon device {}", id);
                     wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &id);
                 }
-                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                MigrationStatus::Completed
+                | MigrationStatus::Failed
+                | MigrationStatus::Canceled => {
+                    self.migrating.store(false, Ordering::SeqCst);
+                }
                 _ => {}
             }
         }
