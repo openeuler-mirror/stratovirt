@@ -22,7 +22,7 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{bail, Context, Result};
 use machine_manager::qmp::qmp_schema::MemDirtyBitmap;
 use util::bitmap::set_dense_bitmap_bit;
-use util::unix::{host_page_size, PagemapBatchReader};
+use util::unix::{host_page_size, PagemapBatchReader, PagemapEntry};
 use vmm_sys_util::sock_ctrl_msg::ScmSocket;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -109,6 +109,7 @@ pub struct UffdMemoryBackend {
     /// Collected RAM regions (host addr, size, cumulative offset).
     regions: Vec<(u64, u64, u64)>,
     uffd_fd: RawFd,
+    wp_async: bool,
     handoff_stream: Option<UnixStream>,
 }
 
@@ -116,11 +117,12 @@ impl UffdMemoryBackend {
     /// Create a new backend that will connect to `socket_path` when
     /// [`Self::send_to_external_uffd_daemon`] is called.
     pub fn new(socket_path: &str) -> Result<Self> {
-        let uffd_fd = create_uffd().context("failed to create userfaultfd")?;
+        let (uffd_fd, wp_async) = create_uffd().context("failed to create userfaultfd")?;
         Ok(UffdMemoryBackend {
             socket_path: PathBuf::from(socket_path),
             regions: Vec::new(),
             uffd_fd,
+            wp_async,
             handoff_stream: None,
         })
     }
@@ -161,12 +163,17 @@ impl UffdMemoryBackend {
             );
         }
 
+        let mode = if self.wp_async {
+            UFFDIO_REGISTER_MODE_MISSING | UFFDIO_REGISTER_MODE_WP
+        } else {
+            UFFDIO_REGISTER_MODE_MISSING
+        };
         let mut reg = UffdioRegister {
             range: UffdioRange {
                 start: host_addr,
                 len: size,
             },
-            mode: UFFDIO_REGISTER_MODE_MISSING | UFFDIO_REGISTER_MODE_WP,
+            mode,
             ioctls: 0,
         };
         // SAFETY: uffd_fd is a valid userfaultfd opened by create_uffd(); `reg` is a
@@ -223,7 +230,13 @@ pub fn store_uffd_backend(backend: UffdMemoryBackend) {
     *backend_state().lock().unwrap() = Some(backend);
 }
 
-fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
+fn build_bitmap_from_pagemap<F>(
+    backend: &UffdMemoryBackend,
+    mut is_dirty: F,
+) -> Result<MemDirtyBitmap>
+where
+    F: FnMut(PagemapEntry) -> bool,
+{
     // Dirty bitmap bits and pagemap entries both use the host base page size.
     let page_size = host_page_size();
     let mut pagemap = PagemapBatchReader::new()?;
@@ -243,7 +256,7 @@ fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
             size,
             page_size,
             |bitmap_page_index, entry| {
-                if entry.is_uffd_dirty() {
+                if is_dirty(entry) {
                     set_dense_bitmap_bit(&mut bitmap, page_base + bitmap_page_index)?;
                 }
                 Ok(())
@@ -252,6 +265,18 @@ fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
     }
 
     Ok(MemDirtyBitmap { bitmap, page_size })
+}
+
+fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
+    build_bitmap_from_pagemap(backend, |entry| entry.is_uffd_dirty())
+}
+
+/// Fallback dirty bitmap when UFFD WP_ASYNC is unavailable: report the
+/// current resident set (pagemap present or swapped bits). A page written
+/// since the previous query is necessarily present or swapped, so this
+/// over-approximates the true dirty set without ever under-reporting.
+fn build_resident_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
+    build_bitmap_from_pagemap(backend, |entry| entry.is_resident())
 }
 
 fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<()> {
@@ -294,17 +319,33 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
     Ok(())
 }
 
-/// Return dirty pages since the previous query, then reset UFFD-WP tracking.
-pub fn query_and_reset_dirty_bitmap() -> Result<MemDirtyBitmap> {
-    let guard = backend_state().lock().unwrap();
-    let backend = guard
-        .as_ref()
-        .with_context(|| "UFFD dirty tracking is not enabled")?;
+/// Return dirty pages since the previous query, then reset dirty tracking.
+///
+/// Tracking mode is tiered by kernel support:
+///   1. UFFD WP_ASYNC: write-protect all RAM, reads pagemap bit 57.
+///   2. Fallback: report the current resident set (pagemap bits 63/62) every
+///      query, which is a conservative superset of writes since the previous
+///      query.
+fn query_and_reset_dirty_bitmap_impl(backend: &mut UffdMemoryBackend) -> Result<MemDirtyBitmap> {
+    if backend.wp_async {
+        let bitmap = build_dirty_bitmap(backend)?;
+        write_protect_mappings(backend, true)
+            .with_context(|| "Failed to reset UFFD-WP dirty tracking")?;
+        return Ok(bitmap);
+    }
 
-    let bitmap = build_dirty_bitmap(backend)?;
-    write_protect_mappings(backend, true)
-        .with_context(|| "Failed to reset UFFD-WP dirty tracking")?;
-    Ok(bitmap)
+    // Without WP_ASYNC there is no write-protect tracking, so every query
+    // returns the current resident set (never incremental).
+    build_resident_bitmap(backend)
+}
+
+/// Return dirty pages since the previous query, then reset dirty tracking.
+pub fn query_and_reset_dirty_bitmap() -> Result<MemDirtyBitmap> {
+    let mut guard = backend_state().lock().unwrap();
+    let backend = guard
+        .as_mut()
+        .with_context(|| "UFFD dirty tracking is not enabled")?;
+    query_and_reset_dirty_bitmap_impl(backend)
 }
 
 impl Drop for UffdMemoryBackend {
@@ -321,7 +362,7 @@ impl Drop for UffdMemoryBackend {
 // Helper: create userfaultfd
 // ────────────────────────────────────────────────────────────────────────────
 
-fn create_uffd() -> Result<RawFd> {
+fn create_uffd() -> Result<(RawFd, bool)> {
     // O_CLOEXEC = 0x80000 on both x86_64 and aarch64
     // SAFETY: SYS_USERFAULTFD_NR is the correct syscall number for this architecture;
     // O_CLOEXEC | O_NONBLOCK are valid flags accepted by userfaultfd(2).
@@ -334,24 +375,37 @@ fn create_uffd() -> Result<RawFd> {
     }
     let fd = fd as RawFd;
 
-    // Enable the API, requesting WP_ASYNC (required for UFFDIO_COPY_MODE_WP)
-    // and EVENT_REMOVE (required for dirty-page tracking during snapshots).
+    match enable_uffd_api(fd, UFFD_FEATURE_EVENT_REMOVE | UFFD_FEATURE_WP_ASYNC) {
+        Ok(()) => Ok((fd, true)),
+        Err(wp_err) => match enable_uffd_api(fd, UFFD_FEATURE_EVENT_REMOVE) {
+            Ok(()) => Ok((fd, false)),
+            Err(err) => {
+                // SAFETY: fd was successfully opened by the syscall above; closing it on
+                // the error path prevents a file-descriptor leak.
+                unsafe { libc::close(fd) };
+                bail!(
+                    "UFFDIO_API failed: {}; fallback without WP_ASYNC failed: {}",
+                    wp_err,
+                    err
+                );
+            }
+        },
+    }
+}
+
+fn enable_uffd_api(fd: RawFd, features: u64) -> Result<()> {
     let mut api = UffdioApi {
         api: UFFD_API,
-        features: UFFD_FEATURE_EVENT_REMOVE | UFFD_FEATURE_WP_ASYNC,
+        features,
         ioctls: 0,
     };
     // SAFETY: fd is a valid userfaultfd just opened above; `api` is a valid UffdioApi
     // struct on the stack and its pointer is live for the duration of the ioctl.
     let ret = unsafe { libc::ioctl(fd, UFFDIO_API as _, &mut api as *mut _) };
     if ret != 0 {
-        // SAFETY: fd was successfully opened by the syscall above; closing it on the
-        // error path prevents a file-descriptor leak.
-        unsafe { libc::close(fd) };
-        bail!("UFFDIO_API failed: {}", std::io::Error::last_os_error());
+        bail!("{}", std::io::Error::last_os_error());
     }
-
-    Ok(fd)
+    Ok(())
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -439,6 +493,7 @@ mod tests {
             socket_path: PathBuf::from("/tmp/unused.sock"),
             regions: vec![(0x1000, 0x2000, 0), (0x8000, 0x1000, 0x2000)],
             uffd_fd: -1,
+            wp_async: false,
             handoff_stream: None,
         };
 
@@ -488,5 +543,68 @@ mod tests {
 
         let json = serde_json::to_value(mapping).unwrap();
         assert_eq!(json["base_host_virt_addr"], 0x1000);
+    }
+
+    #[test]
+    fn test_query_dirty_bitmap_fallback_reports_resident_pages() {
+        // Without WP_ASYNC, the fallback reports the current resident set:
+        // only pages present (or swapped) are marked dirty. Writing a page
+        // makes it resident, so a write is always reported, and the report is
+        // a conservative superset of pages written since the last query.
+        let page_size = host_page_size();
+        let size = page_size as usize * 4;
+        // SAFETY: anonymous RW mapping of `size` bytes; `mmap` returns either a
+        // page-aligned pointer or MAP_FAILED, both valid to test against.
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            eprintln!("skip: mmap failed");
+            return;
+        }
+
+        let mut backend = UffdMemoryBackend {
+            socket_path: PathBuf::from("/tmp/unused.sock"),
+            regions: vec![(ptr as u64, size as u64, 0)],
+            uffd_fd: -1,
+            wp_async: false,
+            handoff_stream: None,
+        };
+
+        // Write pages 0 and 2, leave 1 and 3 untouched so only 0 and 2 are
+        // resident.
+        // SAFETY: ptr and ptr + 2*page_size are within the valid mapping.
+        unsafe {
+            std::ptr::write_volatile(ptr as *mut u8, 1u8);
+            std::ptr::write_volatile((ptr as *mut u8).add((2 * page_size) as usize), 1u8);
+        }
+        let first = query_and_reset_dirty_bitmap_impl(&mut backend).unwrap();
+        assert_eq!(first.page_size, page_size);
+        let mut expected = Vec::new();
+        set_dense_bitmap_bit(&mut expected, 0).unwrap();
+        set_dense_bitmap_bit(&mut expected, 2).unwrap();
+        assert_eq!(first.bitmap, expected);
+
+        // The fallback is a full resident report every query: a new write is
+        // reported together with all previously resident pages.
+        // SAFETY: ptr + 3*page_size is within the valid mapping.
+        unsafe { std::ptr::write_volatile((ptr as *mut u8).add((3 * page_size) as usize), 1u8) };
+        let second = query_and_reset_dirty_bitmap_impl(&mut backend).unwrap();
+        assert_eq!(second.page_size, page_size);
+        let mut expected = Vec::new();
+        set_dense_bitmap_bit(&mut expected, 0).unwrap();
+        set_dense_bitmap_bit(&mut expected, 2).unwrap();
+        set_dense_bitmap_bit(&mut expected, 3).unwrap();
+        assert_eq!(second.bitmap, expected);
+
+        // SAFETY: the mapping established above is still valid.
+        unsafe { libc::munmap(ptr, size) };
     }
 }

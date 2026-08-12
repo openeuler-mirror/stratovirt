@@ -1929,9 +1929,10 @@ pub struct MemPageState {
 /// query-mem-dirty-bitmap
 ///
 /// Query dirty pages after UFFD restore and reset dirty tracking. The VM must
-/// be paused. The returned bitmap covers writes observed since the previous
-/// query/reset point; after the response is built, UFFD-WP is re-enabled for
-/// all registered RAM mappings.
+/// be paused. With UFFD WP_ASYNC the bitmap covers writes observed since the
+/// previous query/reset point, then UFFD-WP is re-enabled for all registered
+/// RAM mappings. Without WP_ASYNC, every query reports the current resident
+/// page set (pagemap present/swapped bits), a conservative full snapshot.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct query_mem_dirty_bitmap {}
