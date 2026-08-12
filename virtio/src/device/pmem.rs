@@ -428,7 +428,11 @@ impl MigrationHook for Pmem {
                     info!("Drain the request for virtio-pmem@{}", self.id);
                     wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.id);
                 }
-                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                MigrationStatus::Completed
+                | MigrationStatus::Failed
+                | MigrationStatus::Canceled => {
+                    self.migrating.store(false, Ordering::SeqCst);
+                }
                 _ => {}
             }
         }
