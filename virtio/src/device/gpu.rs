@@ -1337,6 +1337,17 @@ impl GpuIoHandler {
         let offset = info_set_scanout.rect.x_coord * bpp
             + info_set_scanout.rect.y_coord * pixman_stride as u32;
         let res_data = if info_set_scanout.resource_id & VIRTIO_GPU_RES_FRAMEBUF != 0 {
+            // The framebuffer is displayed directly from the first backing
+            // segment, so the scanout area must fit within it.
+            let fb_len =
+                u64::from(offset) + u64::from(info_set_scanout.rect.height) * pixman_stride as u64;
+            if res.iov.is_empty() || fb_len > res.iov[0].iov_len {
+                error!(
+                    "GuestError: The framebuffer resource {} has no enough backing for scanout.",
+                    info_set_scanout.resource_id
+                );
+                return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
+            }
             res.iov[0].iov_base as *mut u32
         } else {
             get_image_data(res.pixman_image)
@@ -2279,7 +2290,6 @@ impl Gpu {
                 hot_y: cursor.hot_y,
                 data: Self::blob_slice(blob, &cursor.data)?.to_vec(),
             });
-            display_cursor_define(&scanout.con, scanout.mouse.as_ref().unwrap())?;
         }
 
         if state.resource_id == 0 {
@@ -2310,6 +2320,12 @@ impl Gpu {
         let pixman_stride = get_image_stride(res.pixman_image);
         let offset = state.x * bpp + state.y * pixman_stride as u32;
         let res_data = if state.resource_id & VIRTIO_GPU_RES_FRAMEBUF != 0 && !res.iov.is_empty() {
+            // The framebuffer is displayed directly from the first backing
+            // segment, so the scanout area must fit within it.
+            let fb_len = u64::from(offset) + u64::from(state.height) * pixman_stride as u64;
+            if fb_len > res.iov[0].iov_len {
+                bail!("Invalid virtio-gpu framebuffer backing for scanout");
+            }
             res.iov[0].iov_base as *mut u32
         } else {
             get_image_data(res.pixman_image)
@@ -2329,6 +2345,14 @@ impl Gpu {
         );
         if surface.image.is_null() {
             bail!("Failed to recreate virtio-gpu scanout surface");
+        }
+
+        // Define the cursor after the surface is installed, so the cursor is not
+        // overwritten by the display switch that installs the surface.
+        if scanout.cursor_visible {
+            if let Some(mouse) = &scanout.mouse {
+                display_cursor_define(&scanout.con, mouse)?;
+            }
         }
 
         Ok(())
