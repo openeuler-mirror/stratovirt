@@ -242,6 +242,8 @@ impl RefCount {
             .borrow_mut()
             .write_ctrl_cluster(table_offset, &new_table)?;
 
+        self.sync_aio.borrow().metadata_barrier()?;
+
         // Update and save qcow2 header to disk.
         let mut new_header = header.clone();
         new_header.refcount_table_offset = table_offset;
@@ -583,6 +585,8 @@ impl RefCount {
         if alloc_rt_idx != rt_idx {
             self.update_alloc_refcount(alloc_offset, 1, 1, true, &Qcow2DiscardType::Never)?;
         }
+
+        self.sync_aio.borrow().metadata_barrier()?;
 
         let start = rt_idx * ENTRY_SIZE;
         self.save_refcount_table(start, start + ENTRY_SIZE)

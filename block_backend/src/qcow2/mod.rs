@@ -249,6 +249,17 @@ impl SyncAioInfo {
         }
         Ok(())
     }
+
+    /// fsync barrier before persisting a metadata pointer: flushes the content
+    /// it references (L2 / refcount block / refcount table) to durable storage
+    /// first. Uses fsync, not fdatasync, since a content write may be a
+    /// fallocate (extent-map change) that fdatasync does not flush. Mandatory
+    /// under buffered IO (avoids a stale pointer on power loss); redundant but
+    /// harmless under O_DIRECT.
+    pub(crate) fn metadata_barrier(&self) -> Result<()> {
+        self.file.sync_all()?;
+        Ok(())
+    }
 }
 
 pub struct Qcow2Driver<T: Clone + 'static> {
@@ -556,6 +567,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(new_l1_table_offset, &new_l1_table)?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Update the message information, includes:
         // entry size of l1 table and active l1 table offset.
@@ -616,6 +628,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             self.sync_aio
                 .borrow_mut()
                 .write_buffer(new_l2_offset, &l2_cluster)?;
+            self.sync_aio.borrow().metadata_barrier()?;
             let l2_cache_entry = Rc::new(RefCell::new(CacheTable::new(
                 new_l2_offset,
                 l2_cluster,
@@ -838,6 +851,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                     self.sync_aio.borrow_mut().write_buffer(offset, &zero_buf)?;
                 }
             }
+            // Flush the write-zero (fallocate) above. For a recycled cluster
+            // (within committed i_size) preallocate_file_size was a no-op; for a
+            // tail-extending cluster it already fsynced, making this redundant
+            // but harmless.
+            self.sync_aio.borrow().metadata_barrier()?;
         }
         Ok(addr)
     }
@@ -907,6 +925,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(new_l1_table_offset, &snap_l1_table)?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Sync active l1 table offset of header to disk.
         let mut new_header = self.header.clone();
@@ -1135,6 +1154,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut new_header = self.header.clone();
         new_header.snapshots_offset = snapshot_offset;
         new_header.nb_snapshots = (new_header.nb_snapshots as i32 + add) as u32;
+        self.sync_aio.borrow().metadata_barrier()?;
         self.sync_aio
             .borrow_mut()
             .write_buffer(0, &new_header.to_vec())?;
@@ -1186,6 +1206,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Flush the cache of the refcount block and l1/l2 table.
         self.flush()?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Update snapshot offset and num in qcow2 header.
         let mut new_header = self.header.clone();
