@@ -1506,7 +1506,11 @@ impl MigrationHook for Block {
                         yield_now();
                     }
                 }
-                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                MigrationStatus::Completed
+                | MigrationStatus::Failed
+                | MigrationStatus::Canceled => {
+                    self.migrating.store(false, Ordering::SeqCst);
+                }
                 _ => {}
             }
         }

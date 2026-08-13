@@ -1315,10 +1315,11 @@ Note:
 ### 2.25 virtio-pmem
 The virtio pmem device is a persistent memory (NVDIMM) device that provides a virtio based asynchronous flush mechanism. This avoids the need for a separate page cache in the guest and keeps the page cache only in the host.
 
-Three properties are supported for virtio-pmem.
+Four properties are supported for virtio-pmem.
 * id: unique device id.
 * memdev: memory-backend id.
 * memaddr: the base GPA of the virtio-pmem managed memory region. (optional) If not set, it will be auto-allocated.
+* iothread: indicate which iothread will be used. (optional) If not set, the main thread will be used.
 
 For virtio-pmem-pci, two more properties are required.
 * bus: name of bus which to attach.
@@ -1329,9 +1330,9 @@ single function device, the function number should be set to zero.
 Sample Configuration：
 ```shell
 # virtio mmio pmem device
--device virtio-pmem-device,id=<viomem_id>,memdev=<objmem0>[,memaddr=<68719476736>]
+-device virtio-pmem-device,id=<viomem_id>,memdev=<objmem0>[,memaddr=<68719476736>][,iothread=<iothread_id>]
 # virtio pci pmem device
--device virtio-pmem-pci,id=<viomem_id>,bus=<pcie.0>,addr=<0x4>,memdev=<objmem0>[,memaddr=<68719476736>][,multifunction=on|off]
+-device virtio-pmem-pci,id=<viomem_id>,bus=<pcie.0>,addr=<0x4>,memdev=<objmem0>[,memaddr=<68719476736>][,iothread=<iothread_id>][,multifunction=on|off]
 ```
 
 Note:

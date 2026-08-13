@@ -474,7 +474,11 @@ impl MigrationHook for Serial {
                     }
                     info!("No queue in processing for serial device");
                 }
-                MigrationStatus::Failed => self.migrating.store(false, Ordering::SeqCst),
+                MigrationStatus::Completed
+                | MigrationStatus::Failed
+                | MigrationStatus::Canceled => {
+                    self.migrating.store(false, Ordering::SeqCst);
+                }
                 _ => {}
             }
         }
