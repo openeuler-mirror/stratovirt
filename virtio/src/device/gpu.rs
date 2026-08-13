@@ -817,7 +817,7 @@ pub fn set_monochrome_cursor(mse: &mut DisplayMouse, source: &[u8], width: usize
             for i in 0..8 {
                 let cursor_index = (row * mse.width as usize + col * 8 + i) * bpp;
 
-                if row >= height || col * bpl >= width {
+                if row >= height || col * 8 >= width {
                     cursor[cursor_index] = 0x00;
                     cursor[cursor_index + 1] = 0x00;
                     cursor[cursor_index + 2] = 0x00;
@@ -1305,6 +1305,14 @@ impl GpuIoHandler {
         }
 
         let res = &mut rt.resources_list[res_idx.unwrap()];
+        if res.format == VIRTIO_GPU_FORMAT_MONOCHROME {
+            error!(
+                "GuestError: The monochrome resource {} cannot be used as scanout.",
+                info_set_scanout.resource_id
+            );
+            return self.response_nodata(VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER, req);
+        }
+
         if info_set_scanout.rect.width < 16
             || info_set_scanout.rect.height < 16
             || !is_rect_in_resource(&info_set_scanout.rect, res)
@@ -1333,8 +1341,11 @@ impl GpuIoHandler {
         } else {
             get_image_data(res.pixman_image)
         };
+        // All supported formats are 32bpp and pixman stride is 32-bit aligned,
+        // so offset is always a multiple of 4.
         // SAFETY: The offset is within the legal address.
-        let res_data_offset = unsafe { res_data.offset(offset as isize) };
+        let res_data_offset =
+            unsafe { res_data.offset((offset / size_of::<u32>() as u32) as isize) };
 
         // Create surface for the scanout.
         let scanout = &mut rt.scanouts[info_set_scanout.scanout_id as usize];
@@ -2303,8 +2314,11 @@ impl Gpu {
         } else {
             get_image_data(res.pixman_image)
         };
+        // All supported formats are 32bpp and pixman stride is 32-bit aligned,
+        // so offset is always a multiple of 4.
         // SAFETY: The saved scanout was validated before snapshot.
-        let res_data_offset = unsafe { res_data.offset(offset as isize) };
+        let res_data_offset =
+            unsafe { res_data.offset((offset / size_of::<u32>() as u32) as isize) };
         let surface = create_surface(
             scanout,
             info_set_scanout,
@@ -2635,5 +2649,33 @@ mod tests {
         let gpu_cfg =
             GpuDevConfig::try_parse_from(str_slip_to_clap(gpu_cmd6, true, false)).unwrap();
         assert_eq!(gpu_cfg.cursor_size, 64);
+    }
+
+    #[test]
+    fn test_monochrome_cursor_right_half() {
+        const CURSOR_SIZE: usize = 128;
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+
+        let mut mse = DisplayMouse::new(CURSOR_SIZE as u32, CURSOR_SIZE as u32, 0, 0);
+        // White cursor: AND mask all 0, XOR mask all 1.
+        let mut source = vec![0_u8; WIDTH * HEIGHT / 8 * 2];
+        source[WIDTH * HEIGHT / 8..].fill(0xff);
+        set_monochrome_cursor(&mut mse, &source, WIDTH, HEIGHT);
+
+        // The whole cursor area must be opaque white, including the right half.
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let idx = (y * CURSOR_SIZE + x) * 4;
+                assert_eq!(mse.data[idx..idx + 4], [0xff; 4], "pixel ({}, {})", x, y);
+            }
+        }
+        // Area outside the cursor stays transparent.
+        for x in WIDTH..CURSOR_SIZE {
+            let idx = x * 4;
+            assert_eq!(mse.data[idx + 3], 0, "transparent at ({}, 0)", x);
+        }
+        let idx = (HEIGHT * CURSOR_SIZE) * 4;
+        assert_eq!(mse.data[idx + 3], 0, "transparent at row {}", HEIGHT);
     }
 }
