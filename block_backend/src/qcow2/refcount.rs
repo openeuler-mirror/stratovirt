@@ -233,6 +233,10 @@ impl RefCount {
         let end_offset = table_offset + new_table_clusters * self.cluster_size;
         let metadata_clusters = div_round_up(end_offset - start_offset, self.cluster_size).unwrap();
 
+        // Commit i_size before the table pwrite: the header below will point
+        // refcount_table_offset here, so it must not be past an uncommitted EOF.
+        self.sync_aio.borrow().preallocate_file_size(end_offset)?;
+
         // Write new extended refcount table to disk.
         self.sync_aio
             .borrow_mut()
@@ -564,7 +568,10 @@ impl RefCount {
             borrowed_entry.dirty_info.clear();
         }
 
-        // Sync to disk.
+        // Commit i_size before the block pwrite below.
+        self.sync_aio
+            .borrow()
+            .preallocate_file_size(alloc_offset + self.cluster_size)?;
         self.sync_aio.borrow_mut().write_dirty_info(
             borrowed_entry.addr,
             borrowed_entry.get_value(),
@@ -1020,6 +1027,47 @@ mod test {
         } else {
             assert!(false);
         }
+
+        remove_file(path).unwrap();
+    }
+
+    /// Verify `preallocate_file_size`: grows `i_size` by the 256M window when
+    /// `end` is past EOF, never truncates when `end` is below `i_size`, and is
+    /// a no-op while `end` stays inside the window.
+    #[test]
+    fn test_preallocate_file_size() {
+        let path = "/tmp/test_preallocate_file_size.qcow2";
+        let image_bits = 30;
+        let cluster_bits = 16;
+        let (qcow2, file) = create_qcow2_driver(path, image_bits, cluster_bits);
+        let cluster_sz = 1u64 << cluster_bits;
+        // Must match QCOW2_TAIL_PREALLOC_SIZE in mod.rs.
+        let prealloc = 256 * 1024 * 1024u64;
+
+        let file_end = file.as_ref().seek(SeekFrom::End(0)).unwrap();
+        assert!(file_end > 0);
+
+        // 1) Grow: end past EOF -> i_size becomes end + prealloc (and is fsynced).
+        let end = file_end + cluster_sz;
+        qcow2.sync_aio.borrow().preallocate_file_size(end).unwrap();
+        let grown = file.as_ref().seek(SeekFrom::End(0)).unwrap();
+        assert_eq!(grown, end + prealloc);
+
+        // 2) No truncate: end below EOF -> i_size must stay `grown`, not shrink.
+        qcow2
+            .sync_aio
+            .borrow()
+            .preallocate_file_size(file_end)
+            .unwrap();
+        assert_eq!(file.as_ref().seek(SeekFrom::End(0)).unwrap(), grown);
+
+        // 3) Within window: end still inside the 256M window -> no-op, no growth.
+        qcow2
+            .sync_aio
+            .borrow()
+            .preallocate_file_size(end + cluster_sz)
+            .unwrap();
+        assert_eq!(file.as_ref().seek(SeekFrom::End(0)).unwrap(), grown);
 
         remove_file(path).unwrap();
     }

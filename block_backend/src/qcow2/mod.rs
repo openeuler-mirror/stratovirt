@@ -80,6 +80,10 @@ const MAX_L1_SIZE: u64 = 32 * (1 << 20);
 pub(crate) const DEFAULT_SECTOR_SIZE: u64 = 512;
 pub(crate) const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
 
+/// Tail preallocation window for `SyncAioInfo::preallocate_file_size`:
+/// each over-extension covers the next 256 MiB of tail allocations.
+const QCOW2_TAIL_PREALLOC_SIZE: u64 = 256 * 1024 * 1024;
+
 // The default flush interval is 30s.
 const DEFAULT_METADATA_FLUSH_INTERVAL: u64 = 30;
 
@@ -218,6 +222,32 @@ impl SyncAioInfo {
         let end = round_up(end, DEFAULT_SECTOR_SIZE)
             .with_context(|| format!("Round up failed, value is {}", end))?;
         self.write_buffer(addr + start, &buf[start as usize..end as usize])
+    }
+
+    /// When `required_end` is past the current `i_size`, over-extend the backing
+    /// file to `required_end + QCOW2_TAIL_PREALLOC_SIZE` and `fsync`. This commits
+    /// `i_size` before the caller's pwrite lands, so a power-loss `i_size`
+    /// reversion cannot make a just-written tail cluster unreachable. The next
+    /// 256M of tail allocations then land inside the committed window and need
+    /// neither `set_len` nor a sync. The over-extension is a sparse hole.
+    /// `fsync` (not `fdatasync`) is used to also commit the extent-map change.
+    pub(crate) fn preallocate_file_size(&self, required_end: u64) -> Result<()> {
+        let file_end = self.file.as_ref().seek(SeekFrom::End(0))?;
+        if required_end > file_end {
+            let target = required_end
+                .checked_add(QCOW2_TAIL_PREALLOC_SIZE)
+                .with_context(|| {
+                    format!(
+                        "preallocate_file_size overflow: required_end={}",
+                        required_end
+                    )
+                })?;
+            // ftruncate grows i_size (sparse hole, no blocks). Do NOT set_len
+            // when required_end <= file_end: ftruncate to a smaller size would truncate.
+            self.file.set_len(target)?;
+            self.file.sync_all()?;
+        }
+        Ok(())
     }
 }
 
@@ -791,7 +821,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 size
             );
         }
-        if write_zero && addr < self.driver.disk_size()? {
+        // Commit i_size before the clearing pwrite below: a pwrite past the
+        // current i_size auto-extends it without fsync, so committing first
+        // avoids leaving the tail cluster's i_size uncommitted.
+        self.sync_aio.borrow().preallocate_file_size(addr + size)?;
+        if write_zero {
             let ret = raw_write_zeroes(
                 self.sync_aio.borrow_mut().file.as_raw_fd(),
                 addr as usize,
@@ -805,7 +839,6 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 }
             }
         }
-        self.driver.extend_to_len(addr + size)?;
         Ok(addr)
     }
 
