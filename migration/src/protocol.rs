@@ -805,7 +805,7 @@ pub mod tests {
         }
 
         fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-            self.state = *DeviceV1State::from_bytes(state).unwrap();
+            self.state = DeviceV1State::from_bytes(state).unwrap();
             Ok(())
         }
 
@@ -820,7 +820,7 @@ pub mod tests {
         }
 
         fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-            self.state = *DeviceV2State::from_bytes(state).unwrap();
+            self.state = DeviceV2State::from_bytes(state).unwrap();
             Ok(())
         }
 
@@ -849,7 +849,7 @@ pub mod tests {
         }
 
         fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-            self.state = *DeviceV3State::from_bytes(state).unwrap();
+            self.state = DeviceV3State::from_bytes(state).unwrap();
             Ok(())
         }
 
@@ -878,7 +878,7 @@ pub mod tests {
         }
 
         fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-            self.state = *DeviceV4State::from_bytes(state).unwrap();
+            self.state = DeviceV4State::from_bytes(state).unwrap();
             Ok(())
         }
 
@@ -901,7 +901,7 @@ pub mod tests {
         }
 
         fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-            self.state = *DeviceV5State::from_bytes(state).unwrap();
+            self.state = DeviceV5State::from_bytes(state).unwrap();
             Ok(())
         }
 

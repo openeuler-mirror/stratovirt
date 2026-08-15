@@ -994,7 +994,7 @@ impl GICv3ItsAccess for KvmGICv3Its {
     }
 
     fn set_state(&self, state: &[u8]) -> Result<()> {
-        let mut its_state = *GICv3ItsState::from_bytes(state)
+        let mut its_state = GICv3ItsState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("GICv3Its"))?;
 
         self.access_gic_its(GITS_IIDR, &mut its_state.iidr, true)

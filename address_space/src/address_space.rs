@@ -744,7 +744,7 @@ impl AddressSpace {
                     if buf_temp.len() <= 8 {
                         buf_temp.resize(8, 0);
                         let data = u64::from_bytes(buf_temp.as_slice()).unwrap();
-                        if *data == evtfd.data {
+                        if data == evtfd.data {
                             if let Err(e) = evtfd.fd.write(1) {
                                 error!("Failed to write ioeventfd {:?}: {}", evtfd, e);
                             }

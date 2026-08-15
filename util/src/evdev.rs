@@ -141,7 +141,7 @@ pub struct EvdevId {
 
 impl EvdevId {
     pub fn from_buf(buf: EvdevBuf) -> Self {
-        *Self::from_bytes(buf.to_vec().as_slice()).unwrap()
+        Self::from_bytes(buf.to_vec().as_slice()).unwrap()
     }
 }
 
