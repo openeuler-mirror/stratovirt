@@ -229,11 +229,13 @@ impl HypervisorOps for KvmHypervisor {
             .vm_fd
             .create_vcpu(u64::from(vcpu_id))
             .with_context(|| "Create vcpu failed")?;
+        let caps = CPUCaps::init_capabilities(&self.fd)?;
         Ok(Arc::new(KvmCpu::new(
             vcpu_id,
             #[cfg(target_arch = "aarch64")]
             self.vm_fd.clone(),
             vcpu_fd,
+            caps,
         )))
     }
 
@@ -367,13 +369,18 @@ pub struct KvmCpu {
 }
 
 impl KvmCpu {
-    pub fn new(id: u8, #[cfg(target_arch = "aarch64")] vm_fd: Arc<VmFd>, vcpu_fd: VcpuFd) -> Self {
+    pub fn new(
+        id: u8,
+        #[cfg(target_arch = "aarch64")] vm_fd: Arc<VmFd>,
+        vcpu_fd: VcpuFd,
+        caps: CPUCaps,
+    ) -> Self {
         Self {
             id,
             #[cfg(target_arch = "aarch64")]
             vm_fd,
             fd: Arc::new(vcpu_fd),
-            caps: CPUCaps::init_capabilities(),
+            caps,
             #[cfg(target_arch = "aarch64")]
             kvi: Mutex::new(kvm_vcpu_init::default()),
         }
@@ -1087,11 +1094,13 @@ mod test {
         let vm_fd = &kvm_hyp.vm_fd;
         vm_fd.create_irq_chip().unwrap();
         let vcpu_fd = kvm_hyp.vm_fd.create_vcpu(0).unwrap();
+        let caps = CPUCaps::init_capabilities(&kvm_hyp.fd).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
             0,
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
             vcpu_fd,
+            caps,
         ));
         let x86_cpu = Arc::new(Mutex::new(ArchCPU::new(0, 1)));
         let cpu = CPU::new(hypervisor_cpu.clone(), 0, x86_cpu, vm);
@@ -1101,7 +1110,7 @@ mod test {
             .is_ok());
 
         // test setup special registers
-        let cpu_caps = CPUCaps::init_capabilities();
+        let cpu_caps = CPUCaps::init_capabilities(&kvm_hyp.fd).unwrap();
         assert!(hypervisor_cpu.put_register(Arc::new(cpu)).is_ok());
         let x86_sregs = hypervisor_cpu.fd.get_sregs().unwrap();
         assert_eq!(x86_sregs.cs, code_seg);
@@ -1143,11 +1152,13 @@ mod test {
         };
 
         let vcpu_fd = kvm_hyp.vm_fd.create_vcpu(0).unwrap();
+        let caps = CPUCaps::init_capabilities(&kvm_hyp.fd).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
             0,
             #[cfg(target_arch = "aarch64")]
             kvm_hyp.vm_fd.clone(),
             vcpu_fd,
+            caps,
         ));
 
         let vm = Arc::new(Mutex::new(TestVm::new()));
