@@ -468,7 +468,7 @@ impl StateTransfer for PL011 {
     }
 
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-        self.state = *PL011State::from_bytes(state)
+        self.state = PL011State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL011"))?;
 
         let _ = self.tx_ready_evt.write(1); // signal resume TX, if it was paused

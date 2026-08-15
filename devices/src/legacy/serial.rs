@@ -501,7 +501,7 @@ impl StateTransfer for Serial {
     }
 
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-        let serial_state = *SerialState::from_bytes(state)
+        let serial_state = SerialState::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("SERIAL"))?;
         let mut rbr = VecDeque::<u8>::default();
         for i in 0..serial_state.rbr_len {
@@ -606,7 +606,7 @@ mod test {
 
         let serial_state_option = SerialState::from_bytes(&serial_state_vec);
         assert!(serial_state_option.is_some());
-        let mut serial_state = *serial_state_option.unwrap();
+        let mut serial_state = serial_state_option.unwrap();
 
         assert_eq!(serial_state.ier, 0);
         assert_eq!(serial_state.iir, 1);

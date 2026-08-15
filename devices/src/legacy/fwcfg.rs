@@ -1520,9 +1520,9 @@ mod test {
 
         // [1]write dma request.
         let mut dma_req = FwCfgDmaAccess::default();
-        dma_req.length = *u32::from_bytes(&4_u32.to_be_bytes()).unwrap();
-        dma_req.address = *u64::from_bytes(&0xffff_u64.to_be_bytes()).unwrap();
-        dma_req.control = *u32::from_bytes(&FW_CFG_DMA_CTL_READ.to_be_bytes()).unwrap();
+        dma_req.length = u32::from_bytes(&4_u32.to_be_bytes()).unwrap();
+        dma_req.address = u64::from_bytes(&0xffff_u64.to_be_bytes()).unwrap();
+        dma_req.control = u32::from_bytes(&FW_CFG_DMA_CTL_READ.to_be_bytes()).unwrap();
         let dma_request = dma_req.as_mut_bytes();
         let addr = GuestAddress(0x0000);
         fwcfg_common
@@ -1567,9 +1567,9 @@ mod test {
 
         // Read uninitialized entry.
         let mut dma_req = FwCfgDmaAccess::default();
-        dma_req.length = *u32::from_bytes(&8_u32.to_be_bytes()).unwrap();
-        dma_req.address = *u64::from_bytes(&0xffff_u64.to_be_bytes()).unwrap();
-        dma_req.control = *u32::from_bytes(&FW_CFG_DMA_CTL_READ.to_be_bytes()).unwrap();
+        dma_req.length = u32::from_bytes(&8_u32.to_be_bytes()).unwrap();
+        dma_req.address = u64::from_bytes(&0xffff_u64.to_be_bytes()).unwrap();
+        dma_req.control = u32::from_bytes(&FW_CFG_DMA_CTL_READ.to_be_bytes()).unwrap();
         let dma_request = dma_req.as_mut_bytes();
         let addr = GuestAddress(0x0000);
         fwcfg_common

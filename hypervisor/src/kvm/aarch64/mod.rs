@@ -494,7 +494,7 @@ impl KvmCpu {
 
     pub fn arch_set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
         let cpu_state =
-            *ArchCPU::from_bytes(state).with_context(|| MigrationError::FromBytesError("CPU"))?;
+            ArchCPU::from_bytes(state).with_context(|| MigrationError::FromBytesError("CPU"))?;
 
         let mut cpu_state_locked = arch_cpu.lock().unwrap();
         *cpu_state_locked = cpu_state;

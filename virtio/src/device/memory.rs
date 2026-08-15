@@ -562,7 +562,7 @@ impl MemoryHandler {
             match req.req_type {
                 VIRTIO_MEM_REQ_PLUG => {
                     let resp_type = self.handle_plug_request(
-                        VirtioMemReqPlug::from_bytes(req.req_union.as_mut_slice()).unwrap(),
+                        &VirtioMemReqPlug::from_bytes(req.req_union.as_mut_slice()).unwrap(),
                     );
                     let resp = VirtioMemResp {
                         resp_type,
@@ -573,7 +573,7 @@ impl MemoryHandler {
                 VIRTIO_MEM_REQ_UNPLUG => {
                     let resp = VirtioMemResp {
                         resp_type: self.handle_unplug_request(
-                            VirtioMemReqUnplug::from_bytes(req.req_union.as_mut_slice()).unwrap(),
+                            &VirtioMemReqUnplug::from_bytes(req.req_union.as_mut_slice()).unwrap(),
                         ),
                         ..Default::default()
                     };
@@ -588,7 +588,7 @@ impl MemoryHandler {
                 }
                 VIRTIO_MEM_REQ_STATE => {
                     let (resp_type, state_type) = self.handle_state_request(
-                        VirtioMemReqState::from_bytes(req.req_union.as_mut_slice()).unwrap(),
+                        &VirtioMemReqState::from_bytes(req.req_union.as_mut_slice()).unwrap(),
                     );
                     let mut resp = VirtioMemResp {
                         resp_type,
