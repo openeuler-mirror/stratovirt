@@ -127,10 +127,14 @@ enum IrqEntryType {
     Pcie,
 }
 
-/// IRQ MAP of aarch64
+/// IRQ map of the aarch64 standard machine.
+///
+/// Numbers are zero-based GIC SPI numbers, not full INTIDs
+/// (INTID = spi + 32); FDT uses them directly as SPI cells, while the
+/// KVM line/irqfd and ACPI paths add 32 on their own.
 const IRQ_MAP: &[(i32, i32)] = &[
-    (5, 15),  // Sysbus
-    (16, 19), // Pcie
+    (5, 15),  // Sysbus: PL031, GED, PowerDev, PL011 and virtio-mmio.
+    (16, 19), // Pcie: INTx lines of the PCI host.
 ];
 
 const PCI_DEVFN_SLOT_SHIFT: u32 = 3;
