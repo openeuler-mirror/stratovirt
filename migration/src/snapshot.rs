@@ -338,6 +338,8 @@ impl MigrationManager {
             if let Some(gic) = locked_vmm.gic_group.get(&gic_id) {
                 gic.save_device(gic_id, fd)
                     .with_context(|| "Failed to save gic state")?;
+            } else {
+                bail!("GICv2 migration is not supported");
             }
 
             // Save GICv3 ITS device state.
