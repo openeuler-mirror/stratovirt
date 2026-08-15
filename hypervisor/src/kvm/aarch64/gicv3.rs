@@ -1035,30 +1035,27 @@ mod tests {
 
     #[test]
     fn test_create_kvm_gicv3() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
-        assert!(KvmGICv3::new(kvm_hyp.vm_fd.clone().unwrap(), 4, GIC_IRQ_MAX).is_ok());
+        assert!(KvmGICv3::new(kvm_hyp.vm_fd.clone(), 4, GIC_IRQ_MAX).is_ok());
     }
 
     #[test]
     fn test_create_kvm_gicv3its() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
-        assert!(KvmGICv3Its::new(kvm_hyp.vm_fd.clone().unwrap()).is_ok());
+        assert!(KvmGICv3Its::new(kvm_hyp.vm_fd.clone()).is_ok());
     }
 
     #[test]
     fn test_realize_gic_device_without_its() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let gic_config = ICGICConfig {
             version: Some(GICVersion::GICv3),
@@ -1073,13 +1070,9 @@ mod tests {
             }),
         };
 
-        let hypervisor_gic = KvmGICv3::new(
-            kvm_hyp.vm_fd.clone().unwrap(),
-            gic_config.vcpu_count,
-            GIC_IRQ_MAX,
-        )
-        .unwrap();
-        let its_handler = KvmGICv3Its::new(kvm_hyp.vm_fd.clone().unwrap()).unwrap();
+        let hypervisor_gic =
+            KvmGICv3::new(kvm_hyp.vm_fd.clone(), gic_config.vcpu_count, GIC_IRQ_MAX).unwrap();
+        let its_handler = KvmGICv3Its::new(kvm_hyp.vm_fd.clone()).unwrap();
         let gic = GICv3::new(Arc::new(hypervisor_gic), Arc::new(its_handler), &gic_config).unwrap();
         assert!(gic.realize().is_ok());
         assert!(gic.its_dev.is_none());
@@ -1087,10 +1080,9 @@ mod tests {
 
     #[test]
     fn test_gic_redist_regions() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let gic_config = ICGICConfig {
             version: Some(GICVersion::GICv3),
@@ -1105,13 +1097,9 @@ mod tests {
             }),
         };
 
-        let hypervisor_gic = KvmGICv3::new(
-            kvm_hyp.vm_fd.clone().unwrap(),
-            gic_config.vcpu_count,
-            GIC_IRQ_MAX,
-        )
-        .unwrap();
-        let its_handler = KvmGICv3Its::new(kvm_hyp.vm_fd.clone().unwrap()).unwrap();
+        let hypervisor_gic =
+            KvmGICv3::new(kvm_hyp.vm_fd.clone(), gic_config.vcpu_count, GIC_IRQ_MAX).unwrap();
+        let its_handler = KvmGICv3Its::new(kvm_hyp.vm_fd.clone()).unwrap();
         let gic = GICv3::new(Arc::new(hypervisor_gic), Arc::new(its_handler), &gic_config).unwrap();
         assert!(gic.realize().is_ok());
         assert!(gic.its_dev.is_some());

@@ -101,10 +101,9 @@ ioctl_iow_nr!(KVM_SET_MP_STATE, KVMIO, 0x99, kvm_mp_state);
 ioctl_iow_nr!(KVM_SET_VCPU_EVENTS, KVMIO, 0xa0, kvm_vcpu_events);
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Default)]
 pub struct KvmHypervisor {
-    pub fd: Option<Kvm>,
-    pub vm_fd: Option<Arc<VmFd>>,
+    pub fd: Kvm,
+    pub vm_fd: Arc<VmFd>,
     pub mem_slots: Arc<Mutex<HashMap<u32, KvmMemSlot>>>,
     #[cfg(target_arch = "aarch64")]
     pub irq_chip: Option<Arc<InterruptController>>,
@@ -114,15 +113,15 @@ impl KvmHypervisor {
     pub fn new() -> Result<Self> {
         match Kvm::new() {
             Ok(kvm_fd) => {
-                let vm_fd: Option<Arc<VmFd>> = Some(Arc::new(match kvm_fd.create_vm() {
+                let vm_fd: Arc<VmFd> = Arc::new(match kvm_fd.create_vm() {
                     Ok(fd) => fd,
                     Err(e) => {
                         bail!("Failed to create VM in KVM: {:?}", e);
                     }
-                }));
+                });
 
                 Ok(KvmHypervisor {
-                    fd: Some(kvm_fd),
+                    fd: kvm_fd,
                     vm_fd,
                     mem_slots: Arc::new(Mutex::new(HashMap::new())),
                     #[cfg(target_arch = "aarch64")]
@@ -138,7 +137,7 @@ impl KvmHypervisor {
     fn create_memory_listener(&self) -> Arc<Mutex<dyn Listener>> {
         // Memslot will not exceed u32::MAX, so use as translate data type.
         Arc::new(Mutex::new(KvmMemoryListener::new(
-            self.fd.as_ref().unwrap().get_nr_memslots() as u32,
+            self.fd.get_nr_memslots() as u32,
             self.vm_fd.clone(),
             self.mem_slots.clone(),
         )))
@@ -174,12 +173,9 @@ impl HypervisorOps for KvmHypervisor {
         gic_conf.check_sanity()?;
 
         let create_gicv3 = || {
-            let hypervisor_gic = KvmGICv3::new(
-                self.vm_fd.clone().unwrap(),
-                gic_conf.vcpu_count,
-                gic_conf.max_irq,
-            )?;
-            let its_handler = KvmGICv3Its::new(self.vm_fd.clone().unwrap())?;
+            let hypervisor_gic =
+                KvmGICv3::new(self.vm_fd.clone(), gic_conf.vcpu_count, gic_conf.max_irq)?;
+            let its_handler = KvmGICv3Its::new(self.vm_fd.clone())?;
             let gicv3 = Arc::new(GICv3::new(
                 Arc::new(hypervisor_gic),
                 Arc::new(its_handler),
@@ -203,7 +199,7 @@ impl HypervisorOps for KvmHypervisor {
         };
 
         let create_gicv2 = || {
-            let hypervisor_gic = KvmGICv2::new(self.vm_fd.clone().unwrap())?;
+            let hypervisor_gic = KvmGICv2::new(self.vm_fd.clone())?;
             let gicv2 = Arc::new(GICv2::new(Arc::new(hypervisor_gic), gic_conf)?);
             Ok(Arc::new(InterruptController::new(gicv2)))
         };
@@ -219,8 +215,6 @@ impl HypervisorOps for KvmHypervisor {
     #[cfg(target_arch = "x86_64")]
     fn create_interrupt_controller(&mut self) -> Result<()> {
         self.vm_fd
-            .as_ref()
-            .unwrap()
             .create_irq_chip()
             .with_context(|| HypervisorError::CrtIrqchipErr)?;
 
@@ -233,8 +227,6 @@ impl HypervisorOps for KvmHypervisor {
     ) -> Result<Arc<dyn CPUHypervisorOps + Send + Sync>> {
         let vcpu_fd = self
             .vm_fd
-            .as_ref()
-            .unwrap()
             .create_vcpu(u64::from(vcpu_id))
             .with_context(|| "Create vcpu failed")?;
         Ok(Arc::new(KvmCpu::new(
@@ -246,17 +238,17 @@ impl HypervisorOps for KvmHypervisor {
     }
 
     fn create_irq_manager(&mut self) -> Result<IrqManager> {
-        let kvm = Kvm::new().unwrap();
+        let kvm = &self.fd;
         let irqfd_enable = kvm.check_extension(Cap::Irqfd);
-        let irq_route_table = Mutex::new(IrqRouteTable::new(self.fd.as_ref().unwrap()));
+        let irq_route_table = Mutex::new(IrqRouteTable::new(kvm));
         let irq_manager = Arc::new(KVMInterruptManager::new(
             irqfd_enable,
-            self.vm_fd.clone().unwrap(),
+            self.vm_fd.clone(),
             irq_route_table,
         ));
         let mut locked_irq_route_table = irq_manager.irq_route_table.lock().unwrap();
         locked_irq_route_table.init_irq_route_table();
-        locked_irq_route_table.commit_irq_routing(self.vm_fd.as_ref().unwrap())?;
+        locked_irq_route_table.commit_irq_routing(&self.vm_fd)?;
         drop(locked_irq_route_table);
 
         Ok(IrqManager {
@@ -272,7 +264,7 @@ impl HypervisorOps for KvmHypervisor {
             fd: 0,
             flags: 0,
         };
-        let vfio_device_fd = match self.vm_fd.as_ref().unwrap().create_device(&mut device) {
+        let vfio_device_fd = match self.vm_fd.create_device(&mut device) {
             Ok(fd) => Some(fd),
             Err(_) => {
                 error!("Failed to create VFIO device.");
@@ -302,8 +294,6 @@ impl MigrateOps for KvmHypervisor {
 
     fn get_dirty_log(&self, slot: u32, mem_size: u64) -> Result<Vec<u64>> {
         self.vm_fd
-            .as_ref()
-            .unwrap()
             .get_dirty_log(slot, usize::try_from(mem_size)?)
             .with_context(|| {
                 format!(
@@ -320,8 +310,6 @@ impl MigrateOps for KvmHypervisor {
             // SAFETY: region from `KvmHypervisor` is reliable.
             unsafe {
                 self.vm_fd
-                    .as_ref()
-                    .unwrap()
                     .set_user_memory_region(*region)
                     .with_context(|| {
                         format!(
@@ -342,8 +330,6 @@ impl MigrateOps for KvmHypervisor {
             // SAFETY: region from `KvmHypervisor` is reliable.
             unsafe {
                 self.vm_fd
-                    .as_ref()
-                    .unwrap()
                     .set_user_memory_region(*region)
                     .with_context(|| {
                         format!(
@@ -361,7 +347,7 @@ impl MigrateOps for KvmHypervisor {
         #[cfg(target_arch = "x86_64")]
         MigrationManager::register_kvm_instance(
             vm_state::KvmDeviceState::descriptor(),
-            Arc::new(vm_state::KvmDevice::new(self.vm_fd.clone().unwrap())),
+            Arc::new(vm_state::KvmDevice::new(self.vm_fd.clone())),
         );
 
         Ok(())
@@ -371,7 +357,7 @@ impl MigrateOps for KvmHypervisor {
 pub struct KvmCpu {
     id: u8,
     #[cfg(target_arch = "aarch64")]
-    vm_fd: Option<Arc<VmFd>>,
+    vm_fd: Arc<VmFd>,
     fd: Arc<VcpuFd>,
     /// The capability of VCPU.
     caps: CPUCaps,
@@ -381,11 +367,7 @@ pub struct KvmCpu {
 }
 
 impl KvmCpu {
-    pub fn new(
-        id: u8,
-        #[cfg(target_arch = "aarch64")] vm_fd: Option<Arc<VmFd>>,
-        vcpu_fd: VcpuFd,
-    ) -> Self {
+    pub fn new(id: u8, #[cfg(target_arch = "aarch64")] vm_fd: Arc<VmFd>, vcpu_fd: VcpuFd) -> Self {
         Self {
             id,
             #[cfg(target_arch = "aarch64")]
@@ -1049,10 +1031,9 @@ mod test {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn test_x86_64_kvm_cpu() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let vm = Arc::new(Mutex::new(TestVm::new()));
 
@@ -1103,9 +1084,9 @@ mod test {
 
         // For `get_lapic` in realize function to work,
         // you need to create a irq_chip for VM before creating the VCPU.
-        let vm_fd = kvm_hyp.vm_fd.as_ref().unwrap();
+        let vm_fd = &kvm_hyp.vm_fd;
         vm_fd.create_irq_chip().unwrap();
-        let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
+        let vcpu_fd = kvm_hyp.vm_fd.create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
             0,
             #[cfg(target_arch = "aarch64")]
@@ -1157,12 +1138,11 @@ mod test {
     #[test]
     #[allow(unused)]
     fn test_cpu_lifecycle_with_kvm() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
-        let vcpu_fd = kvm_hyp.vm_fd.as_ref().unwrap().create_vcpu(0).unwrap();
+        let vcpu_fd = kvm_hyp.vm_fd.create_vcpu(0).unwrap();
         let hypervisor_cpu = Arc::new(KvmCpu::new(
             0,
             #[cfg(target_arch = "aarch64")]
@@ -1187,12 +1167,7 @@ mod test {
         #[cfg(target_arch = "aarch64")]
         {
             let mut kvi = kvm_bindings::kvm_vcpu_init::default();
-            kvm_hyp
-                .vm_fd
-                .as_ref()
-                .unwrap()
-                .get_preferred_target(&mut kvi)
-                .unwrap();
+            kvm_hyp.vm_fd.get_preferred_target(&mut kvi).unwrap();
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
             *hypervisor_cpu.kvi.lock().unwrap() = kvi;
             hypervisor_cpu.vcpu_init().unwrap();

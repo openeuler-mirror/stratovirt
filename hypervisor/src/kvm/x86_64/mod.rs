@@ -50,7 +50,7 @@ impl KvmHypervisor {
     pub fn arch_init(&self) -> Result<()> {
         // The identity_addr is set in the memory layout of x86 machine.
         let identity_addr: u64 = 0xFEF0_C000;
-        let vm_fd = self.vm_fd.as_ref().unwrap();
+        let vm_fd = &self.vm_fd;
 
         vm_fd
             .set_identity_map_address(identity_addr)
