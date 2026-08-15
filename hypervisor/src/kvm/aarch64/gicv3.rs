@@ -830,7 +830,25 @@ impl GICv3Access for KvmGICv3 {
     }
 
     fn set_state(&self, state: &[u8]) -> Result<()> {
-        let state = GICv3State::from_bytes(state).unwrap();
+        let state = GICv3State::from_bytes(state)
+            .with_context(|| MigrationError::FromBytesError("GICv3"))?;
+        if state.redist_len > state.vcpu_redist.len()
+            || state.dist_len > state.irq_dist.len()
+            || state.iccr_len > state.vcpu_iccr.len()
+        {
+            return Err(anyhow!(MigrationError::FromBytesError(
+                "GICv3 state length"
+            )));
+        }
+        let expected_dist_len = ((self.nr_irqs - GIC_IRQ_INTERNAL) as usize).div_ceil(32);
+        if state.redist_len != self.vcpu_count as usize
+            || state.iccr_len != self.vcpu_count as usize
+            || state.dist_len != expected_dist_len
+        {
+            return Err(anyhow!(MigrationError::FromBytesError(
+                "GICv3 state length mismatch"
+            )));
+        }
 
         let mut regu32 = state.redist_typer_l;
         self.access_gic_redistributor(GICR_TYPER, 0, &mut regu32, false)
@@ -938,7 +956,7 @@ impl GICv3ItsAccess for KvmGICv3Its {
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CTRL,
             u64::from(kvm_bindings::KVM_DEV_ARM_VGIC_CTRL_INIT),
-            &msi_base as *const u64 as u64,
+            0,
             true,
         )
         .with_context(|| "KVM failed to initialize ITS")?;
