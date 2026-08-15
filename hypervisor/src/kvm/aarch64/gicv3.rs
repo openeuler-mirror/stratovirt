@@ -135,6 +135,7 @@ const GITS_BASER: u32 = 0x0100;
 struct GICv3RedistState {
     vcpu: usize,
     edge_trigger: u32,
+    line_level: u32,
     gicr_ctlr: u32,
     gicr_statusr: u32,
     gicr_waker: u32,
@@ -294,11 +295,17 @@ impl KvmGICv3 {
         .with_context(|| format!("Failed to access gic distributor for offset 0x{:x}", offset))
     }
 
-    fn access_gic_line_level(&self, offset: u64, gicll_value: &mut u32, write: bool) -> Result<()> {
+    fn access_gic_line_level(
+        &self,
+        cpu: usize,
+        offset: u64,
+        gicll_value: &mut u32,
+        write: bool,
+    ) -> Result<()> {
         KvmDevice::kvm_device_access(
             &self.fd,
             kvm_bindings::KVM_DEV_ARM_VGIC_GRP_LEVEL_INFO,
-            self.vcpu_gicr_attr(0) | offset,
+            self.vcpu_gicr_attr(cpu) | offset,
             gicll_value as *mut u32 as u64,
             write,
         )
@@ -326,6 +333,7 @@ impl KvmGICv3 {
             false,
         )?;
         self.access_gic_redistributor(GICR_ICFGR1, redist.vcpu, &mut redist.edge_trigger, false)?;
+        self.access_gic_line_level(redist.vcpu, 0, &mut redist.line_level, false)?;
         self.access_gic_redistributor(GICR_ISPENDR0, redist.vcpu, &mut redist.gicr_ipendr0, false)?;
         self.access_gic_redistributor(
             GICR_ISACTIVER0,
@@ -415,6 +423,7 @@ impl KvmGICv3 {
             true,
         )?;
         self.access_gic_redistributor(GICR_ICFGR1, redist.vcpu, &mut redist.edge_trigger, true)?;
+        self.access_gic_line_level(redist.vcpu, 0, &mut redist.line_level, true)?;
         self.access_gic_redistributor(GICR_ICPENDR0, redist.vcpu, &mut !0, true)?;
         self.access_gic_redistributor(GICR_ISPENDR0, redist.vcpu, &mut redist.gicr_ipendr0, true)?;
         self.access_gic_redistributor(GICR_ICACTIVER0, redist.vcpu, &mut !0, true)?;
@@ -446,7 +455,7 @@ impl KvmGICv3 {
         let offset = dist.irq_base / (u64::from(GIC_IRQ_INTERNAL) / REGISTER_SIZE);
         self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, false)?;
         self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, false)?;
-        self.access_gic_distributor(dist.irq_base, &mut dist.line_level, false)?;
+        self.access_gic_line_level(0, dist.irq_base, &mut dist.line_level, false)?;
         self.access_gic_distributor(GICD_ISPENDR + offset, &mut dist.gicd_ispendr, false)?;
         self.access_gic_distributor(GICD_ISACTIVER + offset, &mut dist.gicd_isactiver, false)?;
 
@@ -522,7 +531,7 @@ impl KvmGICv3 {
             self.access_gic_distributor(GICD_ICFGR + offset, &mut dist.gicd_icfgr[i], true)?;
         }
 
-        self.access_gic_line_level(dist.irq_base, &mut dist.line_level, true)?;
+        self.access_gic_line_level(0, dist.irq_base, &mut dist.line_level, true)?;
         clear = u32::MAX;
         self.access_gic_distributor(GICD_ICPENDR + offset, &mut clear, true)?;
         self.access_gic_distributor(GICD_ISPENDR + offset, &mut dist.gicd_ispendr, true)?;
@@ -601,6 +610,30 @@ impl KvmGICv3 {
                     &mut gic_cpu.icc_ap1r_el1[2],
                     false,
                 )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[1],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[0],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[1],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[0],
+                    false,
+                )?;
             }
             0b110 => {
                 self.access_gic_cpu(
@@ -613,6 +646,18 @@ impl KvmGICv3 {
                     ICC_AP1R_EL1_N1,
                     gic_cpu.vcpu,
                     &mut gic_cpu.icc_ap1r_el1[1],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[0],
+                    false,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[0],
                     false,
                 )?;
             }
@@ -686,6 +731,30 @@ impl KvmGICv3 {
                     &mut gic_cpu.icc_ap1r_el1[2],
                     true,
                 )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[1],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[0],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N1,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[1],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[0],
+                    true,
+                )?;
             }
             0b110 => {
                 self.access_gic_cpu(
@@ -698,6 +767,18 @@ impl KvmGICv3 {
                     ICC_AP1R_EL1_N1,
                     gic_cpu.vcpu,
                     &mut gic_cpu.icc_ap1r_el1[1],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP0R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap0r_el1[0],
+                    true,
+                )?;
+                self.access_gic_cpu(
+                    ICC_AP1R_EL1_N0,
+                    gic_cpu.vcpu,
+                    &mut gic_cpu.icc_ap1r_el1[0],
                     true,
                 )?;
             }
@@ -895,6 +976,28 @@ impl GICv3Access for KvmGICv3 {
             return Err(anyhow!(MigrationError::FromBytesError(
                 "GICv3 state length mismatch"
             )));
+        }
+
+        for (idx, redist) in state.vcpu_redist[..state.redist_len].iter().enumerate() {
+            if redist.vcpu != idx {
+                return Err(anyhow!(MigrationError::FromBytesError(
+                    "GICv3 redistributor vcpu mismatch"
+                )));
+            }
+        }
+        for (idx, iccr) in state.vcpu_iccr[..state.iccr_len].iter().enumerate() {
+            if iccr.vcpu != idx {
+                return Err(anyhow!(MigrationError::FromBytesError(
+                    "GICv3 cpu interface vcpu mismatch"
+                )));
+            }
+        }
+        for (idx, expected_irq_base) in gicv3_spi_dist_bases(self.nr_irqs).enumerate() {
+            if state.irq_dist[idx].irq_base != expected_irq_base {
+                return Err(anyhow!(MigrationError::FromBytesError(
+                    "GICv3 distributor irq_base mismatch"
+                )));
+            }
         }
 
         let mut regu32 = state.redist_typer_l;
