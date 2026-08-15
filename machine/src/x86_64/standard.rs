@@ -101,11 +101,14 @@ enum IrqEntryType {
     Pcie,
 }
 
-/// IRQ MAP of x86_64
+/// IRQ map of the x86_64 standard machine.
+///
+/// Plain GSI numbers routed to PIC/IOAPIC. The serial is hardcoded to
+/// IRQ 4, so the sysbus range starts at 5.
 const IRQ_MAP: &[(i32, i32)] = &[
-    (4, 4),   // Uart
-    (5, 15),  // Sysbus
-    (16, 19), // Pcie
+    (4, 4),   // Uart: hardcoded legacy serial IRQ.
+    (5, 15),  // Sysbus: RTC, I8042, GED and other legacy devices.
+    (16, 19), // Pcie: INTx lines of the PCI host.
 ];
 
 impl StdMachine {
