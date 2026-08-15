@@ -156,8 +156,6 @@ impl KvmCpu {
     ) -> Result<()> {
         let mut kvi = self.kvi.lock().unwrap();
         self.vm_fd
-            .as_ref()
-            .unwrap()
             .get_preferred_target(&mut kvi)
             .with_context(|| "Failed to get kvm vcpu preferred target")?;
 
