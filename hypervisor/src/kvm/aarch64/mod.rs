@@ -148,6 +148,7 @@ impl KvmCpu {
         boot_config: &Option<CPUBootConfig>,
         vcpu_config: &CPUFeatures,
     ) -> Result<()> {
+        let is_secondary = arch_cpu.lock().unwrap().apic_id != 0;
         let mut kvi = self.kvi.lock().unwrap();
         self.vm_fd
             .get_preferred_target(&mut kvi)
@@ -157,7 +158,7 @@ impl KvmCpu {
         // We already checked that the capability is supported.
         kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
         // Non-boot cpus are powered off initially.
-        if arch_cpu.lock().unwrap().apic_id != 0 {
+        if is_secondary {
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
         }
 
