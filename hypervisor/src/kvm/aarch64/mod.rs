@@ -489,6 +489,10 @@ impl KvmCpu {
     }
 
     pub fn arch_get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {
+        if self.kvi.lock().unwrap().features[0] & (1 << kvm_bindings::KVM_ARM_VCPU_SVE) != 0 {
+            bail!("SVE migration is not supported");
+        }
+
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::CoreRegs)?;
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::MpState)?;
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
@@ -498,6 +502,10 @@ impl KvmCpu {
     }
 
     pub fn arch_set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
+        if self.kvi.lock().unwrap().features[0] & (1 << kvm_bindings::KVM_ARM_VCPU_SVE) != 0 {
+            bail!("SVE migration is not supported");
+        }
+
         let cpu_state =
             ArchCPU::from_bytes(state).with_context(|| MigrationError::FromBytesError("CPU"))?;
         if cpu_state.cpreg_len > cpu_state.cpreg_list.len() {
