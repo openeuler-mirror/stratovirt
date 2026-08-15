@@ -110,7 +110,7 @@ impl GICv2Access for KvmGICv2 {
     ) -> Result<()> {
         KvmDevice::kvm_device_access(
             &self.fd,
-            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS,
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CPU_REGS,
             self.vcpu_gicr_attr(offset, cpu),
             gicc_value as *mut u64 as u64,
             write,
