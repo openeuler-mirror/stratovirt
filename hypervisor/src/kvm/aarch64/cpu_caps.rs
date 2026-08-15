@@ -13,6 +13,8 @@
 use kvm_ioctls::Cap;
 use kvm_ioctls::Kvm;
 
+use anyhow::Result;
+
 // Capabilities for ARM cpu.
 #[derive(Debug, Clone)]
 pub struct ArmCPUCaps {
@@ -29,9 +31,8 @@ pub struct ArmCPUCaps {
 
 impl ArmCPUCaps {
     /// Initialize ArmCPUCaps instance.
-    pub fn init_capabilities() -> Self {
-        let kvm = Kvm::new().unwrap();
-        ArmCPUCaps {
+    pub fn init_capabilities(kvm: &Kvm) -> Result<Self> {
+        Ok(ArmCPUCaps {
             irq_chip: kvm.check_extension(Cap::Irqchip),
             ioevent_fd: kvm.check_extension(Cap::Ioeventfd),
             irq_fd: kvm.check_extension(Cap::Irqfd),
@@ -41,6 +42,6 @@ impl ArmCPUCaps {
             vcpu_events: kvm.check_extension(Cap::VcpuEvents),
             pmuv3: kvm.check_extension(Cap::ArmPmuV3),
             sve: kvm.check_extension(Cap::ArmSve),
-        }
+        })
     }
 }

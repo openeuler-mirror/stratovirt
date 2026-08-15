@@ -10,7 +10,8 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use kvm_bindings::{kvm_msr_entry, Msrs};
+use anyhow::{Context, Result};
+use kvm_bindings::{kvm_msr_entry, CpuId, Msrs, KVM_MAX_CPUID_ENTRIES};
 use kvm_ioctls::Cap;
 use kvm_ioctls::Kvm;
 use vmm_sys_util::fam::Error;
@@ -32,17 +33,26 @@ pub struct X86CPUCaps {
     pub has_xsave: bool,
     pub has_xcrs: bool,
     supported_msrs: Vec<u32>,
+    supported_cpuid: CpuId,
 }
 
 impl X86CPUCaps {
     /// Initialize X86CPUCaps instance.
-    pub fn init_capabilities() -> Self {
-        let kvm = Kvm::new().unwrap();
-        X86CPUCaps {
+    pub fn init_capabilities(kvm: &Kvm) -> Result<Self> {
+        let supported_cpuid = kvm
+            .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
+            .with_context(|| "Failed to get supported CPUID")?;
+
+        Ok(X86CPUCaps {
             has_xsave: kvm.check_extension(Cap::Xsave),
             has_xcrs: kvm.check_extension(Cap::Xcrs),
-            supported_msrs: kvm.get_msr_index_list().unwrap().as_slice().to_vec(),
-        }
+            supported_msrs: kvm
+                .get_msr_index_list()
+                .with_context(|| "Failed to get supported MSR list")?
+                .as_slice()
+                .to_vec(),
+            supported_cpuid,
+        })
     }
 
     /// Create `Msrs` (a list of `kvm_msr_entry`) from capabilities supported_msrs.
@@ -67,5 +77,9 @@ impl X86CPUCaps {
             })
             .collect();
         Msrs::from_entries(&entry_vec)
+    }
+
+    pub fn supported_cpuid(&self) -> CpuId {
+        self.supported_cpuid.clone()
     }
 }
