@@ -35,8 +35,11 @@ const GICD_CTLR: u64 = 0x0000;
 const GICD_STATUSR: u64 = 0x0010;
 const GICD_IGROUPR: u64 = 0x0080;
 const GICD_ISENABLER: u64 = 0x0100;
+const GICD_ICENABLER: u64 = 0x0180;
 const GICD_ISPENDR: u64 = 0x0200;
+const GICD_ICPENDR: u64 = 0x0280;
 const GICD_ISACTIVER: u64 = 0x0300;
+const GICD_ICACTIVER: u64 = 0x0380;
 const GICD_IPRIORITYR: u64 = 0x0400;
 const GICD_ICFGR: u64 = 0x0C00;
 const GICD_IROUTER: u64 = 0x6000;
@@ -83,6 +86,40 @@ const ICC_IGRPEN1_EL1: u64 = 0xc667;
 /// GICv3 CPU interface control register pribits[8:10]
 const ICC_CTLR_EL1_PRIBITS_MASK: u64 = 0x700;
 const ICC_CTLR_EL1_PRIBITS_SHIFT: u64 = 0x8;
+
+/// Number of distributor register groups required for all SPIs.
+fn gicv3_spi_dist_len(nr_irqs: u32) -> usize {
+    ((nr_irqs - GIC_IRQ_INTERNAL) as usize).div_ceil(32)
+}
+
+/// SPI base IRQs used by distributor register groups.
+fn gicv3_spi_dist_bases(nr_irqs: u32) -> impl Iterator<Item = u64> {
+    (GIC_IRQ_INTERNAL..nr_irqs).step_by(32).map(u64::from)
+}
+
+/// Empty distributor states with the same SPI grouping as migration snapshots.
+fn gicv3_spi_dist_states(nr_irqs: u32) -> Vec<GICv3DistState> {
+    gicv3_spi_dist_bases(nr_irqs)
+        .map(|irq_base| GICv3DistState {
+            irq_base,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Byte offset of a 32-bit GICD_ICFGR register for the SPI group at `irq_base`.
+///
+/// Each 32-bit GICD_ICFGR register covers 16 IRQs (2 config bits per IRQ) and
+/// consecutive registers are 4 bytes apart, so the register at `index` covers
+/// IRQs `irq_base + 16 * index .. irq_base + 16 * index + 16`.
+fn gicd_icfgr_offset(irq_base: u64, index: u64) -> u64 {
+    irq_base / REGISTER_SIZE + index * REGISTER_SIZE
+}
+
+/// Byte offset of the 64-bit GICD_IROUTER register for `irq`.
+fn gicd_irouter_offset(irq: u64) -> u64 {
+    irq * 8
+}
 
 /// GIC Its registers
 const GITS_CTLR: u32 = 0x0000;
@@ -416,16 +453,16 @@ impl KvmGICv3 {
         // edge trigger
         for i in 0..NR_GICD_ICFGR {
             if ((i * GIC_IRQ_INTERNAL as usize / NR_GICD_ICFGR) as u64 + dist.irq_base)
-                > u64::from(self.nr_irqs)
+                >= u64::from(self.nr_irqs)
             {
                 break;
             }
-            let offset = (dist.irq_base + i as u64) / REGISTER_SIZE;
+            let offset = gicd_icfgr_offset(dist.irq_base, i as u64);
             self.access_gic_distributor(GICD_ICFGR + offset, &mut dist.gicd_icfgr[i], false)?;
         }
 
         for i in 0..NR_GICD_IPRIORITYR {
-            if (i as u64 * REGISTER_SIZE + dist.irq_base) > u64::from(self.nr_irqs) {
+            if (i as u64 * REGISTER_SIZE + dist.irq_base) >= u64::from(self.nr_irqs) {
                 break;
             }
             let offset = dist.irq_base + REGISTER_SIZE * i as u64;
@@ -437,10 +474,10 @@ impl KvmGICv3 {
         }
 
         for i in 0..NR_GICD_IROUTER {
-            if (i as u64 + dist.irq_base) > u64::from(self.nr_irqs) {
+            if (i as u64 + dist.irq_base) >= u64::from(self.nr_irqs) {
                 break;
             }
-            let offset = dist.irq_base + i as u64;
+            let offset = gicd_irouter_offset(dist.irq_base + i as u64);
 
             self.access_gic_distributor(GICD_IROUTER + offset, &mut dist.gicd_irouter_l[i], false)?;
             self.access_gic_distributor(
@@ -455,14 +492,16 @@ impl KvmGICv3 {
 
     fn set_dist(&self, mut dist: GICv3DistState) -> Result<()> {
         let offset = dist.irq_base / (u64::from(GIC_IRQ_INTERNAL) / REGISTER_SIZE);
+        let mut clear = u32::MAX;
+        self.access_gic_distributor(GICD_ICENABLER + offset, &mut clear, true)?;
         self.access_gic_distributor(GICD_ISENABLER + offset, &mut dist.gicd_isenabler, true)?;
         self.access_gic_distributor(GICD_IGROUPR + offset, &mut dist.gicd_igroupr, true)?;
 
         for i in 0..NR_GICD_IROUTER {
-            if (i as u64 + dist.irq_base) > u64::from(self.nr_irqs) {
+            if (i as u64 + dist.irq_base) >= u64::from(self.nr_irqs) {
                 break;
             }
-            let offset = dist.irq_base + i as u64;
+            let offset = gicd_irouter_offset(dist.irq_base + i as u64);
 
             self.access_gic_distributor(GICD_IROUTER + offset, &mut dist.gicd_irouter_l[i], true)?;
             self.access_gic_distributor(
@@ -475,20 +514,24 @@ impl KvmGICv3 {
         // edge trigger
         for i in 0..NR_GICD_ICFGR {
             if ((i * GIC_IRQ_INTERNAL as usize / NR_GICD_ICFGR) as u64 + dist.irq_base)
-                > u64::from(self.nr_irqs)
+                >= u64::from(self.nr_irqs)
             {
                 break;
             }
-            let offset = (dist.irq_base + i as u64) / REGISTER_SIZE;
+            let offset = gicd_icfgr_offset(dist.irq_base, i as u64);
             self.access_gic_distributor(GICD_ICFGR + offset, &mut dist.gicd_icfgr[i], true)?;
         }
 
         self.access_gic_line_level(dist.irq_base, &mut dist.line_level, true)?;
+        clear = u32::MAX;
+        self.access_gic_distributor(GICD_ICPENDR + offset, &mut clear, true)?;
         self.access_gic_distributor(GICD_ISPENDR + offset, &mut dist.gicd_ispendr, true)?;
+        clear = u32::MAX;
+        self.access_gic_distributor(GICD_ICACTIVER + offset, &mut clear, true)?;
         self.access_gic_distributor(GICD_ISACTIVER + offset, &mut dist.gicd_isactiver, true)?;
 
         for i in 0..NR_GICD_IPRIORITYR {
-            if (i as u64 * REGISTER_SIZE + dist.irq_base) > u64::from(self.nr_irqs) {
+            if (i as u64 * REGISTER_SIZE + dist.irq_base) >= u64::from(self.nr_irqs) {
                 break;
             }
             let offset = dist.irq_base + REGISTER_SIZE * i as u64;
@@ -787,7 +830,11 @@ impl GICv3Access for KvmGICv3 {
         }
 
         // process distributor
-        gic_state.dist_len = (self.nr_irqs / 32) as usize;
+        let dist_states = gicv3_spi_dist_states(self.nr_irqs);
+        gic_state.dist_len = dist_states.len();
+        for (i, dist) in dist_states.into_iter().enumerate() {
+            gic_state.irq_dist[i] = dist;
+        }
 
         self.set_state(gic_state.as_bytes())
     }
@@ -812,9 +859,9 @@ impl GICv3Access for KvmGICv3 {
 
         self.access_gic_distributor(GICD_STATUSR, &mut state.gicd_statusr, false)
             .map_err(|e| MigrationError::GetGicRegsError("gicd_statusr", e.to_string()))?;
-        for irq in (GIC_IRQ_INTERNAL..self.nr_irqs).step_by(32) {
+        for irq in gicv3_spi_dist_bases(self.nr_irqs) {
             state.irq_dist[state.dist_len] = self
-                .get_dist(u64::from(irq))
+                .get_dist(irq)
                 .map_err(|e| MigrationError::GetGicRegsError("dist", e.to_string()))?;
             state.dist_len += 1;
         }
@@ -840,7 +887,7 @@ impl GICv3Access for KvmGICv3 {
                 "GICv3 state length"
             )));
         }
-        let expected_dist_len = ((self.nr_irqs - GIC_IRQ_INTERNAL) as usize).div_ceil(32);
+        let expected_dist_len = gicv3_spi_dist_len(self.nr_irqs);
         if state.redist_len != self.vcpu_count as usize
             || state.iccr_len != self.vcpu_count as usize
             || state.dist_len != expected_dist_len
@@ -1047,9 +1094,55 @@ impl GICv3ItsAccess for KvmGICv3Its {
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
     use crate::kvm::aarch64::gicv3::{KvmGICv3, KvmGICv3Its};
     use crate::kvm::KvmHypervisor;
     use devices::{GICDevice, GICVersion, GICv3, ICGICConfig, ICGICv3Config, GIC_IRQ_MAX};
+
+    #[test]
+    fn test_gicv3_spi_dist_len() {
+        assert_eq!(gicv3_spi_dist_len(192), 5);
+        assert_eq!(gicv3_spi_dist_len(64), 1);
+        assert_eq!(gicv3_spi_dist_len(65), 2);
+    }
+
+    #[test]
+    fn test_gicv3_spi_dist_bases_match_migration_layout() {
+        assert_eq!(
+            gicv3_spi_dist_bases(192).collect::<Vec<_>>(),
+            vec![32, 64, 96, 128, 160]
+        );
+        assert_eq!(gicv3_spi_dist_bases(65).collect::<Vec<_>>(), vec![32, 64]);
+    }
+
+    #[test]
+    fn test_gicv3_reset_dist_state_is_valid() {
+        let dist_states = gicv3_spi_dist_states(192);
+        assert_eq!(dist_states.len(), gicv3_spi_dist_len(192));
+        assert!(dist_states.len() <= GICv3State::default().irq_dist.len());
+        assert_eq!(
+            dist_states
+                .iter()
+                .map(|dist| dist.irq_base)
+                .collect::<Vec<_>>(),
+            vec![32, 64, 96, 128, 160]
+        );
+    }
+
+    #[test]
+    fn test_gicd_icfgr_offsets_advance_per_register() {
+        assert_eq!(gicd_icfgr_offset(32, 0), 8);
+        assert_eq!(gicd_icfgr_offset(32, 1), 12);
+        assert_eq!(gicd_icfgr_offset(160, 0), 40);
+        assert_eq!(gicd_icfgr_offset(160, 1), 44);
+    }
+
+    #[test]
+    fn test_gicd_irouter_offsets_are_64bit_spaced() {
+        assert_eq!(gicd_irouter_offset(32), 256);
+        assert_eq!(gicd_irouter_offset(33), 264);
+        assert_eq!(gicd_irouter_offset(191), 1528);
+    }
 
     #[test]
     fn test_create_kvm_gicv3() {
