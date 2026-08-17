@@ -455,25 +455,31 @@ impl KvmCpu {
                                 .with_context(|| "Some error occurred in guest reset")?;
                             return Ok(true);
                         } else {
-                            error!(
-                            "Vcpu{} received unexpected system event with type 0x{:x}, flags {:#x?}",
-                            cpu.id(),
-                            event,
-                            flags
-                        );
+                            // Refer to QEMU: unknown system event types are
+                            // logged and ignored so the guest keeps running.
+                            warn!(
+                                "Vcpu{} received unexpected system event with type 0x{:x}, flags {:#x?}",
+                                cpu.id(),
+                                event,
+                                flags
+                            );
+                            return Ok(true);
                         }
-                        return Ok(false);
                     }
                     VcpuExit::FailEntry(reason, cpuid) => {
-                        info!(
-                        "Vcpu{} received KVM_EXIT_FAIL_ENTRY signal. the vcpu could not be run due to unknown reasons({})",
-                        cpuid, reason
-                    );
-                        return Ok(false);
+                        return Err(anyhow!(CpuError::VcpuExitReason(
+                            cpu.id(),
+                            format!(
+                                "KVM_EXIT_FAIL_ENTRY: reason 0x{:x}, cpuid {}",
+                                reason, cpuid
+                            )
+                        )));
                     }
                     VcpuExit::InternalError => {
-                        info!("Vcpu{} received KVM_EXIT_INTERNAL_ERROR signal", cpu.id());
-                        return Ok(false);
+                        return Err(anyhow!(CpuError::VcpuExitReason(
+                            cpu.id(),
+                            "KVM_EXIT_INTERNAL_ERROR".to_string()
+                        )));
                     }
                     r => {
                         return Err(anyhow!(CpuError::VcpuExitReason(
