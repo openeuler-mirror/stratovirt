@@ -55,7 +55,10 @@ use boot_loader::{load_linux, BootLoaderConfig};
 use boot_loader::{load_smbios_to_memory, ARCH_SMBIOS_BEGIN};
 #[cfg(target_arch = "aarch64")]
 use cpu::CPUFeatures;
-use cpu::{ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuTopology, CPU};
+use cpu::{
+    ArchCPU, CPUBootConfig, CPUHypervisorOps, CPUInterface, CPUTopology, CpuLifecycleState,
+    CpuTopology, CPU,
+};
 use devices::legacy::FwCfgOps;
 #[cfg(feature = "pvpanic")]
 use devices::misc::pvpanic::{PvPanicPci, PvpanicDevConfig};
@@ -3229,6 +3232,14 @@ pub trait MachineOps: MachineLifecycle {
             *vm_state = VmState::Running;
         }
         cpus_thread_barrier.wait();
+
+        for cpu in cpus.iter() {
+            let (cpu_state, _) = cpu.state();
+            if *cpu_state.lock().unwrap() == CpuLifecycleState::Stopped {
+                self.deactive_drive_files()?;
+                return Err(anyhow!("Failed to run vcpu{}", cpu.id()));
+            }
+        }
 
         Ok(())
     }
