@@ -711,7 +711,7 @@ impl CPUHypervisorOps for KvmCpu {
         // It shall wait for the vCPU pause state from hypervisor exits.
         let mut sleep_times = 0u32;
         while !pause_signal.load(Ordering::SeqCst) {
-            if sleep_times >= 5 {
+            if sleep_times >= 20 {
                 bail!(CpuError::StopVcpu("timeout".to_string()));
             }
             thread::sleep(Duration::from_millis(5));
@@ -754,31 +754,52 @@ impl CPUHypervisorOps for KvmCpu {
         state: Arc<(Mutex<CpuLifecycleState>, Condvar)>,
     ) -> Result<()> {
         let (cpu_state, cvar) = &*state;
-        let mut locked_cpu_state = cpu_state.lock().unwrap();
-        if *locked_cpu_state == CpuLifecycleState::Running {
-            *locked_cpu_state = CpuLifecycleState::Stopping;
-        } else if *locked_cpu_state == CpuLifecycleState::Stopped
-            || *locked_cpu_state == CpuLifecycleState::Paused
+        let mut need_wait = false;
         {
-            return Ok(());
+            let mut locked_cpu_state = cpu_state.lock().unwrap();
+            match *locked_cpu_state {
+                CpuLifecycleState::Stopped => {}
+                CpuLifecycleState::Created => {
+                    *locked_cpu_state = CpuLifecycleState::Stopped;
+                    return Ok(());
+                }
+                _ => {
+                    *locked_cpu_state = CpuLifecycleState::Stopping;
+                    need_wait = true;
+                }
+            }
         }
-        drop(locked_cpu_state);
 
-        self.kick_vcpu_thread(task)?;
-        let mut locked_cpu_state = cpu_state.lock().unwrap();
-        locked_cpu_state = cvar
-            .wait_timeout(locked_cpu_state, Duration::from_millis(32))
-            .unwrap()
-            .0;
-
-        if *locked_cpu_state == CpuLifecycleState::Stopped {
-            Ok(())
-        } else {
-            Err(anyhow!(CpuError::DestroyVcpu(format!(
-                "VCPU still in {:?} state",
-                *locked_cpu_state
-            ))))
+        if need_wait {
+            self.kick_vcpu_thread(task.clone())?;
+            // A vCPU parked in ready_for_running()'s condvar wait (Paused)
+            // is not woken by the kick signal: the no-op handler runs and the
+            // condvar wait retries internally, so it would never observe the
+            // Stopping state and destroy() would time out. Wake it explicitly.
+            cvar.notify_one();
+            let locked_cpu_state = cpu_state.lock().unwrap();
+            let (locked_cpu_state, _) = cvar
+                .wait_timeout_while(locked_cpu_state, Duration::from_millis(100), |state| {
+                    *state != CpuLifecycleState::Stopped
+                })
+                .unwrap();
+            if *locked_cpu_state != CpuLifecycleState::Stopped {
+                return Err(anyhow!(CpuError::DestroyVcpu(format!(
+                    "VCPU still in {:?} state",
+                    *locked_cpu_state
+                ))));
+            }
         }
+
+        if let Some(handle) = task.lock().unwrap().take() {
+            handle.join().map_err(|_| {
+                anyhow!(CpuError::DestroyVcpu(
+                    "Failed to join VCPU thread".to_string()
+                ))
+            })?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1228,6 +1249,19 @@ mod test {
         assert!(cpu_arc.resume().is_ok());
         // Wait for CPU finish state change.
         std::thread::sleep(Duration::from_millis(50));
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Running);
+        let _ = cpu_state;
+
+        // Destroy the vCPU while it is paused: its thread is parked in the
+        // lifecycle condvar wait, so destroy() must wake it explicitly or the
+        // wait for Stopped would time out.
+        assert!(cpu_arc.pause().is_ok());
+        // Wait for CPU finish state change.
+        std::thread::sleep(Duration::from_millis(50));
+        let (cpu_state, _) = &*cpu_arc.state;
+        assert_eq!(*cpu_state.lock().unwrap(), CpuLifecycleState::Paused);
+        let _ = cpu_state;
 
         assert!(cpu_arc.destroy().is_ok());
 
