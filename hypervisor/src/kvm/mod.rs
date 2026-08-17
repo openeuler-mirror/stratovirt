@@ -608,36 +608,52 @@ impl CPUHypervisorOps for KvmCpu {
         thread_barrier: Arc<Barrier>,
     ) -> Result<()> {
         cpu_thread_worker.init_local_thread_vcpu();
-        if let Err(e) = self.init_signals() {
-            error!(
-                "Failed to init cpu{} signal:{:?}",
-                cpu_thread_worker.thread_cpu.id, e
-            );
+
+        let pre_result = (|| -> Result<()> {
+            self.init_signals()?;
+            cpu_thread_worker.thread_cpu.set_tid(None);
+
+            #[cfg(not(test))]
+            self.put_register(cpu_thread_worker.thread_cpu.clone())?;
+
+            Ok(())
+        })();
+
+        if pre_result.is_err() {
+            let (cpu_state, cvar) = &*cpu_thread_worker.thread_cpu.state;
+            *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
+            cvar.notify_one();
         }
 
-        cpu_thread_worker.thread_cpu.set_tid(None);
-
-        #[cfg(not(test))]
-        self.put_register(cpu_thread_worker.thread_cpu.clone())?;
-
-        // Wait for all vcpu to complete the running
-        // environment initialization.
+        // Every VCPU must reach the barrier, otherwise a VCPU that failed
+        // during early initialization can leave the main thread waiting
+        // forever on the `nr_vcpus + 1` startup barrier.
         thread_barrier.wait();
 
+        pre_result?;
+
         info!("vcpu{} start running", cpu_thread_worker.thread_cpu.id);
+        #[cfg(not(test))]
+        let mut run_result = Ok(());
+        #[cfg(test)]
+        let run_result = Ok(());
         while let Ok(true) = cpu_thread_worker.ready_for_running() {
             #[cfg(not(test))]
             {
-                if !self
+                match self
                     .kvm_vcpu_exec(cpu_thread_worker.thread_cpu.clone())
                     .with_context(|| {
                         format!(
                             "VCPU {}/KVM emulate error!",
                             cpu_thread_worker.thread_cpu.id()
                         )
-                    })?
-                {
-                    break;
+                    }) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(e) => {
+                        run_result = Err(e);
+                        break;
+                    }
                 }
             }
             #[cfg(test)]
@@ -652,7 +668,7 @@ impl CPUHypervisorOps for KvmCpu {
         *cpu_state.lock().unwrap() = CpuLifecycleState::Stopped;
         cvar.notify_one();
 
-        Ok(())
+        run_result
     }
 
     fn set_hypervisor_exit(&self) -> Result<()> {
