@@ -388,13 +388,7 @@ impl KvmCpu {
 
     /// Init signal for `CPU` event.
     fn init_signals(&self) -> Result<()> {
-        extern "C" fn handle_signal(signum: c_int, _: *mut siginfo_t, _: *mut c_void) {
-            if signum == VCPU_TASK_SIGNAL {
-                let _ = CPUThreadWorker::run_on_local_thread_vcpu(|vcpu| {
-                    vcpu.hypervisor_cpu().set_hypervisor_exit().unwrap()
-                });
-            }
-        }
+        extern "C" fn handle_signal(_: c_int, _: *mut siginfo_t, _: *mut c_void) {}
 
         register_signal_handler(VCPU_TASK_SIGNAL, handle_signal)
             .with_context(|| "Failed to register VCPU_TASK_SIGNAL signal.")?;
@@ -493,6 +487,8 @@ impl KvmCpu {
                 match e.errno() {
                     libc::EAGAIN => {}
                     libc::EINTR => {
+                        // Clear the kick flag so the next KVM_RUN enters the
+                        // guest normally.
                         self.fd.set_kvm_immediate_exit(0);
                     }
                     _ => {
@@ -508,6 +504,12 @@ impl KvmCpu {
     }
 
     fn kick_vcpu_thread(&self, task: Arc<Mutex<Option<thread::JoinHandle<()>>>>) -> Result<()> {
+        // KVM_CAP_IMMEDIATE_EXIT: KVM_RUN polls `immediate_exit` once on
+        // entry and returns -EINTR if set, so the vCPU observes the
+        // lifecycle change even if the kick signal lands before the next
+        // KVM_RUN.
+        self.set_hypervisor_exit()?;
+
         let task = task.lock().unwrap();
         match task.as_ref() {
             Some(thread) => thread
@@ -682,6 +684,11 @@ impl CPUHypervisorOps for KvmCpu {
         {
             return Ok(());
         }
+
+        // KVM_CAP_IMMEDIATE_EXIT: KVM_RUN polls `immediate_exit` once on
+        // entry and returns -EINTR if set, so the vCPU observes the paused
+        // state even if the kick signal lands before the next KVM_RUN.
+        self.set_hypervisor_exit()?;
 
         match task.as_ref() {
             Some(thread) => {
