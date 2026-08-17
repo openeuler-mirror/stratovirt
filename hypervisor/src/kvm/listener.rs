@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use kvm_bindings::*;
 use kvm_bindings::{kvm_userspace_memory_region as KvmMemSlot, KVM_MEM_READONLY};
 use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
-use log::{debug, warn};
+use log::debug;
 
 use crate::HypervisorError;
 use address_space::{
@@ -241,12 +241,8 @@ impl KvmMemoryListener {
         if flat_range.owner.region_type() == RegionType::RomDevice
             && !flat_range.owner.get_rom_device_romd().unwrap()
         {
-            if let Err(ref e) = self.delete_region(flat_range) {
-                warn!(
-                    "Rom-device Region changes to IO mode, Failed to delete region: {:?}",
-                    e
-                );
-            }
+            self.delete_region(flat_range)
+                .with_context(|| "Failed to delete RomDevice region when entering IO mode")?;
             return Ok(());
         }
 
