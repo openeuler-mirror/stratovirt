@@ -2435,8 +2435,38 @@ mod test {
         let mut img_info = ImageInfo::default();
         assert!(dst_driver.query_image(&mut img_info).is_ok());
         assert_eq!(img_info.virtual_size, 10 * G);
-        // 1M data(number 0) in offset 300M will not consume space.
-        assert_eq!(img_info.actual_size, 3 * M);
+        // 1M data(number 0) in offset 300M is all-zero and skipped by convert,
+        // so it consumes no space. The 3 segments of 1M data at offset 0 / 5G
+        // / (10G-1M) account for exactly 3M of data blocks.
+        //
+        // actual_size comes from `st_blocks * 512`, which counts not only data
+        // blocks but also any filesystem metadata blocks the host FS allocated
+        // for this 10G sparse raw file. That metadata is host-FS dependent and
+        // non-deterministic.
+        //
+        // Taking ext4 as an example, the contributing factors on ext4 are:
+        //   - extent-tree index blocks: when the extent count exceeds the inode
+        //     inline limit (default 4), a 4K index block is allocated. The
+        //     alloc_first_block pre-write at offset 0 plus the subsequent 1M
+        //     write can fragment the extent list under delalloc.
+        //   - bigalloc cluster padding: when the bigalloc feature is enabled,
+        //     allocation and accounting are done per cluster (N blocks). A
+        //     partially used cluster is charged in full to st_blocks, so
+        //     fragmentation inflates the count.
+        //   - writeback timing: delalloc defers block allocation to writeback,
+        //     so the on-disk extent/block accounting is populated lazily as
+        //     pages are flushed back.
+        // Other host filesystems (xfs, btrfs, overlayfs, ...) have analogous
+        // metadata/extent-bookkeeping that likewise make st_blocks deviate from
+        // the pure data footprint; the phenomenon is host-FS generic, not
+        // ext4-specific, and the test is not restricted to any single FS.
+        //
+        // Hence assert a range, not an exact value -- mirroring the qcow2->qcow2
+        // convert test, which documents the same phenomenon for metadata
+        // clusters.
+        assert!(img_info.actual_size >= 3 * M);
+        // 1M margin is ample headroom for the host-FS metadata overhead of a 10G sparse file.
+        assert!(img_info.actual_size < 4 * M);
 
         // Clean.
         assert!(remove_file(dst_path).is_ok());
@@ -2508,8 +2538,17 @@ mod test {
         let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
         assert!(dst_driver.query_image(&mut img_info).is_ok());
         // Raw file has allocated filled first part (sized 4k(host page size), see function `alloc_first_block`) for
-        // detecting the alignment length.
-        assert_eq!(img_info.actual_size, 4 * K + 8 * K); // 4K allocated filled first part + 8K data.
+        // detecting the alignment length. The data footprint here is 4K
+        // (alloc_first_block) + 8K (two 4K non-zero segments), but actual_size
+        // = st_blocks * 512 also charges host-FS metadata/extent-bookkeeping
+        // blocks (see the qcow2->raw convert test for the full rationale, which
+        // lists the contributing factors with ext4 as an example and notes the
+        // phenomenon is host-FS generic, not ext4-specific). So the count may
+        // exceed the pure data footprint on some host filesystems; assert a
+        // range instead of an exact value.
+        assert!(img_info.actual_size >= 4 * K + 8 * K);
+        // 16K margin is ample headroom for this small contiguous file.
+        assert!(img_info.actual_size < 4 * K + 8 * K + 16 * K);
         drop(dst_driver);
         assert!(remove_file(dst_path).is_ok());
 
@@ -2543,8 +2582,17 @@ mod test {
         let mut dst_driver = RawDriver::new(Arc::new(file), aio, conf);
         assert!(dst_driver.query_image(&mut img_info).is_ok());
         // min_sparse is 16k. So, these continuous `4K 0 buffer + 4K 1 buffer` will be considered as all data buffer sized 8k.
-        // Will not create holes here.
-        assert_eq!(img_info.actual_size, 4 * K + 16 * K);
+        // Will not create holes here. The data footprint is 4K
+        // (alloc_first_block) + 16K (one contiguous data segment), but
+        // actual_size = st_blocks * 512 also charges host-FS
+        // metadata/extent-bookkeeping blocks (see the qcow2->raw convert test
+        // for the full rationale, which lists the contributing factors with
+        // ext4 as an example and notes the phenomenon is host-FS generic, not
+        // ext4-specific). So the count may exceed the pure data footprint on
+        // some host filesystems; assert a range instead of an exact value.
+        assert!(img_info.actual_size >= 4 * K + 16 * K);
+        // 16K margin is ample headroom for this small contiguous file.
+        assert!(img_info.actual_size < 4 * K + 16 * K + 16 * K);
         drop(dst_driver);
         assert!(remove_file(dst_path).is_ok());
     }
