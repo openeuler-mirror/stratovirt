@@ -198,6 +198,18 @@ impl KvmMemoryListener {
         self.slots.lock().unwrap().remove(addr, size)
     }
 
+    fn get_active_slot(&self, addr: u64, size: u64) -> Result<MemSlot> {
+        let slots = self.slots.lock().unwrap();
+        let entry = slots
+            .active_slots
+            .get(&addr)
+            .ok_or_else(|| anyhow!(HypervisorError::NoMatchedKvmSlot(addr, size)))?;
+        if entry.size != size {
+            return Err(anyhow!(HypervisorError::NoMatchedKvmSlot(addr, size)));
+        }
+        Ok(*entry)
+    }
+
     /// Align a piece of memory segment according to `alignment`,
     /// return AddressRange after aligned.
     ///
@@ -281,27 +293,28 @@ impl KvmMemoryListener {
             flags,
         };
 
-        if kvm_region.flags & KVM_MEM_READONLY == 0 {
-            let mut locked_slots = self.kvm_memslots.as_ref().lock().unwrap();
-            locked_slots.insert(kvm_region.slot, kvm_region);
-        }
-
         // SAFETY: All parameters in the struct of kvm_region are valid,
         // it can be guaranteed that calling the ioctl_with_ref in the function
         // of set_user_memory_region is safe.
-        unsafe {
-            self.vm_fd.set_user_memory_region(kvm_region).or_else(|e| {
-                self.delete_slot(aligned_addr.raw_value(), aligned_size)
-                    .with_context(|| "Failed to delete Kvm mem slot")?;
-                Err(e).with_context(|| {
-                    format!(
-                        "KVM register memory region failed: addr 0x{:X}, size 0x{:X}",
-                        aligned_addr.raw_value(),
-                        aligned_size
-                    )
-                })
-            })
+        if let Err(e) = unsafe { self.vm_fd.set_user_memory_region(kvm_region) } {
+            self.delete_slot(aligned_addr.raw_value(), aligned_size)
+                .with_context(|| "Failed to delete Kvm mem slot")?;
+            return Err(e).with_context(|| {
+                format!(
+                    "KVM register memory region failed: addr 0x{:X}, size 0x{:X}",
+                    aligned_addr.raw_value(),
+                    aligned_size
+                )
+            });
         }
+
+        if kvm_region.flags & KVM_MEM_READONLY == 0 {
+            self.kvm_memslots
+                .lock()
+                .unwrap()
+                .insert(kvm_region.slot, kvm_region);
+        }
+        Ok(())
     }
 
     /// Callback function for deleting Region, which only care about Ram-type Region yet.
@@ -322,7 +335,7 @@ impl KvmMemoryListener {
                 .map(|r| (r.base, r.size))
                 .with_context(|| "Failed to align mem slot")?;
 
-        let mem_slot = match self.delete_slot(aligned_addr.raw_value(), aligned_size) {
+        let mem_slot = match self.get_active_slot(aligned_addr.raw_value(), aligned_size) {
             Ok(m) => m,
             Err(_) => {
                 debug!("no match mem slot registered to KVM, just return");
@@ -338,9 +351,6 @@ impl KvmMemoryListener {
             flags: 0,
         };
 
-        let mut locked_slots = self.kvm_memslots.lock().unwrap();
-        locked_slots.remove(&kvm_region.slot);
-
         // SAFETY: All parameters in the struct of kvm_region are valid,
         // it can be guaranteed that calling the ioctl_with_ref in the function
         // of set_user_memory_region is safe.
@@ -352,8 +362,12 @@ impl KvmMemoryListener {
                         "KVM unregister memory region failed: addr 0x{:X}",
                         aligned_addr.raw_value(),
                     )
-                })
+                })?;
         }
+
+        self.delete_slot(aligned_addr.raw_value(), aligned_size)?;
+        self.kvm_memslots.lock().unwrap().remove(&kvm_region.slot);
+        Ok(())
     }
 
     /// Register a IoEvent to `/dev/kvm`.
