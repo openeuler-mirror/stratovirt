@@ -18,3 +18,6 @@ pub mod ivshmem;
 
 #[cfg(feature = "pvpanic")]
 pub mod pvpanic;
+
+#[cfg(feature = "tpm")]
+pub mod tpm;
