@@ -24,6 +24,7 @@ members = [
     "ozone",
     "image",
     "tests/mod_test",
+    "tpm",
 ]
 
 [features]
@@ -69,6 +70,7 @@ vhostuser_net = ["machine/vhostuser_net"]
 vhostuser_vsock = ["machine/vhostuser_vsock"]
 vhostuser_input = ["machine/vhostuser_input"]
 vhost_net = ["machine/vhost_net"]
+tpm = []
 
 [package.metadata.rpm.cargo]
 buildflags = ["--release"]

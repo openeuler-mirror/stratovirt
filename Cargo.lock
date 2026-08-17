@@ -1938,6 +1938,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tpm"
+version = "0.0.1"
+dependencies = [
+ "thiserror",
+ "vmm-sys-util",
+]
+
+[[package]]
 name = "trace"
 version = "2.5.0"
 dependencies = [
