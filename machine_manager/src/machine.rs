@@ -271,7 +271,7 @@ pub trait DeviceInterface {
         )
     }
 
-    /// Query UFFD-WP dirty bitmap after state restore.
+    /// Query dirty bitmap after state restore (UFFD-WP or resident fallback).
     fn query_mem_dirty_bitmap(&self) -> Response {
         Response::create_error_response(
             QmpErrorClass::GenericError("query-mem-dirty-bitmap not implemented".to_string()),
