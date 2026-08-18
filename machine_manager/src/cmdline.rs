@@ -188,8 +188,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("qmp")
             .long("qmp")
             .value_name("<parameters>")
-            .help("\n\t\tset unix socket path: unix:<socket_path>,server,nowait; \
-                   \n\t\tset tcp socket path: tcp:ip:port,server,nowait")
+            .help("\n\t\tset unix socket path: unix:<socket_path>,server,nowait/wait=off; \
+                   \n\t\tset tcp socket path: tcp:ip:port,server,nowait/wait=off")
             .takes_value(true)
         )
         .arg(
@@ -227,8 +227,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             .help("\n\t\tadd standard i/o device: -chardev stdio,id=<char_id>; \
                    \n\t\tadd pseudo-terminal: -chardev pty,id=<char_id>; \
                    \n\t\tadd file: -chardev file,id=<char_id>,path=<path>; \
-                   \n\t\tadd unix-socket: -chardev socket,id=<char_id>,path=<path>[,server][,nowait]; \
-                   \n\t\tadd tcp-socket: -chardev socket,id=<char_id>,port=<port>[,host=host][,server][,nowait];")
+                   \n\t\tadd unix-socket: -chardev socket,id=<char_id>,path=<path>[,server][,nowait/wait=off]; \
+                   \n\t\tadd tcp-socket: -chardev socket,id=<char_id>,port=<port>[,host=host][,server][,nowait/wait=off];")
             .takes_values(true),
         )
         .arg(
@@ -284,8 +284,8 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
                    \n\t\tuse standard i/o device: -serial stdio; \
                    \n\t\tuse pseudo-terminal: -serial pty; \
                    \n\t\tuse file: -serial file,path=<path>; \
-                   \n\t\tuse unix-socket: -serial socket,path=<path>[,server][,nowait]; \
-                   \n\t\tuse tcp-socket: -serial socket,port=<port>[,host=<host>][,server][,nowait]; \
+                   \n\t\tuse unix-socket: -serial socket,path=<path>[,server][,nowait/wait=off]; \
+                   \n\t\tuse tcp-socket: -serial socket,port=<port>[,host=<host>][,server][,nowait/wait=off]; \
                   ")
             .takes_value(true),
         )
@@ -645,8 +645,10 @@ struct QmpConfig {
     uri: String,
     #[arg(long, action = ArgAction::SetTrue, required = true)]
     server: bool,
-    #[arg(long, action = ArgAction::SetTrue, required = true)]
+    #[arg(long, action = ArgAction::SetTrue)]
     nowait: bool,
+    #[arg(long, value_parser = ["off", "on"])]
+    wait: Option<String>,
     #[arg(long)]
     iothread: Option<String>,
 }
@@ -678,6 +680,9 @@ pub fn check_api_channel(
     let mut listeners = Vec::new();
     if let Some(qmp_args) = args.value_of("qmp") {
         let qmp_cfg = QmpConfig::try_parse_from(str_slip_to_clap(&qmp_args, true, false))?;
+        if !qmp_cfg.nowait && qmp_cfg.wait.as_deref() != Some("off") {
+            bail!("Argument \'nowait\' or \'wait=off\' is needed for qmp");
+        }
         let sock_path =
             QmpSocketPath::new(qmp_cfg.uri).with_context(|| "Failed to parse qmp socket path")?;
         listeners.push((
@@ -700,10 +705,16 @@ pub fn check_api_channel(
             .classtype
             .socket_type()
             .with_context(|| "Only chardev of unix-socket type can be used for monitor")?;
-        if let ChardevType::Socket { server, nowait, .. } = cfg.classtype {
-            if !server || !nowait {
+        if let ChardevType::Socket {
+            server,
+            nowait,
+            ref wait,
+            ..
+        } = cfg.classtype
+        {
+            if !server || !(nowait || wait.as_deref() == Some("off")) {
                 bail!(
-                    "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                    "Argument \'server\' and \'nowait\' or \'wait=off\' are both required for chardev \'{}\'",
                     cfg.id()
                 );
             }

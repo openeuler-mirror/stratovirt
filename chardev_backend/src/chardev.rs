@@ -149,10 +149,15 @@ impl Chardev {
                 self.input = Some(master_arc.clone());
                 self.output = Some(master_arc);
             }
-            ChardevType::Socket { server, nowait, .. } => {
-                if !*server || !*nowait {
+            ChardevType::Socket {
+                server,
+                nowait,
+                wait,
+                ..
+            } => {
+                if !*server || !(*nowait || wait.as_deref() == Some("off")) {
                     bail!(
-                        "Argument \'server\' and \'nowait\' are both required for chardev \'{}\'",
+                        "Argument \'server\' and \'nowait\' or \'wait=off\' are both required for chardev \'{}\'",
                         &self.id
                     );
                 }

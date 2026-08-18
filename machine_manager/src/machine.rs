@@ -27,7 +27,7 @@ use crate::qmp::qmp_schema::{
     Events, GetViomemArgument, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
     MigrateCapabilities, NetDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, PropList,
     QmpCommand, QmpErrorClass, QmpEvent, QueryMemGpaArgument, QueryVcpuRegArgument,
-    SetViomemArgument, Target, TypeLists, UpdateRegionArgument,
+    SchemaInfoCommand, SetViomemArgument, Target, TypeLists, UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -171,6 +171,9 @@ pub trait DeviceInterface {
 
     /// Query each cpu's the topology info.
     fn query_cpus(&self) -> Response;
+
+    /// Query each cpu's the fast topology info.
+    fn query_cpus_fast(&self) -> Response;
 
     /// Query each `hotpluggable_cpus`'s topology info and hotplug message.
     fn query_hotpluggable_cpus(&self) -> Response;
@@ -417,6 +420,7 @@ pub trait DeviceInterface {
             #[cfg(feature = "usb_storage")]
             ("usb-storage", "usb-storage-dev"),
             ("virtio-gpu-pci", "virtio-gpu"),
+            ("pl011", "sys-bus-device"),
         ];
 
         for list in list_types {
@@ -424,6 +428,11 @@ pub trait DeviceInterface {
             vec_types.push(re);
         }
         Response::create_response(serde_json::to_value(&vec_types).unwrap(), None)
+    }
+
+    fn qom_list_properties(&self, _typename: String) -> Response {
+        let types = Vec::<String>::new();
+        Response::create_response(serde_json::to_value(types).unwrap(), None)
     }
 
     fn device_list_properties(&self, typename: String) -> Response {
@@ -486,7 +495,17 @@ pub trait DeviceInterface {
     }
 
     fn query_qmp_schema(&self) -> Response {
-        Response::create_empty_response()
+        let mut vec_types = Vec::new();
+        for qmp_cmd in QmpCommand::VARIANTS {
+            let command_info = SchemaInfoCommand {
+                name: String::from(*qmp_cmd),
+                meta_type: String::from("command"),
+                arg_type: String::from("0"),
+                ret_type: String::from("1"),
+            };
+            vec_types.push(command_info);
+        }
+        Response::create_response(serde_json::to_value(&vec_types).unwrap(), None)
     }
 
     fn query_sev_capabilities(&self) -> Response {

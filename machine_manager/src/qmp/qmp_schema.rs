@@ -95,6 +95,7 @@ define_qmp_command_enum!(
     cameradev_del("cameradev_del", cameradev_del),
     query_hotpluggable_cpus("query-hotpluggable-cpus", query_hotpluggable_cpus, default),
     query_cpus("query-cpus", query_cpus, default),
+    query_cpus_fast("query-cpus-fast", query_cpus_fast, default),
     query_status("query-status", query_status, default),
     getfd("getfd", getfd),
     blockdev_add("blockdev-add", Box<blockdev_add>),
@@ -121,6 +122,7 @@ define_qmp_command_enum!(
     query_machines("query-machines", query_machines, default),
     query_events("query-events", query_events, default),
     list_type("qom-list-types", list_type, default),
+    qom_list_properties("qom-list-properties", qom_list_properties, default),
     device_list_properties("device-list-properties", device_list_properties, default),
     block_commit("block-commit", block_commit, default),
     query_tpm_models("query-tpm-models", query_tpm_models, default),
@@ -1006,6 +1008,63 @@ pub struct CpuInfoX86 {}
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CpuInfoArm {}
 
+/// @query-cpus-fast:
+///
+/// Returns information about all virtual CPUs.
+///
+/// Returns: list of @CpuInfoFast
+///
+/// Since: 2.12
+///
+/// Example:
+///
+/// -> { "execute": "query-cpus-fast" }
+/// <- { "return": [
+///         {
+///             "thread-id": 25627,
+///             "props": {
+///                 "core-id": 0,
+///                 "thread-id": 0,
+///                 "socket-id": 0
+///             },
+///             "qom-path": "/machine/unattached/device[0]",
+///             "target":"x86_64",
+///             "cpu-index": 0
+///         },
+///         {
+///             "thread-id": 25628,
+///             "props": {
+///                 "core-id": 0,
+///                 "thread-id": 0,
+///                 "socket-id": 1
+///             },
+///             "qom-path": "/machine/unattached/device[2]",
+///             "target":"x86_64",
+///             "cpu-index": 1
+///         }
+///     ]
+/// }
+///
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_cpus_fast {}
+generate_command_impl!(query_cpus_fast, Vec<CpuInfoFast>);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CpuInfoFast {
+    #[serde(rename = "qom-path")]
+    pub qom_path: String,
+    #[serde(rename = "props", default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<CpuInstanceProperties>,
+    #[serde(rename = "cpu-index")]
+    pub cpu_index: isize,
+    #[serde(rename = "thread-id")]
+    pub thread_id: isize,
+    #[serde(rename = "target")]
+    pub target: String,
+}
+
 /// query-status
 ///
 /// Query the run status of all VCPUs.
@@ -1463,6 +1522,29 @@ impl TypeLists {
     }
 }
 
+/// qom-list-properties
+///
+/// List properties associated with a qom.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "qom-list-properties", "arguments": { "typename": "memory-backend-file" } }
+/// <- { "return": [] }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct qom_list_properties {
+    pub typename: String,
+}
+generate_command_impl!(qom_list_properties, Vec<QomListProps>);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct QomListProps {
+    pub name: String,
+    #[serde(rename = "typename")]
+    pub prop_type: String,
+}
+
 /// device-list-properties
 ///
 /// List properties associated with a device.
@@ -1578,7 +1660,20 @@ pub struct MigrateCapabilities {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_qmp_schema {}
-generate_command_impl!(query_qmp_schema, Empty);
+generate_command_impl!(query_qmp_schema, Vec<SchemaInfoCommand>);
+
+/// One command entry in the QMP schema, the format follows QEMU's
+/// SchemaInfoCommand.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaInfoCommand {
+    pub name: String,
+    #[serde(rename = "meta-type")]
+    pub meta_type: String,
+    #[serde(rename = "arg-type")]
+    pub arg_type: String,
+    #[serde(rename = "ret-type")]
+    pub ret_type: String,
+}
 
 /// query-sev-capabilities
 ///
@@ -2535,6 +2630,60 @@ mod tests {
         };
         let ret_msg = r#"invalid type: string "isdf", expected struct query_cpus"#;
         assert!(err_msg == ret_msg);
+
+        // qmp: query-cpus-fast.
+        let json_msg = r#"
+        {
+            "execute": "query-cpus-fast"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-cpus-fast.
+        let json_msg = r#"
+        {
+            "execute": "query-cpus-fast" ,
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_cpus_fast"#;
+        assert!(err_msg == ret_msg);
+
+        // query-cpus-fast response entry format.
+        let cpu_info = CpuInfoFast {
+            qom_path: "/machine/unattached/device[0]".to_string(),
+            props: None,
+            cpu_index: 0,
+            thread_id: 123,
+            target: "x86_64".to_string(),
+        };
+        let json = serde_json::to_string(&cpu_info).unwrap();
+        assert!(json.contains(r#""qom-path":"/machine/unattached/device[0]""#));
+        assert!(json.contains(r#""cpu-index":0"#));
+        assert!(json.contains(r#""thread-id":123"#));
+        assert!(json.contains(r#""target":"x86_64""#));
+
+        // query-qmp-schema response entry format.
+        let schema_entry = SchemaInfoCommand {
+            name: "query-status".to_string(),
+            meta_type: "command".to_string(),
+            arg_type: "0".to_string(),
+            ret_type: "1".to_string(),
+        };
+        let json = serde_json::to_string(&schema_entry).unwrap();
+        assert!(json.contains(r#""name":"query-status""#));
+        assert!(json.contains(r#""meta-type":"command""#));
+        assert!(json.contains(r#""arg-type":"0""#));
+        assert!(json.contains(r#""ret-type":"1""#));
 
         // qmp: query-ststus.
         let json_msg = r#"
