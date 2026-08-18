@@ -1206,6 +1206,33 @@ impl DeviceInterface for StdMachine {
         Response::create_response(cpu_vec.into(), None)
     }
 
+    fn query_cpus_fast(&self) -> Response {
+        let mut cpu_vec: Vec<serde_json::Value> = Vec::new();
+        let cpu_topo = self.get_cpu_topo();
+        let cpus = self.get_cpus();
+        for cpu_index in 0..cpu_topo.max_cpus {
+            if cpu_topo.get_mask(cpu_index as usize) == 1 {
+                let thread_id = cpus[cpu_index as usize].tid();
+                let cpu_instance = cpu_topo.get_topo_instance_for_qmp(cpu_index);
+                #[cfg(target_arch = "x86_64")]
+                let target = String::from("x86_64");
+                #[cfg(target_arch = "aarch64")]
+                let target = String::from("aarch64");
+                let cpu_info = qmp_schema::CpuInfoFast {
+                    qom_path: String::from("/machine/unattached/device[")
+                        + &cpu_index.to_string()
+                        + "]",
+                    props: Some(cpu_instance),
+                    cpu_index: cpu_index as isize,
+                    thread_id: thread_id as isize,
+                    target,
+                };
+                cpu_vec.push(serde_json::to_value(cpu_info).unwrap());
+            }
+        }
+        Response::create_response(cpu_vec.into(), None)
+    }
+
     fn query_hotpluggable_cpus(&self) -> Response {
         Response::create_empty_response()
     }
