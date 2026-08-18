@@ -135,6 +135,8 @@ pub enum ChardevType {
         server: bool,
         #[arg(long, action = ArgAction::SetTrue)]
         nowait: bool,
+        #[arg(long, value_parser = ["off", "on"])]
+        wait: Option<String>,
     },
     File {
         #[arg(long, value_parser = valid_id)]
@@ -235,6 +237,7 @@ pub fn get_chardev_config(args: qmp_schema::CharDevAddArgument) -> Result<Charde
             port: None,
             server: data.server,
             nowait: false,
+            wait: None,
         },
     })
 }
@@ -407,6 +410,7 @@ mod tests {
             port: None,
             server: true,
             nowait: true,
+            wait: None,
         };
         test_mmio_console_config_cmdline_parser(chardev_cfg, expected_chardev)
     }
@@ -421,6 +425,7 @@ mod tests {
             port: Some(9090),
             server: true,
             nowait: true,
+            wait: None,
         };
         test_mmio_console_config_cmdline_parser(chardev_cfg, expected_chardev)
     }
@@ -457,6 +462,7 @@ mod tests {
             port: None,
             server: true,
             nowait: true,
+            wait: None,
         };
         test_pci_console_config_cmdline_parser(chardev_cfg, expected_chardev)
     }
@@ -471,6 +477,7 @@ mod tests {
             port: Some(9090),
             server: true,
             nowait: true,
+            wait: None,
         };
         test_pci_console_config_cmdline_parser(chardev_cfg, expected_chardev)
     }
@@ -540,6 +547,7 @@ mod tests {
                     port: None,
                     server: server_state,
                     nowait: nowait_state,
+                    wait: None,
                 },
             );
             check_argument(
@@ -551,6 +559,7 @@ mod tests {
                     port: Some(9090),
                     server: server_state,
                     nowait: nowait_state,
+                    wait: None,
                 },
             );
             check_argument(
@@ -565,6 +574,7 @@ mod tests {
                     port: Some(7070),
                     server: server_state,
                     nowait: nowait_state,
+                    wait: None,
                 },
             );
         }

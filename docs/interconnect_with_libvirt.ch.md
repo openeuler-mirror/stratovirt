@@ -161,3 +161,19 @@ CPU拓扑还没有支持，请仅配置VCPU的个数。
 </source>
 </hostdev>
 ```
+
+## QMP
+
+StratoVirt按照libvirt的期望，使用 `server,wait=off` 创建QMP socket；
+`wait=off` 与 `nowait` 等价。
+
+```
+-qmp unix:/path/to/api/socket,server,wait=off
+```
+
+为了与libvirt互联，StratoVirt提供以下QMP命令：
+
+- `qom-list-types`：列出支持的设备类型。在aarch64平台上，包含 `pl011` 串口类型。
+- `qom-list-properties`：列出QOM类型的属性，目前返回空列表。
+- `query-qmp-schema`：返回QMP命令schema。
+- `device-list-properties`：列出设备的属性。
