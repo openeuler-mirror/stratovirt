@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 #[cfg(target_arch = "x86_64")]
 use boot_loader::{load_acpi_to_memory, ARCH_RSDP_BEGIN};
+#[cfg(feature = "tpm")]
 use devices::misc::tpm::{TpmInterfaceType, TpmTis};
 use log::{error, warn};
 use util::{any_typecast_mut, set_termi_canon_mode};
@@ -57,10 +58,12 @@ use devices::acpi::cpu_controller::CpuController;
 use devices::legacy::FwCfgOps;
 use devices::pci::hotplug::{handle_plug, handle_unplug_pci_request};
 use devices::pci::{PciBus, PciHost};
-#[cfg(feature = "tpm")]
-use devices::sysbus::{to_sysbusdevops, SysBusDevType};
 use devices::Device;
-use devices::SYS_BUS_DEVICE;
+#[cfg(feature = "tpm")]
+use devices::{
+    sysbus::{to_sysbusdevops, SysBusDevType},
+    SYS_BUS_DEVICE,
+};
 #[cfg(feature = "usb_camera")]
 use machine_manager::config::get_cameradev_config;
 #[cfg(target_arch = "aarch64")]
@@ -144,7 +147,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     fn build_acpi_tables(
         &self,
         fw_cfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
-        tpm_enabled: Option<TpmInterfaceType>,
+        #[cfg(feature = "tpm")] tpm_enabled: Option<TpmInterfaceType>,
     ) -> Result<()>
     where
         Self: Sized,
@@ -223,6 +226,7 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
             xsdt_entries.push(pptt_addr);
         }
 
+        #[cfg(feature = "tpm")]
         if let Some(interface_type) = tpm_enabled.as_ref() {
             let tpm2_addr = self
                 .build_tpm2_table(&acpi_tables, &mut loader, interface_type)
@@ -996,6 +1000,7 @@ pub(crate) trait AcpiBuilder {
     ///
     /// `acpi_data` - Bytes streams that ACPI tables converts to.
     /// `loader` - ACPI table loader.
+    #[cfg(feature = "tpm")]
     fn build_tpm2_table(
         &self,
         _acpi_data: &Arc<Mutex<Vec<u8>>>,
@@ -2370,6 +2375,7 @@ impl DeviceInterface for StdMachine {
         }
     }
 
+    #[cfg(feature = "tpm")]
     fn tpm_reconnect(&mut self, args: qmp_schema::TpmReconnectArg) -> Response {
         for dev in self.get_sysbus_devices().values() {
             SYS_BUS_DEVICE!(dev, locked_busdev, sysbusdev);

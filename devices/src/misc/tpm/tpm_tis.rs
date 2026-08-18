@@ -37,7 +37,7 @@ use address_space::GuestAddress;
 use machine_manager::{
     event,
     qmp::qmp_channel::QmpChannel,
-    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, TPM_TYPE},
+    qmp::qmp_schema::{DeviceClassSubType, VmNotifyEvent, DEVICE_CLASS_ID},
 };
 use migration::{
     snapshot::TPMTIS_SNAPSHOT_ID, DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer,
@@ -570,7 +570,7 @@ impl OnComplete for TpmTis {
 
                     let disconnected_msg = VmNotifyEvent {
                         klass: DEVICE_CLASS_ID,
-                        type_t: TPM_TYPE,
+                        type_t: DeviceClassSubType::TPM.into(),
                         code: TPM_DISCONNECTED_NOTIFY_CODE,
                         message: None,
                     };
@@ -673,7 +673,7 @@ impl SysBusDevOps for TpmTis {
 
                                 let disconnected_msg = VmNotifyEvent {
                                     klass: DEVICE_CLASS_ID,
-                                    type_t: TPM_TYPE,
+                                    type_t: DeviceClassSubType::TPM.into(),
                                     code: TPM_DISCONNECTED_NOTIFY_CODE,
                                     message: None,
                                 };
@@ -815,7 +815,7 @@ impl SysBusDevOps for TpmTis {
 
                                     let disconnected_msg = VmNotifyEvent {
                                         klass: DEVICE_CLASS_ID,
-                                        type_t: TPM_TYPE,
+                                        type_t: DeviceClassSubType::TPM.into(),
                                         code: TPM_DISCONNECTED_NOTIFY_CODE,
                                         message: None,
                                     };
@@ -860,7 +860,7 @@ impl SysBusDevOps for TpmTis {
 
                                     let disconnected_msg = VmNotifyEvent {
                                         klass: DEVICE_CLASS_ID,
-                                        type_t: TPM_TYPE,
+                                        type_t: DeviceClassSubType::TPM.into(),
                                         code: TPM_DISCONNECTED_NOTIFY_CODE,
                                         message: None,
                                     };
@@ -922,7 +922,7 @@ impl SysBusDevOps for TpmTis {
 
                             let disconnected_msg = VmNotifyEvent {
                                 klass: DEVICE_CLASS_ID,
-                                type_t: TPM_TYPE,
+                                type_t: DeviceClassSubType::TPM.into(),
                                 code: TPM_DISCONNECTED_NOTIFY_CODE,
                                 message: None,
                             };
@@ -945,7 +945,7 @@ impl SysBusDevOps for TpmTis {
 
                             let disconnected_msg = VmNotifyEvent {
                                 klass: DEVICE_CLASS_ID,
-                                type_t: TPM_TYPE,
+                                type_t: DeviceClassSubType::TPM.into(),
                                 code: TPM_DISCONNECTED_NOTIFY_CODE,
                                 message: None,
                             };
@@ -977,7 +977,7 @@ impl SysBusDevOps for TpmTis {
 
                                     let disconnected_msg = VmNotifyEvent {
                                         klass: DEVICE_CLASS_ID,
-                                        type_t: TPM_TYPE,
+                                        type_t: DeviceClassSubType::TPM.into(),
                                         code: TPM_DISCONNECTED_NOTIFY_CODE,
                                         message: None,
                                     };
