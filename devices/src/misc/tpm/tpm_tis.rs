@@ -15,11 +15,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::legacy::error::LegacyError;
-use crate::misc::tpm::TpmInterfaceType;
+use crate::misc::tpm::{TpmInterfaceType, TPM_DISCONNECTED_NOTIFY_CODE};
 use crate::sysbus::{SysBus, SysBusDevBase, SysBusDevOps, SysBusDevType};
 use crate::{convert_bus_mut, Device, DeviceBase, MUT_SYS_BUS};
 use acpi::{
@@ -30,6 +30,11 @@ use acpi::{
 #[cfg(target_arch = "aarch64")]
 use acpi::{INTERRUPT_PPIS_COUNT, INTERRUPT_SGIS_COUNT};
 use address_space::GuestAddress;
+use machine_manager::{
+    event,
+    qmp::qmp_channel::QmpChannel,
+    qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, TPM_TYPE},
+};
 use tpm::{
     emulator::{
         Emulator, EmulatorError, Result as EmulatorResult, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET,
@@ -181,6 +186,7 @@ pub struct TpmTis {
     loc: [TpmLocality; TPM_TIS_NUM_LOCALITIES],
     pub emulator: Arc<Mutex<Emulator<TpmTis>>>,
     backend_buff_size: usize,
+    backend_disconnected: bool,
 }
 
 impl TpmTis {
@@ -203,6 +209,7 @@ impl TpmTis {
             loc: [TpmLocality::default(); TPM_TIS_NUM_LOCALITIES],
             emulator,
             backend_buff_size: TPM_TIS_BUFFER_MAX,
+            backend_disconnected: false,
         };
         tpm.set_sys_resource(sysbus, region_base, region_size, "TPM-TIS")
             .with_context(|| LegacyError::SetSysResErr)?;
@@ -212,6 +219,33 @@ impl TpmTis {
         tpm.get_established_flag()?;
 
         Ok(tpm)
+    }
+
+    pub fn reconnect(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        info!("Reconnecting vTPM to: {:?}", path.as_ref());
+
+        let handler = self.emulator.lock().unwrap().stop_data_worker();
+
+        let new_emulator =
+            Emulator::new(path).map_err(|e| anyhow::anyhow!("Reconnect to swtpm failed: {}", e))?;
+
+        let cur_buff_size = new_emulator.lock().unwrap().get_buffer_size();
+        self.backend_buff_size = cmp::min(cur_buff_size, TPM_TIS_BUFFER_MAX);
+
+        if let Err(e) = new_emulator
+            .lock()
+            .unwrap()
+            .startup_tpm(self.backend_buff_size, false)
+        {
+            return Err(anyhow!("Failed while running Startup TPM. Error: {e:?}"));
+        }
+        new_emulator.lock().unwrap().set_complete_handler(handler);
+
+        self.emulator = new_emulator;
+        self.backend_disconnected = false;
+
+        info!("vTPM reconnect sequence completed successfully.");
+        Ok(())
     }
 
     fn write_fatal_error_response(&mut self) {
@@ -362,6 +396,17 @@ impl TpmTis {
 
         if let Err(e) = res {
             error!("Failed to dispatch TPM request to backend: {:?}", e);
+            if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+                self.backend_disconnected = true;
+
+                let disconnected_msg = VmNotifyEvent {
+                    klass: DEVICE_CLASS_ID,
+                    type_t: TPM_TYPE,
+                    code: TPM_DISCONNECTED_NOTIFY_CODE,
+                    message: None,
+                };
+                event!(VmNotifyEvent; disconnected_msg);
+            }
             self.write_fatal_error_response();
             self.request_completed(false);
             return Err(anyhow::anyhow!("Failed to trigger tpm request send: {}", e));
@@ -499,6 +544,17 @@ impl OnComplete for TpmTis {
                 self.request_completed(true);
             }
             Err(e) => {
+                if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+                    self.backend_disconnected = true;
+
+                    let disconnected_msg = VmNotifyEvent {
+                        klass: DEVICE_CLASS_ID,
+                        type_t: TPM_TYPE,
+                        code: TPM_DISCONNECTED_NOTIFY_CODE,
+                        message: None,
+                    };
+                    event!(VmNotifyEvent; disconnected_msg);
+                }
                 error!("TPM async request failed: {:?}", e);
                 self.write_fatal_error_response();
                 self.request_completed(false);
@@ -557,15 +613,30 @@ impl SysBusDevOps for TpmTis {
                     access |= TPM_TIS_ACCESS_PENDING_REQUEST;
                 }
 
-                match self.get_established_flag() {
-                    Ok(is_established) => {
-                        if !is_established {
-                            access |= TPM_TIS_ACCESS_TPM_ESTABLISHMENT;
+                if !self.backend_disconnected {
+                    match self.get_established_flag() {
+                        Ok(is_established) => {
+                            if !is_established {
+                                access |= TPM_TIS_ACCESS_TPM_ESTABLISHMENT;
+                            }
+                            val = access as u32;
                         }
-                        val = access as u32;
-                    }
-                    Err(e) => {
-                        error!("FATAL: Failed to read TPM established flag: {:?}", e);
+                        Err(e) => {
+                            error!("FATAL: Failed to read TPM established flag: {:?}", e);
+                            if matches!(e, EmulatorError::Disconnected)
+                                && !self.backend_disconnected
+                            {
+                                self.backend_disconnected = true;
+
+                                let disconnected_msg = VmNotifyEvent {
+                                    klass: DEVICE_CLASS_ID,
+                                    type_t: TPM_TYPE,
+                                    code: TPM_DISCONNECTED_NOTIFY_CODE,
+                                    message: None,
+                                };
+                                event!(VmNotifyEvent; disconnected_msg);
+                            }
+                        }
                     }
                 }
             }
@@ -693,7 +764,21 @@ impl SysBusDevOps for TpmTis {
                         }
                         if newlocty < TPM_TIS_NUM_LOCALITIES as u8 {
                             set_new_locty = false;
-                            let _ = self.prep_abort(locty, newlocty);
+                            if let Err(EmulatorError::Disconnected) =
+                                self.prep_abort(locty, newlocty)
+                            {
+                                if !self.backend_disconnected {
+                                    self.backend_disconnected = true;
+
+                                    let disconnected_msg = VmNotifyEvent {
+                                        klass: DEVICE_CLASS_ID,
+                                        type_t: TPM_TYPE,
+                                        code: TPM_DISCONNECTED_NOTIFY_CODE,
+                                        message: None,
+                                    };
+                                    event!(VmNotifyEvent; disconnected_msg);
+                                }
+                            };
                         } else {
                             active_locty = TPM_TIS_NO_LOCALITY;
                         }
@@ -724,7 +809,21 @@ impl SysBusDevOps for TpmTis {
                             self.loc[locty_idx].access |= TPM_TIS_ACCESS_SEIZE;
                             set_new_locty = false;
 
-                            let _ = self.prep_abort(self.active_locty, locty);
+                            if let Err(EmulatorError::Disconnected) =
+                                self.prep_abort(self.active_locty, locty)
+                            {
+                                if !self.backend_disconnected {
+                                    self.backend_disconnected = true;
+
+                                    let disconnected_msg = VmNotifyEvent {
+                                        klass: DEVICE_CLASS_ID,
+                                        type_t: TPM_TYPE,
+                                        code: TPM_DISCONNECTED_NOTIFY_CODE,
+                                        message: None,
+                                    };
+                                    event!(VmNotifyEvent; disconnected_msg);
+                                }
+                            };
                         }
                     }
                 }
@@ -773,12 +872,34 @@ impl SysBusDevOps for TpmTis {
                     && self.loc[locty_idx].state == TpmTisState::Execution
                 {
                     if let Err(e) = self.emulator.lock().unwrap().cancel_cmd() {
+                        if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+                            self.backend_disconnected = true;
+
+                            let disconnected_msg = VmNotifyEvent {
+                                klass: DEVICE_CLASS_ID,
+                                type_t: TPM_TYPE,
+                                code: TPM_DISCONNECTED_NOTIFY_CODE,
+                                message: None,
+                            };
+                            event!(VmNotifyEvent; disconnected_msg);
+                        }
                         warn!("Tpm backend cancel command failed: {:?}", e);
                     }
                 }
                 if (write_val & TPM_TIS_STS_RESET_ESTABLISHMENT) != 0 && (3..=4_u8).contains(&locty)
                 {
                     if let Err(e) = self.emulator.lock().unwrap().reset_established_falg(locty) {
+                        if matches!(e, EmulatorError::Disconnected) && !self.backend_disconnected {
+                            self.backend_disconnected = true;
+
+                            let disconnected_msg = VmNotifyEvent {
+                                klass: DEVICE_CLASS_ID,
+                                type_t: TPM_TYPE,
+                                code: TPM_DISCONNECTED_NOTIFY_CODE,
+                                message: None,
+                            };
+                            event!(VmNotifyEvent; disconnected_msg);
+                        }
                         warn!("Tpm backend cancel command failed: {:?}", e);
                     }
                 }
@@ -797,7 +918,20 @@ impl SysBusDevOps for TpmTis {
                             self.raise_irq(locty, TPM_TIS_INT_COMMAND_READY);
                         }
                         TpmTisState::Execution | TpmTisState::Reception => {
-                            let _ = self.prep_abort(locty, locty);
+                            if let Err(EmulatorError::Disconnected) = self.prep_abort(locty, locty)
+                            {
+                                if !self.backend_disconnected {
+                                    self.backend_disconnected = true;
+
+                                    let disconnected_msg = VmNotifyEvent {
+                                        klass: DEVICE_CLASS_ID,
+                                        type_t: TPM_TYPE,
+                                        code: TPM_DISCONNECTED_NOTIFY_CODE,
+                                        message: None,
+                                    };
+                                    event!(VmNotifyEvent; disconnected_msg);
+                                }
+                            };
                         }
                         TpmTisState::Completion => {
                             self.rw_offset = 0;
@@ -812,7 +946,7 @@ impl SysBusDevOps for TpmTis {
                 } else if core_cmd == TPM_TIS_STS_TPM_GO {
                     let is_reception = self.loc[locty_idx].state == TpmTisState::Reception;
                     let is_expected = (self.loc[locty_idx].sts & TPM_TIS_STS_EXPECT) == 0;
-                    if is_reception && is_expected {
+                    if is_reception && is_expected && !self.backend_disconnected {
                         if let Err(e) = self.send_request_async(locty) {
                             error!("Tpm send request failed: {:?}", e);
                         }

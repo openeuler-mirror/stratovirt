@@ -153,6 +153,7 @@ define_qmp_command_enum!(
     query_ohui_status("query-ohui-status", OhuiStatus, default),
     query_workloads("query-workloads", query_workloads),
     detect_silent_audio("detect-silent-audio", DetectSilentAudio),
+    tpm_reconnect("tpm-reconnect", tpm_reconnect),
     mmds_put("put-mmds", MmdsPutArgs),
     mmds_patch("patch-mmds", MmdsPatchArgs),
     mmds_get("get-mmds", mmds_get, default),
@@ -2433,6 +2434,7 @@ pub enum DeviceClassSubType {
     CAMERA = 1,
     VIRTIO_NET,
     PVPANIC,
+    TPM,
     USBHOST,
 }
 
@@ -2444,6 +2446,30 @@ impl From<DeviceClassSubType> for u32 {
 
 // types for VCPU_CLASS_ID
 pub const SMP_STATE: u32 = 1;
+
+/// tpm_reconnect
+///
+/// Reconnect to swtpm.
+///
+/// # Arguments
+///
+/// * `id` - The tpm device ID.
+/// * `path` - The socket path for control panel.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "tpm-reconnected", "arguments": { "id": "tpm0", "path": "swtpm_control_path.socket" } }
+/// <- { "return": {} }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct tpm_reconnect {
+    pub id: String,
+    pub path: String,
+}
+pub type TpmReconnectArg = tpm_reconnect;
+generate_command_impl!(tpm_reconnect, Empty);
 
 #[cfg(test)]
 mod tests {
