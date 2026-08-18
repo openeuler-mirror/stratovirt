@@ -95,6 +95,7 @@ define_qmp_command_enum!(
     cameradev_del("cameradev_del", cameradev_del),
     query_hotpluggable_cpus("query-hotpluggable-cpus", query_hotpluggable_cpus, default),
     query_cpus("query-cpus", query_cpus, default),
+    query_cpus_fast("query-cpus-fast", query_cpus_fast, default),
     query_status("query-status", query_status, default),
     getfd("getfd", getfd),
     blockdev_add("blockdev-add", Box<blockdev_add>),
@@ -1005,6 +1006,63 @@ pub struct CpuInfoX86 {}
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CpuInfoArm {}
+
+/// @query-cpus-fast:
+///
+/// Returns information about all virtual CPUs.
+///
+/// Returns: list of @CpuInfoFast
+///
+/// Since: 2.12
+///
+/// Example:
+///
+/// -> { "execute": "query-cpus-fast" }
+/// <- { "return": [
+///         {
+///             "thread-id": 25627,
+///             "props": {
+///                 "core-id": 0,
+///                 "thread-id": 0,
+///                 "socket-id": 0
+///             },
+///             "qom-path": "/machine/unattached/device[0]",
+///             "target":"x86_64",
+///             "cpu-index": 0
+///         },
+///         {
+///             "thread-id": 25628,
+///             "props": {
+///                 "core-id": 0,
+///                 "thread-id": 0,
+///                 "socket-id": 1
+///             },
+///             "qom-path": "/machine/unattached/device[2]",
+///             "target":"x86_64",
+///             "cpu-index": 1
+///         }
+///     ]
+/// }
+///
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct query_cpus_fast {}
+generate_command_impl!(query_cpus_fast, Vec<CpuInfoFast>);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CpuInfoFast {
+    #[serde(rename = "qom-path")]
+    pub qom_path: String,
+    #[serde(rename = "props", default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<CpuInstanceProperties>,
+    #[serde(rename = "cpu-index")]
+    pub cpu_index: isize,
+    #[serde(rename = "thread-id")]
+    pub thread_id: isize,
+    #[serde(rename = "target")]
+    pub target: String,
+}
 
 /// query-status
 ///
@@ -2535,6 +2593,47 @@ mod tests {
         };
         let ret_msg = r#"invalid type: string "isdf", expected struct query_cpus"#;
         assert!(err_msg == ret_msg);
+
+        // qmp: query-cpus-fast.
+        let json_msg = r#"
+        {
+            "execute": "query-cpus-fast"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"ok"#;
+        assert!(err_msg == ret_msg);
+
+        // unexpected arguments for query-cpus-fast.
+        let json_msg = r#"
+        {
+            "execute": "query-cpus-fast" ,
+            "arguments": "isdf"
+        }
+        "#;
+        let err_msg = match serde_json::from_str::<QmpCommand>(json_msg) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let ret_msg = r#"invalid type: string "isdf", expected struct query_cpus_fast"#;
+        assert!(err_msg == ret_msg);
+
+        // query-cpus-fast response entry format.
+        let cpu_info = CpuInfoFast {
+            qom_path: "/machine/unattached/device[0]".to_string(),
+            props: None,
+            cpu_index: 0,
+            thread_id: 123,
+            target: "x86_64".to_string(),
+        };
+        let json = serde_json::to_string(&cpu_info).unwrap();
+        assert!(json.contains(r#""qom-path":"/machine/unattached/device[0]""#));
+        assert!(json.contains(r#""cpu-index":0"#));
+        assert!(json.contains(r#""thread-id":123"#));
+        assert!(json.contains(r#""target":"x86_64""#));
 
         // qmp: query-ststus.
         let json_msg = r#"

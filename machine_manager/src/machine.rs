@@ -172,6 +172,9 @@ pub trait DeviceInterface {
     /// Query each cpu's the topology info.
     fn query_cpus(&self) -> Response;
 
+    /// Query each cpu's the fast topology info.
+    fn query_cpus_fast(&self) -> Response;
+
     /// Query each `hotpluggable_cpus`'s topology info and hotplug message.
     fn query_hotpluggable_cpus(&self) -> Response;
 

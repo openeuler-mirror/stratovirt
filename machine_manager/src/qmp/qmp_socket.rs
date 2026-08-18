@@ -540,6 +540,7 @@ fn qmp_command_exec(
         (query_migrate, query_migrate),
         (cancel_migrate, cancel_migrate),
         (query_cpus, query_cpus),
+        (query_cpus_fast, query_cpus_fast),
         (query_balloon, query_balloon),
         (query_mem, query_mem),
         (query_mem_mappings, query_mem_mappings),
