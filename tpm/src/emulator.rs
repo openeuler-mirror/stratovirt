@@ -291,10 +291,6 @@ impl Emulator {
         self.run_control_cmd(&mut res, CtrlCmdCode::Stop, None)
     }
 
-    pub fn get_buffer_size(&mut self) -> usize {
-        self.set_buffer_size(0).unwrap_or(TPM_TIS_BUFFER_MAX)
-    }
-
     fn get_state_blobs(&mut self) -> Result<TpmStateBlobs> {
         let permanent = self.get_state_blob(PTM_BLOB_TYPE_PERMANENT)?;
         let volatile = self.get_state_blob(PTM_BLOB_TYPE_VOLATILE)?;
@@ -489,6 +485,10 @@ impl AsyncMsgHandle for Emulator {
 impl TpmBackend for Emulator {
     fn new(path: impl AsRef<Path>) -> anyhow::Result<Self, BackendError> {
         Ok(Self::connect(path)?)
+    }
+
+    fn get_buffer_size(&mut self) -> usize {
+        self.set_buffer_size(0).unwrap_or(TPM_TIS_BUFFER_MAX)
     }
 
     fn startup_tpm(
