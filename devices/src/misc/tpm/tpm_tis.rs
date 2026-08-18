@@ -49,7 +49,7 @@ use tpm::{
         AioError, AsyncMsg, OnComplete,
     },
     emulator::{Emulator, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET, TPM_RSP_RC_OFFSET},
-    BackendError, TpmBackend, TpmMigration, TPM_TIS_BUFFER_MAX,
+    BackendError, TpmBackend, TPM_TIS_BUFFER_MAX,
 };
 use util::gen_base_func;
 
@@ -206,7 +206,7 @@ pub struct TpmTis {
     aborting_locty: u8,
     next_locty: u8,
     loc: [TpmLocality; TPM_TIS_NUM_LOCALITIES],
-    emulator: Arc<Mutex<Emulator>>,
+    backend: Arc<Mutex<dyn TpmBackend>>,
     backend_buff_size: usize,
     backend_disconnected: bool,
     iothread: Option<String>,
@@ -221,7 +221,7 @@ impl TpmTis {
         path: impl AsRef<Path>,
         iothread: Option<String>,
     ) -> Result<Self> {
-        let emulator =
+        let backend: Arc<Mutex<dyn TpmBackend>> =
             Arc::new(Mutex::new(Emulator::new(path).map_err(|e| {
                 anyhow!("Failed while initializing tpm Emulator: {e:?}")
             })?));
@@ -234,7 +234,7 @@ impl TpmTis {
             aborting_locty: 0,
             next_locty: 0,
             loc: [TpmLocality::default(); TPM_TIS_NUM_LOCALITIES],
-            emulator,
+            backend,
             backend_buff_size: TPM_TIS_BUFFER_MAX,
             backend_disconnected: false,
             iothread,
@@ -253,15 +253,15 @@ impl TpmTis {
     pub fn reconnect(&mut self, path: impl AsRef<Path>) -> Result<()> {
         info!("Reconnecting vTPM to: {:?}", path.as_ref());
 
-        let new_emulator =
+        let new_backend: Arc<Mutex<dyn TpmBackend>> =
             Arc::new(Mutex::new(Emulator::new(path).map_err(|e| {
                 anyhow::anyhow!("Reconnect to swtpm failed: {}", e)
             })?));
 
-        let cur_buff_size = new_emulator.lock().unwrap().get_buffer_size();
+        let cur_buff_size = new_backend.lock().unwrap().get_buffer_size();
         self.backend_buff_size = cmp::min(cur_buff_size, TPM_TIS_BUFFER_MAX);
 
-        if let Err(e) = new_emulator
+        if let Err(e) = new_backend
             .lock()
             .unwrap()
             .startup_tpm(self.backend_buff_size, false)
@@ -269,7 +269,7 @@ impl TpmTis {
             return Err(anyhow!("Failed while running Startup TPM. Error: {e:?}"));
         }
 
-        self.emulator = new_emulator;
+        self.backend = new_backend;
         self.backend_disconnected = false;
 
         if let Some(ref evt) = self.async_ctrl_evt {
@@ -463,7 +463,7 @@ impl TpmTis {
 
         if is_backend_busy {
             debug!("TPM backend is busy executing. Sending cancel request...");
-            if let Err(e) = self.emulator.lock().unwrap().cancel_cmd() {
+            if let Err(e) = self.backend.lock().unwrap().cancel_cmd() {
                 warn!("Failed to send cancel command to TPM backend: {:?}", e);
                 return Err(e);
             }
@@ -510,11 +510,11 @@ impl TpmTis {
     }
 
     fn get_established_flag(&mut self) -> Result<bool, BackendError> {
-        self.emulator.lock().unwrap().get_established_flag()
+        self.backend.lock().unwrap().get_established_flag()
     }
 
     fn reset(&mut self) -> Result<()> {
-        let cur_buff_size = self.emulator.lock().unwrap().get_buffer_size();
+        let cur_buff_size = self.backend.lock().unwrap().get_buffer_size();
         self.backend_buff_size = cmp::min(cur_buff_size, TPM_TIS_BUFFER_MAX);
 
         self.active_locty = TPM_TIS_NO_LOCALITY;
@@ -536,7 +536,7 @@ impl TpmTis {
         }
 
         if let Err(e) = self
-            .emulator
+            .backend
             .lock()
             .unwrap()
             .startup_tpm(self.backend_buff_size, false)
@@ -552,7 +552,7 @@ impl TpmTis {
 }
 
 impl OnComplete for TpmTis {
-    type T = Emulator;
+    type T = dyn TpmBackend;
 
     fn on_complete(&mut self, res: aio::Result<()>, buffer: Vec<u8>) {
         self.buffer = Some(buffer);
@@ -585,7 +585,7 @@ impl OnComplete for TpmTis {
     }
 
     fn get_async_handler(&self) -> Arc<Mutex<Self::T>> {
-        self.emulator.clone()
+        self.backend.clone()
     }
 }
 
@@ -616,7 +616,7 @@ impl Device for TpmTis {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        if let Err(e) = self.emulator.lock().unwrap().shutdown_tpm() {
+        if let Err(e) = self.backend.lock().unwrap().shutdown_tpm() {
             return Err(anyhow!("Failed while running Shutdown TPM. Error: {e:?}"));
         }
 
@@ -915,7 +915,7 @@ impl SysBusDevOps for TpmTis {
                 if (write_val & TPM_TIS_STS_COMMAND_CANCEL) != 0
                     && self.loc[locty_usize].state == TpmTisState::Execution
                 {
-                    if let Err(e) = self.emulator.lock().unwrap().cancel_cmd() {
+                    if let Err(e) = self.backend.lock().unwrap().cancel_cmd() {
                         if matches!(e, BackendError::Disconnected) && !self.backend_disconnected {
                             self.backend_disconnected = true;
 
@@ -934,7 +934,7 @@ impl SysBusDevOps for TpmTis {
                     && (3..=4_u8).contains(&locty_u8)
                 {
                     if let Err(e) = self
-                        .emulator
+                        .backend
                         .lock()
                         .unwrap()
                         .reset_established_flag(locty_u8)
@@ -1145,7 +1145,7 @@ impl StateTransfer for TpmTisMigration {
         let tpm = self.tpm.lock().unwrap();
 
         let state_blob = tpm
-            .emulator
+            .backend
             .lock()
             .unwrap()
             .get_state()
@@ -1181,13 +1181,13 @@ impl StateTransfer for TpmTisMigration {
         tpm.backend_disconnected = false;
 
         // set state blob to swtpm
-        tpm.emulator
+        tpm.backend
             .lock()
             .unwrap()
             .set_state(snapshot.swtpm_blob)
             .map_err(|e| anyhow::anyhow!("Failed to restore swtpm state blobs: {:?}", e))?;
 
-        tpm.emulator
+        tpm.backend
             .lock()
             .unwrap()
             .startup_tpm(0, true)

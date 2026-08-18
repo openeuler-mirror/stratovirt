@@ -226,7 +226,7 @@ fn locality_from_addr(addr: u32) -> u8 {
 
 pub struct TpmCrb {
     base: SysBusDevBase,
-    emulator: Emulator,
+    backend: Box<dyn TpmBackend>,
     regs: [u32; TPM_CRB_R_MAX],
     backend_buff_size: usize,
     data_buff: [u8; TPM_CRB_BUFFER_MAX],
@@ -240,12 +240,14 @@ impl TpmCrb {
         region_size: u64,
         path: impl AsRef<Path>,
     ) -> Result<Self> {
-        let emulator = Emulator::new(path)
-            .map_err(|e| anyhow!("Failed while initializing tpm Emulator: {e:?}"))?;
+        let backend: Box<dyn TpmBackend> = Box::new(
+            Emulator::new(path)
+                .map_err(|e| anyhow!("Failed while initializing tpm Emulator: {e:?}"))?,
+        );
 
         let mut tpm = TpmCrb {
             base: SysBusDevBase::new(SysBusDevType::Tpm(TpmInterfaceType::Crb)),
-            emulator,
+            backend,
             regs: [0; TPM_CRB_R_MAX],
             backend_buff_size: TPM_CRB_BUFFER_MAX,
             data_buff: [0; TPM_CRB_BUFFER_MAX],
@@ -277,7 +279,7 @@ impl TpmCrb {
     }
 
     fn get_eatablished_flag(&mut self) -> Result<()> {
-        let established_flag = self.emulator.get_established_flag()?;
+        let established_flag = self.backend.get_established_flag()?;
         if !established_flag {
             return Err(anyhow!("TPM not in established state"));
         }
@@ -297,7 +299,7 @@ impl TpmCrb {
     }
 
     fn reset(&mut self) -> Result<()> {
-        let cur_buff_size = self.emulator.get_buffer_size();
+        let cur_buff_size = self.backend.get_buffer_size();
         self.regs = [0; TPM_CRB_R_MAX];
         set_reg_field(
             &mut self.regs,
@@ -367,7 +369,7 @@ impl TpmCrb {
 
         self.backend_buff_size = cmp::min(cur_buff_size, TPM_CRB_BUFFER_MAX);
 
-        if let Err(e) = self.emulator.startup_tpm(self.backend_buff_size, false) {
+        if let Err(e) = self.backend.startup_tpm(self.backend_buff_size, false) {
             return Err(anyhow!("Failed while running Startup TPM. Error: {e:?}"));
         }
         Ok(())
@@ -387,7 +389,7 @@ impl Device for TpmCrb {
     }
 
     fn unrealize(&mut self) -> Result<()> {
-        if let Err(e) = self.emulator.shutdown_tpm() {
+        if let Err(e) = self.backend.shutdown_tpm() {
             return Err(anyhow!("Failed while running Shutdown TPM. Error: {e:?}"));
         }
 
@@ -416,7 +418,7 @@ impl SysBusDevOps for TpmCrb {
             offset &= 0xff;
             let mut val = self.regs[offset as usize];
 
-            if offset == CRB_LOC_STATE && !self.emulator.get_established_flag().is_ok_and(|v| v) {
+            if offset == CRB_LOC_STATE && !self.backend.get_established_flag().is_ok_and(|v| v) {
                 val |= 0x1;
             }
 
@@ -523,7 +525,7 @@ impl SysBusDevOps for TpmCrb {
                     if v == CRB_CANCEL_INVOKE
                         && (self.regs[CRB_CTRL_START as usize] & CRB_START_INVOKE != 0)
                     {
-                        if let Err(e) = self.emulator.cancel_cmd() {
+                        if let Err(e) = self.backend.cancel_cmd() {
                             error!("Failed to run cancel command. Error: {e:?}");
                         }
                     }
@@ -537,7 +539,7 @@ impl SysBusDevOps for TpmCrb {
 
                         let input_len = cmp::min(self.data_buff_len, TPM_CRB_BUFFER_MAX);
                         let status = self
-                            .emulator
+                            .backend
                             .process_request(&mut self.data_buff, input_len)
                             .is_ok();
 

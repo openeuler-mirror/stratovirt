@@ -79,7 +79,9 @@ pub trait AsyncMsgHandle {
  * TPM device should implement this trait.
  */
 pub trait OnComplete {
-    type T: AsyncMsgHandle;
+    // `?Sized` allows the async handler to be a trait object (`dyn TpmBackend`),
+    // so frontends are not tied to a concrete backend type.
+    type T: AsyncMsgHandle + ?Sized;
 
     fn on_complete(&mut self, res: Result<()>, buf: Vec<u8>);
 
@@ -233,7 +235,7 @@ fn create_async_request_notifier<A, T>(
     evtfd: RawFd,
 ) -> EventNotifier
 where
-    A: AsyncMsgHandle + 'static,
+    A: AsyncMsgHandle + ?Sized + 'static,
     T: OnComplete + 'static,
 {
     let cb: Rc<NotifierCallback> = Rc::new(move |_, fd: RawFd| {

@@ -60,10 +60,16 @@ pub enum BackendError {
     Other(#[from] anyhow::Error),
 }
 
-pub trait TpmBackend: aio::AsyncMsgHandle + TpmMigration {
+// `Send + Sync` lets frontend devices hold a backend as `dyn TpmBackend` (behind
+// an `Arc<Mutex<..>>` or directly in a `Box<..>`) while still satisfying the
+// `Device: Send + Sync` requirement, regardless of the concrete backend
+// (emulator, future passthrough, ...).
+pub trait TpmBackend: aio::AsyncMsgHandle + TpmMigration + Send + Sync {
     fn new(path: impl AsRef<Path>) -> anyhow::Result<Self, BackendError>
     where
         Self: Sized;
+
+    fn get_buffer_size(&mut self) -> usize;
 
     fn startup_tpm(
         &mut self,

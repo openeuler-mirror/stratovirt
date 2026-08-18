@@ -61,7 +61,7 @@ use devices::{
 };
 use hypervisor::kvm::aarch64::*;
 use hypervisor::kvm::*;
-#[cfg(feature = "ramfb")]
+#[cfg(any(feature = "ramfb", feature = "tpm"))]
 use machine_manager::config::str_slip_to_clap;
 #[cfg(feature = "gtk")]
 use machine_manager::config::UiContext;
