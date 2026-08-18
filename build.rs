@@ -38,6 +38,7 @@ fn main() {
         feature = "ramfb",
         feature = "virtio_gpu",
         feature = "vnc",
+        feature = "vhostuser_gpu",
     )) {
         println!("cargo:rustc-link-arg=-lpixman-1");
     }
