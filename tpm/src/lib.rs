@@ -21,6 +21,12 @@ pub const TPM_CRB_BUFFER_MAX: usize = 3968; // 0x1000 - 0x80 TPM_CRB_ADDR_SIZE -
 pub const TPM_TIS_BUFFER_MAX: usize = 4096;
 pub const TPM_SUCCESS: u32 = 0x0;
 
+const PTM_BLOB_TYPE_PERMANENT: u32 = 1;
+const PTM_BLOB_TYPE_VOLATILE: u32 = 2;
+const PTM_BLOB_TYPE_SAVESTATE: u32 = 3;
+
+const PTM_STATE_FLAG_DECRYPTED: u32 = 1;
+
 const PTM_INIT_FLAG_DELETE_VOLATILE: u32 = 1;
 
 /*
@@ -466,5 +472,59 @@ impl Ptm for PtmResetEst {
     #[inline]
     fn get_resp_size(&self) -> usize {
         std::mem::size_of::<u32>()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PtmGetState {
+    pub req_state_flags: u32,
+    pub req_type: u32,
+    pub req_offset: u32,
+    pub tpm_result: u32,
+    pub resp_state_flags: u32,
+    pub totlength: u32,
+    pub length: u32,
+}
+
+impl Ptm for PtmGetState {
+    fn to_req_buf(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(12);
+        buf.extend_from_slice(&self.req_state_flags.to_be_bytes());
+        buf.extend_from_slice(&self.req_type.to_be_bytes());
+        buf.extend_from_slice(&self.req_offset.to_be_bytes());
+        buf
+    }
+
+    fn update_ptm_with_response(&mut self, buf: &[u8]) -> Result<()> {
+        if buf.len() < self.get_resp_size() {
+            return Err(Error::ConvertToPtm(anyhow::anyhow!(
+                "PtmGetState response too short"
+            )));
+        }
+
+        self.tpm_result = BigEndian::read_u32(&buf[0..4]);
+        self.resp_state_flags = BigEndian::read_u32(&buf[4..8]);
+        self.totlength = BigEndian::read_u32(&buf[8..12]);
+        self.length = BigEndian::read_u32(&buf[12..16]);
+
+        Ok(())
+    }
+
+    fn get_result_code(&self) -> u32 {
+        if self.tpm_result != TPM_SUCCESS && (self.tpm_result & 0x800) == 0 {
+            self.tpm_result
+        } else {
+            TPM_SUCCESS
+        }
+    }
+
+    #[inline]
+    fn get_req_size(&self) -> usize {
+        3 * std::mem::size_of::<u32>()
+    }
+
+    #[inline]
+    fn get_resp_size(&self) -> usize {
+        4 * std::mem::size_of::<u32>()
     }
 }

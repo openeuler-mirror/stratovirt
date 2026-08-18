@@ -1946,6 +1946,8 @@ dependencies = [
  "byteorder",
  "libc",
  "log",
+ "serde",
+ "serde-big-array",
  "thiserror",
  "vmm-sys-util",
 ]

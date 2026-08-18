@@ -21,12 +21,15 @@ use std::thread;
 
 use byteorder::{BigEndian, ByteOrder};
 use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::socket::{self, SocketDev};
 use crate::{
-    CtrlCmdCode, OnComplete, Ptm, PtmCap, PtmEst, PtmInit, PtmResetEst, PtmResult,
-    PtmSetBufferSize, PtmSetLoc, PTM_INIT_FLAG_DELETE_VOLATILE, TPM_SUCCESS, TPM_TIS_BUFFER_MAX,
+    CtrlCmdCode, OnComplete, Ptm, PtmCap, PtmEst, PtmGetState, PtmInit, PtmResetEst, PtmResult,
+    PtmSetBufferSize, PtmSetLoc, PTM_BLOB_TYPE_PERMANENT, PTM_BLOB_TYPE_SAVESTATE,
+    PTM_BLOB_TYPE_VOLATILE, PTM_INIT_FLAG_DELETE_VOLATILE, PTM_STATE_FLAG_DECRYPTED, TPM_SUCCESS,
+    TPM_TIS_BUFFER_MAX,
 };
 
 const TPM_INVALID_LOC: u32 = 0xff;
@@ -117,6 +120,19 @@ pub enum DataPlaneMsg {
         cmd_len: usize,
         locty: u8,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TpmStateBlob {
+    pub flags: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TpmStateBlobs {
+    pub permanent: TpmStateBlob,
+    pub volatile: TpmStateBlob,
+    pub savestate: TpmStateBlob,
 }
 
 pub struct Emulator<T: OnComplete + Sync + Send + 'static> {
@@ -457,5 +473,110 @@ impl<T: OnComplete + Sync + Send + 'static> Emulator<T> {
         let mut res: PtmResult = 0;
 
         self.run_control_cmd(&mut res, CtrlCmdCode::Shutdown, None)
+    }
+
+    pub fn get_state_blobs(&mut self) -> Result<TpmStateBlobs> {
+        let permanent = self.get_state_blob(PTM_BLOB_TYPE_PERMANENT)?;
+        let volatile = self.get_state_blob(PTM_BLOB_TYPE_VOLATILE)?;
+        let savestate = self.get_state_blob(PTM_BLOB_TYPE_SAVESTATE)?;
+
+        Ok(TpmStateBlobs {
+            permanent,
+            volatile,
+            savestate,
+        })
+    }
+
+    fn get_state_blob(&mut self, blob_type: u32) -> Result<TpmStateBlob> {
+        let mut ptm_state = PtmGetState {
+            req_state_flags: PTM_STATE_FLAG_DECRYPTED,
+            req_type: blob_type,
+            req_offset: 0,
+            ..Default::default()
+        };
+
+        self.run_control_cmd(&mut ptm_state, CtrlCmdCode::GetStateBlob, None)?;
+
+        if ptm_state.totlength != ptm_state.length {
+            error!(
+                "swtpm stateblob size mismatch: expected {}, got {}",
+                ptm_state.totlength, ptm_state.length
+            );
+            return Err(EmulatorError::ParseResponse {
+                cmd: CtrlCmdCode::GetStateBlob,
+                err: format!(
+                    "totlength {} != length {}",
+                    ptm_state.totlength, ptm_state.length
+                ),
+            });
+        }
+
+        let mut data = vec![0u8; ptm_state.totlength as usize];
+        if ptm_state.totlength > 0 {
+            self.control_socket
+                .read_exact(&mut data)
+                .map_err(EmulatorError::ControlSocket)?;
+        }
+
+        Ok(TpmStateBlob {
+            flags: ptm_state.resp_state_flags,
+            data,
+        })
+    }
+
+    pub fn set_state_blobs(&mut self, blobs: TpmStateBlobs) -> Result<()> {
+        self.stop_tpm().map_err(|e| {
+            EmulatorError::Initialize(format!(
+                "Failed to stop TPM before restoring state: {:?}",
+                e
+            ))
+        })?;
+
+        self.set_state_blob(PTM_BLOB_TYPE_PERMANENT, &blobs.permanent)?;
+        self.set_state_blob(PTM_BLOB_TYPE_VOLATILE, &blobs.volatile)?;
+        self.set_state_blob(PTM_BLOB_TYPE_SAVESTATE, &blobs.savestate)?;
+
+        Ok(())
+    }
+
+    fn set_state_blob(&mut self, blob_type: u32, blob: &TpmStateBlob) -> Result<()> {
+        if blob.data.is_empty() {
+            return Ok(());
+        }
+
+        // 16 bytes control header
+        // [0..4] Command (CMD_SET_STATEBLOB = 0x0000_000D)
+        // [4..8] state_flags
+        // [8..12] type
+        // [12..16] length (payload)
+        let mut header = [0u8; 16];
+        let cmd_val: u32 = CtrlCmdCode::SetStateBlob as u32;
+        header[0..4].copy_from_slice(&cmd_val.to_be_bytes());
+        header[4..8].copy_from_slice(&blob.flags.to_be_bytes());
+        header[8..12].copy_from_slice(&blob_type.to_be_bytes());
+
+        let length = blob.data.len() as u32;
+        header[12..16].copy_from_slice(&length.to_be_bytes());
+
+        self.control_socket.write_all(&header)?;
+        self.control_socket.write_all(&blob.data)?;
+
+        let mut resp = [0u8; 4];
+        self.control_socket.read_exact(&mut resp)?;
+
+        let mut tpm_result: PtmResult = 0;
+        tpm_result
+            .update_ptm_with_response(&resp[0..4])
+            .inspect_err(|e| error!("Failed to update ptm with response, {e:?}"))
+            .map_err(|_| EmulatorError::RunControlCmd)?;
+        if tpm_result.get_result_code() != TPM_SUCCESS {
+            error!(
+                "swtpm setting stateblob (type {}) failed with TPM error {:#x}",
+                blob_type, tpm_result
+            );
+            return Err(EmulatorError::TpmError(tpm_result));
+        }
+
+        Ok(())
     }
 }
