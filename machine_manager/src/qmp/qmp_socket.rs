@@ -540,6 +540,7 @@ fn qmp_command_exec(
         (query_migrate, query_migrate),
         (cancel_migrate, cancel_migrate),
         (query_cpus, query_cpus),
+        (query_cpus_fast, query_cpus_fast),
         (query_balloon, query_balloon),
         (query_mem, query_mem),
         (query_mem_mappings, query_mem_mappings),
@@ -551,6 +552,7 @@ fn qmp_command_exec(
         (list_type, list_type),
         (query_hotpluggable_cpus, query_hotpluggable_cpus);
         (input_event, input_event, key, value),
+        (qom_list_properties, qom_list_properties, typename),
         (device_list_properties, device_list_properties, typename),
         (device_del, device_del, id),
         (switch_audio_record, switch_audio_record, authorized),
