@@ -162,3 +162,21 @@ To use `virsh console` command, the virtio console with redirect `pty` should be
 </source>
 </hostdev>
 ```
+
+## QMP
+
+StratoVirt creates the QMP socket with `server,wait=off` as libvirt expects;
+`wait=off` is equivalent to `nowait`.
+
+```
+-qmp unix:/path/to/api/socket,server,wait=off
+```
+
+For libvirt interconnection, StratoVirt provides the following QMP commands:
+
+- `qom-list-types`: list the supported device types. On the aarch64 platform, the
+  `pl011` serial type is included.
+- `qom-list-properties`: list the properties of a QOM type, currently returns an
+  empty list.
+- `query-qmp-schema`: return the QMP command schema.
+- `device-list-properties`: list the properties of a device.

@@ -15,13 +15,18 @@ StratoVirt supports UnixSocket-type QMP and TcpSocket-type QMP, you can set it b
 # cmdline
 # Start with UnixSocket
 -qmp unix:/path/to/api/socket,server,nowait
+# or
+-qmp unix:/path/to/api/socket,server,wait=off
 ```
 ```shell
 # cmdline
 # Start with TcpSocket
 -qmp tcp:ip:port,server,nowait
+# or
+-qmp tcp:ip:port,server,wait=off
 ```
-Where, the information about 'server' and 'nowait' can be found in [section 2.12 Chardev](#212-chardev)
+Where, the information about 'server' and 'nowait' can be found in [section 2.12 Chardev](#212-chardev).
+`wait=off` is equivalent to `nowait`, and it is the option used by libvirt.
 
 On top of that, monitor can be used to create QMP connection as well.
 The following commands can be used to create a monitor.
@@ -37,12 +42,16 @@ Three properties can be set for monitor.
 # cmdline
 # Start with UnixSocket
 -chardev socket,path=/path/to/monitor/sock,id=chardev_id,server,nowait
+# or
+-chardev socket,path=/path/to/monitor/sock,id=chardev_id,server,wait=off
 -mon chardev=chardev_id,id=monitor_id,mode=control
 ```
 ```shell
 # cmdline
 # Start with TcpSocket
 -chardev socket,host=ip,port=port,id=chardev_id,server,nowait
+# or
+-chardev socket,host=ip,port=port,id=chardev_id,server,wait=off
 -mon chardev=chardev_id,id=monitor_id,mode=control
 ```
 

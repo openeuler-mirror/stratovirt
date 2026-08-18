@@ -122,6 +122,7 @@ define_qmp_command_enum!(
     query_machines("query-machines", query_machines, default),
     query_events("query-events", query_events, default),
     list_type("qom-list-types", list_type, default),
+    qom_list_properties("qom-list-properties", qom_list_properties, default),
     device_list_properties("device-list-properties", device_list_properties, default),
     block_commit("block-commit", block_commit, default),
     query_tpm_models("query-tpm-models", query_tpm_models, default),
@@ -1521,6 +1522,29 @@ impl TypeLists {
     }
 }
 
+/// qom-list-properties
+///
+/// List properties associated with a qom.
+///
+/// # Examples
+///
+/// ```text
+/// -> { "execute": "qom-list-properties", "arguments": { "typename": "memory-backend-file" } }
+/// <- { "return": [] }
+/// ```
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct qom_list_properties {
+    pub typename: String,
+}
+generate_command_impl!(qom_list_properties, Vec<QomListProps>);
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct QomListProps {
+    pub name: String,
+    #[serde(rename = "typename")]
+    pub prop_type: String,
+}
+
 /// device-list-properties
 ///
 /// List properties associated with a device.
@@ -1636,7 +1660,20 @@ pub struct MigrateCapabilities {
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct query_qmp_schema {}
-generate_command_impl!(query_qmp_schema, Empty);
+generate_command_impl!(query_qmp_schema, Vec<SchemaInfoCommand>);
+
+/// One command entry in the QMP schema, the format follows QEMU's
+/// SchemaInfoCommand.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaInfoCommand {
+    pub name: String,
+    #[serde(rename = "meta-type")]
+    pub meta_type: String,
+    #[serde(rename = "arg-type")]
+    pub arg_type: String,
+    #[serde(rename = "ret-type")]
+    pub ret_type: String,
+}
 
 /// query-sev-capabilities
 ///
@@ -2634,6 +2671,19 @@ mod tests {
         assert!(json.contains(r#""cpu-index":0"#));
         assert!(json.contains(r#""thread-id":123"#));
         assert!(json.contains(r#""target":"x86_64""#));
+
+        // query-qmp-schema response entry format.
+        let schema_entry = SchemaInfoCommand {
+            name: "query-status".to_string(),
+            meta_type: "command".to_string(),
+            arg_type: "0".to_string(),
+            ret_type: "1".to_string(),
+        };
+        let json = serde_json::to_string(&schema_entry).unwrap();
+        assert!(json.contains(r#""name":"query-status""#));
+        assert!(json.contains(r#""meta-type":"command""#));
+        assert!(json.contains(r#""arg-type":"0""#));
+        assert!(json.contains(r#""ret-type":"1""#));
 
         // qmp: query-ststus.
         let json_msg = r#"
