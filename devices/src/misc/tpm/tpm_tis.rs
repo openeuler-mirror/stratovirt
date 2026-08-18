@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Huawei Technologies Co.,Ltd. All rights reserved.
+// Copyright (c) 2026 Huawei Technologies Co.,Ltd. All rights reserved.
 //
 // StratoVirt is licensed under Mulan PSL v2.
 // You can use this software according to the terms and conditions of the Mulan
@@ -10,9 +10,10 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use std::cmp;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::{cmp, thread};
 
 use anyhow::{anyhow, Context, Result};
 use log::{debug, error, info, warn};
@@ -35,10 +36,14 @@ use machine_manager::{
     qmp::qmp_channel::QmpChannel,
     qmp::qmp_schema::{VmNotifyEvent, DEVICE_CLASS_ID, TPM_TYPE},
 };
+use migration::{
+    snapshot::TPMTIS_SNAPSHOT_ID, DeviceStateDesc, MigrationHook, MigrationManager, StateTransfer,
+};
+use migration_derive::DescSerde;
 use tpm::{
     emulator::{
-        Emulator, EmulatorError, Result as EmulatorResult, TPM_RSP_HDR_SIZE, TPM_RSP_PS_OFFSET,
-        TPM_RSP_RC_OFFSET,
+        Emulator, EmulatorError, Result as EmulatorResult, TpmStateBlobs, TPM_RSP_HDR_SIZE,
+        TPM_RSP_PS_OFFSET, TPM_RSP_RC_OFFSET,
     },
     OnComplete, TPM_TIS_BUFFER_MAX,
 };
@@ -174,6 +179,19 @@ impl TpmLocality {
         self.sts &= TPM_TIS_STS_SELFTEST_DONE | TPM_TIS_STS_TPM_FAMILY_MASK;
         self.sts |= flags;
     }
+}
+
+#[derive(Clone, Deserialize, Serialize, DescSerde)]
+#[desc_version(current_version = "0.1.0")]
+pub struct TpmTisSnapshot {
+    pub valid_buffer_data: Vec<u8>,
+    pub rw_offset: u16,
+    pub active_locty: u8,
+    pub aborting_locty: u8,
+    pub next_locty: u8,
+    pub loc_states: [TpmLocality; TPM_TIS_NUM_LOCALITIES],
+    pub backend_buff_size: usize,
+    pub swtpm_blob: TpmStateBlobs,
 }
 
 pub struct TpmTis {
@@ -578,6 +596,12 @@ impl Device for TpmTis {
             .unwrap()
             .set_complete_handler(Arc::downgrade(&dev));
 
+        MigrationManager::register_device_instance(
+            TpmTisSnapshot::descriptor(),
+            TpmTisMigration::new(dev.clone()),
+            TPMTIS_SNAPSHOT_ID,
+        );
+
         Ok(dev)
     }
 
@@ -585,6 +609,11 @@ impl Device for TpmTis {
         if let Err(e) = self.emulator.lock().unwrap().shutdown_tpm() {
             return Err(anyhow!("Failed while running Shutdown TPM. Error: {e:?}"));
         }
+
+        MigrationManager::unregister_device_instance(
+            TpmTisSnapshot::descriptor(),
+            TPMTIS_SNAPSHOT_ID,
+        );
 
         Ok(())
     }
@@ -1056,3 +1085,97 @@ impl AmlBuilder for TpmTis {
         tpm2_dev.aml_bytes()
     }
 }
+
+struct TpmTisMigration {
+    tpm: Arc<Mutex<TpmTis>>,
+}
+
+impl TpmTisMigration {
+    fn new(tpm: Arc<Mutex<TpmTis>>) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self { tpm }))
+    }
+
+    fn wait_for_async_cmd(&self) -> Result<()> {
+        let mut tried = 0;
+
+        loop {
+            if self.tpm.lock().unwrap().buffer.is_some() {
+                return Ok(());
+            }
+
+            thread::sleep(Duration::from_micros(200));
+            tried += 1;
+
+            if tried >= 1000 {
+                return Err(anyhow::anyhow!(
+                    "vTPM is busy for too long time. Failed to migrate."
+                ));
+            }
+        }
+    }
+}
+
+impl StateTransfer for TpmTisMigration {
+    fn get_state_vec(&self) -> Result<Vec<u8>> {
+        self.wait_for_async_cmd()?;
+
+        let tpm = self.tpm.lock().unwrap();
+
+        let state_blobs = tpm
+            .emulator
+            .lock()
+            .unwrap()
+            .get_state_blobs()
+            .map_err(|e| anyhow::anyhow!("Failed to fetch swtpm state blobs: {:?}", e))?;
+
+        let snapshot = TpmTisSnapshot {
+            valid_buffer_data: tpm.buffer.clone().unwrap(),
+            rw_offset: tpm.rw_offset,
+            active_locty: tpm.active_locty,
+            aborting_locty: tpm.aborting_locty,
+            next_locty: tpm.next_locty,
+            loc_states: tpm.loc,
+            backend_buff_size: tpm.backend_buff_size,
+            swtpm_blob: state_blobs,
+        };
+
+        Ok(serde_json::to_vec(&snapshot)?)
+    }
+
+    fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
+        let snapshot: TpmTisSnapshot = serde_json::from_slice(state)
+            .with_context(|| migration::error::MigrationError::FromBytesError("TpmTis"))?;
+
+        let mut tpm = self.tpm.lock().unwrap();
+
+        tpm.buffer = Some(snapshot.valid_buffer_data);
+        tpm.rw_offset = snapshot.rw_offset;
+        tpm.active_locty = snapshot.active_locty;
+        tpm.aborting_locty = snapshot.aborting_locty;
+        tpm.next_locty = snapshot.next_locty;
+        tpm.backend_buff_size = snapshot.backend_buff_size;
+        tpm.loc = snapshot.loc_states;
+        tpm.backend_disconnected = false;
+
+        // set state blob to swtpm
+        tpm.emulator
+            .lock()
+            .unwrap()
+            .set_state_blobs(snapshot.swtpm_blob)
+            .map_err(|e| anyhow::anyhow!("Failed to restore swtpm state blobs: {:?}", e))?;
+
+        tpm.emulator
+            .lock()
+            .unwrap()
+            .startup_tpm(0, true)
+            .map_err(|e| anyhow::anyhow!("Failed to startup swtpm in resume mode: {:?}", e))?;
+
+        Ok(())
+    }
+
+    fn get_device_alias(&self) -> u64 {
+        MigrationManager::get_desc_alias(&TpmTisSnapshot::descriptor().name).unwrap_or(!0)
+    }
+}
+
+impl MigrationHook for TpmTisMigration {}
