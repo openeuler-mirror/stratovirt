@@ -27,7 +27,7 @@ use crate::qmp::qmp_schema::{
     Events, GetViomemArgument, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
     MigrateCapabilities, NetDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, PropList,
     QmpCommand, QmpErrorClass, QmpEvent, QueryMemGpaArgument, QueryVcpuRegArgument,
-    SchemaInfoCommand, SetViomemArgument, Target, TypeLists, UpdateRegionArgument,
+    SchemaInfoCommand, SetViomemArgument, Target, TpmReconnectArg, TypeLists, UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -642,6 +642,13 @@ pub trait DeviceInterface {
             QmpErrorClass::GenericError(
                 "put-mmds-config not supported for this VM type".to_string(),
             ),
+            None,
+        )
+    }
+
+    fn tpm_reconnect(&mut self, _args: TpmReconnectArg) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("tpm_reconnect is not supported yet".to_string()),
             None,
         )
     }

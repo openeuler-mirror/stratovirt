@@ -58,3 +58,5 @@ pub const TPM_TIS_SIZE: u64 = 0x5000;
 /// ACPI Start Method
 pub const TPM2_START_METHOD_MMIO: u32 = 6;
 pub const TPM2_START_METHOD_CRB: u32 = 7;
+
+pub const TPM_DISCONNECTED_NOTIFY_CODE: u32 = 1;
