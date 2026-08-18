@@ -14,6 +14,8 @@ use anyhow::Result;
 
 use crate::MachineBase;
 use cpu::PMU_INTR;
+#[cfg(feature = "tpm")]
+use devices::misc::tpm::TpmInterfaceType;
 use devices::sysbus::{to_sysbusdevops, SysBusDevType, SysRes};
 use devices::{Bus, SYS_BUS_DEVICE};
 use util::device_tree::{self, FdtBuilder};
@@ -142,6 +144,46 @@ fn generate_flash_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> 
     fdt.set_property_array_u64("reg", &[flash_base, flash_size])?;
     fdt.set_property_u32("bank-width", 4)?;
     fdt.end_node(flash_node_dep)
+}
+
+/// Function that helps to generate tpm-tis node in device-tree.
+///
+/// # Arguments
+///
+/// * `dev_info` - Device resource info of fw-cfg device.
+/// * `tpm-tis` - Flatted device-tree blob where fw-cfg node will be filled into.
+#[cfg(feature = "tpm")]
+fn generate_tpm_tis_device_node(fdt: &mut FdtBuilder, res: &SysRes) -> Result<()> {
+    let tpm_base = res.region_base;
+    let tpm_size = res.region_size;
+
+    // generic-name@address spec
+    let node = format!("tpm@{:x}", tpm_base);
+    let tpm_node_dep = fdt.begin_node(&node)?;
+
+    fdt.set_property_string("compatible", "tcg,tpm-tis-mmio")?;
+    fdt.set_property_array_u64("reg", &[tpm_base, tpm_size])?;
+
+    // ----------------------------------------------------------------------
+    // Interrupt Support
+    // If SysRes structure has an IRQ allocated, and you want the TPM to run
+    // in interrupt mode instead of polling mode
+    // In an AArch64 (GIC) environment, an interrupt typically consists of 3
+    // u32 units:
+    // [Interrupt Type (SPI=0), Interrupt Number, Trigger Flag (Level High=4)]
+    // ----------------------------------------------------------------------
+    if res.irq != -1 {
+        fdt.set_property_array_u32(
+            "interrupts",
+            &[
+                device_tree::GIC_FDT_IRQ_TYPE_SPI,
+                res.irq as u32,
+                device_tree::IRQ_TYPE_LEVEL_HIGH,
+            ],
+        )?;
+    }
+
+    fdt.end_node(tpm_node_dep)
 }
 
 /// Trait that helps to generate all nodes in device-tree.
@@ -284,6 +326,10 @@ impl CompileFDTHelper for MachineBase {
                 }
                 SysBusDevType::Flash => {
                     generate_flash_device_node(fdt, &sysbusdev.sysbusdev_base().res)?;
+                }
+                #[cfg(feature = "tpm")]
+                SysBusDevType::Tpm(TpmInterfaceType::Tis) => {
+                    generate_tpm_tis_device_node(fdt, &sysbusdev.sysbusdev_base().res)?;
                 }
                 _ => (),
             }

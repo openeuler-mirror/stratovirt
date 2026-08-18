@@ -10,6 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+pub mod tpm_crb;
+pub mod tpm_tis;
+
+pub use tpm_crb::TpmCrb;
+pub use tpm_tis::TpmTis;
+
 use std::fmt;
 
 use clap::{Parser, ValueEnum};

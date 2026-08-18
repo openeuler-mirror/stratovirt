@@ -48,6 +48,11 @@ use devices::legacy::{
 };
 #[cfg(feature = "ramfb")]
 use devices::legacy::{Ramfb, RamfbConfig};
+#[cfg(feature = "tpm")]
+use devices::misc::tpm::{
+    TpmConfig, TpmCrb, TpmInterfaceType, TpmTis, TPM2_START_METHOD_CRB, TPM2_START_METHOD_MMIO,
+    TPM_CRB_SIZE, TPM_START, TPM_TIS_SIZE,
+};
 use devices::pci::intx::PciIntxCountState;
 use devices::pci::{PciBus, PciHost, PciIntxState, PCI_PIN_NUM};
 use devices::sysbus::{to_sysbusdevops, SysBusDevType};
@@ -218,7 +223,11 @@ impl StdMachine {
                 .build_smbios(None, mem_array)
                 .with_context(|| "Failed to rebuild SMBIOS")?;
             locked_vm
-                .build_acpi_tables(None)
+                .build_acpi_tables(
+                    None,
+                    #[cfg(feature = "tpm")]
+                    None,
+                )
                 .with_context(|| "Failed to rebuild ACPI tables")?;
         }
 
@@ -562,6 +571,27 @@ impl MachineOps for StdMachine {
         Ok(())
     }
 
+    #[cfg(feature = "tpm")]
+    fn add_tpm_device(&mut self, _vm_config: &mut VmConfig, cfg_args: &str) -> Result<()> {
+        let tpm_cfg = TpmConfig::try_parse_from(str_slip_to_clap(cfg_args, true, false))?;
+        match tpm_cfg.interface_type {
+            TpmInterfaceType::Crb => {
+                let tpm = TpmCrb::new(&self.base.sysbus, TPM_START, TPM_CRB_SIZE, &tpm_cfg.path)
+                    .with_context(|| "Failed to new TpmCrb device")?;
+                tpm.realize()
+                    .with_context(|| "Failed to realize TpmCrb device")?;
+            }
+            TpmInterfaceType::Tis => {
+                let tpm = TpmTis::new(&self.base.sysbus, TPM_START, TPM_TIS_SIZE, &tpm_cfg.path)
+                    .with_context(|| "Failed to new TpmTis device")?;
+                tpm.realize()
+                    .with_context(|| "Failed to realize TpmTis device")?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn add_serial_device(&mut self, config: &SerialConfig) -> Result<()> {
         let region_base: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].0;
         let region_size: u64 = MEM_LAYOUT[LayoutEntryType::Uart as usize].1;
@@ -685,8 +715,25 @@ impl MachineOps for StdMachine {
             .build_smbios(fwcfg.as_ref(), mem_array.clone())
             .with_context(|| "Failed to build SMBIOS data")?;
 
+        #[cfg(feature = "tpm")]
+        let tpm_enable: Option<TpmInterfaceType> = vm_config
+            .devices
+            .iter()
+            .find(|(dev, _)| dev.as_str() == "tpm")
+            .map(|(_, args)| {
+                if args.to_lowercase().contains("crb") {
+                    TpmInterfaceType::Crb
+                } else {
+                    TpmInterfaceType::Tis
+                }
+            });
+
         locked_vm
-            .build_acpi_tables(fwcfg.as_ref())
+            .build_acpi_tables(
+                fwcfg.as_ref(),
+                #[cfg(feature = "tpm")]
+                tpm_enable,
+            )
             .with_context(|| "Failed to build ACPI tables")?;
 
         locked_vm
@@ -1234,6 +1281,35 @@ impl AcpiBuilder for StdMachine {
         let pptt_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut pptt)
             .with_context(|| "Fail to add PPTT table to loader")?;
         Ok(pptt_begin)
+    }
+
+    #[cfg(feature = "tpm")]
+    fn build_tpm2_table(
+        &self,
+        acpi_data: &Arc<Mutex<Vec<u8>>>,
+        loader: &mut TableLoader,
+        interface_type: &TpmInterfaceType,
+    ) -> Result<u64> {
+        let mut tpm2 = AcpiTable::new(*b"TPM2", 4, *b"STRATO", *b"VIRTTPM2", 1);
+        tpm2.set_table_len(52);
+
+        tpm2.set_field(36, 0_u16); //Platform Class
+        tpm2.set_field(38, 0_u16); // Reserved Space
+
+        match interface_type {
+            TpmInterfaceType::Crb => {
+                tpm2.set_field(40, 0x0909_1040_u64); // Address of Control Area
+                tpm2.set_field(48, TPM2_START_METHOD_CRB); //Start Method: CRB
+            }
+            TpmInterfaceType::Tis => {
+                tpm2.set_field(40, 0); // Address of Control Area (Not used, will acquire from DSDT)
+                tpm2.set_field(48, TPM2_START_METHOD_MMIO); //Start Method: TIS
+            }
+        }
+
+        let tpm2_begin = StdMachine::add_table_to_loader(acpi_data, loader, &mut tpm2)
+            .with_context(|| "Fail to add TPM2 table to loader")?;
+        Ok(tpm2_begin)
     }
 
     fn get_hardware_signature(&self) -> Option<u32> {

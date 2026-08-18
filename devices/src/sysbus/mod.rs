@@ -34,6 +34,8 @@ use crate::legacy::{FwCfgIO, I8042, RTC};
 #[cfg(target_arch = "aarch64")]
 use crate::legacy::{FwCfgMem, PL011, PL031};
 use crate::legacy::{PFlash, Serial};
+#[cfg(feature = "tpm")]
+use crate::misc::tpm::{TpmCrb, TpmInterfaceType, TpmTis};
 use crate::pci::PciHost;
 use crate::{Bus, BusBase, Device, DeviceBase, IrqState, LineIrqManager, TriggerMode};
 use acpi::{AmlBuilder, AmlScope};
@@ -220,6 +222,8 @@ pub enum SysBusDevType {
     Flash,
     #[cfg(all(feature = "ramfb", target_arch = "aarch64"))]
     Ramfb,
+    #[cfg(feature = "tpm")]
+    Tpm(TpmInterfaceType),
     Others,
 }
 
@@ -407,6 +411,11 @@ pub fn devices_register_sysbusdevops_type() -> Result<()> {
         register_sysbusdevops_type::<PL011>()?;
         register_sysbusdevops_type::<PL031>()?;
         register_sysbusdevops_type::<PowerDev>()?;
+    }
+    #[cfg(feature = "tpm")]
+    {
+        register_sysbusdevops_type::<TpmCrb>()?;
+        register_sysbusdevops_type::<TpmTis>()?;
     }
     register_sysbusdevops_type::<Ged>()?;
     register_sysbusdevops_type::<PFlash>()?;

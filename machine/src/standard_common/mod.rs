@@ -24,6 +24,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 #[cfg(target_arch = "x86_64")]
 use boot_loader::{load_acpi_to_memory, ARCH_RSDP_BEGIN};
+#[cfg(feature = "tpm")]
+use devices::misc::tpm::TpmInterfaceType;
 use log::{error, warn};
 use util::{any_typecast_mut, set_termi_canon_mode};
 use vmm_sys_util::epoll::EventSet;
@@ -137,7 +139,11 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
     /// # Arguments
     ///
     /// `fw_cfg` - Optional fwcfg device.
-    fn build_acpi_tables(&self, fw_cfg: Option<&Arc<Mutex<dyn FwCfgOps>>>) -> Result<()>
+    fn build_acpi_tables(
+        &self,
+        fw_cfg: Option<&Arc<Mutex<dyn FwCfgOps>>>,
+        #[cfg(feature = "tpm")] tpm_enabled: Option<TpmInterfaceType>,
+    ) -> Result<()>
     where
         Self: Sized,
     {
@@ -213,6 +219,14 @@ pub(crate) trait StdMachineOps: AcpiBuilder + MachineOps {
                 .build_pptt_table(&acpi_tables, &mut loader)
                 .with_context(|| "Failed to build ACPI PPTT table")?;
             xsdt_entries.push(pptt_addr);
+        }
+
+        #[cfg(feature = "tpm")]
+        if let Some(interface_type) = tpm_enabled.as_ref() {
+            let tpm2_addr = self
+                .build_tpm2_table(&acpi_tables, &mut loader, interface_type)
+                .with_context(|| "Failed to build ACPI TPM2 table")?;
+            xsdt_entries.push(tpm2_addr);
         }
 
         let xsdt_addr = Self::build_xsdt_table(&acpi_tables, &mut loader, xsdt_entries)?;
@@ -973,6 +987,22 @@ pub(crate) trait AcpiBuilder {
         loader.add_cksum_entry(ACPI_RSDP_FILE, exd_cksum_offset, 0, 36)?;
         let data = rsdp_data.lock().unwrap().to_vec();
         Ok(data)
+    }
+
+    /// Build ACPI TPM2 table, returns the offset of ACPI TPM2 table in `acpi_data`.
+    ///
+    /// # Arguments
+    ///
+    /// `acpi_data` - Bytes streams that ACPI tables converts to.
+    /// `loader` - ACPI table loader.
+    #[cfg(feature = "tpm")]
+    fn build_tpm2_table(
+        &self,
+        _acpi_data: &Arc<Mutex<Vec<u8>>>,
+        _loader: &mut TableLoader,
+        #[cfg(feature = "tpm")] _interface_type: &TpmInterfaceType,
+    ) -> Result<u64> {
+        bail!("Not implemented");
     }
 }
 
