@@ -113,6 +113,8 @@ impl KvmHypervisor {
     pub fn new() -> Result<Self> {
         match Kvm::new() {
             Ok(kvm_fd) => {
+                CPUCaps::check_required_extensions(&kvm_fd)?;
+
                 let vm_fd: Arc<VmFd> = Arc::new(match kvm_fd.create_vm() {
                     Ok(fd) => fd,
                     Err(e) => {

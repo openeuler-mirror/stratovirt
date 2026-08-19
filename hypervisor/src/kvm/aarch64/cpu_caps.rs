@@ -13,7 +13,19 @@
 use kvm_ioctls::Cap;
 use kvm_ioctls::Kvm;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+
+/// KVM capabilities the aarch64 machine cannot run without.
+const REQUIRED_CAPS: [Cap; 8] = [
+    Cap::ArmPsci02,     // KVM_ARM_VCPU_PSCI_0_2 set in arch_vcpu_init.
+    Cap::ImmediateExit, // KVM_RUN immediate exit for vCPU pause.
+    Cap::Ioeventfd,     // ioeventfd offload for virtio notifications.
+    Cap::Irqchip,       // In-kernel GIC.
+    Cap::Irqfd,         // irqfd for interrupt injection.
+    Cap::IrqRouting,    // GSI routing table for irqfd/MSI.
+    Cap::OneReg,        // KVM_GET/SET_ONE_REG for all vCPU register access.
+    Cap::UserMemory,    // KVM_SET_USER_MEMORY_REGION for guest memory.
+];
 
 // Capabilities for ARM cpu.
 #[derive(Debug, Clone)]
@@ -30,6 +42,16 @@ pub struct ArmCPUCaps {
 }
 
 impl ArmCPUCaps {
+    /// Preflight the KVM capabilities required by the aarch64 machine.
+    pub fn check_required_extensions(kvm: &Kvm) -> Result<()> {
+        for cap in REQUIRED_CAPS {
+            if !kvm.check_extension(cap) {
+                bail!("KVM capability {cap:?} is required for aarch64");
+            }
+        }
+        Ok(())
+    }
+
     /// Initialize ArmCPUCaps instance.
     pub fn init_capabilities(kvm: &Kvm) -> Result<Self> {
         Ok(ArmCPUCaps {
