@@ -10,11 +10,28 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use kvm_bindings::{kvm_msr_entry, CpuId, Msrs, KVM_MAX_CPUID_ENTRIES};
 use kvm_ioctls::Cap;
 use kvm_ioctls::Kvm;
 use vmm_sys_util::fam::Error;
+
+/// KVM capabilities the x86 machine cannot run without.
+const REQUIRED_CAPS: [Cap; 13] = [
+    Cap::AdjustClock,        // KVM_GET/SET_CLOCK for migration.
+    Cap::ExtCpuid,           // KVM_GET_SUPPORTED_CPUID for CPUID setup.
+    Cap::ImmediateExit,      // KVM_RUN immediate exit for vCPU pause.
+    Cap::Ioeventfd,          // ioeventfd offload for virtio notifications.
+    Cap::Irqchip,            // In-kernel PIC/IOAPIC/LAPIC.
+    Cap::Irqfd,              // irqfd for MSI-X interrupt injection.
+    Cap::IrqRouting,         // GSI routing table for irqfd/MSI.
+    Cap::MpState,            // KVM_GET/SET_MP_STATE for vCPU lifecycle.
+    Cap::Pit2,               // In-kernel PIT created by arch_init.
+    Cap::SetIdentityMapAddr, // arch_init identity map setup.
+    Cap::SetTssAddr,         // arch_init TSS setup.
+    Cap::UserMemory,         // KVM_SET_USER_MEMORY_REGION for guest memory.
+    Cap::VcpuEvents,         // KVM_GET/SET_VCPU_EVENTS for migration.
+];
 
 /// See: https://elixir.bootlin.com/linux/v4.19.123/source/arch/x86/include/asm/msr-index.h#L558
 const MSR_IA32_MISC_ENABLE: ::std::os::raw::c_uint = 0x1a0;
@@ -37,6 +54,16 @@ pub struct X86CPUCaps {
 }
 
 impl X86CPUCaps {
+    /// Preflight the KVM capabilities required by the x86 machine.
+    pub fn check_required_extensions(kvm: &Kvm) -> Result<()> {
+        for cap in REQUIRED_CAPS {
+            if !kvm.check_extension(cap) {
+                bail!("KVM capability {cap:?} is required for x86_64");
+            }
+        }
+        Ok(())
+    }
+
     /// Initialize X86CPUCaps instance.
     pub fn init_capabilities(kvm: &Kvm) -> Result<Self> {
         let supported_cpuid = kvm
