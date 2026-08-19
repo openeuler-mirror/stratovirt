@@ -930,7 +930,14 @@ impl MsiIrqManager for KVMInterruptManager {
         locked_irq_route_table.release_gsi(irq).map_err(|e| {
             error!("Failed to release gsi, error is {:?}", e);
             e
-        })
+        })?;
+
+        locked_irq_route_table
+            .commit_irq_routing(&self.vm_fd.clone())
+            .map_err(|e| {
+                error!("Failed to commit irq routing, error is {:?}", e);
+                e
+            })
     }
 
     fn register_irqfd(&self, irq_fd: Arc<EventFd>, irq: u32) -> Result<()> {
