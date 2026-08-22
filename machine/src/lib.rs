@@ -3645,6 +3645,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_numa_memdev_selects_backend_without_host_nodes() {
+        const MEM_SIZE: u64 = 2 * 1024 * 1024;
+
+        let mut vm_config = VmConfig::default();
+        vm_config.machine_config.hypervisor = HypervisorType::Test;
+        vm_config.machine_config.mem_config.mem_size = MEM_SIZE;
+        vm_config
+            .add_mem_backend("memory-backend-ram,size=2M,id=main")
+            .unwrap();
+        vm_config
+            .add_numa("node,nodeid=0,cpus=0,memdev=main")
+            .unwrap();
+
+        let mut machine = LightMachine::new(&vm_config).unwrap();
+        machine.base.numa_nodes = machine.add_numa_nodes(&mut vm_config).unwrap();
+        machine
+            .create_machine_ram(&vm_config.machine_config.mem_config, 1)
+            .unwrap();
+
+        let regions = machine.get_vm_ram().subregions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].name, "main");
+    }
+
+    #[test]
     fn test_build_mem_mappings_sorts_regions_and_assigns_contiguous_offsets() {
         let root = Region::init_container_region(0x4000, "root");
         let high = Arc::new(
