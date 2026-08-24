@@ -16,8 +16,6 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
@@ -30,7 +28,7 @@ use super::{qmp_channel::QmpChannel, qmp_response::QmpGreeting, qmp_response::Re
 use crate::config::{parse_migrate_uri, MigrateMode};
 use crate::event;
 use crate::event_loop::EventLoop;
-use crate::machine::{MachineExternalInterface, VmState};
+use crate::machine::{pause_vm_with_retry, MachineExternalInterface, VmState};
 use crate::socket::SocketHandler;
 use crate::socket::SocketRWHandler;
 use crate::state_query::{detect_silent_audio, query_workloads};
@@ -443,21 +441,11 @@ fn handle_qmp(
 
 fn stop(controller: &Arc<Mutex<dyn MachineExternalInterface>>) -> Response {
     let mut qmp_response = Response::create_empty_response();
-    let now = Instant::now();
-    while !controller.lock().unwrap().pause() {
-        thread::sleep(Duration::from_millis(5));
-        if now.elapsed() > Duration::from_secs(2) {
-            // Not use resume() to avoid unnecessary qmp event.
-            controller
-                .lock()
-                .unwrap()
-                .notify_lifecycle(VmState::Running);
-            qmp_response = Response::create_error_response(
-                qmp_schema::QmpErrorClass::GenericError("Failed to pause VM".to_string()),
-                None,
-            );
-            break;
-        }
+    if !pause_vm_with_retry(controller.as_ref()) {
+        qmp_response = Response::create_error_response(
+            qmp_schema::QmpErrorClass::GenericError("Failed to pause VM".to_string()),
+            None,
+        );
     }
 
     qmp_response
