@@ -37,7 +37,7 @@ use libusb1_sys::{
     libusb_device_handle, libusb_get_iso_packet_buffer, libusb_set_iso_packet_lengths,
     libusb_set_log_cb, libusb_transfer,
 };
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use rusb::{
     constants::LIBUSB_CLASS_HUB, Context, Device, DeviceDescriptor, DeviceHandle, Direction, Error,
     TransferType, UsbContext,
@@ -1160,12 +1160,18 @@ impl UsbHost {
                 }
                 Err(e) => {
                     locked_iso_queue.unused.push_back(iso_transfer.unwrap());
-                    if e == Error::NoDevice || e == Error::Io {
-                        // When the USB device reports the preceding error, XHCI notifies the guest
-                        // of the error through packet status. The guest initializes the device
-                        // again.
-                        packet.lock().unwrap().status = UsbPacketStatus::Stall;
-                    };
+                    if e == Error::NoDevice {
+                        // When the host USB device is physically detached, notify the guest via
+                        // NoDev status so that the control plane can initiate device removal mechanisms.
+                        packet.lock().unwrap().status = UsbPacketStatus::NoDev;
+                    } else {
+                        // NOTE: For other IO errors (e.g., ENOMEM from the host kernel), we intentionally
+                        // DO NOT alter the packet status (keeping it as Success) and simply drop this frame.
+                        // Emulating a STALL here violates the specs. It would force the guest driver to
+                        // issue a Reset Endpoint command on an endpoint that is still structurally in the
+                        // RUNNING state, permanently deadlocking the guest's xHCI state machine.
+                        debug!("Host in iso transfer submission failed (err: {:?}), skipping current frame", e);
+                    }
                     break;
                 }
             };
@@ -1256,12 +1262,18 @@ impl UsbHost {
                 }
                 Err(e) => {
                     locked_iso_queue.unused.push_back(iso_transfer);
-                    if e == Error::NoDevice || e == Error::Io {
-                        // When the USB device reports the preceding error, XHCI notifies the guest
-                        // of the error through packet status. The guest initializes the device
-                        // again.
-                        packet.lock().unwrap().status = UsbPacketStatus::Stall;
-                    };
+                    if e == Error::NoDevice {
+                        // When the host USB device is physically detached, notify the guest via
+                        // NoDev status so that the control plane can initiate device removal mechanisms.
+                        packet.lock().unwrap().status = UsbPacketStatus::NoDev;
+                    } else {
+                        // NOTE: For other IO errors (e.g., ENOMEM from the host kernel), we intentionally
+                        // DO NOT alter the packet status (keeping it as Success) and simply drop this frame.
+                        // Emulating a STALL here violates the specs. It would force the guest driver to
+                        // issue a Reset Endpoint command on an endpoint that is still structurally in the
+                        // RUNNING state, permanently deadlocking the guest's xHCI state machine.
+                        debug!("Host out iso transfer submission failed (err: {:?}), skipping current frame", e);
+                    }
                     break;
                 }
             };
