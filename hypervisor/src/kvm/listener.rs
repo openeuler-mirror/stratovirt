@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use kvm_bindings::*;
 use kvm_bindings::{kvm_userspace_memory_region as KvmMemSlot, KVM_MEM_READONLY};
 use kvm_ioctls::{IoEventAddress, NoDatamatch, VmFd};
-use log::{debug, warn};
+use log::debug;
 
 use crate::HypervisorError;
 use address_space::{
@@ -132,7 +132,7 @@ impl SlotAllocator {
 
 #[derive(Clone)]
 pub struct KvmMemoryListener {
-    vm_fd: Option<Arc<VmFd>>,
+    vm_fd: Arc<VmFd>,
     /// Id of AddressSpace.
     as_id: Arc<AtomicU32>,
     /// Record all MemSlots.
@@ -151,7 +151,7 @@ impl KvmMemoryListener {
     /// * `nr_slots` - Number of slots.
     pub fn new(
         nr_slots: u32,
-        vm_fd: Option<Arc<VmFd>>,
+        vm_fd: Arc<VmFd>,
         kvm_memslots: Arc<Mutex<HashMap<u32, KvmMemSlot>>>,
     ) -> KvmMemoryListener {
         KvmMemoryListener {
@@ -198,6 +198,18 @@ impl KvmMemoryListener {
         self.slots.lock().unwrap().remove(addr, size)
     }
 
+    fn get_active_slot(&self, addr: u64, size: u64) -> Result<MemSlot> {
+        let slots = self.slots.lock().unwrap();
+        let entry = slots
+            .active_slots
+            .get(&addr)
+            .ok_or_else(|| anyhow!(HypervisorError::NoMatchedKvmSlot(addr, size)))?;
+        if entry.size != size {
+            return Err(anyhow!(HypervisorError::NoMatchedKvmSlot(addr, size)));
+        }
+        Ok(*entry)
+    }
+
     /// Align a piece of memory segment according to `alignment`,
     /// return AddressRange after aligned.
     ///
@@ -241,12 +253,8 @@ impl KvmMemoryListener {
         if flat_range.owner.region_type() == RegionType::RomDevice
             && !flat_range.owner.get_rom_device_romd().unwrap()
         {
-            if let Err(ref e) = self.delete_region(flat_range) {
-                warn!(
-                    "Rom-device Region changes to IO mode, Failed to delete region: {:?}",
-                    e
-                );
-            }
+            self.delete_region(flat_range)
+                .with_context(|| "Failed to delete RomDevice region when entering IO mode")?;
             return Ok(());
         }
 
@@ -285,31 +293,28 @@ impl KvmMemoryListener {
             flags,
         };
 
-        if kvm_region.flags & KVM_MEM_READONLY == 0 {
-            let mut locked_slots = self.kvm_memslots.as_ref().lock().unwrap();
-            locked_slots.insert(kvm_region.slot, kvm_region);
-        }
-
         // SAFETY: All parameters in the struct of kvm_region are valid,
         // it can be guaranteed that calling the ioctl_with_ref in the function
         // of set_user_memory_region is safe.
-        unsafe {
-            self.vm_fd
-                .as_ref()
-                .unwrap()
-                .set_user_memory_region(kvm_region)
-                .or_else(|e| {
-                    self.delete_slot(aligned_addr.raw_value(), aligned_size)
-                        .with_context(|| "Failed to delete Kvm mem slot")?;
-                    Err(e).with_context(|| {
-                        format!(
-                            "KVM register memory region failed: addr 0x{:X}, size 0x{:X}",
-                            aligned_addr.raw_value(),
-                            aligned_size
-                        )
-                    })
-                })
+        if let Err(e) = unsafe { self.vm_fd.set_user_memory_region(kvm_region) } {
+            self.delete_slot(aligned_addr.raw_value(), aligned_size)
+                .with_context(|| "Failed to delete Kvm mem slot")?;
+            return Err(e).with_context(|| {
+                format!(
+                    "KVM register memory region failed: addr 0x{:X}, size 0x{:X}",
+                    aligned_addr.raw_value(),
+                    aligned_size
+                )
+            });
         }
+
+        if kvm_region.flags & KVM_MEM_READONLY == 0 {
+            self.kvm_memslots
+                .lock()
+                .unwrap()
+                .insert(kvm_region.slot, kvm_region);
+        }
+        Ok(())
     }
 
     /// Callback function for deleting Region, which only care about Ram-type Region yet.
@@ -330,7 +335,7 @@ impl KvmMemoryListener {
                 .map(|r| (r.base, r.size))
                 .with_context(|| "Failed to align mem slot")?;
 
-        let mem_slot = match self.delete_slot(aligned_addr.raw_value(), aligned_size) {
+        let mem_slot = match self.get_active_slot(aligned_addr.raw_value(), aligned_size) {
             Ok(m) => m,
             Err(_) => {
                 debug!("no match mem slot registered to KVM, just return");
@@ -346,24 +351,23 @@ impl KvmMemoryListener {
             flags: 0,
         };
 
-        let mut locked_slots = self.kvm_memslots.lock().unwrap();
-        locked_slots.remove(&kvm_region.slot);
-
         // SAFETY: All parameters in the struct of kvm_region are valid,
         // it can be guaranteed that calling the ioctl_with_ref in the function
         // of set_user_memory_region is safe.
         unsafe {
             self.vm_fd
-                .as_ref()
-                .unwrap()
                 .set_user_memory_region(kvm_region)
                 .with_context(|| {
                     format!(
                         "KVM unregister memory region failed: addr 0x{:X}",
                         aligned_addr.raw_value(),
                     )
-                })
+                })?;
         }
+
+        self.delete_slot(aligned_addr.raw_value(), aligned_size)?;
+        self.kvm_memslots.lock().unwrap().remove(&kvm_region.slot);
+        Ok(())
     }
 
     /// Register a IoEvent to `/dev/kvm`.
@@ -376,7 +380,7 @@ impl KvmMemoryListener {
     ///
     /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
-        let vm_fd = self.vm_fd.as_ref().unwrap();
+        let vm_fd = &self.vm_fd;
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
         trace::kvm_add_ioeventfd(
             &ioevtfd.fd,
@@ -417,7 +421,7 @@ impl KvmMemoryListener {
     ///
     /// * `ioevtfd` - IoEvent would be deleted.
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
-        let vm_fd = self.vm_fd.as_ref().unwrap();
+        let vm_fd = &self.vm_fd;
         let io_addr = IoEventAddress::Mmio(ioevtfd.addr_range.base.raw_value());
         trace::kvm_delete_ioeventfd(
             &ioevtfd.fd,
@@ -511,16 +515,15 @@ impl Listener for KvmMemoryListener {
 }
 
 #[cfg(target_arch = "x86_64")]
-#[derive(Default)]
 pub struct KvmIoListener {
-    vm_fd: Option<Arc<VmFd>>,
+    vm_fd: Arc<VmFd>,
     /// Whether enabled as a IO listener.
     enabled: bool,
 }
 
 #[cfg(target_arch = "x86_64")]
 impl KvmIoListener {
-    pub fn new(vm_fd: Option<Arc<VmFd>>) -> KvmIoListener {
+    pub fn new(vm_fd: Arc<VmFd>) -> KvmIoListener {
         KvmIoListener {
             vm_fd,
             enabled: false,
@@ -536,7 +539,7 @@ impl KvmIoListener {
     ///
     /// Return Error if the length of ioeventfd data is unexpected or syscall failed.
     fn add_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
-        let vm_fd = self.vm_fd.as_ref().unwrap();
+        let vm_fd = &self.vm_fd;
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
         trace::kvm_add_ioeventfd(
             &ioevtfd.fd,
@@ -577,7 +580,7 @@ impl KvmIoListener {
     ///
     /// * `ioevtfd` - IoEvent of Region.
     fn delete_ioeventfd(&self, ioevtfd: &RegionIoEventFd) -> Result<()> {
-        let vm_fd = self.vm_fd.as_ref().unwrap();
+        let vm_fd = &self.vm_fd;
         let io_addr = IoEventAddress::Pio(ioevtfd.addr_range.base.raw_value());
         trace::kvm_delete_ioeventfd(
             &ioevtfd.fd,
@@ -700,10 +703,9 @@ mod test {
 
     #[test]
     fn test_alloc_slot() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let kml = KvmMemoryListener::new(4, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let host_addr = 0u64;
@@ -755,10 +757,9 @@ mod test {
 
     #[test]
     fn test_add_del_ram_region() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let ram_size = host_page_size();
@@ -781,10 +782,9 @@ mod test {
 
     #[test]
     fn test_add_region_align() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         // flat-range not aligned
@@ -803,10 +803,9 @@ mod test {
 
     #[test]
     fn test_add_del_ioeventfd() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
@@ -849,10 +848,9 @@ mod test {
 
     #[test]
     fn test_ioeventfd_with_data_match() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let kml = KvmMemoryListener::new(34, kvm_hyp.vm_fd.clone(), kvm_hyp.mem_slots);
         let evtfd_addr = 0x1000_u64;
@@ -903,12 +901,11 @@ mod test {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_kvm_io_listener() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or_default();
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
-        let iol = KvmIoListener::new(kvm_hyp.vm_fd);
+        let iol = KvmIoListener::new(kvm_hyp.vm_fd.clone());
         let evtfd = generate_region_ioeventfd(4, NoDatamatch);
         assert!(iol
             .handle_request(None, Some(&evtfd), ListenerReqType::AddIoeventfd)

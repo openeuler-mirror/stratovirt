@@ -87,8 +87,9 @@ impl Macnat for IpvtapMacnat {
 
         // Replace destination mac address if not broadcast or multicast.
         if ether_buf[0] & 0x1 == 0 {
-            let ethhdr = EthHdr::from_mut_bytes(&mut ether_buf[..ETH_HLEN]).unwrap();
+            let mut ethhdr = EthHdr::from_bytes(&ether_buf[..ETH_HLEN]).unwrap();
             ethhdr.set_dst_addr(guest_mac);
+            ether_buf[..ETH_HLEN].copy_from_slice(ethhdr.as_bytes());
             // SAFETY: the buffer came from iovces so it's safe to copy back to iovecs.
             unsafe { iov_from_buf_direct(iovecs, &buf)? };
         }
@@ -113,9 +114,10 @@ impl Macnat for IpvtapMacnat {
             Self::handle_tx_arp(&mut ether_buf[ETH_HLEN..], host_mac);
         }
 
-        let ethhdr = EthHdr::from_mut_bytes(&mut ether_buf[..ETH_HLEN]).unwrap();
+        let mut ethhdr = EthHdr::from_bytes(&ether_buf[..ETH_HLEN]).unwrap();
         if ethhdr.src_addr[0] & 0x1 == 0 {
             ethhdr.set_src_addr(host_mac);
+            ether_buf[..ETH_HLEN].copy_from_slice(ethhdr.as_bytes());
             // SAFETY: the buffer came from iovces so it's safe to copy back to iovecs.
             unsafe { iov_from_buf_direct(iovecs, &buf)? };
         }

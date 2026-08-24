@@ -661,10 +661,6 @@ impl VmConfig {
             .mem_object
             .insert(mb_config.id.clone(), mb_config.clone());
 
-        if mb_config.host_numa_nodes.is_none() {
-            return Ok(mb_config);
-        }
-
         if self.machine_config.mem_config.membackend_objs.is_some() {
             self.machine_config
                 .mem_config
