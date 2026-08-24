@@ -110,7 +110,7 @@ impl GICv2Access for KvmGICv2 {
     ) -> Result<()> {
         KvmDevice::kvm_device_access(
             &self.fd,
-            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS,
+            kvm_bindings::KVM_DEV_ARM_VGIC_GRP_CPU_REGS,
             self.vcpu_gicr_attr(offset, cpu),
             gicc_value as *mut u64 as u64,
             write,
@@ -140,10 +140,9 @@ mod tests {
 
     #[test]
     fn test_create_kvm_gicv2() {
-        let kvm_hyp = KvmHypervisor::new().unwrap_or(KvmHypervisor::default());
-        if kvm_hyp.vm_fd.is_none() {
+        let Ok(kvm_hyp) = KvmHypervisor::new() else {
             return;
-        }
+        };
 
         let gic_conf = ICGICConfig {
             version: Some(GICVersion::GICv2),
@@ -157,7 +156,7 @@ mod tests {
             }),
             v3: None,
         };
-        let hypervisor_gic = KvmGICv2::new(kvm_hyp.vm_fd.clone().unwrap()).unwrap();
+        let hypervisor_gic = KvmGICv2::new(kvm_hyp.vm_fd.clone()).unwrap();
         let gic = GICv2::new(Arc::new(hypervisor_gic), &gic_conf).unwrap();
         assert!(gic.realize().is_ok());
     }

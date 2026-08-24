@@ -47,11 +47,12 @@ pub const IRQ_BASE: i32 = 5;
 #[cfg(target_arch = "x86_64")]
 pub const IRQ_MAX: i32 = 15;
 
-// 0-31 is private to each CPU (SGIs and PPIs).
+// GIC SPIs are numbered from zero in the KVM line-IRQ API and in the
+// guest FDT, even though the full INTID is SPI index + GIC_IRQ_INTERNAL.
 #[cfg(target_arch = "aarch64")]
-pub const IRQ_BASE: i32 = 32;
+pub const IRQ_BASE: i32 = 0;
 #[cfg(target_arch = "aarch64")]
-pub const IRQ_MAX: i32 = 191;
+pub const IRQ_MAX: i32 = 159;
 
 pub struct SysBus {
     pub base: BusBase,

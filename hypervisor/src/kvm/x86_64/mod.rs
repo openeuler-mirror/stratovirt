@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use kvm_bindings::*;
-use kvm_ioctls::Kvm;
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_ior_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use crate::kvm::listener::KvmIoListener;
@@ -50,7 +49,7 @@ impl KvmHypervisor {
     pub fn arch_init(&self) -> Result<()> {
         // The identity_addr is set in the memory layout of x86 machine.
         let identity_addr: u64 = 0xFEF0_C000;
-        let vm_fd = self.vm_fd.as_ref().unwrap();
+        let vm_fd = &self.vm_fd;
 
         vm_fd
             .set_identity_map_address(identity_addr)
@@ -265,13 +264,7 @@ impl KvmCpu {
         let locked_arch_cpu = cpu.arch_cpu.lock().unwrap();
         let apic_id = locked_arch_cpu.apic_id;
 
-        let sys_fd = match Kvm::new() {
-            Ok(fd) => fd,
-            _ => bail!("setup_cpuid: Open /dev/kvm failed"),
-        };
-        let mut cpuid = sys_fd
-            .get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)
-            .with_context(|| format!("Failed to get supported cpuid for CPU {}/KVM", apic_id))?;
+        let mut cpuid = self.caps.supported_cpuid();
 
         locked_arch_cpu
             .setup_cpuid(&mut cpuid)

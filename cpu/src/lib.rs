@@ -435,6 +435,14 @@ impl CPUInterface for CPU {
                     vm.lock().unwrap().destroy();
                 }
                 ShutdownActionPause => {
+                    // guest_shutdown runs on the vCPU thread that triggered the
+                    // shutdown. Mark it Paused and set its pause_signal before
+                    // vm.pause(), so the per-vCPU pause path does not kick and
+                    // wait on this same thread.
+                    let (cpu_state, _) = &*self.state;
+                    *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
+                    self.pause_signal.store(true, Ordering::SeqCst);
+
                     let now = Instant::now();
                     while !vm.lock().unwrap().pause() {
                         thread::sleep(Duration::from_millis(5));

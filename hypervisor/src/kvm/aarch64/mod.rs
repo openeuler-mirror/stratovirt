@@ -17,11 +17,9 @@ pub mod gicv3;
 mod core_regs;
 mod sys_regs;
 
-use std::mem::forget;
-use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use kvm_bindings::*;
 use kvm_ioctls::DeviceFd;
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
@@ -101,9 +99,7 @@ impl KvmCpu {
             addr: 0,
             flags: 0,
         };
-        // SAFETY: The fd can be guaranteed to be legal during creation.
-        let vcpu_device = unsafe { DeviceFd::from_raw_fd(self.fd.as_raw_fd()) };
-        vcpu_device
+        self.fd
             .has_device_attr(&pmu_attr)
             .with_context(|| "Kernel does not support PMU for vCPU")?;
         // Set IRQ 23, PPI 7 for PMU.
@@ -115,15 +111,13 @@ impl KvmCpu {
             flags: 0,
         };
 
-        vcpu_device
+        self.fd
             .set_device_attr(&pmu_irq_attr)
             .with_context(|| "Failed to set IRQ for PMU")?;
         // Init PMU after setting IRQ.
-        vcpu_device
+        self.fd
             .set_device_attr(&pmu_attr)
             .with_context(|| "Failed to enable PMU for vCPU")?;
-        // forget `vcpu_device` to avoid fd close on exit, as DeviceFd is backed by File.
-        forget(vcpu_device);
 
         Ok(())
     }
@@ -154,10 +148,9 @@ impl KvmCpu {
         boot_config: &Option<CPUBootConfig>,
         vcpu_config: &CPUFeatures,
     ) -> Result<()> {
+        let is_secondary = arch_cpu.lock().unwrap().apic_id != 0;
         let mut kvi = self.kvi.lock().unwrap();
         self.vm_fd
-            .as_ref()
-            .unwrap()
             .get_preferred_target(&mut kvi)
             .with_context(|| "Failed to get kvm vcpu preferred target")?;
 
@@ -165,7 +158,7 @@ impl KvmCpu {
         // We already checked that the capability is supported.
         kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PSCI_0_2;
         // Non-boot cpus are powered off initially.
-        if arch_cpu.lock().unwrap().apic_id != 0 {
+        if is_secondary {
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_POWER_OFF;
         }
 
@@ -256,6 +249,12 @@ impl KvmCpu {
                 self.fd.get_reg_list(&mut cpreg_list)?;
                 locked_arch_cpu.cpreg_len = 0;
                 for cpreg in cpreg_list.as_slice() {
+                    if locked_arch_cpu.cpreg_len >= locked_arch_cpu.cpreg_list.len() {
+                        bail!(
+                            "KVM returned more cpregs than capacity {}",
+                            locked_arch_cpu.cpreg_list.len()
+                        );
+                    }
                     let mut cpreg_entry = CpregListEntry {
                         reg_id: *cpreg,
                         value: 0,
@@ -314,7 +313,14 @@ impl KvmCpu {
                 }
             }
             RegsIndex::CpregList => {
-                for cpreg in locked_arch_cpu.cpreg_list[0..locked_arch_cpu.cpreg_len].iter() {
+                if locked_arch_cpu.cpreg_len > locked_arch_cpu.cpreg_list.len() {
+                    bail!(
+                        "Invalid cpreg_len {}, capacity {}",
+                        locked_arch_cpu.cpreg_len,
+                        locked_arch_cpu.cpreg_list.len()
+                    );
+                }
+                for cpreg in locked_arch_cpu.cpreg_list[..locked_arch_cpu.cpreg_len].iter() {
                     self.set_cpreg(cpreg)
                         .with_context(|| format!("Failed to set cpreg for CPU {}", apic_id))?;
                 }
@@ -484,6 +490,10 @@ impl KvmCpu {
     }
 
     pub fn arch_get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {
+        if self.kvi.lock().unwrap().features[0] & (1 << kvm_bindings::KVM_ARM_VCPU_SVE) != 0 {
+            bail!("SVE migration is not supported");
+        }
+
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::CoreRegs)?;
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::MpState)?;
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
@@ -493,8 +503,15 @@ impl KvmCpu {
     }
 
     pub fn arch_set_state(&self, state: &[u8], arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<()> {
+        if self.kvi.lock().unwrap().features[0] & (1 << kvm_bindings::KVM_ARM_VCPU_SVE) != 0 {
+            bail!("SVE migration is not supported");
+        }
+
         let cpu_state =
-            *ArchCPU::from_bytes(state).with_context(|| MigrationError::FromBytesError("CPU"))?;
+            ArchCPU::from_bytes(state).with_context(|| MigrationError::FromBytesError("CPU"))?;
+        if cpu_state.cpreg_len > cpu_state.cpreg_list.len() {
+            return Err(anyhow!(MigrationError::FromBytesError("CPU cpreg count")));
+        }
 
         let mut cpu_state_locked = arch_cpu.lock().unwrap();
         *cpu_state_locked = cpu_state;

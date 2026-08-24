@@ -206,7 +206,7 @@ impl StateTransfer for PL031 {
     }
 
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-        self.state = *PL031State::from_bytes(state)
+        self.state = PL031State::from_bytes(state)
             .with_context(|| MigrationError::FromBytesError("PL031"))?;
 
         Ok(())
