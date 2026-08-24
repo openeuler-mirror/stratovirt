@@ -14,8 +14,6 @@ use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::mem::size_of;
-use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -25,7 +23,7 @@ use crate::protocol::{
     MAX_DEVICE_STATE_SIZE, MAX_LARGE_DEVICE_STATE_SIZE,
 };
 use crate::{MigrationError, MigrationManager};
-use machine_manager::machine::VmState;
+use machine_manager::machine::pause_vm_with_retry;
 use util::unix::host_page_size;
 
 impl MigrationManager {
@@ -288,14 +286,8 @@ pub trait Lifecycle {
     /// Pause VM during migration.
     fn pause() -> Result<()> {
         if let Some(locked_vm) = &MIGRATION_MANAGER.vmm.read().unwrap().vm {
-            let now = Instant::now();
-            while !locked_vm.lock().unwrap().pause() {
-                thread::sleep(Duration::from_millis(5));
-                if now.elapsed() > Duration::from_secs(2) {
-                    // Not use resume() to avoid unnecessary qmp event.
-                    locked_vm.lock().unwrap().notify_lifecycle(VmState::Running);
-                    bail!("Failed to pause VM");
-                }
+            if !pause_vm_with_retry(locked_vm.as_ref()) {
+                bail!("Failed to pause VM");
             }
         }
 

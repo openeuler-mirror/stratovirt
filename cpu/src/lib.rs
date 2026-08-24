@@ -67,8 +67,6 @@ use std::cell::RefCell;
 use std::sync::atomic::{fence, AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::thread;
-use std::time::Duration;
-use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::{error, info, warn};
@@ -76,7 +74,7 @@ use nix::unistd::gettid;
 
 use machine_manager::config::ShutdownAction::{ShutdownActionPause, ShutdownActionPoweroff};
 use machine_manager::event;
-use machine_manager::machine::{HypervisorType, MachineInterface, VmState};
+use machine_manager::machine::{pause_vm_with_retry, HypervisorType, MachineInterface};
 use machine_manager::qmp::{qmp_channel::QmpChannel, qmp_schema};
 use migration::DeviceStateDesc;
 
@@ -443,14 +441,13 @@ impl CPUInterface for CPU {
                     *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
                     self.pause_signal.store(true, Ordering::SeqCst);
 
-                    let now = Instant::now();
-                    while !vm.lock().unwrap().pause() {
-                        thread::sleep(Duration::from_millis(5));
-                        if now.elapsed() > Duration::from_secs(2) {
-                            // Not use resume() to avoid unnecessary qmp event.
-                            vm.lock().unwrap().notify_lifecycle(VmState::Running);
-                            bail!("Failed to pause VM");
+                    if !pause_vm_with_retry(vm.as_ref()) {
+                        // Restore every vCPU (including this one), then power
+                        // the VM off.
+                        if !vm.lock().unwrap().destroy() {
+                            error!("Failed to shutdown VM after failed pause");
                         }
+                        bail!("Failed to pause VM");
                     }
                 }
             }

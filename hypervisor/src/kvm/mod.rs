@@ -439,7 +439,9 @@ impl KvmCpu {
                         info!("Vcpu{} received an KVM_EXIT_SHUTDOWN signal", cpu.id);
                         cpu.guest_shutdown()?;
 
-                        return Ok(false);
+                        // Stay in the loop: a pause shutdown parks this vCPU
+                        // instead of exiting, so it can be resumed later.
+                        return Ok(true);
                     }
                     #[cfg(target_arch = "aarch64")]
                     VcpuExit::SystemEvent(event, flags) => {
@@ -684,12 +686,28 @@ impl CPUHypervisorOps for KvmCpu {
         let task = task.lock().unwrap();
         let (cpu_state, cvar) = &*state;
 
-        if *cpu_state.lock().unwrap() == CpuLifecycleState::Running {
-            *cpu_state.lock().unwrap() = CpuLifecycleState::Paused;
-            cvar.notify_one()
-        } else if *cpu_state.lock().unwrap() == CpuLifecycleState::Paused
-            && pause_signal.load(Ordering::SeqCst)
-        {
+        // Leave a failed pause armed (Paused, unacknowledged) so a retry only
+        // waits for the same acknowledgement; a caller that gives up restores
+        // every vCPU by notifying the VM as Running.
+        let need_ack = {
+            let mut locked_state = cpu_state.lock().unwrap();
+            match *locked_state {
+                CpuLifecycleState::Running => {
+                    *locked_state = CpuLifecycleState::Paused;
+                    cvar.notify_one();
+                    true
+                }
+                // Already paused and acknowledged by the vCPU thread.
+                CpuLifecycleState::Paused if pause_signal.load(Ordering::SeqCst) => false,
+                // Paused but not acknowledged yet: keep waiting instead of
+                // re-marking.
+                CpuLifecycleState::Paused => true,
+                // Created/Stopping/Stopped: nothing to pause.
+                _ => false,
+            }
+        };
+
+        if !need_ack {
             return Ok(());
         }
 
