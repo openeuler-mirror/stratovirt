@@ -576,7 +576,8 @@ fn qmp_command_exec(
         (blockdev_snapshot_internal_sync, blockdev_snapshot_internal_sync),
         (blockdev_snapshot_delete_internal_sync, blockdev_snapshot_delete_internal_sync),
         (query_vcpu_reg, query_vcpu_reg),
-        (query_mem_gpa, query_mem_gpa)
+        (query_mem_gpa, query_mem_gpa),
+        (tpm_reconnect, tpm_reconnect)
     );
 
     // Handle the Qmp command which macro can't cover

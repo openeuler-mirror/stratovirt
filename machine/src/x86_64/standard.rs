@@ -193,7 +193,11 @@ impl StdMachine {
                 .build_smbios(None, locked_vm.guest_memory_ranges())
                 .with_context(|| "Failed to rebuild SMBIOS")?;
             locked_vm
-                .build_acpi_tables(None)
+                .build_acpi_tables(
+                    None,
+                    #[cfg(feature = "tpm")]
+                    None,
+                )
                 .with_context(|| "Failed to rebuild ACPI tables")?;
         }
 
@@ -623,7 +627,11 @@ impl MachineOps for StdMachine {
             .with_context(|| "Failed to build SMBIOS")?;
 
         locked_vm
-            .build_acpi_tables(fwcfg.as_ref())
+            .build_acpi_tables(
+                fwcfg.as_ref(),
+                #[cfg(feature = "tpm")]
+                None,
+            )
             .with_context(|| "Failed to build ACPI tables")?;
 
         locked_vm

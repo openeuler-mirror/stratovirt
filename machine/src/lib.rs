@@ -1098,6 +1098,12 @@ pub trait MachineOps: MachineLifecycle {
         Ok(())
     }
 
+    /// Add Tpm device.
+    #[cfg(feature = "tpm")]
+    fn add_tpm_device(&mut self, _vm_config: &mut VmConfig, _cfg_args: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Add serial device.
     ///
     /// # Arguments
@@ -3049,6 +3055,8 @@ pub trait MachineOps: MachineLifecycle {
                 ("scsi-hd" | "scsi-cd", add_scsi_device, vm_config, cfg_args),
                 #[cfg(feature = "ramfb")]
                 ("ramfb", add_ramfb, cfg_args),
+                #[cfg(feature = "tpm")]
+                ("tpm", add_tpm_device, vm_config, cfg_args),
                 #[cfg(feature = "demo_device")]
                 ("pcie-demo-dev", add_demo_dev, cfg_args),
                 #[cfg(feature = "scream")]

@@ -465,6 +465,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "thiserror",
+ "tpm",
  "trace",
  "ui",
  "util",
@@ -1935,6 +1936,22 @@ dependencies = [
  "serde_spanned",
  "toml_datetime",
  "winnow",
+]
+
+[[package]]
+name = "tpm"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "libc",
+ "log",
+ "machine_manager",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "util",
+ "vmm-sys-util",
 ]
 
 [[package]]
