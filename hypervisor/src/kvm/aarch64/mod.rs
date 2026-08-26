@@ -480,7 +480,11 @@ impl KvmCpu {
         self.arch_set_regs(arch_cpu.clone(), RegsIndex::CoreRegs)?;
         self.arch_set_regs(arch_cpu.clone(), RegsIndex::MpState)?;
         self.arch_set_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
-        self.arch_set_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)?;
+        // Restore the virtual timer counter saved in the CPU state (e.g. from
+        // migration/snapshot restore), so the guest clock survives regardless
+        // of whether the VM starts paused or running.
+        self.arch_set_regs(arch_cpu.clone(), RegsIndex::VtimerCount)
     }
 
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
@@ -498,6 +502,7 @@ impl KvmCpu {
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::MpState)?;
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::CpregList)?;
         self.arch_get_regs(arch_cpu.clone(), RegsIndex::VcpuEvents)?;
+        self.arch_get_regs(arch_cpu.clone(), RegsIndex::VtimerCount)?;
 
         Ok(arch_cpu.lock().unwrap().as_bytes().to_vec())
     }
