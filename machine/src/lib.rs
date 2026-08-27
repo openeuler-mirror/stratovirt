@@ -3262,7 +3262,10 @@ pub trait MachineOps: MachineLifecycle {
 
         // Deactive files so that VM on the other end can active files.
         if MigrationManager::is_active() {
-            self.deactive_drive_files()?;
+            if let Err(e) = self.deactive_drive_files() {
+                EventLoop::get_ctx(None).unwrap().enable_clock();
+                return Err(e);
+            }
         }
         let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
@@ -3270,6 +3273,9 @@ pub trait MachineOps: MachineLifecycle {
                 if MigrationManager::is_active() {
                     self.active_drive_files()?;
                 }
+                // Keep failed and already-paused vCPUs armed so a retry only
+                // waits for the acknowledgement; a caller that gives up
+                // notifies the VM as Running to restore them.
                 return Err(anyhow!("Failed to pause vcpu{}, {:?}", cpu_index, e));
             }
         }
@@ -3294,23 +3300,40 @@ pub trait MachineOps: MachineLifecycle {
     /// # Arguments
     ///
     /// * `vm_state` - Vm state.
-    fn vm_resume(&self, vm_state: &mut VmState) -> Result<()> {
+    /// * `full_resume` - Whether this is a normal Paused-to-Running resume:
+    ///   notify devices that the VM resumed and, on failure, roll back to the
+    ///   paused state. The Running-to-Running recovery path passes `false`
+    ///   and skips both, because devices were never told the VM was paused
+    ///   and there is no paused state to go back to on failure.
+    fn vm_resume(&self, vm_state: &mut VmState, full_resume: bool) -> Result<()> {
         EventLoop::get_ctx(None).unwrap().enable_clock();
 
-        self.active_drive_files()?;
-
-        // Notify VM resumed.
-        pause_notify(false);
+        if let Err(e) = self.active_drive_files() {
+            if full_resume {
+                // The clock was enabled above but the VM is not resuming;
+                // keep the clock consistent with the paused state.
+                EventLoop::get_ctx(None).unwrap().disable_clock();
+            }
+            return Err(e);
+        }
 
         let cpus = &self.machine_base().cpus;
         for (cpu_index, cpu) in cpus.iter().enumerate() {
             if let Err(e) = cpu.resume() {
-                self.deactive_drive_files()?;
+                if full_resume {
+                    self.deactive_drive_files()?;
+                    EventLoop::get_ctx(None).unwrap().disable_clock();
+                }
                 return Err(anyhow!("Failed to resume vcpu{}, {:?}", cpu_index, e));
             }
         }
 
         *vm_state = VmState::Running;
+
+        if full_resume {
+            // Notify VM resumed.
+            pause_notify(false);
+        }
 
         Ok(())
     }
@@ -3356,12 +3379,20 @@ pub trait MachineOps: MachineLifecycle {
                 .vm_start(&mut vm_state, false)
                 .with_context(|| "Failed to start vm.")?,
             (Paused, Running) => self
-                .vm_resume(&mut vm_state)
+                .vm_resume(&mut vm_state, true)
                 .with_context(|| "Failed to resume vm.")?,
             (Running, Paused) | (Created, Paused) => self
                 .vm_pause(&mut vm_state)
                 .with_context(|| "Failed to pause vm.")?,
-            (Paused, Paused) | (Running, Running) => return Ok(()),
+            (Paused, Paused) => return Ok(()),
+            // A failed pause may have left vCPUs parked in Paused while the
+            // VM state is still Running; restore them and re-enable the
+            // virtual clock (no-op when already Running). Devices are not
+            // notified and failure rollback is skipped: they were never told
+            // the VM was paused, so there is no paused state to go back to.
+            (Running, Running) => self
+                .vm_resume(&mut vm_state, false)
+                .with_context(|| "Failed to restore vCPUs after failed pause.")?,
             (_, Shutdown) => self
                 .vm_destroy(&mut vm_state)
                 .with_context(|| "Failed to destroy vm.")?,
@@ -3554,7 +3585,7 @@ fn check_windows_emu_pid(
         let mut vm_state = locked_vm.get_vm_state().lock().unwrap();
         if *vm_state == VmState::Paused {
             info!("VM state is paused, resume VM before exit");
-            if let Err(e) = locked_vm.vm_resume(&mut vm_state) {
+            if let Err(e) = locked_vm.vm_resume(&mut vm_state, true) {
                 log::error!("Failed to resume VM when check windows emu pid: {:?}", e);
             }
         }
