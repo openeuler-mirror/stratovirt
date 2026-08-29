@@ -43,6 +43,7 @@ hisysevent = { path = "../hisysevent" }
 bytemuck = { version = "1.22.0", features = ["derive"] }
 static_assertions = "1.1.0"
 bitflags = "= 1.3.2"
+tpm = { path = "../tpm" }
 
 [dev-dependencies]
 regex = "1"
@@ -67,3 +68,4 @@ trace_to_logger = []
 trace_to_ftrace = []
 trace_to_hitrace = []
 usb_consumer = ["usb_base"]
+tpm = []

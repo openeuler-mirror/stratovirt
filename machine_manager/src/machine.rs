@@ -13,6 +13,8 @@
 use std::os::unix::io::RawFd;
 use std::str::FromStr;
 use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use once_cell::sync::Lazy;
@@ -27,7 +29,7 @@ use crate::qmp::qmp_schema::{
     Events, GetViomemArgument, GicCap, HumanMonitorCmdArgument, IothreadInfo, KvmInfo, MachineInfo,
     MigrateCapabilities, NetDevAddArgument, NetDevReplaceArgument, NetLinkSetArgument, PropList,
     QmpCommand, QmpErrorClass, QmpEvent, QueryMemGpaArgument, QueryVcpuRegArgument,
-    SchemaInfoCommand, SetViomemArgument, Target, TypeLists, UpdateRegionArgument,
+    SchemaInfoCommand, SetViomemArgument, Target, TpmReconnectArg, TypeLists, UpdateRegionArgument,
 };
 
 #[derive(Clone)]
@@ -645,6 +647,13 @@ pub trait DeviceInterface {
             None,
         )
     }
+
+    fn tpm_reconnect(&mut self, _args: TpmReconnectArg) -> Response {
+        Response::create_error_response(
+            QmpErrorClass::GenericError("tpm_reconnect is not supported yet".to_string()),
+            None,
+        )
+    }
 }
 
 /// Migrate external api
@@ -676,6 +685,40 @@ pub trait MachineExternalInterface: MachineLifecycle + DeviceInterface + Migrate
 
 /// Machine interface which is exposed to test server.
 pub trait MachineTestInterface: MachineAddressInterface {}
+
+/// Retry interval and overall timeout for pausing the VM.
+const PAUSE_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+const PAUSE_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Pause the VM, retrying until it succeeds or `PAUSE_RETRY_TIMEOUT` elapses.
+///
+/// Failed attempts leave vCPUs armed in the Paused state so a retry only
+/// waits for their acknowledgement; on timeout, notifying the VM as
+/// `Running` restores them. The VM mutex is released between attempts so a
+/// vCPU blocked in device emulation can make progress.
+///
+/// # Returns
+///
+/// `true` if paused, `false` if the pause timed out and was rolled back.
+pub fn pause_vm_with_retry<M>(vm: &Mutex<M>) -> bool
+where
+    M: MachineLifecycle + ?Sized,
+{
+    let now = Instant::now();
+    loop {
+        if vm.lock().unwrap().pause() {
+            return true;
+        }
+        thread::sleep(PAUSE_RETRY_INTERVAL);
+        if now.elapsed() > PAUSE_RETRY_TIMEOUT {
+            // Not use resume() to avoid unnecessary qmp event.
+            if !vm.lock().unwrap().notify_lifecycle(VmState::Running) {
+                log::error!("Failed to restore vCPUs after failed pause");
+            }
+            return false;
+        }
+    }
+}
 
 pub static PTY_PATH: Lazy<Mutex<Vec<PathInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static IOTHREADS: Lazy<Mutex<Vec<IothreadInfo>>> = Lazy::new(|| Mutex::new(Vec::new()));

@@ -38,6 +38,7 @@ pub const FWCFG_SNAPSHOT_ID: &str = "fwcfg";
 pub const GED_SNAPSHOT_ID: &str = "ged";
 pub const OHUI_SNAPSHOT_ID: &str = "ohui";
 pub const POWER_SNAPSHOT_ID: &str = "power";
+pub const TPMTIS_SNAPSHOT_ID: &str = "tpmtis";
 
 /// The suffix used for snapshot memory storage.
 pub const MEMORY_PATH_SUFFIX: &str = "memory";

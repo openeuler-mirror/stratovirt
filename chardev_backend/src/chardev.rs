@@ -15,14 +15,14 @@ use std::fs::{read_link, File, OpenOptions};
 use std::io::{ErrorKind, Stdin, Stdout};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{
     mpsc::{channel, Sender},
     Arc, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
@@ -45,9 +45,12 @@ use util::loop_context::{
 };
 use util::set_termi_raw_mode;
 use util::socket::{SocketListener, SocketStream};
+use util::time::{get_format_time, gettime};
 use util::unix::limit_permission;
 
 const BUF_QUEUE_SIZE: usize = 128;
+const LOG_ROTATE_SIZE_MAX: u64 = 100 * 1024 * 1024;
+const LOG_ROTATE_COUNT_MAX: u32 = 7;
 
 type PipeFile = Arc<Mutex<File>>;
 
@@ -191,15 +194,10 @@ impl Chardev {
                 }
             }
             ChardevType::File { path, .. } => {
-                let file = Arc::new(Mutex::new(
-                    OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .create(true)
-                        .truncate(false)
-                        .open(path)?,
-                ));
-                self.output = Some(file);
+                let writer = RotatingFileWriter::new(path).with_context(|| {
+                    format!("Failed to open file chardev '{}': {}", self.id, path)
+                })?;
+                self.output = Some(Arc::new(Mutex::new(writer)));
             }
             ChardevType::Pipe { path, .. } => {
                 let (input, output) = open_pipe_backend(path)?;
@@ -978,6 +976,92 @@ impl CommunicatOutInterface for SocketStream {}
 impl CommunicatOutInterface for File {}
 impl CommunicatOutInterface for Stdout {}
 impl CommunicatOutInterface for SenderWrapper {}
+impl CommunicatOutInterface for RotatingFileWriter {}
+
+struct RotatingFileWriter {
+    file: File,
+    path: String,
+    current_size: u64,
+    create_day_key: i32,
+}
+
+impl RotatingFileWriter {
+    fn new(path: &str) -> Result<Self> {
+        let file = open_rotating_file(path)?;
+        let metadata = file.metadata()?;
+        let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
+
+        Ok(Self {
+            file,
+            path: path.to_string(),
+            current_size: metadata.len(),
+            create_day_key: rotating_day_key(i64::try_from(modified)?),
+        })
+    }
+
+    fn rotate_if_needed(&mut self, written: usize) -> Result<()> {
+        self.current_size = self.current_size.saturating_add(written as u64);
+
+        let today = rotating_day_key(gettime()?.0);
+        if self.current_size < LOG_ROTATE_SIZE_MAX && self.create_day_key == today {
+            return Ok(());
+        }
+
+        let oldest = format!("{}{}", self.path, LOG_ROTATE_COUNT_MAX - 1);
+        if Path::new(&oldest).exists() {
+            std::fs::remove_file(&oldest)
+                .with_context(|| format!("Failed to remove log file {}", oldest))?;
+        }
+
+        for suffix in (0..LOG_ROTATE_COUNT_MAX - 1).rev() {
+            let source = if suffix == 0 {
+                self.path.clone()
+            } else {
+                format!("{}{}", self.path, suffix)
+            };
+            if !Path::new(&source).exists() {
+                continue;
+            }
+
+            let target = format!("{}{}", self.path, suffix + 1);
+            std::fs::rename(&source, &target).with_context(|| {
+                format!("Failed to rename log file from {} to {}", source, target)
+            })?;
+        }
+
+        self.file = open_rotating_file(&self.path)?;
+        self.current_size = 0;
+        self.create_day_key = today;
+        Ok(())
+    }
+}
+
+impl std::io::Write for RotatingFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write_all(buf)?;
+        self.rotate_if_needed(buf.len())
+            .map_err(std::io::Error::other)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+fn open_rotating_file(path: &str) -> Result<File> {
+    OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o640)
+        .open(path)
+        .with_context(|| format!("Failed to open log file {}", path))
+}
+
+fn rotating_day_key(sec: i64) -> i32 {
+    let time = get_format_time(sec);
+    time[0] * 10_000 + time[1] * 100 + time[2]
+}
 
 struct SenderWrapper(Sender<u8>);
 // SAFETY: Send and Sync is auto-implemented for Sender<T>,

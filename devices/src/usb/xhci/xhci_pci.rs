@@ -266,14 +266,13 @@ impl XhciPciDevice {
             locked_dev.device_id().to_string()
         };
 
+        let mut locked_xhci = self.xhci.lock().unwrap();
+
         let mut locked_port = port.lock().unwrap();
 
         trace::usb_xhci_detach_device(&locked_port.port_id, &dev_id);
 
-        self.xhci
-            .lock()
-            .unwrap()
-            .discharge_usb_port(&mut locked_port);
+        locked_xhci.discharge_usb_port(&mut locked_port);
 
         Ok(())
     }
