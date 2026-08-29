@@ -142,13 +142,33 @@ fn image_do_create(create_options: &CreateOptions, print_info: bool) -> Result<(
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
 
     let mut driver: Box<dyn BlockDriverOps<()>> = match create_options.conf.format {
-        DiskFormat::Raw => Box::new(RawDriver::new(file, aio, create_options.conf.clone())),
-        DiskFormat::Qcow2 => Box::new(Qcow2Driver::new(file, aio, create_options.conf.clone())?),
+        DiskFormat::Raw => Box::new(RawDriver::new(
+            file.clone(),
+            aio,
+            create_options.conf.clone(),
+        )),
+        DiskFormat::Qcow2 => Box::new(Qcow2Driver::new(
+            file.clone(),
+            aio,
+            create_options.conf.clone(),
+        )?),
     };
     let image_info = driver.as_mut().create_image(create_options)?;
 
     if print_info {
         println!("Stratovirt-img: {}", image_info);
+    }
+
+    // create_image writes the header/L1/refcount via file.write_all, which
+    // already lands in the OS page cache before returning. fsync here flushes
+    // all of it (data + metadata, including the file creation/truncation from
+    // O_CREAT|O_TRUNC) to the physical disk. Without this, a crash or power
+    // loss right after `create` returns could leave the newly written
+    // header/L1/refcount and the file's inode metadata unflushed, corrupting
+    // the image on the next use. A fsync failure is not fatal here (the file
+    // may still be usable); print the error but do not abort the command.
+    if let Err(e) = file.sync_all() {
+        println!("Failed to fsync '{}': {:?}", create_options.path, e);
     }
 
     Ok(())
