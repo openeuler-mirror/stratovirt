@@ -440,13 +440,28 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let old_l2_entry = l2_entry;
         l2_entry &= !QCOW2_OFLAG_ZERO;
         let mut cluster_addr = l2_entry & L2_TABLE_OFFSET_MASK;
+        // No zeroing is needed when allocating a new data cluster:
+        // 1. If the process exits abnormally (process killed, host power loss,
+        //    etc.) before the L2 entry is updated, the on-disk L2 entry still
+        //    points to the old cluster, so the new data cluster is never read;
+        //    whether it is zeroed makes no difference.
+        // 2. If the process exits abnormally after the L2 entry is updated but
+        //    before the real data is written into the data cluster, the next
+        //    StratoVirt run will read dirty data instead of the real data here.
+        //    Zeroing does not help: the zeros themselves would be that dirty
+        //    data, so it is pointless.
+        // 3. With buffered IO, even if the L2 entry is updated and the real data
+        //    IO has already returned, a host power loss may still prevent the data
+        //    from being flushed to the physical disk. This has no solution unless
+        //    every IO is synchronized (equivalent to direct IO).
+        // Therefore, zeroing data clusters here is unnecessary.
         if cluster_addr == 0 {
             let new_addr = self.alloc_cluster(1, false)?;
             l2_entry = new_addr | QCOW2_OFFSET_COPIED;
             cluster_addr = new_addr & L2_TABLE_OFFSET_MASK;
         } else if l2_entry & QCOW2_OFFSET_COPIED == 0 {
             // Copy on write for data cluster.
-            let new_data_addr = self.alloc_cluster(1, true)?;
+            let new_data_addr = self.alloc_cluster(1, false)?;
             if nbytes < self.header.cluster_size() {
                 let data = self.load_cluster(cluster_addr)?;
                 self.sync_aio
