@@ -107,6 +107,21 @@ impl ImageFile {
 
 impl Drop for ImageFile {
     fn drop(&mut self) {
+        // Flush all dirty data and metadata (including the file size set by
+        // ftruncate and inode timestamps) to the physical disk before releasing
+        // the lock and exiting. Offline operations (create/resize/snapshot/
+        // check-fix/convert) only do pwritev into the OS page cache during
+        // execution; the qcow2 driver's resize()/Drop and ImageFile's Drop
+        // never fsync on their own. Without an explicit fsync here, a crash or
+        // power loss right after the command returns could leave qcow2 metadata
+        // or the resized file length unflushed and corrupt the image on the next
+        // use. fsync (sync_all) rather than fdatasync is required because
+        // ftruncate changes inode metadata (file size, atime, etc.) that
+        // fdatasync may not flush. Applies to read-only images too, since their
+        // inode metadata (e.g. atime) also needs to be flushed.
+        if let Err(e) = self.file.sync_all() {
+            println!("Failed to fsync '{}': {:?}", self.path, e);
+        }
         if let Err(e) = unlock_file(&self.file, &self.path) {
             println!("{:?}", e);
         }
