@@ -107,6 +107,21 @@ impl ImageFile {
 
 impl Drop for ImageFile {
     fn drop(&mut self) {
+        // Flush all dirty data and metadata (including the file size set by
+        // ftruncate and inode timestamps) to the physical disk before releasing
+        // the lock and exiting. Offline operations (create/resize/snapshot/
+        // check-fix/convert) only do pwritev into the OS page cache during
+        // execution; the qcow2 driver's resize()/Drop and ImageFile's Drop
+        // never fsync on their own. Without an explicit fsync here, a crash or
+        // power loss right after the command returns could leave qcow2 metadata
+        // or the resized file length unflushed and corrupt the image on the next
+        // use. fsync (sync_all) rather than fdatasync is required because
+        // ftruncate changes inode metadata (file size, atime, etc.) that
+        // fdatasync may not flush. Applies to read-only images too, since their
+        // inode metadata (e.g. atime) also needs to be flushed.
+        if let Err(e) = self.file.sync_all() {
+            println!("Failed to fsync '{}': {:?}", self.path, e);
+        }
         if let Err(e) = unlock_file(&self.file, &self.path) {
             println!("{:?}", e);
         }
@@ -127,13 +142,33 @@ fn image_do_create(create_options: &CreateOptions, print_info: bool) -> Result<(
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
 
     let mut driver: Box<dyn BlockDriverOps<()>> = match create_options.conf.format {
-        DiskFormat::Raw => Box::new(RawDriver::new(file, aio, create_options.conf.clone())),
-        DiskFormat::Qcow2 => Box::new(Qcow2Driver::new(file, aio, create_options.conf.clone())?),
+        DiskFormat::Raw => Box::new(RawDriver::new(
+            file.clone(),
+            aio,
+            create_options.conf.clone(),
+        )),
+        DiskFormat::Qcow2 => Box::new(Qcow2Driver::new(
+            file.clone(),
+            aio,
+            create_options.conf.clone(),
+        )?),
     };
     let image_info = driver.as_mut().create_image(create_options)?;
 
     if print_info {
         println!("Stratovirt-img: {}", image_info);
+    }
+
+    // create_image writes the header/L1/refcount via file.write_all, which
+    // already lands in the OS page cache before returning. fsync here flushes
+    // all of it (data + metadata, including the file creation/truncation from
+    // O_CREAT|O_TRUNC) to the physical disk. Without this, a crash or power
+    // loss right after `create` returns could leave the newly written
+    // header/L1/refcount and the file's inode metadata unflushed, corrupting
+    // the image on the next use. A fsync failure is not fatal here (the file
+    // may still be usable); print the error but do not abort the command.
+    if let Err(e) = file.sync_all() {
+        println!("Failed to fsync '{}': {:?}", create_options.path, e);
     }
 
     Ok(())
