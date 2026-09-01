@@ -306,6 +306,103 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         Ok(())
     }
 
+    /// Load the snapshot table (public wrapper for the dump-qcow2 command).
+    pub fn dump_load_snapshot_table(&mut self) -> Result<()> {
+        if self.header.nb_snapshots as usize > QCOW2_MAX_SNAPSHOTS {
+            bail!(
+                "Snapshot count {} exceeds the limit {}",
+                self.header.nb_snapshots,
+                QCOW2_MAX_SNAPSHOTS
+            );
+        }
+        self.snapshot.set_cluster_size(self.header.cluster_size());
+
+        // The full snapshot table size can't be known until every entry has been
+        // read (entries are variable-length), so the whole table can't be
+        // range-checked up front. Check the first cluster instead. Snapshots
+        // rarely exceed one cluster in practice.
+        //
+        // TODO: use a more complete check.
+        if self.header.nb_snapshots > 0 {
+            self.dump_check_range(self.header.snapshots_offset, self.header.cluster_size())?;
+        }
+        self.snapshot.load_snapshot_table(
+            self.header.snapshots_offset,
+            self.header.nb_snapshots,
+            false,
+        )?;
+        Ok(())
+    }
+
+    /// Load the refcount table (dump-qcow2 wrapper).
+    pub fn dump_load_refcount_table(&mut self) -> Result<()> {
+        let bytes = u64::from(self.header.refcount_table_clusters)
+            .checked_mul(self.header.cluster_size())
+            .with_context(|| {
+                format!(
+                    "Refcount table clusters {} * cluster size {} overflow",
+                    self.header.refcount_table_clusters,
+                    self.header.cluster_size()
+                )
+            })?;
+        self.dump_check_range(self.header.refcount_table_offset, bytes)?;
+        self.load_refcount_table()
+    }
+
+    /// Validate that a range [offset, offset+size) is cluster-aligned and
+    /// within the file.
+    fn dump_check_range(&mut self, offset: u64, size: u64) -> Result<()> {
+        let cluster_size = self.header.cluster_size();
+        if offset == 0 && size != 0 {
+            bail!("Offset is 0 for a non-empty metadata region");
+        }
+        if !is_aligned(cluster_size, offset) {
+            bail!(
+                "Offset 0x{:x} is not aligned to cluster size {}",
+                offset,
+                cluster_size
+            );
+        }
+        let file_size = self.driver.disk_size()?;
+        let end = offset
+            .checked_add(size)
+            .with_context(|| format!("Offset 0x{:x} + size {} overflow", offset, size))?;
+        if end > file_size {
+            bail!(
+                "Range [0x{:x}, 0x{:x}) is out of file (size 0x{:x})",
+                offset,
+                end,
+                file_size
+            );
+        }
+        Ok(())
+    }
+
+    /// Read `count` 8-byte table entries from disk at the given offset,
+    /// bypassing cache (dump-qcow2 primitive for L1 tables and L2 tables).
+    pub fn dump_read_table_entries(&mut self, offset: u64, count: u64) -> Result<Vec<u64>> {
+        let bytes = count
+            .checked_mul(ENTRY_SIZE)
+            .with_context(|| format!("Entry count {} * {} overflow", count, ENTRY_SIZE))?;
+        self.dump_check_range(offset, bytes)?;
+        self.sync_aio.borrow_mut().read_ctrl_cluster(offset, count)
+    }
+
+    /// Read a raw refcount block from disk at the given offset, bypassing cache.
+    pub fn dump_read_refcount_block(&mut self, block_offset: u64) -> Result<Vec<u16>> {
+        let cluster_size = self.header.cluster_size() as usize;
+        self.dump_check_range(block_offset, cluster_size as u64)?;
+        let mut buf = vec![0u8; cluster_size];
+        self.sync_aio
+            .borrow_mut()
+            .read_buffer(block_offset, &mut buf)?;
+        let mut entries = Vec::with_capacity(cluster_size / 2);
+        for i in (0..cluster_size).step_by(2) {
+            entries.push(BigEndian::read_u16(&buf[i..i + 2]));
+        }
+        Ok(entries)
+    }
+
     pub fn flush(&mut self) -> Result<()> {
         trace::qcow2_flush(&self.driver.block_prop.id);
         self.table.flush()?;
