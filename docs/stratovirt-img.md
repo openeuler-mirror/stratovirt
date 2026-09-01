@@ -134,3 +134,37 @@ stratovirt-img convert -f qcow2 -O raw qcow2_img_path raw_img_path
 ```
 
 Note: Only qcow2 image to raw image conversion is supported currently.
+
+## Dump-qcow2
+
+Dump the qcow2 metadata verbatim for inspection or offline analysis. It is only
+supported by qcow2 format. The metadata is read directly from disk, bypassing the
+in-memory cache, and printed as it is on disk; corrupted or out-of-range fields
+are reported per section as an `[ERROR]` line rather than aborting the whole dump.
+
+Command syntax:
+
+```shell
+dump-qcow2 [--summary | --verbose | --full] img_path
+```
+
+- --summary: show only per-table summaries (skip zero-valued entries).
+- --verbose: show summaries plus nonzero entries (default if no flag is given).
+- --full: show all entries including zero-valued ones, for a complete export.
+- img_path: path of the qcow2 image to dump.
+
+The flags control verbosity. When none is given, the default is `--verbose`.
+If several are given together, `--full` takes precedence over `--verbose`,
+which takes precedence over `--summary`.
+
+Sample Configuration：
+
+```shell
+stratovirt-img dump-qcow2 img_path
+stratovirt-img dump-qcow2 --summary img_path
+stratovirt-img dump-qcow2 --verbose img_path
+stratovirt-img dump-qcow2 --full img_path
+```
+
+Note: This command is read-only and does not modify the image.
+
