@@ -3325,4 +3325,582 @@ mod test {
         // Clean.
         assert!(remove_file(dst_path).is_ok());
     }
+
+    /// Test argument parsing for dump-qcow2 subcommand.
+    #[test]
+    fn test_dump_qcow2_args_parse() {
+        let path = "/tmp/test_dump_qcow2_args_parse.qcow2";
+        let _ = remove_file(path);
+
+        let test_cases = [
+            ("img_path", true),
+            ("--verbose img_path", true),
+            ("--summary img_path", true),
+            ("--full img_path", true),
+            ("--verbose --full img_path", true),
+            ("-h", true),
+            ("--help", true),
+            ("img_path extra_arg", false),
+            ("--verbose img_path extra_arg", false),
+            ("", false),
+        ];
+
+        for (case, expect_ok) in test_cases {
+            let cmd_str = case.replace("img_path", path);
+            let args: Vec<String> = if cmd_str.is_empty() {
+                vec![]
+            } else {
+                cmd_str.split(' ').map(|s| s.to_string()).collect()
+            };
+
+            assert!(image_create(vec![
+                "-f".to_string(),
+                "qcow2".to_string(),
+                path.to_string(),
+                "+10M".to_string()
+            ])
+            .is_ok());
+
+            let ret = image_dump_qcow2(args.clone());
+            if expect_ok {
+                assert!(ret.is_ok(), "case '{}' should succeed: {:?}", case, ret);
+            } else {
+                assert!(ret.is_err(), "case '{}' should fail", case);
+            }
+
+            assert!(remove_file(path).is_ok());
+        }
+    }
+
+    /// Test dump-qcow2 in Summary mode (--summary).
+    #[test]
+    fn test_dump_qcow2_summary() {
+        let path = "/tmp/test_dump_qcow2_summary.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        assert!(image_dump_qcow2(vec!["--summary".to_string(), path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 in Verbose mode (--verbose), the default when no
+    /// verbosity flag is given.
+    #[test]
+    fn test_dump_qcow2_verbose() {
+        let path = "/tmp/test_dump_qcow2_verbose.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        assert!(image_dump_qcow2(vec!["--verbose".to_string(), path.to_string()]).is_ok());
+        // No verbosity flag: defaults to Verbose.
+        assert!(image_dump_qcow2(vec![path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 in Full mode (--full).
+    #[test]
+    fn test_dump_qcow2_full() {
+        let path = "/tmp/test_dump_qcow2_full.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        assert!(image_dump_qcow2(vec!["--full".to_string(), path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 with snapshots.
+    #[test]
+    fn test_dump_qcow2_with_snapshots() {
+        let path = "/tmp/test_dump_qcow2_with_snapshots.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        // Create two snapshots.
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "snap1".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "snap2".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+
+        // Dump should succeed and include snapshot data.
+        assert!(image_dump_qcow2(vec![path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--verbose".to_string(), path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--summary".to_string(), path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--full".to_string(), path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 rejects non-qcow2 formats.
+    #[test]
+    fn test_dump_qcow2_non_qcow2() {
+        let path = "/tmp/test_dump_qcow2_non_qcow2.raw";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "raw".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(ret.is_err(), "dump on raw image should fail");
+        let err_msg = format!("{:?}", ret.unwrap_err());
+        assert!(
+            err_msg.contains("qcow2") || err_msg.contains("Raw"),
+            "error should mention format: {}",
+            err_msg
+        );
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 fault-tolerance on a truncated image.
+    #[test]
+    fn test_dump_qcow2_truncated() {
+        let path = "/tmp/test_dump_qcow2_truncated.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+1M".to_string()
+        ])
+        .is_ok());
+
+        // Truncate the image to half size. The header is in the first cluster,
+        // but L1 table and later metadata may be lost. Fault-tolerance should
+        // print the header and report errors for unreachable sections.
+        let original_size = std::fs::metadata(path).unwrap().len();
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_len(original_size / 2).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on truncated image should still succeed: {:?}",
+            ret
+        );
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 with a data-filled qcow2 image.
+    #[test]
+    fn test_dump_qcow2_with_data() {
+        let raw_path = "/tmp/test_dump_qcow2_with_data.raw";
+        let qcow2_path = "/tmp/test_dump_qcow2_with_data.qcow2";
+        let _ = remove_file(raw_path);
+        let _ = remove_file(qcow2_path);
+
+        // Create a 10M raw file with real non-zero data in the first 1M.
+        let data = vec![0xabu8; 1 * M as usize];
+        std::fs::write(raw_path, &data).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(raw_path)
+            .unwrap();
+        file.set_len(10 * M).unwrap();
+        drop(file);
+
+        // Convert raw to qcow2.
+        assert!(image_convert(vec![
+            "-f".to_string(),
+            "raw".to_string(),
+            "-O".to_string(),
+            "qcow2".to_string(),
+            raw_path.to_string(),
+            qcow2_path.to_string()
+        ])
+        .is_ok());
+
+        // All three modes should succeed.
+        assert!(image_dump_qcow2(vec![qcow2_path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--verbose".to_string(), qcow2_path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--summary".to_string(), qcow2_path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--full".to_string(), qcow2_path.to_string()]).is_ok());
+
+        assert!(remove_file(raw_path).is_ok());
+        assert!(remove_file(qcow2_path).is_ok());
+    }
+
+    /// Test that dump header reports correct fields via direct driver access.
+    #[test]
+    fn test_dump_qcow2_header_consistency() {
+        let path = "/tmp/test_dump_qcow2_header.qcow2";
+        let _ = remove_file(path);
+
+        let cluster_bits = 16;
+        let refcount_bits = 16;
+        let img_size = "100M";
+
+        let test_image = TestQcow2Image::create(cluster_bits, refcount_bits, path, img_size);
+
+        // Validate header fields directly.
+        assert_eq!(test_image.header.version, 3);
+        assert_eq!(test_image.header.cluster_bits, cluster_bits as u32);
+        assert_eq!(test_image.header.cluster_size(), 1 << cluster_bits);
+        assert_eq!(test_image.header.refcount_order, 4); // 4 -> 16-bit refcounts
+        assert_eq!(test_image.header.incompatible_features, 0);
+        assert_eq!(test_image.header.compatible_features, 0);
+        assert_eq!(test_image.header.autoclear_features, 0);
+        assert!(test_image.header.size > 0);
+
+        // Verify the dump methods succeed via Qcow2DumpArg.
+        let file_size = std::fs::metadata(path).unwrap().len();
+        let mut dump_arg = Qcow2DumpArg::new(path.to_string(), DumpVerbosity::Summary).unwrap();
+        dump_arg.file_size = file_size;
+        assert!(dump_arg.dump_header().is_ok());
+        let l1_table = dump_arg
+            .driver
+            .dump_read_table_entries(
+                dump_arg.driver.header.l1_table_offset,
+                u64::from(dump_arg.driver.header.l1_size),
+            )
+            .unwrap();
+        dump_arg.dump_l1_table(&l1_table, "", "L1 Table");
+        dump_arg.dump_l2_tables(&l1_table, "", "L2 Table");
+        assert!(dump_arg.dump_refcount_table().is_ok());
+
+        drop(dump_arg);
+    }
+
+    /// Test that the dump helpers reject out-of-range / corrupted metadata
+    /// fields instead of silently returning zero-filled buffers (pread past
+    /// EOF returns 0 bytes without error).
+    #[test]
+    fn test_dump_qcow2_rejects_corrupted_metadata() {
+        let path = "/tmp/test_dump_qcow2_corrupted_meta.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "100M");
+        let mut driver = test_image.create_driver();
+
+        let cluster_size = driver.header.cluster_size();
+        // A point well past both the virtual disk size and the on-disk file
+        // size, but still cluster-aligned so it isolates the range check.
+        let out_of_range = 1u64 << 40;
+
+        // dump_read_table_entries (L2 table): offset past EOF must be
+        // rejected, not zero-filled.
+        let l2_entries = cluster_size / ENTRY_SIZE;
+        assert!(
+            driver
+                .dump_read_table_entries(out_of_range, l2_entries)
+                .is_err(),
+            "out-of-range L2 offset should be rejected"
+        );
+        // Misaligned offset must be rejected.
+        assert!(
+            driver.dump_read_table_entries(1, l2_entries).is_err(),
+            "misaligned L2 offset should be rejected"
+        );
+
+        // dump_read_refcount_block: offset past EOF must be rejected.
+        assert!(
+            driver.dump_read_refcount_block(out_of_range).is_err(),
+            "out-of-range refcount block offset should be rejected"
+        );
+        assert!(
+            driver.dump_read_refcount_block(cluster_size + 1).is_err(),
+            "misaligned refcount block offset should be rejected"
+        );
+
+        // A valid offset but count reaching past EOF must also be rejected.
+        assert!(
+            driver.dump_read_table_entries(out_of_range, 1).is_err(),
+            "out-of-range table offset should be rejected"
+        );
+
+        drop(driver);
+    }
+
+    /// Test that dump-qcow2 tolerates a corrupted nb_snapshots header field:
+    /// the snapshot section reports an error instead of hanging or OOM, and
+    /// the rest of the dump still succeeds.
+    #[test]
+    fn test_dump_qcow2_dirty_snapshot_count() {
+        let path = "/tmp/test_dump_qcow2_dirty_snapshot_count.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+1M".to_string()
+        ])
+        .is_ok());
+
+        // Read the header, corrupt nb_snapshots (offset 60, big-endian u32),
+        // and write it back. Use a value large enough that looping would be
+        // catastrophic if unguarded.
+        let mut buf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        use std::os::unix::prelude::FileExt;
+        file.read_at(&mut buf, 0).unwrap();
+        // u32::MAX snapshots.
+        buf[60..64].copy_from_slice(&u32::MAX.to_be_bytes());
+        file.write_at(&buf, 0).unwrap();
+        drop(file);
+
+        // dump-qcow2 must not hang or OOM; it reports the snapshot section as
+        // an error and returns Ok overall.
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty nb_snapshots should still succeed: {:?}",
+            ret
+        );
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test that dump-qcow2 tolerates a corrupted snapshots_offset (out of
+    /// file range): the snapshot section reports an error instead of
+    /// crashing or fabricating snapshot entries.
+    #[test]
+    fn test_dump_qcow2_dirty_snapshot_offset() {
+        let path = "/tmp/test_dump_qcow2_dirty_snapshot_offset.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "+1M");
+        // Create a real snapshot so the snapshot table is non-empty, then drop
+        // the driver to release the file handle before patching the header.
+        // create_snapshot flushes metadata to disk internally.
+        {
+            let mut driver = test_image.create_driver();
+            assert!(driver.create_snapshot("s1".to_string(), 0).is_ok());
+            drop(driver);
+        }
+
+        // Patch the on-disk header: keep nb_snapshots, point snapshots_offset
+        // at a cluster-aligned location well past EOF.
+        use std::os::unix::prelude::FileExt;
+        let mut buf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut buf, 0).unwrap();
+        let out_of_range = 1u64 << 40; // cluster-aligned, past EOF
+        buf[64..72].copy_from_slice(&out_of_range.to_be_bytes());
+        file.write_at(&buf, 0).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty snapshots_offset should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
+    }
+
+    /// Test that dump-qcow2 tolerates a dirty (garbage) L1 table entry: the
+    /// entry is printed verbatim, its masked L2 offset is rejected by the
+    /// dump range check as an [ERROR] line, and the dump still succeeds.
+    #[test]
+    fn test_dump_qcow2_dirty_l1_entry() {
+        let path = "/tmp/test_dump_qcow2_dirty_l1_entry.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "+1M");
+        // Write one cluster so an L1 entry is allocated and persisted, then
+        // drop the driver to release the file handle before patching.
+        {
+            let mut driver = test_image.create_driver();
+            let data = vec![0xaau8; test_image.header.cluster_size() as usize];
+            assert!(driver
+                .write_vectored(
+                    vec![Iovec {
+                        iov_base: data.as_ptr() as u64,
+                        iov_len: data.len() as u64,
+                    }],
+                    0,
+                    (),
+                )
+                .is_ok());
+            assert!(driver.flush().is_ok());
+            drop(driver);
+        }
+
+        // Patch the first L1 entry on disk with a garbage value. The L1
+        // table offset (header byte 0x28) locates the table; the first entry
+        // is the first 8 bytes there.
+        use std::os::unix::prelude::FileExt;
+        let mut hbuf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut hbuf, 0).unwrap();
+        let l1_off = u64::from_be_bytes(hbuf[40..48].try_into().unwrap());
+        let mut entry_buf = [0u8; 8];
+        file.read_at(&mut entry_buf, l1_off).unwrap();
+        // Garbage entry: a value that is neither cluster-aligned nor a valid
+        // offset. After masking it stays non-cluster-aligned, so dump_check_range
+        // rejects it on the misalignment check.
+        let garbage = 0x650e_124e_f1c7_1111u64;
+        file.write_at(&garbage.to_be_bytes(), l1_off).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty L1 entry should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
+    }
+
+    /// Test that dump-qcow2 classifies a corrupted l1_table_offset pointing
+    /// past EOF as an out-of-file error rather than a generic pread failure
+    /// (misaligned offsets are already caught earlier by QcowHeader::check,
+    /// so the past-EOF case is the one only the dump pre-check catches).
+    #[test]
+    fn test_dump_qcow2_dirty_l1_offset_past_eof() {
+        let path = "/tmp/test_dump_qcow2_dirty_l1_offset_past_eof.qcow2";
+        let _ = remove_file(path);
+
+        // Keep test_image alive so the file handle (and the file on disk) survives
+        // the header patch and the dump; its Drop removes the file at function end.
+        let _test_image = TestQcow2Image::create(16, 16, path, "+1M");
+
+        // Patch the on-disk l1_table_offset (header byte 0x28) with a
+        // cluster-aligned value well past EOF.
+        use std::os::unix::prelude::FileExt;
+        let mut buf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut buf, 0).unwrap();
+        let out_of_range = 1u64 << 40; // cluster-aligned, past EOF
+        buf[40..48].copy_from_slice(&out_of_range.to_be_bytes());
+        file.write_at(&buf, 0).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty l1_table_offset (past EOF) should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
+    }
+
+    /// Test that dump-qcow2 tolerates a dirty L2 table entry: it is printed
+    /// verbatim as a row (L2 entries are not used to drive further reads in
+    /// the dump path) and does not crash the dump.
+    #[test]
+    fn test_dump_qcow2_dirty_l2_entry() {
+        let path = "/tmp/test_dump_qcow2_dirty_l2_entry.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "+1M");
+        // Write one cluster so an L2 entry is allocated and persisted, then
+        // drop the driver to release the file handle before patching.
+        {
+            let mut driver = test_image.create_driver();
+            let data = vec![0xbbu8; test_image.header.cluster_size() as usize];
+            assert!(driver
+                .write_vectored(
+                    vec![Iovec {
+                        iov_base: data.as_ptr() as u64,
+                        iov_len: data.len() as u64,
+                    }],
+                    0,
+                    (),
+                )
+                .is_ok());
+            assert!(driver.flush().is_ok());
+            drop(driver);
+        }
+
+        // Locate the L2 table: read L1[0] from the on-disk L1 table, mask it to
+        // get the L2 table offset, then patch the first L2 entry with a value
+        // whose host offset field is past EOF.
+        use std::os::unix::prelude::FileExt;
+        let mut hbuf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut hbuf, 0).unwrap();
+        let l1_off = u64::from_be_bytes(hbuf[40..48].try_into().unwrap());
+        let mut l1_entry_buf = [0u8; 8];
+        file.read_at(&mut l1_entry_buf, l1_off).unwrap();
+        let l2_off = u64::from_be_bytes(l1_entry_buf) & L1_TABLE_OFFSET_MASK;
+        assert_ne!(
+            l2_off, 0,
+            "L1[0] should point at an allocated L2 table after writing data"
+        );
+        // Dirty L2 entry: host offset past EOF, cluster-aligned so only the
+        // range check (not the alignment check) rejects any downstream use.
+        let dirty_l2 = 1u64 << 40;
+        file.write_at(&dirty_l2.to_be_bytes(), l2_off).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty L2 entry should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
+    }
 }
