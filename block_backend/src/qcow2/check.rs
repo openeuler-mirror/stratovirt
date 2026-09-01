@@ -173,7 +173,12 @@ impl RefcountBlock {
         for i in 0..total_counts {
             let cluster_offset = (start_idx as u64 + i) << cluster_bits;
             self.set_refcount(start_idx + i as usize, 1)?;
-            // Write zero to disk
+            // Commit i_size before clearing: a freshly allocated cluster may
+            // lie past the current EOF, where the fallback pwrite below would
+            // auto-extend i_size without committing it.
+            sync_aio
+                .borrow()
+                .preallocate_file_size(cluster_offset + cluster_size as u64)?;
             let ret = raw_write_zeroes(
                 sync_aio.borrow_mut().file.as_raw_fd(),
                 cluster_offset as usize,
@@ -1004,6 +1009,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             let size = refblock_size;
             let refblock_buf = check.refblock.get_data(start, size as usize);
             self.sync_aio
+                .borrow()
+                .preallocate_file_size(refblock_offset + self.header.cluster_size())?;
+            self.sync_aio
                 .borrow_mut()
                 .write_buffer(refblock_offset, &refblock_buf)?;
 
@@ -1037,6 +1045,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         if self.check_overlap(0, reftable_offset, reftable_size as u64 * ENTRY_SIZE) != 0 {
             bail!("ERROR writing reftable");
         }
+        self.sync_aio.borrow().preallocate_file_size(
+            reftable_offset + reftable_clusters * self.header.cluster_size(),
+        )?;
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(reftable_offset, &new_reftable)?;
