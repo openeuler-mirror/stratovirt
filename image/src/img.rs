@@ -11,7 +11,9 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
+    cell::RefCell,
     fs::File,
+    mem::size_of,
     os::unix::prelude::{FileExt, MetadataExt, OpenOptionsExt},
     str::FromStr,
     sync::Arc,
@@ -22,9 +24,14 @@ use anyhow::{anyhow, bail, Context, Result};
 use crate::{cmdline::ArgsParse, BINARY_NAME};
 use block_backend::{
     qcow2::{
-        header::QcowHeader, is_aligned, table::Qcow2ClusterType, InternalSnapshotOps, Qcow2Driver,
-        SyncAioInfo, ENTRY_SIZE, L1_RESERVED_MASK, L1_TABLE_OFFSET_MASK, L2_TABLE_OFFSET_MASK,
+        header::QcowHeader,
+        is_aligned,
+        snapshot::{QcowSnapshotHeader, SNAPSHOT_EXTRA_DATA_LEN_16, SNAPSHOT_EXTRA_DATA_LEN_24},
+        table::Qcow2ClusterType,
+        InternalSnapshotOps, Qcow2Driver, SyncAioInfo, ENTRY_SIZE, L1_RESERVED_MASK,
+        L1_TABLE_OFFSET_MASK, L2_STD_RESERVED_MASK, L2_TABLE_OFFSET_MASK, QCOW2_MAX_L1_SIZE,
         QCOW2_OFFSET_COPIED, QCOW2_OFLAG_ZERO, REFCOUNT_TABLE_OFFSET_MASK,
+        REFCOUNT_TABLE_RESERVED_MASK,
     },
     raw::RawDriver,
     BlockAllocStatus, BlockDriverOps, BlockProperty, CheckResult, CreateOptions, ImageInfo,
@@ -34,6 +41,7 @@ use machine_manager::config::{memory_unit_conversion, DiskFormat};
 use util::{
     aio::{buffer_is_zero, Aio, AioEngine, Iovec, WriteZeroesState},
     file::{lock_file, open_file, unlock_file},
+    num_ops::round_up,
 };
 
 enum SnapshotOperation {
@@ -248,6 +256,480 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     image_do_create(&create_options, true)?;
 
     Ok(())
+}
+
+/// Parsed snapshot-table information: the (l1_table_offset, l1_size) of every snapshot
+/// that survived the parse (l1_list.len()) and the number of clusters the table
+/// occupies.
+struct SnapshotTableInfo {
+    l1_list: Vec<(u64, u32)>,
+    table_clusters: u64,
+}
+
+/// A qcow2 image whose tail clusters may have been lost to host-file truncation.
+/// Bundles the state the metadata walks need; `max_end` accumulates the minimum file
+/// length covering every referenced metadata cluster (initialized to the head cluster).
+struct TailLostQcow2 {
+    sync_aio: RefCell<SyncAioInfo>,
+    file: Arc<File>,
+    header: QcowHeader,
+    file_size: u64,
+    cluster_size: u64,
+    max_end: u64,
+    snap_info: Option<SnapshotTableInfo>,
+}
+
+impl TailLostQcow2 {
+    /// Open the image and read the header, the file size and the cluster geometry.
+    /// A tail-truncated image still has a valid header (truncation never rewrites it).
+    fn new(file: Arc<File>, conf: &BlockProperty) -> Result<Self> {
+        let mut hdr_buf = vec![0_u8; QcowHeader::len()];
+        file.read_at(&mut hdr_buf, 0)
+            .with_context(|| "Failed to read qcow2 header")?;
+        let header =
+            QcowHeader::from_vec(&hdr_buf).with_context(|| "Failed to parse qcow2 header")?;
+        if header.version != 3 {
+            bail!("tailappend only supports qcow2 version 3 images");
+        }
+        // The driver validates the header through load_metadata(); tailappend bypasses
+        // it, so run the same check here: every walk below trusts the header's offsets,
+        // sizes and cluster_bits, and a corrupt header would otherwise turn into a
+        // bogus (possibly huge or overflowing) file extension instead of an error.
+        header
+            .check()
+            .context("tailappend: qcow2 header failed validation")?;
+        let file_size = file
+            .metadata()
+            .with_context(|| "Failed to stat qcow2 file")?
+            .len();
+        let cluster_size = header.cluster_size();
+        let sync_aio = RefCell::new(
+            SyncAioInfo::new(file.clone(), conf.clone())
+                .with_context(|| "Failed to create sync aio for metadata reads")?,
+        );
+        Ok(Self {
+            sync_aio,
+            file,
+            header,
+            file_size,
+            cluster_size,
+            // Head cluster.
+            max_end: cluster_size,
+            snap_info: None,
+        })
+    }
+
+    /// Extend self.max_end to cover the byte range [off, off + len) if it lies
+    /// beyond it. The addition is checked: an overflowing range is corruption,
+    /// not tail loss, and is an error.
+    fn cover_range(&mut self, off: u64, len: u64, what: &str) -> Result<()> {
+        let end = off
+            .checked_add(len)
+            .with_context(|| format!("{} end overflow ({:#x} + {:#x})", what, off, len))?;
+        if end > self.max_end {
+            self.max_end = end;
+        }
+        Ok(())
+    }
+
+    /// Walk one L2 table and extend self.max_end to cover every data cluster it
+    /// references. Each entry is validated before it is followed: a reserved bit set or
+    /// a misaligned host offset is corruption, not tail loss, and is an error.
+    fn walk_l2_table(&mut self, l2_off: u64) -> Result<()> {
+        let l2_entries = self.cluster_size / ENTRY_SIZE;
+        let l2_buf = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(l2_off, l2_entries)
+            .with_context(|| format!("Failed to read L2 table at {:#x}", l2_off))?;
+        for (idx, &l2_entry) in l2_buf.iter().enumerate() {
+            let cluster_type = Qcow2ClusterType::get_cluster_type(l2_entry);
+            if cluster_type != Qcow2ClusterType::Compressed && l2_entry & L2_STD_RESERVED_MASK != 0
+            {
+                bail!(
+                    "L2 entry {:#x}:{} has reserved bits set: {:#X}",
+                    l2_off,
+                    idx,
+                    l2_entry
+                );
+            }
+            match cluster_type {
+                Qcow2ClusterType::Normal | Qcow2ClusterType::ZeroAlloc => {
+                    let data_cluster_offset = l2_entry & L2_TABLE_OFFSET_MASK;
+                    if !is_aligned(self.cluster_size, data_cluster_offset) {
+                        bail!(
+                            "L2 entry {:#x}:{} host offset {:#X} is not cluster aligned",
+                            l2_off,
+                            idx,
+                            data_cluster_offset
+                        );
+                    }
+                    self.cover_range(data_cluster_offset, self.cluster_size, "Data cluster")?;
+                }
+                Qcow2ClusterType::Compressed => {
+                    bail!("Compressed is not supported");
+                }
+                // Unallocated / ZeroPlain: no host cluster referenced.
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Walk one L1 table and extend self.max_end to cover the L1 region itself, every
+    /// L2 table it points at, and every data cluster those L2 tables reference. Called
+    /// for both the active L1 table and every snapshot's L1 table. A table beyond EOF
+    /// is tail loss: only the in-file prefix is read (a fully-lost table has nothing to
+    /// walk). Every in-file entry is validated before it is followed; a bad entry is
+    /// corruption, not tail loss, and is an error. An entry pointing beyond EOF is
+    /// expected tail loss: self.max_end is extended over the lost L2 table and the walk
+    /// stops there.
+    fn walk_l1_table(&mut self, l1_off: u64, l1_size: u32) -> Result<()> {
+        if l1_off == 0 || l1_size == 0 {
+            return Ok(());
+        }
+
+        let l1_clusters_bytes = round_up(u64::from(l1_size) * ENTRY_SIZE, self.cluster_size)
+            .context("L1 table size overflow")?;
+        self.cover_range(l1_off, l1_clusters_bytes, "L1 table")?;
+
+        // Fully beyond EOF: the whole table was lost; nothing to walk.
+        if l1_off >= self.file_size {
+            return Ok(());
+        }
+        // Partly beyond EOF: read only the in-file prefix.
+        let read_entries = ((self.file_size - l1_off) / ENTRY_SIZE).min(u64::from(l1_size));
+
+        let l1_buf = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(l1_off, read_entries)
+            .with_context(|| {
+                format!(
+                    "Failed to read L1 table at {:#x} ({} entries)",
+                    l1_off, read_entries
+                )
+            })?;
+        for (idx, &l1_entry) in l1_buf.iter().enumerate() {
+            // Stricter than check_refcounts_l1 (which records the corruption and
+            // continues): reserved bits in an L1 entry are corruption, not tail
+            // loss, and abort the walk.
+            if l1_entry & L1_RESERVED_MASK != 0 {
+                bail!(
+                    "L1 entry {} at {:#x} has reserved bits set: {:#X}",
+                    idx,
+                    l1_off,
+                    l1_entry
+                );
+            }
+            let l2_off = l1_entry & L1_TABLE_OFFSET_MASK;
+            if l2_off == 0 {
+                continue;
+            }
+            if !is_aligned(self.cluster_size, l2_off) {
+                bail!(
+                    "L1 entry {} at {:#x}: L2 table offset {:#X} is not cluster aligned",
+                    idx,
+                    l1_off,
+                    l2_off
+                );
+            }
+            // The L2 table is lost to tail truncation: extend over it and stop
+            // -- its entries are gone, so there is nothing left to walk.
+            if l2_off >= self.file_size {
+                self.cover_range(l2_off, self.cluster_size, "L2 table")?;
+                continue;
+            }
+            self.walk_l2_table(l2_off)?;
+        }
+        Ok(())
+    }
+
+    /// Parse the snapshot table described by the header.
+    ///
+    /// `l1_list.len()` is the number of snapshots that survived the parse.
+    /// tail truncation can only lose a trailing suffix of entries,
+    /// so an entry whose header or body runs past EOF just ends the
+    /// table. Returns `None` when the whole table is lost (its start lies beyond EOF).
+    /// An entry fully inside the file but with garbage fields is real corruption.
+    ///
+    /// Note:
+    /// This is the mirror of function `InternalSnapshot::load_snapshot_table`:
+    /// the on-disk format rules (entry layout, extra_data_size / id_str_size
+    /// validation, 8-byte alignment) are defined there -- this is their shadow
+    /// copy. Keep the two in sync: change a rule there and the same rule must
+    /// change here, or the surviving prefix would no longer match what the
+    /// real loader accepts.
+    fn parse_snapshot_table(&self) -> Result<Option<SnapshotTableInfo>> {
+        let snapshots_offset = self.header.snapshots_offset;
+        if snapshots_offset >= self.file_size {
+            return Ok(None);
+        }
+        // The table base comes from the header, which header.check() does not cover.
+        if !is_aligned(self.cluster_size, snapshots_offset) {
+            bail!(
+                "Snapshot table offset {:#X} is not cluster aligned",
+                snapshots_offset
+            );
+        }
+
+        let header_size = size_of::<QcowSnapshotHeader>() as u64;
+        let mut l1_list: Vec<(u64, u32)> = Vec::new();
+        let mut cur = snapshots_offset;
+        for i in 0..self.header.nb_snapshots {
+            // Entry header runs past EOF: lost to tail truncation.
+            let hdr_end = cur
+                .checked_add(header_size)
+                .context("snapshot entry offset overflow")?;
+            if hdr_end > self.file_size {
+                break;
+            }
+            let mut hbuf = vec![0_u8; header_size as usize];
+            self.file
+                .read_at(&mut hbuf, cur)
+                .with_context(|| format!("read snapshot header error(addr {:#x})", cur))?;
+            let header = QcowSnapshotHeader::from_vec(&hbuf)?;
+
+            if ![SNAPSHOT_EXTRA_DATA_LEN_16, SNAPSHOT_EXTRA_DATA_LEN_24]
+                .contains(&(header.extra_date_size as usize))
+            {
+                bail!(
+                    "too much extra metadata in snapshot table entry {} ({} bytes)",
+                    i,
+                    header.extra_date_size
+                );
+            }
+            // The header is fully in-file, so a zero id size is real corruption.
+            if header.id_str_size == 0 {
+                bail!("invalid snapshot id size 0 (zeroed snapshot table)");
+            }
+
+            // Entries are aligned to 8 bytes, zero-padded, per the qcow2 spec.
+            let entry_size = round_up(
+                header_size
+                    + u64::from(header.extra_date_size)
+                    + u64::from(header.id_str_size)
+                    + u64::from(header.name_size),
+                u8::BITS as u64,
+            )
+            .context("snapshot entry size overflow")?;
+            // Entry body runs past EOF: lost to tail truncation.
+            let entry_end = cur
+                .checked_add(entry_size)
+                .context("snapshot entry offset overflow")?;
+            if entry_end > self.file_size {
+                break;
+            }
+            l1_list.push((header.l1_table_offset, header.l1_size));
+            cur = entry_end;
+        }
+
+        // Size the table in whole clusters: qcow2 allocates (and tailappend
+        // re-extends) space cluster-granularly.
+        let table_clusters = round_up(cur - snapshots_offset, self.cluster_size)
+            .context("snapshot table size overflow")?
+            / self.cluster_size;
+        Ok(Some(SnapshotTableInfo {
+            l1_list,
+            table_clusters,
+        }))
+    }
+
+    /// Walk the refcount table described by the header and extend self.max_end to
+    /// cover the table region itself and every refcount block it points at. Same
+    /// EOF-aware pattern as walk_l1_table: only the in-file prefix is read, and a
+    /// block entry beyond EOF just extends self.max_end over the lost block.
+    fn walk_refcount_table(&mut self) -> Result<()> {
+        let rt_off = self.header.refcount_table_offset;
+        let rt_clusters = self.header.refcount_table_clusters;
+        if rt_off == 0 || rt_clusters == 0 {
+            return Ok(());
+        }
+        let rt_bytes = u64::from(rt_clusters) * self.cluster_size;
+        self.cover_range(rt_off, rt_bytes, "Refcount table")?;
+
+        // Fully beyond EOF: the whole table was lost; nothing to walk.
+        if rt_off >= self.file_size {
+            return Ok(());
+        }
+        // Partly beyond EOF: read only the in-file prefix (entries in the lost suffix
+        // read back as zero and would contribute nothing).
+        let read_entries = ((self.file_size - rt_off) / ENTRY_SIZE).min(rt_bytes / ENTRY_SIZE);
+
+        let rt_buf = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(rt_off, read_entries)
+            .with_context(|| {
+                format!(
+                    "Failed to read refcount table at {:#x} ({} entries)",
+                    rt_off, read_entries
+                )
+            })?;
+        for rte in rt_buf {
+            if rte & REFCOUNT_TABLE_RESERVED_MASK != 0 {
+                bail!("Refcount table entry {:#X} has reserved bits set", rte);
+            }
+            let rb_off = rte & REFCOUNT_TABLE_OFFSET_MASK;
+            if rb_off != 0 {
+                if !is_aligned(self.cluster_size, rb_off) {
+                    bail!("Refcount block address not aligned {:#x}", rb_off);
+                }
+                self.cover_range(rb_off, self.cluster_size, "Refcount block")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compute the minimum file length covering every metadata cluster referenced by
+    /// the header (active tree, refcounts, and -- when still intact -- the snapshot
+    /// table and each snapshot's tree). The result is left in self.max_end,
+    /// rounded up to whole clusters.
+    fn compute_intended_size(&mut self) -> Result<()> {
+        // Active L1 table -> L2 tables -> data clusters.
+        self.walk_l1_table(self.header.l1_table_offset, self.header.l1_size)?;
+
+        // Refcount table -> refcount blocks.
+        self.walk_refcount_table()?;
+
+        // Snapshot table + each snapshot's L1/L2/data (a lost snapshot table was
+        // already dropped by the caller).
+        if let Some(info) = self.snap_info.take() {
+            if self.header.snapshots_offset != 0 && self.header.nb_snapshots > 0 {
+                // Snapshot table.
+                self.cover_range(
+                    self.header.snapshots_offset,
+                    info.table_clusters * self.cluster_size,
+                    "Snapshot table",
+                )?;
+            }
+            // Snapshot L1 table -> Snapshot L2 tables -> Snapshot data clusters.
+            for &(snap_l1_off, snap_l1_size) in &info.l1_list {
+                if !is_aligned(self.cluster_size, snap_l1_off) {
+                    bail!(
+                        "Snapshot L1 table offset {:#X} is not cluster aligned",
+                        snap_l1_off
+                    );
+                }
+                if u64::from(snap_l1_size) > QCOW2_MAX_L1_SIZE / ENTRY_SIZE {
+                    bail!("Snapshot L1 table too large: {} entries", snap_l1_size);
+                }
+                self.walk_l1_table(snap_l1_off, snap_l1_size)?;
+            }
+            self.snap_info = Some(info);
+        }
+
+        self.max_end =
+            round_up(self.max_end, self.cluster_size).context("get max file size overflow")?;
+        Ok(())
+    }
+}
+
+/// Append zero clusters at the tail of a qcow2 image whose tail clusters were lost
+/// (host file truncated, e.g. on power loss): cover every metadata reference that now
+/// dangles beyond EOF, then rebuild refcounts and fix leaks inline (equivalent to
+/// `check -r all`; no separate check run is needed afterwards).
+/// Lost cluster contents are not recovered (they become zeros).
+pub(crate) fn image_tail_append(args: Vec<String>) -> Result<()> {
+    let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec![], vec![]);
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    let path = match arg_parser.free.len() {
+        0 => bail!("tailappend requires a filename"),
+        1 => arg_parser.free[0].clone(),
+        _ => bail!("Unexpected argument: {}", arg_parser.free[1]),
+    };
+
+    let image_file = ImageFile::create(&path, false)?;
+    let file = image_file.file.clone();
+    let conf = BlockProperty {
+        format: DiskFormat::Qcow2,
+        ..Default::default()
+    };
+
+    // 1) Open the image and load the header / file size / cluster geometry.
+    let mut tl_qcow2 = TailLostQcow2::new(file.clone(), &conf)?;
+
+    // 2) Snapshot-table tail loss: a truncated table loses a trailing suffix of its
+    //    sequentially laid-out entries, so keep the surviving prefix (l1_list.len())
+    //    and only shrink nb_snapshots in the header when entries were lost. Only when
+    //    the table start itself lies beyond EOF are all snapshots dropped.
+    let orig_nb_snapshots = tl_qcow2.header.nb_snapshots;
+    if tl_qcow2.header.nb_snapshots > 0 && tl_qcow2.header.snapshots_offset != 0 {
+        match tl_qcow2.parse_snapshot_table()? {
+            Some(info) => {
+                let kept = info.l1_list.len() as u32;
+                if kept < orig_nb_snapshots {
+                    tl_qcow2.header.nb_snapshots = kept;
+                    file.write_at(&tl_qcow2.header.to_vec(), 0)
+                        .with_context(|| "Failed to shrink nb_snapshots in header")?;
+                    println!(
+                        "tailappend: snapshot table was lost beyond EOF; kept {} of {} snapshot(s) (lost ones unrecoverable)",
+                        kept, orig_nb_snapshots
+                    );
+                }
+                tl_qcow2.snap_info = Some(info);
+            }
+            None => {
+                // Rewrite the whole header, the way the driver persists header updates.
+                tl_qcow2.header.nb_snapshots = 0;
+                tl_qcow2.header.snapshots_offset = 0;
+                file.write_at(&tl_qcow2.header.to_vec(), 0)
+                    .with_context(|| "Failed to drop snapshots from header")?;
+                println!(
+                    "tailappend: snapshot table was lost beyond EOF; dropped {} snapshot(s) from header (unrecoverable)",
+                    orig_nb_snapshots
+                );
+            }
+        }
+    }
+
+    // 3) Compute the minimum file length covering all referenced metadata.
+    tl_qcow2.compute_intended_size()?;
+
+    // 4) Append zero clusters at the tail to cover whatever was lost beyond EOF.
+    // There is no sound upper bound to validate max_end against: an in-file,
+    // aligned, reserved-bit-free metadata reference is indistinguishable from
+    // real tail loss (the file may have grown far beyond its current size in
+    // the past via snapshot COW and later deletion). A corrupt entry that
+    // survives all per-entry checks therefore gets extended over as-is; at
+    // worst this enlarges the (sparse) file size, nothing else is affected.
+    let final_size = if tl_qcow2.max_end > tl_qcow2.file_size {
+        file.set_len(tl_qcow2.max_end)
+            .with_context(|| format!("Failed to extend qcow2 file to {:#X}", tl_qcow2.max_end))?;
+        if let Err(e) = file.sync_all() {
+            println!("Failed to set len sync '{}': {:?}", path, e);
+        }
+        tl_qcow2.max_end
+    } else {
+        println!("tailappend: nothing to extend, image already covers all references");
+        tl_qcow2.file_size
+    };
+    let added_clusters = (final_size - tl_qcow2.file_size) / tl_qcow2.cluster_size;
+    println!(
+        "tailappend: file size {:#X} -> {:#X} bytes, extended {} cluster(s) ({} bytes)",
+        tl_qcow2.file_size,
+        final_size,
+        added_clusters,
+        final_size - tl_qcow2.file_size
+    );
+
+    // 5) Rebuild refcounts / fix leaks so the image is fully consistent.
+    let mut qcow2_driver = create_qcow2_driver_for_check(file.clone(), conf)
+        .with_context(|| "Failed to create qcow2 driver for check")?;
+    let mut check_res = CheckResult::default();
+    let fix = FIX_LEAKS | FIX_ERRORS;
+    let ret = qcow2_driver.check_image(&mut check_res, false, fix);
+    print!("{}", check_res.collect_check_message());
+    if let Err(e) = file.sync_all() {
+        println!("Failed to fsync in the end '{}': {:?}", path, e);
+    }
+    ret
 }
 
 pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
@@ -1448,6 +1930,7 @@ resize [-f fmt] filename [+]size
 snapshot [-l | -a snapshot | -c snapshot | -d snapshot | -r old_snapshot_name new_snapshot_name] filename
 convert [-f input_fmt | -O output_fmt | -S sparse_size ] input_filename output_filename
 dump-qcow2 [--summary | --verbose | --full] filename
+tailappend filename
 
 Command parameters:
 'filename' is a disk image filename
@@ -1481,6 +1964,18 @@ Parameters to dump-qcow2 subcommand:
  '--summary'       show only per-table summaries (skip zero-valued entries)
  '--verbose'       show summaries plus nonzero entries (default if none given)
  '--full'          show all entries including zero-valued ones
+
+Parameters to tailappend subcommand:
+ 'filename' is the qcow2 image to repair.
+ Repairs a qcow2 whose tail clusters were lost (host file truncated, e.g. on
+     power loss). It appends zero clusters at the tail to cover every metadata
+     reference that now dangles beyond EOF, then rebuilds refcounts and fixes
+     leaks inline (equivalent to `check -r all`; no separate check run is
+     needed afterwards) so the image is openable again.
+ Lost cluster *contents* are NOT recovered (they become zeros); this restores the
+     qcow2 structure, accepting data loss in the lost clusters.
+ If the snapshot table itself was lost (snapshot-table / snapshot-l1 tail loss), the
+     snapshots are unrecoverable and are dropped from the header before repairing.
 "#,
     );
 }

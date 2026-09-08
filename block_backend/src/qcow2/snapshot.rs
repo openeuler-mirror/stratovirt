@@ -24,9 +24,9 @@ pub const QCOW2_MAX_SNAPSHOTS: usize = 65536;
 
 // Length of Qcow2 internal snapshot which doesn't have icount in extra data.
 // Qcow2 snapshots created by qemu-img(version <= 5.0) may have this format.
-const SNAPSHOT_EXTRA_DATA_LEN_16: usize = 16;
+pub const SNAPSHOT_EXTRA_DATA_LEN_16: usize = 16;
 // Length of Qcow2 internal snapshot which has icount in extra data.
-const SNAPSHOT_EXTRA_DATA_LEN_24: usize = 24;
+pub const SNAPSHOT_EXTRA_DATA_LEN_24: usize = 24;
 
 #[derive(Clone)]
 pub struct InternalSnapshot {
@@ -308,19 +308,19 @@ impl QcowSnapshot {
 }
 
 pub struct QcowSnapshotHeader {
-    l1_table_offset: u64,
-    l1_size: u32,
-    id_str_size: u16,
-    name_size: u16,
+    pub l1_table_offset: u64,
+    pub l1_size: u32,
+    pub id_str_size: u16,
+    pub name_size: u16,
     date_sec: u32,
     date_nsec: u32,
     vm_clock_nsec: u64,
     vm_state_size: u32,
-    extra_date_size: u32,
+    pub extra_date_size: u32,
 }
 
 impl QcowSnapshotHeader {
-    fn from_vec(buf: &[u8]) -> Result<QcowSnapshotHeader> {
+    pub fn from_vec(buf: &[u8]) -> Result<QcowSnapshotHeader> {
         if buf.len() < size_of::<QcowSnapshotHeader>() {
             bail!("Invalid qcow2 snapshot header length {}.", buf.len());
         }
