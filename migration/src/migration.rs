@@ -328,8 +328,17 @@ impl MigrationManager {
             bail!("Source MemBlock config size is too large");
         }
 
+        let block_size = size_of::<MemBlock>() as u64;
+        if !len.is_multiple_of(block_size) {
+            bail!(
+                "Source MemBlock length {} is not a multiple of MemBlock Size {}",
+                len,
+                block_size
+            );
+        }
+        let n = (len / block_size) as usize;
         let mut blocks = Vec::<MemBlock>::new();
-        blocks.resize_with(len as usize / (size_of::<MemBlock>()), Default::default);
+        blocks.resize_with(n, Default::default);
         fd.read_exact(
             // SAFETY:
             // 1. The pointer of blocks can be guaranteed not null.
