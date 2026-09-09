@@ -168,3 +168,21 @@ stratovirt-img dump-qcow2 --full img_path
 
 Note: This command is read-only and does not modify the image.
 
+## Tailappend
+
+Repair a qcow2 image whose tail clusters were lost (the host file was truncated, e.g. on power fail). It walks all metadata to find every reference dangling beyond EOF, extends the file with zero clusters to cover them, then rebuilds refcounts and fixes leaks in the same run (inline, equivalent to `check -r all` — no need to run it again afterwards). The contents of the lost clusters are not recovered. Only qcow2 version 3 images are supported.
+
+Command syntax:
+
+```shell
+tailappend img_path
+```
+
+Sample Configuration：
+
+```shell
+stratovirt-img tailappend img_path
+```
+
+Note: The command of tailappend is not supported by raw format. If the snapshot table was lost beyond EOF, the affected snapshots are dropped from the header (unrecoverable).
+
