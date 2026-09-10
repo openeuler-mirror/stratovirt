@@ -105,7 +105,7 @@ impl MigrationManager {
     {
         // Activate the migration status.
         let request = Request::recv_msg(fd)?;
-        if request.status == TransStatus::Active {
+        if request.status() == TransStatus::Active {
             info!("Active the migration");
             Self::set_status(MigrationStatus::Active)?;
             Response::send_msg(fd, TransStatus::Ok)?;
@@ -119,7 +119,7 @@ impl MigrationManager {
 
         // Check source and destination virtual machine configuration.
         let request = Request::recv_msg(fd)?;
-        if request.status == TransStatus::VmConfig {
+        if request.status() == TransStatus::VmConfig {
             info!("Receive VmConfig status");
             Self::check_vm_config(fd, request.length)
                 .with_context(|| "Failed to check vm config")?;
@@ -538,7 +538,7 @@ impl MigrationManager {
     {
         // Receive complete status from source vm.
         let request = Request::recv_msg(fd)?;
-        if request.status == TransStatus::Complete {
+        if request.status() == TransStatus::Complete {
             info!("Receive Complete status");
             Self::set_status(MigrationStatus::Completed)?;
             Response::send_msg(fd, TransStatus::Ok)?;
