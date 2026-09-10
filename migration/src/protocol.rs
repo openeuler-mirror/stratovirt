@@ -140,6 +140,27 @@ impl Default for TransStatus {
     }
 }
 
+impl TryFrom<u16> for TransStatus {
+    type Error = ();
+
+    /// Convert a raw `u16` from the wire into a `TransStatus`.
+    /// Fails if the value is not a valid discriminant.
+    fn try_from(v: u16) -> std::result::Result<Self, ()> {
+        Ok(match v {
+            0 => TransStatus::Active,
+            1 => TransStatus::VmConfig,
+            2 => TransStatus::Memory,
+            3 => TransStatus::State,
+            4 => TransStatus::Complete,
+            5 => TransStatus::Cancel,
+            6 => TransStatus::Ok,
+            7 => TransStatus::Error,
+            8 => TransStatus::Unknown,
+            _ => return Err(()),
+        })
+    }
+}
+
 impl std::fmt::Display for TransStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -161,7 +182,7 @@ impl std::fmt::Display for TransStatus {
 }
 
 /// Structure is used to save request protocol from source VM.
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Default, Copy, Clone)]
 pub struct Request {
     /// Length of data to be sent.
@@ -214,12 +235,24 @@ impl Request {
         fd.read_exact(data)
             .with_context(|| format!("Failed to read request data {:?}", data))?;
 
+        // The raw status bytes may hold an invalid discriminant injected by
+        // the peer; validate them as raw bytes before the enum field is ever
+        // read, otherwise reading it is undefined behavior.
+        let raw = u16::from_ne_bytes([data[8], data[9]]);
+        TransStatus::try_from(raw).map_err(|_| anyhow!("Invalid TransStatus {raw:#x}"))?;
+
         Ok(request)
+    }
+
+    /// Get the TransStatus of this request.
+    #[inline]
+    pub fn status(&self) -> TransStatus {
+        self.status
     }
 }
 
 /// Structure is used to save response protocol from destination VM.
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Default, Copy, Clone)]
 pub struct Response {
     /// The status need to response to source.
@@ -269,12 +302,24 @@ impl Response {
         fd.read_exact(data)
             .with_context(|| format!("Failed to read response data {:?}", data))?;
 
+        // The raw status bytes may hold an invalid discriminant injected by
+        // the peer; validate them as raw bytes before the enum field is ever
+        // read, otherwise reading it is undefined behavior.
+        let raw = u16::from_ne_bytes([data[0], data[1]]);
+        TransStatus::try_from(raw).map_err(|_| anyhow!("Invalid TransStatus {raw:#x}"))?;
+
         Ok(response)
     }
 
     /// Check the status from response is not OK.
     pub fn is_err(&self) -> bool {
-        self.status != TransStatus::Ok
+        self.status() != TransStatus::Ok
+    }
+
+    /// Get the TransStatus of this response.
+    #[inline]
+    pub fn status(&self) -> TransStatus {
+        self.status
     }
 }
 
