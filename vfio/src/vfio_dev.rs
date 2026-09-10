@@ -650,6 +650,17 @@ impl VfioDevice {
                 if unsafe { (*sparse).header.id } == vfio::VFIO_REGION_INFO_CAP_SPARSE_MMAP as u16 {
                     // SAFETY: The reason is same as above.
                     let nr_areas = unsafe { (*sparse).nr_areas as usize };
+
+                    // Validate nr_areas to prevent out-of-bounds access.
+                    let sparse_hdr_size = size_of::<vfio::vfio_region_info_cap_sparse_mmap>();
+                    let area_size = size_of::<vfio::vfio_region_sparse_mmap_area>();
+                    let max_areas = cap_size.saturating_sub(sparse_hdr_size) / area_size;
+                    if nr_areas > max_areas {
+                        return Err(anyhow!(VfioError::VfioIoctl(
+                            "VFIO sparse mmap nr_areas exceeds buffer".to_string(),
+                            std::io::Error::from_raw_os_error(libc::EINVAL),
+                        )));
+                    }
                     let areas: &mut [vfio::vfio_region_sparse_mmap_area] =
                         // SAFETY: The reason is same as above.
                         unsafe { (*sparse).areas.as_mut_slice(nr_areas) };
