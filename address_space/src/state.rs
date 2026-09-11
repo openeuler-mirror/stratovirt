@@ -83,9 +83,18 @@ fn build_mapped_ram_regions(
     first_region_offset: u64,
 ) -> Result<()> {
     for ram_state in ram_states.iter() {
+        let offset = ram_state
+            .offset
+            .checked_add(first_region_offset)
+            .with_context(|| {
+                format!(
+                    "Mapped ram offset overflow: {} + {}",
+                    ram_state.offset, first_region_offset
+                )
+            })?;
         let file_backend = FileBackend {
             file: memfile_arc.clone(),
-            offset: ram_state.offset + first_region_offset,
+            offset,
             page_size: host_page_size(),
         };
         let host_mmap = Arc::new(
