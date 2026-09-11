@@ -105,7 +105,7 @@ impl MigrationManager {
     {
         // Activate the migration status.
         let request = Request::recv_msg(fd)?;
-        if request.status == TransStatus::Active {
+        if request.status() == TransStatus::Active {
             info!("Active the migration");
             Self::set_status(MigrationStatus::Active)?;
             Response::send_msg(fd, TransStatus::Ok)?;
@@ -119,7 +119,7 @@ impl MigrationManager {
 
         // Check source and destination virtual machine configuration.
         let request = Request::recv_msg(fd)?;
-        if request.status == TransStatus::VmConfig {
+        if request.status() == TransStatus::VmConfig {
             info!("Receive VmConfig status");
             Self::check_vm_config(fd, request.length)
                 .with_context(|| "Failed to check vm config")?;
@@ -328,8 +328,17 @@ impl MigrationManager {
             bail!("Source MemBlock config size is too large");
         }
 
+        let block_size = size_of::<MemBlock>() as u64;
+        if !len.is_multiple_of(block_size) {
+            bail!(
+                "Source MemBlock length {} is not a multiple of MemBlock Size {}",
+                len,
+                block_size
+            );
+        }
+        let n = (len / block_size) as usize;
         let mut blocks = Vec::<MemBlock>::new();
-        blocks.resize_with(len as usize / (size_of::<MemBlock>()), Default::default);
+        blocks.resize_with(n, Default::default);
         fd.read_exact(
             // SAFETY:
             // 1. The pointer of blocks can be guaranteed not null.
@@ -538,7 +547,7 @@ impl MigrationManager {
     {
         // Receive complete status from source vm.
         let request = Request::recv_msg(fd)?;
-        if request.status == TransStatus::Complete {
+        if request.status() == TransStatus::Complete {
             info!("Receive Complete status");
             Self::set_status(MigrationStatus::Completed)?;
             Response::send_msg(fd, TransStatus::Ok)?;
