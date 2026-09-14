@@ -966,7 +966,9 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
     fn rebuild_refcount_structure(&mut self, check: &mut Qcow2Check) -> Result<()> {
         let mut cluster_idx: u64 = 0;
         let mut first_free_cluster: u64 = 0;
+        let mut reftable_offset: u64 = 0;
         let mut new_reftable: Vec<u64> = Vec::new();
+        let mut reftable_clusters: u64 = 0;
         let cluster_bits = u64::from(self.header.cluster_bits);
         let refblock_bits: u64 = cluster_bits + 3 - u64::from(self.header.refcount_order);
         let refblock_size: u64 = 1 << refblock_bits;
@@ -999,6 +1001,24 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             }
             new_reftable[refblock_idx] = refblock_offset;
 
+            // Alloc clusters for the new refcount table when it no longer
+            // fits. Size by the table length: nb_clusters is inflated by
+            // preallocation. Allocating inside the loop ensures the table's
+            // refcounts are persisted with the refblocks written below.
+            let needed_clusters = bytes_to_clusters(
+                new_reftable.len() as u64 * ENTRY_SIZE,
+                self.header.cluster_size(),
+            )?;
+            if needed_clusters > reftable_clusters {
+                reftable_offset = check.refblock.alloc_clusters(
+                    needed_clusters,
+                    cluster_bits,
+                    &mut (first_free_cluster as usize),
+                    self.sync_aio.clone(),
+                )?;
+                reftable_clusters = needed_clusters;
+            }
+
             // New allocated refblock offset is overlap with other matedata.
             if self.check_overlap(0, refblock_offset, self.header.cluster_size()) != 0 {
                 bail!("ERROR writing refblock");
@@ -1019,29 +1039,12 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             cluster_idx = refblock_start + refblock_size;
         }
 
-        if new_reftable.is_empty() {
-            bail!("ERROR allocating reftable: no refcount block to rebuild");
+        if reftable_offset == 0 {
+            bail!("ERROR allocating reftable");
         }
 
-        // Alloc clusters for the new refcount table now that its size is final:
-        // new_reftable.len() is the exact number of refblocks that carry
-        // references. Allocating after the loop avoids tying the size estimate
-        // to check.refblock.nb_clusters, which counts clusters from the real
-        // file size and thus also spans trailing sparse holes; those carry
-        // refcount 0 and are skipped above, so they must not inflate the table.
-        let reftable_size = new_reftable.len();
-        let reftable_clusters = bytes_to_clusters(
-            reftable_size as u64 * ENTRY_SIZE,
-            self.header.cluster_size(),
-        )?;
-        let reftable_offset = check.refblock.alloc_clusters(
-            reftable_clusters,
-            cluster_bits,
-            &mut (first_free_cluster as usize),
-            self.sync_aio.clone(),
-        )?;
-
         // Write new refcount table to disk
+        let reftable_size = new_reftable.len();
         if self.check_overlap(0, reftable_offset, reftable_size as u64 * ENTRY_SIZE) != 0 {
             bail!("ERROR writing reftable");
         }
