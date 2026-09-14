@@ -2431,6 +2431,61 @@ mod test {
         }
     }
 
+    /// Test the refcount rebuild convergence: the rebuilt refcount table's own
+    /// refcount must be persisted, so a single repair pass yields a consistent
+    /// image.
+    ///
+    /// TestStep:
+    ///   1. Create an image with a small cluster size.
+    ///   2. Zero the refcount of the reftable cluster in its refblock, so the
+    ///      image needs a refcount rebuild.
+    ///   3. Apply image check with FIX_ERRORS | FIX_LEAKS.
+    /// Expect:
+    ///   1. One repair pass converges: the repaired image reports no
+    ///      corruptions, leaks or errors.
+    #[test]
+    fn test_rebuild_refcount_convergence() {
+        let path = "/tmp/test_rebuild_refcount_convergence.qcow2";
+        // Only refcount bit=16 is supported currently.
+        let refcount_bits = 16;
+        let cluster_bits = 9;
+        let fix = FIX_ERRORS | FIX_LEAKS;
+
+        let test_image = TestQcow2Image::create(cluster_bits, refcount_bits, path, "+4M");
+
+        // Zero the refcount of cluster 1 (the reftable cluster) in refblock 0
+        // to make the on-disk refcount inconsistent with the references, so
+        // the check has to rebuild the refcount structure.
+        let refblock0_offset = test_image.header.refcount_table_offset;
+        let mut entry = vec![0_u8; 8];
+        test_image
+            .file
+            .read_at(&mut entry, refblock0_offset)
+            .unwrap();
+        let refblock0 = u64::from_be_bytes(entry.try_into().unwrap()) & 0x00ff_ffff_ffff_fe00;
+        let buf = [0_u8; 2];
+        assert!(test_image.file.write_at(&buf, refblock0 + 2).is_ok());
+
+        // One repair pass must rebuild the refcount structure and converge.
+        let mut res = CheckResult::default();
+        let mut qcow2_driver = test_image.create_driver_for_check();
+        assert!(qcow2_driver.check_image(&mut res, false, fix).is_ok());
+        assert!(res.corruptions_fixed != 0);
+        drop(qcow2_driver);
+
+        // The rebuilt reftable clusters' refcounts must be on disk now: the
+        // second pass must find nothing left to rebuild or fix, or the repair
+        // would never converge.
+        let mut res = CheckResult::default();
+        let mut qcow2_driver = test_image.create_driver_for_check();
+        assert!(qcow2_driver.check_image(&mut res, false, fix).is_ok());
+        assert_eq!(res.corruptions, 0);
+        assert_eq!(res.corruptions_fixed, 0);
+        assert_eq!(res.leaks, 0);
+        assert_eq!(res.err_num, 0);
+        drop(qcow2_driver);
+    }
+
     /// Test the function of image check.
     /// 1. If the l2 offset is not align to cluster size, it will be set to zero during checking.
     /// 2. The value of reserved area of l2 entry is expected to 0(Seen L2_STD_RESERVED_MASK). If not ,
