@@ -1821,7 +1821,23 @@ mod test {
             assert_ne!(l1_size, 0);
             assert_ne!(reftable_clusters, 0);
             assert!(u64::from(l1_size) * cluster_size * cluster_size / ENTRY_SIZE >= image_size);
-            assert!(reftable_size * refblock_size * cluster_size >= file_len);
+
+            // The end of the on-disk metadata layout: metadata extents really
+            // exist in the file, so they cannot end past the physical file.
+            // The file tail beyond this may be a sparse preallocated hole.
+            let metadata_end = test_image
+                .header
+                .l1_table_offset
+                .saturating_add(u64::from(test_image.header.l1_size) * ENTRY_SIZE)
+                .max(
+                    test_image.header.refcount_table_offset
+                        + u64::from(reftable_clusters) * cluster_size,
+                );
+            assert!(metadata_end <= file_len);
+            // Refcount coverage must reach every allocated cluster, i.e. the
+            // metadata layout end; trailing sparse-hole clusters carry
+            // refcount 0 and need no coverage.
+            assert!(reftable_size * refblock_size * cluster_size >= metadata_end);
             assert_eq!(u64::from(test_image.header.cluster_bits), cluster_bits);
             assert_eq!(test_image.header.size, image_size);
 

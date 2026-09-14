@@ -80,6 +80,10 @@ const MAX_L1_SIZE: u64 = 32 * (1 << 20);
 pub(crate) const DEFAULT_SECTOR_SIZE: u64 = 512;
 pub(crate) const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
 
+/// Tail preallocation window for `SyncAioInfo::preallocate_file_size`:
+/// each over-extension covers the next 256 MiB of tail allocations.
+const QCOW2_TAIL_PREALLOC_SIZE: u64 = 256 * 1024 * 1024;
+
 // The default flush interval is 30s.
 const DEFAULT_METADATA_FLUSH_INTERVAL: u64 = 30;
 
@@ -218,6 +222,43 @@ impl SyncAioInfo {
         let end = round_up(end, DEFAULT_SECTOR_SIZE)
             .with_context(|| format!("Round up failed, value is {}", end))?;
         self.write_buffer(addr + start, &buf[start as usize..end as usize])
+    }
+
+    /// When `required_end` is past the current `i_size`, over-extend the backing
+    /// file to `required_end + QCOW2_TAIL_PREALLOC_SIZE` and `fsync`. This commits
+    /// `i_size` before the caller's pwrite lands, so a power-loss `i_size`
+    /// reversion cannot make a just-written tail cluster unreachable. The next
+    /// 256M of tail allocations then land inside the committed window and need
+    /// neither `set_len` nor a sync. The over-extension is a sparse hole.
+    /// `fsync` (not `fdatasync`) is used to also commit the extent-map change.
+    pub(crate) fn preallocate_file_size(&self, required_end: u64) -> Result<()> {
+        let file_end = self.file.as_ref().seek(SeekFrom::End(0))?;
+        if required_end > file_end {
+            let target = required_end
+                .checked_add(QCOW2_TAIL_PREALLOC_SIZE)
+                .with_context(|| {
+                    format!(
+                        "preallocate_file_size overflow: required_end={}",
+                        required_end
+                    )
+                })?;
+            // ftruncate grows i_size (sparse hole, no blocks). Do NOT set_len
+            // when required_end <= file_end: ftruncate to a smaller size would truncate.
+            self.file.set_len(target)?;
+            self.file.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// fsync barrier before persisting a metadata pointer: flushes the content
+    /// it references (L2 / refcount block / refcount table) to durable storage
+    /// first. Uses fsync, not fdatasync, since a content write may be a
+    /// fallocate (extent-map change) that fdatasync does not flush. Mandatory
+    /// under buffered IO (avoids a stale pointer on power loss); redundant but
+    /// harmless under O_DIRECT.
+    pub(crate) fn metadata_barrier(&self) -> Result<()> {
+        self.file.sync_all()?;
+        Ok(())
     }
 }
 
@@ -623,6 +664,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(new_l1_table_offset, &new_l1_table)?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Update the message information, includes:
         // entry size of l1 table and active l1 table offset.
@@ -683,6 +725,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             self.sync_aio
                 .borrow_mut()
                 .write_buffer(new_l2_offset, &l2_cluster)?;
+            self.sync_aio.borrow().metadata_barrier()?;
             let l2_cache_entry = Rc::new(RefCell::new(CacheTable::new(
                 new_l2_offset,
                 l2_cluster,
@@ -888,7 +931,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 size
             );
         }
-        if write_zero && addr < self.driver.disk_size()? {
+        // Commit i_size before the clearing pwrite below: a pwrite past the
+        // current i_size auto-extends it without fsync, so committing first
+        // avoids leaving the tail cluster's i_size uncommitted.
+        self.sync_aio.borrow().preallocate_file_size(addr + size)?;
+        if write_zero {
             let ret = raw_write_zeroes(
                 self.sync_aio.borrow_mut().file.as_raw_fd(),
                 addr as usize,
@@ -901,8 +948,12 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                     self.sync_aio.borrow_mut().write_buffer(offset, &zero_buf)?;
                 }
             }
+            // Flush the write-zero (fallocate) above. For a recycled cluster
+            // (within committed i_size) preallocate_file_size was a no-op; for a
+            // tail-extending cluster it already fsynced, making this redundant
+            // but harmless.
+            self.sync_aio.borrow().metadata_barrier()?;
         }
-        self.driver.extend_to_len(addr + size)?;
         Ok(addr)
     }
 
@@ -971,6 +1022,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(new_l1_table_offset, &snap_l1_table)?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Sync active l1 table offset of header to disk.
         let mut new_header = self.header.clone();
@@ -1199,6 +1251,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut new_header = self.header.clone();
         new_header.snapshots_offset = snapshot_offset;
         new_header.nb_snapshots = (new_header.nb_snapshots as i32 + add) as u32;
+        self.sync_aio.borrow().metadata_barrier()?;
         self.sync_aio
             .borrow_mut()
             .write_buffer(0, &new_header.to_vec())?;
@@ -1250,6 +1303,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Flush the cache of the refcount block and l1/l2 table.
         self.flush()?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Update snapshot offset and num in qcow2 header.
         let mut new_header = self.header.clone();
