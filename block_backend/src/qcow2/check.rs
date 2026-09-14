@@ -998,24 +998,25 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             if new_reftable.len() <= refblock_idx {
                 // SAFETY: Upper limit of refblock_idx is decided by disk file size.
                 new_reftable.resize(refblock_idx + 1, 0);
-                // Need to reallocate clusters for new refcount table.
-                reftable_offset = 0;
             }
             new_reftable[refblock_idx] = refblock_offset;
 
-            // Alloc clusters for new refcount table.
-            if refblock_idx + 1 >= (check.refblock.nb_clusters >> refblock_bits) as usize
-                && reftable_offset == 0
-            {
-                let reftable_size = new_reftable.len() as u64;
-                reftable_clusters =
-                    bytes_to_clusters(reftable_size * ENTRY_SIZE, self.header.cluster_size())?;
+            // Alloc clusters for the new refcount table when it no longer
+            // fits. Size by the table length: nb_clusters is inflated by
+            // preallocation. Allocating inside the loop ensures the table's
+            // refcounts are persisted with the refblocks written below.
+            let needed_clusters = bytes_to_clusters(
+                new_reftable.len() as u64 * ENTRY_SIZE,
+                self.header.cluster_size(),
+            )?;
+            if needed_clusters > reftable_clusters {
                 reftable_offset = check.refblock.alloc_clusters(
-                    reftable_clusters,
+                    needed_clusters,
                     cluster_bits,
                     &mut (first_free_cluster as usize),
                     self.sync_aio.clone(),
                 )?;
+                reftable_clusters = needed_clusters;
             }
 
             // New allocated refblock offset is overlap with other matedata.
