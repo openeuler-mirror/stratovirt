@@ -1,5 +1,7 @@
 # StratoVirt
-
+ 
+English | [简体中文](./README.md)
+ 
 StratoVirt is an enterprise-class virtualization platform oriented to cloud data centers. It offers a unified architecture that fits into the three scenarios: VMs, containers, and serverless computing.
 StratoVirt has competitive advantages in key technologies such as lightweight low overhead, hardware-software collaboration, and Rust language-level security.
 
