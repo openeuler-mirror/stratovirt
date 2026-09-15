@@ -1,5 +1,7 @@
 # Hydropper
-
+ 
+English | [简体中文](./README.cn.md)
+ 
 Hydropper is a lightweight testing framework based on pytest. It encapsulates virtualization-related atomic tests for black-box testing of StratoVirt. Currently, hydropper supports certain test cases in lightweight and standard virtualization scenarios, helping developers detect and locate StratoVirt issues.
 
 ## How to Start
