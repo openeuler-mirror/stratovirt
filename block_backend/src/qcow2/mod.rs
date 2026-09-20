@@ -78,7 +78,7 @@ const QCOW2_OFFSET_COMPRESSED: u64 = 1 << 62;
 pub const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
 const MAX_L1_SIZE: u64 = 32 * (1 << 20);
 pub(crate) const DEFAULT_SECTOR_SIZE: u64 = 512;
-pub(crate) const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
+pub const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
 
 /// Tail preallocation window for `SyncAioInfo::preallocate_file_size`:
 /// each over-extension covers the next 256 MiB of tail allocations.
@@ -199,7 +199,7 @@ impl SyncAioInfo {
         self.write_buffer(addr, &output)
     }
 
-    pub(crate) fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
+    pub fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
         let mut buf = vec![0; sz as usize];
         let vec_len = size_of::<u64>() * sz as usize;
         let mut vec = vec![0_u8; vec_len];

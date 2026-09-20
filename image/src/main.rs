@@ -22,7 +22,7 @@ use anyhow::{bail, Result};
 
 use crate::img::{
     image_check, image_convert, image_create, image_dump_qcow2, image_info, image_resize,
-    image_snapshot, print_help, print_version,
+    image_snapshot, image_tail_append, print_help, print_version,
 };
 
 const BINARY_NAME: &str = "stratovirt-img";
@@ -88,6 +88,7 @@ fn run(args: Vec<String>) -> Result<()> {
         ("check", image_check, cmd_args),
         ("resize", image_resize, cmd_args),
         ("convert", image_convert, cmd_args),
+        ("tailappend", image_tail_append, cmd_args),
         ("snapshot", image_snapshot, cmd_args),
         ("dump-qcow2", image_dump_qcow2, cmd_args);
         ("-v" | "--version", print_version),
