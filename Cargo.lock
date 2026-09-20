@@ -1226,6 +1226,7 @@ version = "2.5.0"
 dependencies = [
  "acpi",
  "anyhow",
+ "block_backend",
  "byteorder",
  "devices",
  "hex",
