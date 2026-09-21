@@ -16,6 +16,7 @@ use std::{
 };
 
 use libc::{c_int, c_void, siginfo_t};
+use log::info;
 use vmm_sys_util::signal::register_signal_handler;
 
 use crate::{
@@ -73,6 +74,9 @@ pub fn handle_signal() {
     let sig_num = get_signal();
     if sig_num != 0 {
         set_termi_canon_mode().expect("Failed to set terminal to canonical mode.");
+        if [libc::SIGTERM, libc::SIGINT, libc::SIGHUP].contains(&sig_num) {
+            info!("Received kill signal, signal number: {}", sig_num);
+        }
         if [libc::SIGTERM, libc::SIGINT, libc::SIGHUP].contains(&sig_num)
             && QmpChannel::is_connected()
         {
@@ -88,11 +92,6 @@ pub fn handle_signal() {
 extern "C" fn receive_signal_kill(num: c_int, _: *mut siginfo_t, _: *mut c_void) {
     hisysevent::STRATOVIRT_KILLED(num as u32);
     set_signal(num);
-    let _ = write!(
-        &mut std::io::stderr(),
-        "Received kill signal, signal number: {} \r\n",
-        num
-    );
 }
 
 extern "C" fn receive_signal_sys(num: c_int, info: *mut siginfo_t, _: *mut c_void) {

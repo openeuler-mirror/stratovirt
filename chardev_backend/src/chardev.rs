@@ -207,32 +207,9 @@ impl Chardev {
             }
             ChardevType::Null { .. } => (),
             ChardevType::RedirectToLog { .. } => {
-                let (sender, receiver) = channel::<u8>();
-                self.output = Some(Arc::new(Mutex::new(SenderWrapper(sender))));
-                let res = thread::Builder::new()
-                    .name("Redirect to log".to_string())
-                    .spawn(move || {
-                        let mut buffer = String::new();
-                        loop {
-                            match receiver.recv() {
-                                Ok(ch) => {
-                                    if ch == b'\n' {
-                                        info!("{}", buffer);
-                                        buffer.clear();
-                                    } else {
-                                        buffer.push(ch.into());
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to receive message: {}", e);
-                                    break;
-                                }
-                            }
-                        }
-                    });
-                if let Err(e) = res {
-                    error!("Failed to start Redirect to log thread: {:?}", e);
-                }
+                let redirect = RedirectToLog::new()?;
+                self.output = Some(redirect.output.clone());
+                REDIRECT_LOGS.lock().unwrap().push(redirect);
             }
         };
         Ok(())
@@ -1063,15 +1040,70 @@ fn rotating_day_key(sec: i64) -> i32 {
     time[0] * 10_000 + time[1] * 100 + time[2]
 }
 
-struct SenderWrapper(Sender<u8>);
+// Keep the consumer handles independently of device references retained by event loops.
+static REDIRECT_LOGS: Mutex<Vec<RedirectToLog>> = Mutex::new(Vec::new());
+
+struct RedirectToLog {
+    output: Arc<Mutex<SenderWrapper>>,
+    thread: thread::JoinHandle<()>,
+}
+
+impl RedirectToLog {
+    fn new() -> Result<Self> {
+        let (sender, receiver) = channel::<u8>();
+        let thread = thread::Builder::new()
+            .name("Redirect to log".to_string())
+            .spawn(move || {
+                let mut buffer = Vec::new();
+                // Disconnection is normal shutdown. recv drains queued bytes first.
+                while let Ok(ch) = receiver.recv() {
+                    if ch == b'\n' {
+                        info!("{}", String::from_utf8_lossy(&buffer));
+                        buffer.clear();
+                    } else {
+                        buffer.push(ch);
+                    }
+                }
+                if !buffer.is_empty() {
+                    info!("{}", String::from_utf8_lossy(&buffer));
+                }
+            })
+            .with_context(|| "Failed to start Redirect to log thread")?;
+        Ok(Self {
+            output: Arc::new(Mutex::new(SenderWrapper(Some(sender)))),
+            thread,
+        })
+    }
+}
+
+/// Stop enqueueing, drain queued console output and wait for its consumers.
+/// Call after stopping I/O event loops on normal VM exit.
+pub fn drain_redirect_logs() {
+    let redirects = std::mem::take(&mut *REDIRECT_LOGS.lock().unwrap());
+    // Close every sender before joining, including those held by cloned output Arcs.
+    // Never hold the registry or output locks while waiting for a consumer.
+    for redirect in &redirects {
+        redirect.output.lock().unwrap().0.take();
+    }
+    for redirect in redirects {
+        if redirect.thread.join().is_err() {
+            error!("Redirect to log thread panicked");
+        }
+    }
+}
+
+struct SenderWrapper(Option<Sender<u8>>);
 // SAFETY: Send and Sync is auto-implemented for Sender<T>,
 // implementing them for SenderWrapper is safe too.
 unsafe impl std::marker::Send for SenderWrapper {}
 
 impl std::io::Write for SenderWrapper {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let sender = self.0.as_ref().ok_or_else(|| {
+            std::io::Error::new(ErrorKind::BrokenPipe, "Redirect to log is closed")
+        })?;
         for i in buf {
-            self.0.send(*i).map_err(std::io::Error::other)?;
+            sender.send(*i).map_err(std::io::Error::other)?;
         }
         Ok(buf.len())
     }
