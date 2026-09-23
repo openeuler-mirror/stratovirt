@@ -226,20 +226,20 @@ One property can be set:
 
 ### 1.9 Logging
 
-StratoVirt supports to output log to stderr and log file.
+StratoVirt supports to output log to stdout and log file.
 
 You can enable StratoVirt's logging by:
 
 ```shell
-# Output log to stderr
+# Output log to stdout
 -D
 # Output log to log file
 -D <logfile_path>
 ```
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
-StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
-If "-D" parameter is not set, logs are output to stderr by default.
+StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `info`.
+If "-D" parameter is not set, logs are output to stdout by default.
 
 ### 1.10 Daemonize
 

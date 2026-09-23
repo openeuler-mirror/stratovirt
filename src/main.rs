@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use log::{error, info};
 
+use chardev_backend::chardev::drain_redirect_logs;
 use machine::{type_init, LightMachine, MachineOps, StdMachine};
 use machine_manager::{
     cmdline::{check_api_channel, create_args_parser, create_vmconfig},
@@ -94,6 +95,7 @@ fn run() -> Result<()> {
             // clean temporary file
             TempCleaner::clean();
             EventLoop::loop_clean();
+            drain_redirect_logs();
             handle_signal();
         }
         Err(ref e) => {

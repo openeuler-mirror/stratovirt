@@ -133,11 +133,13 @@ impl Log for VmLogger {
 
         let mut rotate = self.rotate.lock().unwrap();
         if let Err(e) = rotate.handler.write_all(formatmsg.as_bytes()) {
-            println!("Failed to log message {:?}", e);
+            drop(rotate);
+            let _ = writeln!(std::io::stderr(), "Failed to log message {:?}", e);
             return;
         }
         if let Err(e) = rotate.rotate_file(formatmsg.len()) {
-            println!("Failed to rotate log files {:?}", e);
+            drop(rotate);
+            let _ = writeln!(std::io::stderr(), "Failed to rotate log files {:?}", e);
         }
     }
 
@@ -202,7 +204,7 @@ fn open_log_file(path: &str) -> Result<File> {
 
 pub fn init_log(path: String) -> Result<()> {
     let logfile: Box<dyn Write + Send> = if path.is_empty() {
-        Box::new(std::io::stderr())
+        Box::new(std::io::stdout())
     } else {
         Box::new(open_log_file(&path)?)
     };

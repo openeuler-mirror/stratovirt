@@ -293,7 +293,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
             Arg::with_name("display log")
             .long("D")
             .value_name("[log path]")
-            .help("output log to logfile (default stderr)")
+            .help("output log to logfile (default stdout)")
             .takes_value(true)
             .can_no_value(true),
         )
