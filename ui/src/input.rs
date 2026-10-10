@@ -795,6 +795,7 @@ impl MultiTouchDevice {
         for slot in self.slots.iter_mut() {
             if slot.tracking_id != -1 {
                 slot.tracking_id = -1;
+                slot.kind = MultiTouchEventKind::END;
                 locked_ops.send_event(slot)?;
             }
         }
