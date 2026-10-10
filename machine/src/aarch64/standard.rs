@@ -40,7 +40,7 @@ use acpi::{
 #[cfg(all(target_env = "ohos", feature = "ohui_srv"))]
 use address_space::FileBackend;
 use address_space::{AddressAttr, AddressSpace, AliasRegionState, GuestAddress, Region};
-use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, PMU_INTR, PPI_BASE};
+use cpu::{CPUInterface, CPUTopology, CpuLifecycleState, CPU, PMU_INTR, PPI_BASE};
 use devices::acpi::ged::{acpi_dsdt_add_power_button, Ged, GedEvent};
 use devices::acpi::power::PowerDev;
 use devices::legacy::{
@@ -214,6 +214,11 @@ impl StdMachine {
             }
         }
 
+        // Save vtimer for all vCPUs.
+        for cpu in locked_vm.base.cpus.iter() {
+            CPU::get_vtimer(cpu.id, &cpu.hypervisor_cpu, cpu.arch_cpu.clone());
+        }
+
         // Must reload boot resource for direct kernel boot.
         if locked_vm.get_fwcfg_dev().is_none() {
             locked_vm
@@ -261,6 +266,11 @@ impl StdMachine {
         locked_vm.base.irq_chip.as_ref().unwrap().reset()?;
 
         if vm_state != VmState::Paused {
+            // Restore vtimer for all vCPUs.
+            for cpu in locked_vm.base.cpus.iter() {
+                CPU::set_vtimer(cpu.id, &cpu.hypervisor_cpu, cpu.arch_cpu.clone());
+            }
+
             for (cpu_index, cpu) in locked_vm.base.cpus.iter().enumerate() {
                 cpu.resume()
                     .with_context(|| format!("Failed to resume vcpu{}", cpu_index))?;

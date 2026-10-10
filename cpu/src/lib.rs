@@ -54,6 +54,8 @@ pub use aarch64::PPI_BASE;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::PVTIME_SIZE_PER_CPU;
 pub use error::CpuError;
+#[cfg(target_arch = "aarch64")]
+use machine_manager::notifier::{register_vm_pause_notifier, unregister_vm_pause_notifier};
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::X86CPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "x86_64")]
@@ -243,6 +245,9 @@ pub struct CPU {
     pause_signal: Arc<AtomicBool>,
     /// Interact between the vCPU and hypervisor.
     pub hypervisor_cpu: Arc<dyn CPUHypervisorOps>,
+    #[cfg(target_arch = "aarch64")]
+    /// VM pause notifier id
+    pause_notifier: u64,
 }
 
 impl CPU {
@@ -260,6 +265,10 @@ impl CPU {
         arch_cpu: Arc<Mutex<ArchCPU>>,
         vm: Arc<Mutex<dyn MachineInterface + Send + Sync>>,
     ) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        let pause_notifier =
+            Self::register_vm_pause_handler(id, arch_cpu.clone(), hypervisor_cpu.clone());
+
         CPU {
             id,
             arch_cpu,
@@ -270,6 +279,8 @@ impl CPU {
             boot_state: Arc::new(Mutex::new(ArchCPU::default())),
             pause_signal: Arc::new(AtomicBool::new(false)),
             hypervisor_cpu,
+            #[cfg(target_arch = "aarch64")]
+            pause_notifier,
         }
     }
 
@@ -326,6 +337,41 @@ impl CPU {
     pub fn pause_signal(&self) -> Arc<AtomicBool> {
         self.pause_signal.clone()
     }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn get_vtimer(
+        cpu_id: u8,
+        hyp_cpu: &Arc<dyn CPUHypervisorOps>,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+    ) {
+        if let Err(e) = hyp_cpu.get_regs(arch_cpu, RegsIndex::VtimerCount) {
+            error!("Failed to get vtimer for vcpu{}: {:?}", cpu_id, e);
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn set_vtimer(
+        cpu_id: u8,
+        hyp_cpu: &Arc<dyn CPUHypervisorOps>,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+    ) {
+        if let Err(e) = hyp_cpu.set_regs(arch_cpu, RegsIndex::VtimerCount) {
+            error!("Failed to set vtimer for vcpu{}: {:?}", cpu_id, e);
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn register_vm_pause_handler(
+        cpu_id: u8,
+        arch_cpu: Arc<Mutex<ArchCPU>>,
+        hyp_cpu: Arc<dyn CPUHypervisorOps>,
+    ) -> u64 {
+        let handler = move |paused: bool| match paused {
+            true => Self::get_vtimer(cpu_id, &hyp_cpu, arch_cpu.clone()),
+            false => Self::set_vtimer(cpu_id, &hyp_cpu, arch_cpu.clone()),
+        };
+        register_vm_pause_notifier(Arc::new(handler))
+    }
 }
 
 impl CPUInterface for CPU {
@@ -364,10 +410,6 @@ impl CPUInterface for CPU {
     }
 
     fn resume(&self) -> Result<()> {
-        #[cfg(target_arch = "aarch64")]
-        self.hypervisor_cpu
-            .set_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount)?;
-
         self.hypervisor_cpu
             .resume(self.state.clone(), self.pause_signal.clone())
     }
@@ -409,16 +451,13 @@ impl CPUInterface for CPU {
             self.task.clone(),
             self.state.clone(),
             self.pause_signal.clone(),
-        )?;
-
-        #[cfg(target_arch = "aarch64")]
-        self.hypervisor_cpu
-            .get_regs(self.arch_cpu.clone(), RegsIndex::VtimerCount)?;
-
-        Ok(())
+        )
     }
 
     fn destroy(&self) -> Result<()> {
+        #[cfg(target_arch = "aarch64")]
+        unregister_vm_pause_notifier(self.pause_notifier);
+
         self.hypervisor_cpu
             .destroy(self.task.clone(), self.state.clone())
     }
