@@ -268,13 +268,15 @@ impl OhUiServer {
 
     /// # Safety
     ///
-    /// This function is unsafe because it copies the data from the buffer pointed by
-    /// `surface_data` parameter to the framebuffer.
+    /// This function is unsafe because it copies the dirty area from the guest surface
+    /// image buffer (obtained via `surface.guest_image`) to the framebuffer.
     /// The caller must ensure that:
     ///
-    /// - the source buffer is valid and the actual copied buffer can't exceed the source buffer.
-    /// - the size of source buffer is less or equal to the size of framebuffer.
-    /// - the source buffer should not be overlapped with the framebuffer.
+    /// - the guest image buffer is valid and the dirty area specified by `pos` and `size`
+    ///   does not exceed the bounds of the guest image buffer.
+    /// - the dirty area specified by `pos` and `size` does not exceed the bounds of the
+    ///   framebuffer.
+    /// - the guest image buffer does not overlap with the framebuffer.
     ///
     /// Failure to meet these conditions will lead to undefined behavior.
     unsafe fn raw_update_dirty_area(
