@@ -12,8 +12,9 @@
 
 use anyhow::{bail, Result};
 use byteorder::{BigEndian, ByteOrder};
+use log::warn;
 
-use crate::aio::{iov_from_buf_direct, iov_to_buf_direct, Iovec};
+use crate::aio::{get_iov_size, iov_from_buf_direct, iov_to_buf_direct, Iovec};
 use crate::byte_code::ByteCode;
 
 const ETH_HLEN: usize = libc::ETH_HLEN as usize;
@@ -48,23 +49,24 @@ impl EthHdr {
 }
 
 pub trait Macnat {
-    // Handle mac nat for rx packet.
+    // Handle mac nat for rx packet. Return None if the packet should be dropped.
     fn handle_rx_packet(
         &self,
         iovecs: &[Iovec],
         offset: usize,
+        packet_len: usize,
         guest_mac: &[u8; ETH_ALEN],
         host_mac: &[u8; ETH_ALEN],
-    ) -> Result<Vec<u8>>;
+    ) -> Result<Option<Vec<u8>>>;
     // Minimal length of rx packet to do mac nat.
     fn rx_min_len(&self) -> usize;
-    // Handle mac nat for tx packet.
+    // Handle mac nat for tx packet. Return true if the packet should be dropped.
     fn handle_tx_packet(
         &self,
         iovecs: &[Iovec],
         offset: usize,
         host_mac: &[u8; ETH_ALEN],
-    ) -> Result<()>;
+    ) -> Result<bool>;
 }
 
 pub struct IpvtapMacnat;
@@ -74,13 +76,37 @@ impl Macnat for IpvtapMacnat {
         &self,
         iovecs: &[Iovec],
         offset: usize,
+        packet_len: usize,
         guest_mac: &[u8; ETH_ALEN],
         host_mac: &[u8; ETH_ALEN],
-    ) -> Result<Vec<u8>> {
-        let mut buf = Self::buf_from_iov(iovecs, offset + ETH_HLEN + ARP_DATA_LEN)?;
+    ) -> Result<Option<Vec<u8>>> {
+        let eth_packet_len = offset + ETH_HLEN;
+        if packet_len < eth_packet_len {
+            warn!(
+                "Drop truncated ethernet packet: actual data len {} is less than request len {}",
+                packet_len, eth_packet_len
+            );
+            return Ok(None);
+        }
+
+        let mut buf = Self::buf_from_iov(iovecs, eth_packet_len)?;
+        let proto = BigEndian::read_u16(&buf[offset + ETH_PROTO_OFFSET..]);
+        let required_len = match proto {
+            ETH_P_ARP => offset + ETH_HLEN + ARP_DATA_LEN,
+            _ => eth_packet_len,
+        };
+        if packet_len < required_len {
+            warn!(
+                "Drop truncated rx packet: actual data len {} is less than request len {}",
+                packet_len, required_len
+            );
+            return Ok(None);
+        }
+        if required_len > buf.len() {
+            buf = Self::buf_from_iov(iovecs, required_len)?;
+        }
 
         let ether_buf = &mut buf[offset..];
-        let proto = BigEndian::read_u16(&ether_buf[ETH_PROTO_OFFSET..]);
         if proto == ETH_P_ARP {
             Self::handle_rx_arp(&mut ether_buf[ETH_HLEN..], guest_mac, host_mac);
         }
@@ -93,11 +119,11 @@ impl Macnat for IpvtapMacnat {
             // SAFETY: the buffer came from iovces so it's safe to copy back to iovecs.
             unsafe { iov_from_buf_direct(iovecs, &buf)? };
         }
-        Ok(buf)
+        Ok(Some(buf))
     }
 
     fn rx_min_len(&self) -> usize {
-        ETH_HLEN + ARP_DATA_LEN
+        ETH_HLEN
     }
 
     fn handle_tx_packet(
@@ -105,15 +131,28 @@ impl Macnat for IpvtapMacnat {
         iovecs: &[Iovec],
         offset: usize,
         host_mac: &[u8; ETH_ALEN],
-    ) -> Result<()> {
-        let mut buf = Self::buf_from_iov(iovecs, offset + ETH_HLEN + ARP_DATA_LEN)?;
+    ) -> Result<bool> {
+        // Read the ethernet header first. A short ethernet frame is valid input here because
+        // padding to the minimum on-wire frame size can be added by a lower network layer.
+        let mut buf = Self::buf_from_iov(iovecs, offset + ETH_HLEN)?;
 
-        let ether_buf = &mut buf[offset..];
-        let proto = BigEndian::read_u16(&ether_buf[ETH_PROTO_OFFSET..]);
+        let proto = BigEndian::read_u16(&buf[offset + ETH_PROTO_OFFSET..]);
         if proto == ETH_P_ARP {
-            Self::handle_tx_arp(&mut ether_buf[ETH_HLEN..], host_mac);
+            // The ARP hardware address fields are only present in a complete ARP packet.
+            let arp_packet_len = offset + ETH_HLEN + ARP_DATA_LEN;
+            let actual_len = get_iov_size(iovecs);
+            if actual_len < arp_packet_len as u64 {
+                warn!(
+                    "Drop truncated ARP packet: actual data len {} is less than request len {}",
+                    actual_len, arp_packet_len
+                );
+                return Ok(true);
+            }
+            buf = Self::buf_from_iov(iovecs, arp_packet_len)?;
+            Self::handle_tx_arp(&mut buf[offset + ETH_HLEN..], host_mac);
         }
 
+        let ether_buf = &mut buf[offset..];
         let mut ethhdr = EthHdr::from_bytes(&ether_buf[..ETH_HLEN]).unwrap();
         if ethhdr.src_addr[0] & 0x1 == 0 {
             ethhdr.set_src_addr(host_mac);
@@ -121,7 +160,7 @@ impl Macnat for IpvtapMacnat {
             // SAFETY: the buffer came from iovces so it's safe to copy back to iovecs.
             unsafe { iov_from_buf_direct(iovecs, &buf)? };
         }
-        Ok(())
+        Ok(false)
     }
 }
 

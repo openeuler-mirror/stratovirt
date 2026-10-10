@@ -723,29 +723,35 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
         const MIN_LEN: usize = NET_HDR_LENGTH + ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH;
 
         if let Some(macnat) = self.macnat.as_ref() {
-            cmp::max(NET_HDR_LENGTH + macnat.rx_min_len(), MIN_LEN)
+            NET_HDR_LENGTH + macnat.rx_min_len()
         } else {
             MIN_LEN
         }
     }
 
     // return true if ignore the packet, otherwise return false.
-    // iovecs bytes must be larger than `len`.
+    // `packet_len` is the number of bytes read from tap, not the iovec capacity.
     fn process_rx_packet(
         &self,
         iovecs: &[Iovec],
-        len: usize,
+        packet_len: usize,
         tap_mac: Option<&[u8; MAC_ADDR_LEN]>,
     ) -> Result<bool> {
         let buf = if let Some(macnat) = self.macnat.as_ref() {
             // SAFETY: `tap_mac` must be valid if macnat is enabled.
-            macnat.handle_rx_packet(
+            let Some(buf) = macnat.handle_rx_packet(
                 iovecs,
                 NET_HDR_LENGTH,
+                packet_len,
                 &self.config.lock().unwrap().mac,
                 tap_mac.unwrap(),
             )?
+            else {
+                return Ok(true);
+            };
+            buf
         } else {
+            let len = self.rx_min_bytes();
             let mut buf = vec![0u8; len];
             get_net_header(iovecs, &mut buf).and_then(|size| {
                 if size != buf.len() {
@@ -829,7 +835,12 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
                 break;
             };
             let len = self.rx_min_bytes();
-            if size < len as isize {
+            if size <= 0 {
+                queue.vring.push_back();
+                break;
+            }
+            let packet_len = usize::try_from(size)?;
+            if packet_len < len {
                 queue.vring.push_back();
                 break;
             }
@@ -837,7 +848,7 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
             let tap_mac = locked_tap.as_ref().unwrap().get_mac();
             drop(locked_tap);
 
-            if self.process_rx_packet(&iovecs, len, tap_mac.as_ref())? {
+            if self.process_rx_packet(&iovecs, packet_len, tap_mac.as_ref())? {
                 queue.vring.push_back();
                 continue;
             }
@@ -937,16 +948,17 @@ impl<T: Macnat + 'static> NetIoQueue<T> {
                 break;
             }
 
+            let mut drop_packet = false;
             if let Some(macnat) = self.macnat.as_ref() {
                 let tap_mac = locked_tap
                     .as_ref()
                     .unwrap()
                     .get_mac()
                     .with_context(|| "No host mac address for macnat")?;
-                macnat.handle_tx_packet(&iovecs, NET_HDR_LENGTH, &tap_mac)?;
+                drop_packet = macnat.handle_tx_packet(&iovecs, NET_HDR_LENGTH, &tap_mac)?;
             }
 
-            if locked_tap.as_ref().unwrap().send_packets(&iovecs) == -1 {
+            if !drop_packet && locked_tap.as_ref().unwrap().send_packets(&iovecs) == -1 {
                 queue.vring.push_back();
                 queue
                     .vring
