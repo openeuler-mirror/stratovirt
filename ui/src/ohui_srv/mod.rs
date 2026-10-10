@@ -286,12 +286,6 @@ impl OhUiServer {
         size: (i32, i32),
         force_copy: bool,
     ) {
-        let (x, y) = pos;
-        let (w, h) = size;
-        let bytes_per_pixel = bytes_per_pixel() as i32;
-        let src_stride = surface.stride;
-        // Framebuffer layout is width * bpp * height.
-        let dst_stride = surface.width * bytes_per_pixel;
         let surface_data = get_image_data(surface.guest_image);
 
         if self.framebuffer == 0
@@ -301,19 +295,24 @@ impl OhUiServer {
             return;
         }
 
-        let src_offset = (x * bytes_per_pixel as i32 + y * src_stride) as u64;
-        let dst_offset = (x * bytes_per_pixel as i32 + y * dst_stride) as u64;
-        let mut src_ptr = surface_data as u64 + src_offset;
-        let mut dst_ptr = self.framebuffer + dst_offset;
+        let (x, y) = (pos.0 as usize, pos.1 as usize);
+        let (w, h) = (size.0 as usize, size.1 as usize);
+        let bpp = bytes_per_pixel();
+
+        let src_stride = surface.stride as usize;
+        let dst_stride = (surface.width as usize) * bpp;
+        let row_bytes = w * bpp;
+
+        let src_offset = y * src_stride + x * bpp;
+        let dst_offset = y * dst_stride + x * bpp;
+
+        let mut src_ptr = (surface_data as *const u8).add(src_offset);
+        let mut dst_ptr = (self.framebuffer as *mut u8).add(dst_offset);
 
         for _ in 0..h {
-            ptr::copy_nonoverlapping(
-                src_ptr as *const u8,
-                dst_ptr as *mut u8,
-                (w * bytes_per_pixel) as usize,
-            );
-            src_ptr += src_stride as u64;
-            dst_ptr += dst_stride as u64;
+            ptr::copy_nonoverlapping(src_ptr, dst_ptr, row_bytes);
+            src_ptr = src_ptr.add(src_stride);
+            dst_ptr = dst_ptr.add(dst_stride);
         }
     }
 
