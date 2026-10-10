@@ -666,10 +666,10 @@ impl Scream {
         }
     }
 
-    fn register_silent_data_detect(&self, hva: u64, cond: Arc<ScreamCond>) {
+    fn register_silent_data_detect(&self, hva: u64, len: u64, cond: Arc<ScreamCond>) {
         register_silent_audio_cb(
             "scream".to_string(),
-            Arc::new(move || detect_silent_audio(hva, cond.clone())),
+            Arc::new(move || detect_silent_audio(hva, len, cond.clone())),
         );
     }
 
@@ -679,7 +679,7 @@ impl Scream {
         let interface = self.interface_init("ScreamPlay", ScreamDirection::Playback);
         self.interface_resource.push(interface.clone());
         self.register_state_query(KEYWORD_AUDIO_PLAY.to_string(), cond.clone());
-        self.register_silent_data_detect(hva, cond.clone());
+        self.register_silent_data_detect(hva, shmem_size, cond.clone());
 
         thread::Builder::new()
             .name("scream audio play worker".to_string())
@@ -907,7 +907,7 @@ fn notify_audio_changed_event(play_cond: Arc<ScreamCond>, capt_cond: Arc<ScreamC
     event!(AudioChanged; audio_state);
 }
 
-fn detect_silent_audio(hva: u64, cond: Arc<ScreamCond>) -> bool {
+fn detect_silent_audio(hva: u64, len: u64, cond: Arc<ScreamCond>) -> bool {
     if cond.stream_paused() {
         return false;
     }
@@ -919,6 +919,11 @@ fn detect_silent_audio(hva: u64, cond: Arc<ScreamCond>) -> bool {
     let header = &unsafe { std::slice::from_raw_parts(hva as *const ShmemHeader, 1) }[0];
     let data_hva = hva + u64::from(header.play.offset);
     let data_len = u64::from(header.play.chunk_size) * u64::from(header.play.max_chunks);
+
+    let valid_range = hva..hva + len;
+    if !valid_range.contains(&data_hva) || !valid_range.contains(&(data_hva + data_len - 1)) {
+        return false;
+    }
 
     // SAFETY:
     // - The `[data_hva, data_hva + data_len)` range lies fully within the mmap region.
