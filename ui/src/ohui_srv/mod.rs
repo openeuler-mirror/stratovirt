@@ -729,15 +729,18 @@ impl StateTransfer for OhUiMigration {
     }
 
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-        let mgt_state: OhUiMigrationState = serde_json::from_slice(state)
+        let cursor_bytes = CURSOR_SIZE as usize;
+        let mut mgt_state: OhUiMigrationState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("OHUI"))?;
         let mut cursor = self.cursor.lock().unwrap();
+
+        mgt_state.cursor_img.resize(cursor_bytes, 0);
         // SAFETY: the buffer is initialized and being kept for the whole VM lifecycle.
         unsafe {
             ptr::copy_nonoverlapping(
                 mgt_state.cursor_img.as_ptr(),
                 cursor.buffer as *mut u8,
-                CURSOR_SIZE as usize,
+                cursor_bytes,
             );
         }
         cursor.width = mgt_state.width;
