@@ -281,14 +281,18 @@ impl OhUiServer {
     /// Failure to meet these conditions will lead to undefined behavior.
     unsafe fn raw_update_dirty_area(
         &self,
-        surface_data: *mut u32,
-        stride: i32,
+        surface: &GuestSurface,
         pos: (i32, i32),
         size: (i32, i32),
         force_copy: bool,
     ) {
         let (x, y) = pos;
         let (w, h) = size;
+        let bytes_per_pixel = bytes_per_pixel() as i32;
+        let src_stride = surface.stride;
+        // Framebuffer layout is width * bpp * height.
+        let dst_stride = surface.width * bytes_per_pixel;
+        let surface_data = get_image_data(surface.guest_image);
 
         if self.framebuffer == 0
             || surface_data.is_null()
@@ -297,18 +301,19 @@ impl OhUiServer {
             return;
         }
 
-        let offset = (x * bytes_per_pixel() as i32 + y * stride) as u64;
-        let mut src_ptr = surface_data as u64 + offset;
-        let mut dst_ptr = self.framebuffer + offset;
+        let src_offset = (x * bytes_per_pixel as i32 + y * src_stride) as u64;
+        let dst_offset = (x * bytes_per_pixel as i32 + y * dst_stride) as u64;
+        let mut src_ptr = surface_data as u64 + src_offset;
+        let mut dst_ptr = self.framebuffer + dst_offset;
 
         for _ in 0..h {
             ptr::copy_nonoverlapping(
                 src_ptr as *const u8,
                 dst_ptr as *mut u8,
-                w as usize * bytes_per_pixel(),
+                (w * bytes_per_pixel) as usize,
             );
-            src_ptr += stride as u64;
-            dst_ptr += stride as u64;
+            src_ptr += src_stride as u64;
+            dst_ptr += dst_stride as u64;
         }
     }
 
@@ -380,13 +385,11 @@ impl DisplayChangeListenerOperations for OhUiServer {
         locked_surface.stride = surface.stride();
         locked_surface.width = surface.width();
         locked_surface.height = surface.height();
-        drop(locked_surface);
-        let locked_surface = self.surface.read().unwrap();
+
         // SAFETY: we have checked the new surafce and it should not be larger than framebuffer.
         unsafe {
             self.raw_update_dirty_area(
-                get_image_data(locked_surface.guest_image),
-                locked_surface.stride,
+                &locked_surface,
                 (0, 0),
                 (locked_surface.width, locked_surface.height),
                 true,
@@ -431,15 +434,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
 
         // SAFETY: we have checked the buffer indicated by (x,y,w,h) and it should not
         // exceed the image buffer stored in the surface which has been checked in dpy_switch().
-        unsafe {
-            self.raw_update_dirty_area(
-                get_image_data(locked_surface.guest_image),
-                locked_surface.stride,
-                (x, y),
-                (w, h),
-                false,
-            )
-        };
+        unsafe { self.raw_update_dirty_area(&locked_surface, (x, y), (w, h), false) };
 
         self.msg_handler
             .handle_dirty_area(x as u32, y as u32, w as u32, h as u32);
