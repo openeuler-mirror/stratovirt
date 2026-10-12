@@ -584,17 +584,41 @@ pub(crate) fn build_mem_page_state(machine_ram: &Region) -> Result<qmp_schema::M
             );
         }
         let page_count = size / page_size;
+        if page_count == 0 {
+            continue;
+        }
         // SAFETY: `sorted_ram_regions()` only returns RAM regions from the
         // address space. The returned host address is validated below before
         // being queried for residency.
         let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
             .with_context(|| format!("RAM region {} has no host address", region.name))?;
 
+        let mut mincore_resident = vec![0_u8; usize::try_from(size / base_page_size)?];
+        // SAFETY: the RAM region owns this page-aligned mapping, and the
+        // output vector has one byte for every host page in the range.
+        let ret = unsafe {
+            libc::mincore(
+                base_host_virt_addr as *mut libc::c_void,
+                usize::try_from(size)?,
+                mincore_resident.as_mut_ptr(),
+            )
+        };
+        if ret != 0 {
+            bail!(
+                "RAM page-state mincore failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
         // Read pagemap in base-page batches, sampling the first entry of each
         // bitmap page. Swapped ordinary pages still hold snapshot data and
         // must be read back before zero-page classification.
         pagemap.scan_range(base_host_virt_addr, size, base_page_size, |index, entry| {
-            if index % entries_per_page != 0 || !entry.is_resident() {
+            // HugeTLB migration entries can lack both pagemap present and swapped
+            // bits. mincore still reports these pages as resident.
+            if index % entries_per_page != 0
+                || !(entry.is_resident() || mincore_resident[index as usize] & 1 != 0)
+            {
                 return Ok(());
             }
             let page_index = index / entries_per_page;

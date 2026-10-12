@@ -258,7 +258,7 @@ fn build_bitmap_from_pagemap<F>(
     mut is_dirty: F,
 ) -> Result<MemDirtyBitmap>
 where
-    F: FnMut(PagemapEntry) -> bool,
+    F: FnMut(PagemapEntry, bool) -> bool,
 {
     let base_page_size = host_page_size();
     let page_size = bitmap_page_size(
@@ -289,9 +289,22 @@ where
                 ram_offset
             );
         }
+        let mut resident = vec![0_u8; usize::try_from(size / base_page_size)?];
+        // SAFETY: the backend owns this page-aligned RAM mapping, and the
+        // vector has one byte for each host page in the range.
+        let ret = unsafe {
+            libc::mincore(
+                base_host_virt_addr as *mut libc::c_void,
+                usize::try_from(size)?,
+                resident.as_mut_ptr(),
+            )
+        };
+        if ret != 0 {
+            bail!("UFFD mincore failed: {}", std::io::Error::last_os_error());
+        }
         let page_base = ram_offset / page_size;
         pagemap.scan_range(base_host_virt_addr, size, base_page_size, |index, entry| {
-            if index % entries_per_page == 0 && is_dirty(entry) {
+            if index % entries_per_page == 0 && is_dirty(entry, resident[index as usize] & 1 != 0) {
                 let bitmap_index = page_base
                     .checked_add(index / entries_per_page)
                     .context("UFFD bitmap index overflow")?;
@@ -305,15 +318,18 @@ where
 }
 
 fn build_dirty_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
-    build_bitmap_from_pagemap(backend, |entry| entry.is_uffd_dirty())
+    build_bitmap_from_pagemap(backend, |entry, resident| {
+        // HugeTLB migration entries can have neither pagemap present nor swapped
+        // set. Treat inconsistent residency as dirty, even if the WP bit is set.
+        entry.is_uffd_dirty() || (resident && !entry.is_resident())
+    })
 }
 
 /// Fallback dirty bitmap when UFFD WP_ASYNC is unavailable: report the
-/// current resident set (pagemap present or swapped bits). A page written
-/// since the previous query is necessarily present or swapped, so this
-/// over-approximates the true dirty set without ever under-reporting.
+/// current resident set (mincore or pagemap present/swapped), including
+/// migration entries that pagemap alone can miss.
 fn build_resident_bitmap(backend: &UffdMemoryBackend) -> Result<MemDirtyBitmap> {
-    build_bitmap_from_pagemap(backend, |entry| entry.is_resident())
+    build_bitmap_from_pagemap(backend, |entry, resident| resident || entry.is_resident())
 }
 
 fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<()> {
@@ -365,9 +381,8 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
 ///
 /// Tracking mode is tiered by kernel support:
 ///   1. UFFD WP_ASYNC: write-protect all RAM, reads pagemap bit 57.
-///   2. Fallback: report the current resident set (pagemap bits 63/62) every
-///      query, which is a conservative superset of writes since the previous
-///      query.
+///   2. Fallback: report the current resident set (mincore or pagemap bits 63/62)
+///      every query.
 fn query_and_reset_dirty_bitmap_impl(backend: &mut UffdMemoryBackend) -> Result<MemDirtyBitmap> {
     if backend.wp_async {
         let bitmap = build_dirty_bitmap(backend)?;
