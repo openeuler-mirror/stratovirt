@@ -725,7 +725,8 @@ of device and the second one represents function number of it.
 -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom={true|false}][,free-page-reporting={true|false}][,multifunction={on|off}]
 ```
 
-Note: avoid using balloon devices and vfio devices together, balloon device is invalid when memory is hugepages.
+Note: avoid using balloon devices and vfio devices together.
+When using hugepages, the balloon device supports free-page reporting only; inflation and deflation are not supported.
 The balloon memory size must be an integer multiple of guest page size.
 
 ### 2.8 Virtio-rng
