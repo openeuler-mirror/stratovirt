@@ -208,9 +208,9 @@ unsafe fn touch_pages(start: u64, page_size: u64, nr_pages: u64) {
 /// * `host_addr` - The start host address to pre allocate which must be valid hva.
 /// * `size` - Size of memory which must be not exceed the length of host_addr.
 /// * `nr_vcpus` - Number of vcpus.
-unsafe fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
+/// * `page_size` - Actual mapping page size; must be nonzero.
+unsafe fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8, page_size: u64) {
     trace::trace_scope_start!(pre_alloc, args = (size));
-    let page_size = host_page_size();
     let threads = max_nr_threads(nr_vcpus);
     let nr_pages = size.div_ceil(page_size);
     let pages_per_thread = nr_pages / u64::from(threads);
@@ -246,7 +246,12 @@ unsafe fn mem_prealloc(host_addr: u64, size: u64, nr_vcpus: u8) {
 ///
 /// * `mem_config` - The config of default memory.
 /// * `thread_num` - The num of mem preallocv threads, typically the number of vCPUs.
-pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Result<Region> {
+/// * `skip_prealloc` - Skip preallocation for UFFD snapshot restore.
+pub fn create_default_mem(
+    mem_config: &MachineMemConfig,
+    thread_num: u8,
+    skip_prealloc: bool,
+) -> Result<Region> {
     let mut f_back: Option<FileBackend> = None;
 
     if let Some(path) = &mem_config.mem_path {
@@ -285,9 +290,16 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
         false,
         mem_config.hugepages,
     )?);
-    if mem_config.mem_prealloc {
-        // SAFETY: The host_addr and size is valid when defining block.
-        unsafe { mem_prealloc(block.host_address(), mem_config.mem_size, thread_num) };
+    if mem_config.mem_prealloc && !skip_prealloc {
+        // SAFETY: The mapping owns the entire range and supplies its page size.
+        unsafe {
+            mem_prealloc(
+                block.host_address(),
+                block.size(),
+                thread_num,
+                block.page_size(),
+            )
+        };
     }
     let region = Region::init_ram_region(block, DEFAULT_RAM_REGION_NAME);
 
@@ -300,11 +312,13 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
 ///
 /// * `mem_config` - The config of default memory.
 /// * `thread_num` - The num of mem preallocv threads, typically the number of vCPUs.
+/// * `skip_prealloc` - Skip preallocation for UFFD snapshot restore.
 /// * `hugepages` - The global hugepage configuration inherited by each backend.
 pub fn create_backend_mem(
     mem_config: &MemBackendObjConfig,
     thread_num: u8,
     hugepages: HugePageConfig,
+    skip_prealloc: bool,
 ) -> Result<Region> {
     if hugepages == HugePageConfig::Hugetlb2M {
         mem_config.check_hugetlb_2m()?;
@@ -347,11 +361,23 @@ pub fn create_backend_mem(
         false,
         hugepages,
     )?);
-    if mem_config.prealloc {
-        // SAFETY: The host_addr and size is valid when defining block.
-        unsafe { mem_prealloc(block.host_address(), mem_config.size, thread_num) };
+    set_host_memory_policy(&block, mem_config).with_context(|| {
+        format!(
+            "Failed to set host memory policy for backend '{}'",
+            mem_config.id
+        )
+    })?;
+    if mem_config.prealloc && !skip_prealloc {
+        // SAFETY: The mapping owns the entire range and supplies its page size.
+        unsafe {
+            mem_prealloc(
+                block.host_address(),
+                block.size(),
+                thread_num,
+                block.page_size(),
+            )
+        };
     }
-    set_host_memory_policy(&block, mem_config)?;
 
     let region = Region::init_ram_region(block, mem_config.id.as_str());
     Ok(region)
@@ -676,7 +702,7 @@ mod test {
         // The max threads limit is 16, or the number of host CPUs, it will never be 20.
         assert_ne!(max_nr_threads(20), 20);
         // SAFETY: The host_addr and size is valid which is mapped above.
-        unsafe { mem_prealloc(host_addr, 0x20_0000, 20) };
+        unsafe { mem_prealloc(host_addr, 0x20_0000, 20, host_page_size()) };
 
         // Mmap and prealloc with file backend.
         let file_path = String::from("back_mem_test");
@@ -693,7 +719,7 @@ mod test {
         )
         .unwrap();
         // SAFETY: The host_addr and size is valid which is mapped above.
-        unsafe { mem_prealloc(host_addr, 0x10_0000, 2) };
+        unsafe { mem_prealloc(host_addr, 0x10_0000, 2, host_page_size()) };
         std::fs::remove_file(file_path).unwrap();
     }
 }
