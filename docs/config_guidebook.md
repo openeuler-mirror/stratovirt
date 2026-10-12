@@ -92,6 +92,8 @@ Memory Prealloc feature is used to preallocate VM physical memory in advance and
 Using this feature, the number of page faults will decrease, and the memory access performance of the VM will improve.
 
 Note: This option will take effect the VM startup time.
+Memory preallocation is skipped during UFFD snapshot restore, including NUMA
+backend preallocation.
 
 You can use the following cmdline to configure memory prealloc.
 
