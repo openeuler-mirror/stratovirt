@@ -153,7 +153,7 @@ use util::loop_context::{
 };
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use util::{
-    bitmap::set_dense_bitmap_bit,
+    bitmap::{bitmap_page_size, set_dense_bitmap_bit},
     unix::{host_page_size, PagemapBatchReader},
 };
 #[cfg(feature = "vfio_device")]
@@ -564,25 +564,40 @@ pub(crate) fn build_mem_mappings(machine_ram: &Region) -> Result<qmp_schema::Mem
 
 pub(crate) fn build_mem_page_state(machine_ram: &Region) -> Result<qmp_schema::MemPageState> {
     let ram_regions = sorted_ram_regions(machine_ram);
-    let page_size = host_page_size();
+    let base_page_size = host_page_size();
+    let page_size = bitmap_page_size(ram_regions.iter().map(region_page_size), base_page_size)?;
+    let entries_per_page = page_size / base_page_size;
     let mut pagemap = PagemapBatchReader::new()?;
-
     let mut page_base = 0_u64;
     let mut resident = Vec::new();
     let mut empty = Vec::new();
     for region in ram_regions {
         let size = region.size();
-        let page_count = size.div_ceil(page_size);
+        let mapping_page_size = region_page_size(&region);
+        if mapping_page_size < page_size
+            || !mapping_page_size.is_multiple_of(page_size)
+            || size % page_size != 0
+        {
+            bail!(
+                "RAM mapping is not aligned to bitmap page size {}",
+                page_size
+            );
+        }
+        let page_count = size / page_size;
         // SAFETY: `sorted_ram_regions()` only returns RAM regions from the
         // address space. The returned host address is validated below before
-        // being passed to pagemap scanning.
+        // being queried for residency.
         let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
             .with_context(|| format!("RAM region {} has no host address", region.name))?;
 
-        pagemap.scan_range(base_host_virt_addr, size, page_size, |page_index, entry| {
-            if !entry.is_resident() {
+        // Read pagemap in base-page batches, sampling the first entry of each
+        // bitmap page. Swapped ordinary pages still hold snapshot data and
+        // must be read back before zero-page classification.
+        pagemap.scan_range(base_host_virt_addr, size, base_page_size, |index, entry| {
+            if index % entries_per_page != 0 || !entry.is_resident() {
                 return Ok(());
             }
+            let page_index = index / entries_per_page;
             let bitmap_index = page_base
                 .checked_add(page_index)
                 .with_context(|| "resident bitmap index overflow")?;

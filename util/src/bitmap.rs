@@ -13,9 +13,30 @@
 use std::cmp::Ord;
 use std::mem::size_of;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::UtilError;
+
+/// Use the smallest mapping page size as bitmap granularity, or the base page size if empty.
+pub fn bitmap_page_size(
+    page_sizes: impl IntoIterator<Item = u64>,
+    base_page_size: u64,
+) -> Result<u64> {
+    if !base_page_size.is_power_of_two() {
+        bail!("Invalid base page size {}", base_page_size);
+    }
+    let mut smallest = None;
+    for size in page_sizes {
+        if !size.is_power_of_two() || size < base_page_size {
+            bail!("Invalid mapping page size {}", size);
+        }
+        smallest = Some(match smallest {
+            Some(previous) => size.min(previous),
+            None => size,
+        });
+    }
+    Ok(smallest.unwrap_or(base_page_size))
+}
 
 /// Set one bit in a dense `Vec<u64>` bitmap, growing the vector as needed.
 pub fn set_dense_bitmap_bit(bitmap: &mut Vec<u64>, bit: u64) -> Result<()> {
