@@ -516,12 +516,9 @@ impl Region {
         self.mem_mapping.as_ref().and_then(|r| r.file_backend())
     }
 
-    /// Get the region file backend page size.
+    /// Get the actual mapping page size.
     pub fn get_region_page_size(&self) -> Option<u64> {
-        self.mem_mapping
-            .as_ref()
-            .and_then(|r| r.file_backend())
-            .map(|fb| fb.page_size)
+        self.mem_mapping.as_ref().map(|r| r.page_size())
     }
 
     /// Return all sub-regions of this Region, the returned vector is not empty,

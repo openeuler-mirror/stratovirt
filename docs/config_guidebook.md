@@ -10,6 +10,7 @@ General configuration of machine, including
 * type: The type of machine, three types of machine are available: "none", "microvm",
 "q35"(x86_64 platform) and "virt" (aarch64 platform).
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
+* hugepages: `off` (default) or `2M`; `2M` selects private anonymous 2 MiB HugeTLB RAM.
 * mem-share: Guest memory is sharable with other processes or not. By default this option is turned off.
 * accel: accelerate module, supported value `kvm`. (optional). If not set, default is KVM.
 * usb: whether use usb. supported value `off`. (optional). If not set, default is off.
@@ -18,7 +19,7 @@ NB: machine type "none" is used to get the capabilities of stratovirt.
 
 ```shell
 # cmdline
--machine [type=]name[,dump-guest-core={on|off}][,mem-share={on|off}]
+-machine [type=]name[,dump-guest-core={on|off}][,mem-share={on|off}][,hugepages={off|2M}]
 ```
 
 ### 1.2 CPU Config
@@ -128,6 +129,26 @@ $ cat /proc/meminfo
 # run StratoVirt with backend-file
 ... -mem-path <filebackend_path>
 ```
+
+#### 1.4.2 Private anonymous 2 MiB HugeTLB RAM
+
+Use `hugepages=2M` to enable private anonymous 2 MiB HugeTLB RAM.
+The default is `hugepages=off`.
+
+```shell
+-machine microvm,hugepages=2M -m 1G
+```
+
+The host must have enough free 2 MiB huge pages, and RAM sizes must be
+aligned to 2 MiB. NUMA `memory-backend-ram` objects inherit this setting.
+
+The following configurations are not supported with `hugepages=2M`:
+
+- `-mem-path` or `mem-share=on`.
+- NUMA backends using `memory-backend-file`, `memory-backend-memfd`,
+  `mem-path` or `share=on`.
+- vhost-user devices.
+- File snapshot restore with `mapped=true`.
 
 ### 1.5 NUMA node
 The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.

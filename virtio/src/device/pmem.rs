@@ -331,6 +331,7 @@ impl VirtioDevice for Pmem {
                 false,
                 self.backend.share,
                 false,
+                false,
             )?,
             None => bail!("No file opened for virtio-pmem@{}", self.id),
         };

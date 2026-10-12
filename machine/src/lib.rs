@@ -794,7 +794,7 @@ pub trait MachineOps: MachineLifecycle {
         for node in numa_nodes.as_ref().unwrap().iter() {
             for mb_obj in mb_objs.iter() {
                 if mb_obj.id.eq(&node.1.mem_dev) {
-                    let ram = create_backend_mem(mb_obj, thread_num)?;
+                    let ram = create_backend_mem(mb_obj, thread_num, mem_config.hugepages)?;
                     root.add_subregion_not_update(ram, offset)?;
                     offset = offset
                         .checked_add(mb_obj.size)

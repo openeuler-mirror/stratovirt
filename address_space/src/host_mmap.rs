@@ -20,11 +20,13 @@ use std::thread;
 use anyhow::{bail, Context, Result};
 use log::{error, info};
 use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
-use nix::sys::statfs::fstatfs;
+use nix::sys::statfs::{fstatfs, HUGETLBFS_MAGIC};
 use nix::unistd::{mkstemp, sysconf, unlink, SysconfVar};
 
 use crate::{AddressRange, GuestAddress, Region, DEFAULT_RAM_REGION_NAME};
-use machine_manager::config::{HostMemPolicy, MachineMemConfig, MemBackendObjConfig};
+use machine_manager::config::{
+    HostMemPolicy, HugePageConfig, MachineMemConfig, MemBackendObjConfig,
+};
 use util::unix::{do_mmap, host_page_size, mbind};
 
 const MAX_PREALLOC_THREAD: i64 = 16;
@@ -118,10 +120,12 @@ impl FileBackend {
         };
 
         let fstat = fstatfs(&file).with_context(|| "Failed to fstatfs file")?;
-        info!(
-            "Using memory backing file, the page size is {}",
-            fstat.optimal_transfer_size()
-        );
+        let page_size = if fstat.filesystem_type() == HUGETLBFS_MAGIC {
+            fstat.optimal_transfer_size() as u64
+        } else {
+            host_page_size()
+        };
+        info!("Using memory backing file, the page size is {}", page_size);
 
         let old_file_len = file.metadata().unwrap().len();
         if old_file_len == 0 {
@@ -142,7 +146,7 @@ impl FileBackend {
         Ok(FileBackend {
             file: Arc::new(file),
             offset: 0_u64,
-            page_size: fstat.optimal_transfer_size() as _,
+            page_size,
         })
     }
 }
@@ -271,7 +275,7 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
             page_size: host_page_size(),
         });
     }
-    let block = Arc::new(HostMemMapping::new(
+    let block = Arc::new(HostMemMapping::new_with_hugepages(
         GuestAddress(0),
         None,
         mem_config.mem_size,
@@ -279,8 +283,8 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
         mem_config.dump_guest_core,
         mem_config.mem_share,
         false,
+        mem_config.hugepages,
     )?);
-
     if mem_config.mem_prealloc {
         // SAFETY: The host_addr and size is valid when defining block.
         unsafe { mem_prealloc(block.host_address(), mem_config.mem_size, thread_num) };
@@ -296,7 +300,15 @@ pub fn create_default_mem(mem_config: &MachineMemConfig, thread_num: u8) -> Resu
 ///
 /// * `mem_config` - The config of default memory.
 /// * `thread_num` - The num of mem preallocv threads, typically the number of vCPUs.
-pub fn create_backend_mem(mem_config: &MemBackendObjConfig, thread_num: u8) -> Result<Region> {
+/// * `hugepages` - The global hugepage configuration inherited by each backend.
+pub fn create_backend_mem(
+    mem_config: &MemBackendObjConfig,
+    thread_num: u8,
+    hugepages: HugePageConfig,
+) -> Result<Region> {
+    if hugepages == HugePageConfig::Hugetlb2M {
+        mem_config.check_hugetlb_2m()?;
+    }
     let mut f_back: Option<FileBackend> = None;
 
     if mem_config.memfd() {
@@ -325,7 +337,7 @@ pub fn create_backend_mem(mem_config: &MemBackendObjConfig, thread_num: u8) -> R
                 .with_context(|| "Failed to create file that backs memory")?,
         );
     }
-    let block = Arc::new(HostMemMapping::new(
+    let block = Arc::new(HostMemMapping::new_with_hugepages(
         GuestAddress(0),
         None,
         mem_config.size,
@@ -333,6 +345,7 @@ pub fn create_backend_mem(mem_config: &MemBackendObjConfig, thread_num: u8) -> R
         mem_config.dump_guest_core,
         mem_config.share(),
         false,
+        hugepages,
     )?);
     if mem_config.prealloc {
         // SAFETY: The host_addr and size is valid when defining block.
@@ -405,6 +418,8 @@ pub struct HostMemMapping {
     file_back: Option<FileBackend>,
     /// share mem flag
     is_share: bool,
+    /// The size of a memory page in bytes.
+    page_size: u64,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type,
@@ -435,6 +450,48 @@ impl HostMemMapping {
         is_share: bool,
         read_only: bool,
     ) -> Result<Self> {
+        Self::new_with_hugepages(
+            guest_addr,
+            host_addr,
+            size,
+            file_back,
+            dump_guest_core,
+            is_share,
+            read_only,
+            HugePageConfig::None,
+        )
+    }
+
+    /// Construct a mapping with an explicit anonymous hugepage configuration.
+    /// Other arguments have the same meaning as in [`Self::new`].
+    /// `HugePageConfig::None` preserves file-backed page sizes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_hugepages(
+        guest_addr: GuestAddress,
+        host_addr: Option<u64>,
+        size: u64,
+        file_back: Option<FileBackend>,
+        dump_guest_core: bool,
+        is_share: bool,
+        read_only: bool,
+        hugepages: HugePageConfig,
+    ) -> Result<Self> {
+        let page_size = match hugepages {
+            HugePageConfig::None => match file_back.as_ref() {
+                Some(fb) if fb.page_size != 0 => fb.page_size,
+                _ => host_page_size(),
+            },
+            HugePageConfig::Hugetlb2M => {
+                let page_size = 2 * 1024 * 1024;
+                if size == 0 || !size.is_multiple_of(page_size) || usize::try_from(size).is_err() {
+                    bail!("Invalid 2 MiB HugeTLB mapping size {}", size);
+                }
+                if host_addr.is_some() || file_back.is_some() || is_share {
+                    bail!("Anonymous 2 MiB HugeTLB requires a new private mapping without a file");
+                }
+                page_size
+            }
+        };
         let host_addr = if let Some(addr) = host_addr {
             addr
         } else {
@@ -446,6 +503,7 @@ impl HostMemMapping {
                 read_only,
                 is_share,
                 dump_guest_core,
+                hugepages == HugePageConfig::Hugetlb2M,
             )?
         };
 
@@ -455,9 +513,14 @@ impl HostMemMapping {
                 size,
             },
             host_addr: host_addr as *mut u8,
+            page_size,
             file_back,
             is_share,
         })
+    }
+
+    pub fn page_size(&self) -> u64 {
+        self.page_size
     }
 
     /// Get size of mapped memory.
@@ -607,7 +670,7 @@ mod test {
     #[test]
     fn test_memory_prealloc() {
         // Mmap and prealloc with anonymous memory.
-        let host_addr = do_mmap(&None, 0x20_0000, 0, false, false, false).unwrap();
+        let host_addr = do_mmap(&None, 0x20_0000, 0, false, false, false, false).unwrap();
         // Check the thread number equals to minimum value.
         assert_eq!(max_nr_threads(1), 1);
         // The max threads limit is 16, or the number of host CPUs, it will never be 20.
@@ -625,6 +688,7 @@ mod test {
             f_back.offset,
             false,
             true,
+            false,
             false,
         )
         .unwrap();
