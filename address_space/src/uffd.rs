@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
 use machine_manager::qmp::qmp_schema::MemDirtyBitmap;
-use util::bitmap::set_dense_bitmap_bit;
+use util::bitmap::{bitmap_page_size, set_dense_bitmap_bit};
 use util::unix::{host_page_size, PagemapBatchReader, PagemapEntry};
 use vmm_sys_util::sock_ctrl_msg::ScmSocket;
 
@@ -38,14 +38,15 @@ const UFFD_API: u64 = 0xAA;
 const UFFDIO_API: u64 = 0xc018aa3f;
 const UFFDIO_REGISTER: u64 = 0xc020aa00;
 const UFFDIO_WRITEPROTECT: u64 = 0xc018aa06;
+// Bit in UffdioRegister::ioctls, not the UFFDIO_COPY ioctl request value.
+const UFFDIO_COPY_SUPPORTED: u64 = 1 << 3;
 
 const UFFDIO_REGISTER_MODE_MISSING: u64 = 1 << 0;
 const UFFDIO_REGISTER_MODE_WP: u64 = 1 << 1;
 const UFFDIO_WRITEPROTECT_MODE_WP: u64 = 1 << 0;
 
-// UFFD_FEATURE_EVENT_REMOVE: generate REMOVE events on madvise(MADV_DONTNEED)
-// so the external uffd daemon can track dirty pages during snapshot creation.
-const UFFD_FEATURE_EVENT_REMOVE: u64 = 1 << 6;
+const UFFD_FEATURE_MISSING_HUGETLBFS: u64 = 1 << 4;
+const UFFD_FEATURE_WP_HUGETLBFS_SHMEM: u64 = 1 << 12;
 // UFFD_FEATURE_WP_ASYNC: write-protect faults are cleared by the kernel
 // automatically (no UFFD event), which is required for UFFDIO_COPY_MODE_WP.
 const UFFD_FEATURE_WP_ASYNC: u64 = 1 << 15;
@@ -91,7 +92,8 @@ fn backend_state() -> &'static Mutex<Option<UffdMemoryBackend>> {
 struct RegionMapping {
     base_host_virt_addr: u64,
     size: u64,
-    /// Byte offset of this region's data within the flat snapshot file.
+    /// Byte offset of this region's data within the snapshot file. For full
+    /// snapshots this includes headers and need not be huge-page aligned.
     offset: u64,
     /// Kept as `page_size_kib` for wire-compatibility with Firecracker.
     /// The value is in *bytes*, matching the deprecated Firecracker field.
@@ -106,24 +108,31 @@ struct RegionMapping {
 /// fd to the external uffd daemon so it can serve page faults from a snapshot source.
 pub struct UffdMemoryBackend {
     socket_path: PathBuf,
-    /// Collected RAM regions (host addr, size, cumulative offset).
-    regions: Vec<(u64, u64, u64)>,
+    regions: Vec<RegionMapping>,
+    features: u64,
     uffd_fd: RawFd,
     wp_async: bool,
     handoff_stream: Option<UnixStream>,
+    // Start of RAM data in the snapshot source file (zero for external RAM).
+    snapfile_offset: u64,
 }
 
 impl UffdMemoryBackend {
     /// Create a new backend that will connect to `socket_path` when
     /// [`Self::send_to_external_uffd_daemon`] is called.
-    pub fn new(socket_path: &str) -> Result<Self> {
-        let (uffd_fd, wp_async) = create_uffd().context("failed to create userfaultfd")?;
+    /// `snapfile_offset` is the start of RAM data in the snapshot source file.
+    /// Bitmap indices are RAM-relative; daemon offsets remain file-relative.
+    pub fn new(socket_path: &str, require_hugetlb: bool, snapfile_offset: u64) -> Result<Self> {
+        let (uffd_fd, wp_async, features) =
+            create_uffd(require_hugetlb).context("failed to create userfaultfd")?;
         Ok(UffdMemoryBackend {
             socket_path: PathBuf::from(socket_path),
+            features,
             regions: Vec::new(),
             uffd_fd,
             wp_async,
             handoff_stream: None,
+            snapfile_offset,
         })
     }
 
@@ -132,6 +141,7 @@ impl UffdMemoryBackend {
     /// * `host_addr` – host virtual address of the region start.
     /// * `size`      – size in bytes.
     /// * `offset`    – byte offset of this region in the flat snapshot file.
+    /// * `page_size` – actual mapping page size in bytes (2 MiB for HugeTLB).
     ///
     /// Before registering, the region is cleared with MADV_DONTNEED.
     /// UFFDIO_REGISTER does not evict pages that are already present: any
@@ -143,10 +153,31 @@ impl UffdMemoryBackend {
     /// invariant that every access faults as MISSING and is served by the
     /// UFFD handler.  On an untouched anonymous mapping the madvise is
     /// essentially free, so it is kept unconditionally as a safety net.
-    pub fn register_region(&mut self, host_addr: u64, size: u64, offset: u64) -> Result<()> {
-        // SAFETY: host_addr points to a valid anonymous mapping of exactly `size` bytes
-        // belonging to this guest RAM region; the region remains alive for the duration
-        // of this call.
+    pub fn register_region(
+        &mut self,
+        host_addr: u64,
+        size: u64,
+        offset: u64,
+        page_size: u64,
+    ) -> Result<()> {
+        if !page_size.is_power_of_two()
+            || size == 0
+            || host_addr & (page_size - 1) != 0
+            || size & (page_size - 1) != 0
+            || host_addr.checked_add(size).is_none()
+            || offset.checked_add(size).is_none()
+        {
+            bail!("Invalid UFFD region alignment or range");
+        }
+        if page_size > host_page_size() {
+            if self.features & UFFD_FEATURE_MISSING_HUGETLBFS == 0 {
+                bail!("UFFD missing faults on HugeTLB are not supported");
+            }
+            if self.features & UFFD_FEATURE_WP_HUGETLBFS_SHMEM == 0 {
+                self.wp_async = false;
+            }
+        }
+        // SAFETY: the caller owns this valid RAM mapping for the duration of the call.
         let ret = unsafe {
             libc::madvise(
                 host_addr as *mut libc::c_void,
@@ -188,7 +219,15 @@ impl UffdMemoryBackend {
                 std::io::Error::last_os_error()
             );
         }
-        self.regions.push((host_addr, size, offset));
+        if reg.ioctls & UFFDIO_COPY_SUPPORTED == 0 {
+            bail!("UFFD region does not support UFFDIO_COPY");
+        }
+        self.regions.push(RegionMapping {
+            base_host_virt_addr: host_addr,
+            size,
+            offset,
+            page_size_kib: page_size,
+        });
         Ok(())
     }
 
@@ -198,30 +237,14 @@ impl UffdMemoryBackend {
     /// the userfaultfd kernel semantics already queue page faults until the daemon
     /// starts serving them.
     pub fn send_to_external_uffd_daemon(&mut self) -> Result<()> {
-        // SAFETY: sysconf(_SC_PAGESIZE) is always valid on Linux and never fails;
-        // no pointers or memory invariants are involved.
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-
-        let json = serde_json::to_vec(&self.region_mappings(page_size))
-            .context("failed to serialise region mappings")?;
+        let json =
+            serde_json::to_vec(&self.regions).context("failed to serialise region mappings")?;
 
         let stream = send_fd_with_json(&self.socket_path, self.uffd_fd, &json)
             .context("failed to send uffd fd to external uffd daemon")?;
         self.handoff_stream = Some(stream);
 
         Ok(())
-    }
-
-    fn region_mappings(&self, page_size: u64) -> Vec<RegionMapping> {
-        self.regions
-            .iter()
-            .map(|&(host_addr, size, offset)| RegionMapping {
-                base_host_virt_addr: host_addr,
-                size,
-                offset,
-                page_size_kib: page_size,
-            })
-            .collect()
     }
 }
 
@@ -237,31 +260,45 @@ fn build_bitmap_from_pagemap<F>(
 where
     F: FnMut(PagemapEntry) -> bool,
 {
-    // Dirty bitmap bits and pagemap entries both use the host base page size.
-    let page_size = host_page_size();
+    let base_page_size = host_page_size();
+    let page_size = bitmap_page_size(
+        backend.regions.iter().map(|region| region.page_size_kib),
+        base_page_size,
+    )?;
     let mut pagemap = PagemapBatchReader::new()?;
     let mut bitmap = Vec::new();
+    let entries_per_page = page_size / base_page_size;
 
-    for &(base_host_virt_addr, size, offset) in &backend.regions {
-        if offset % page_size != 0 {
+    for &RegionMapping {
+        base_host_virt_addr,
+        size,
+        offset,
+        page_size_kib: region_page_size,
+    } in &backend.regions
+    {
+        let ram_offset = offset
+            .checked_sub(backend.snapfile_offset)
+            .context("UFFD region precedes snapshot RAM data")?;
+        if region_page_size < page_size
+            || region_page_size % page_size != 0
+            || ram_offset % page_size != 0
+        {
             bail!(
-                "UFFD mapping offset {} is not aligned to page size {}",
-                offset,
-                page_size
+                "UFFD mapping is not aligned to bitmap page size {} at offset {}",
+                page_size,
+                ram_offset
             );
         }
-        let page_base = offset / page_size;
-        pagemap.scan_range(
-            base_host_virt_addr,
-            size,
-            page_size,
-            |bitmap_page_index, entry| {
-                if is_dirty(entry) {
-                    set_dense_bitmap_bit(&mut bitmap, page_base + bitmap_page_index)?;
-                }
-                Ok(())
-            },
-        )?;
+        let page_base = ram_offset / page_size;
+        pagemap.scan_range(base_host_virt_addr, size, base_page_size, |index, entry| {
+            if index % entries_per_page == 0 && is_dirty(entry) {
+                let bitmap_index = page_base
+                    .checked_add(index / entries_per_page)
+                    .context("UFFD bitmap index overflow")?;
+                set_dense_bitmap_bit(&mut bitmap, bitmap_index)?;
+            }
+            Ok(())
+        })?;
     }
 
     Ok(MemDirtyBitmap { bitmap, page_size })
@@ -286,7 +323,12 @@ fn write_protect_mappings(backend: &UffdMemoryBackend, enabled: bool) -> Result<
         0
     };
 
-    for &(base_host_virt_addr, size, _) in &backend.regions {
+    for &RegionMapping {
+        base_host_virt_addr,
+        size,
+        ..
+    } in &backend.regions
+    {
         if size == 0 {
             continue;
         }
@@ -362,7 +404,7 @@ impl Drop for UffdMemoryBackend {
 // Helper: create userfaultfd
 // ────────────────────────────────────────────────────────────────────────────
 
-fn create_uffd() -> Result<(RawFd, bool)> {
+fn create_uffd(require_hugetlb: bool) -> Result<(RawFd, bool, u64)> {
     // O_CLOEXEC = 0x80000 on both x86_64 and aarch64
     // SAFETY: SYS_USERFAULTFD_NR is the correct syscall number for this architecture;
     // O_CLOEXEC | O_NONBLOCK are valid flags accepted by userfaultfd(2).
@@ -375,10 +417,20 @@ fn create_uffd() -> Result<(RawFd, bool)> {
     }
     let fd = fd as RawFd;
 
-    match enable_uffd_api(fd, UFFD_FEATURE_EVENT_REMOVE | UFFD_FEATURE_WP_ASYNC) {
-        Ok(()) => Ok((fd, true)),
-        Err(wp_err) => match enable_uffd_api(fd, UFFD_FEATURE_EVENT_REMOVE) {
-            Ok(()) => Ok((fd, false)),
+    let mut required = 0;
+    if require_hugetlb {
+        required |= UFFD_FEATURE_MISSING_HUGETLBFS;
+    }
+
+    let mut preferred = required | UFFD_FEATURE_WP_ASYNC;
+    if require_hugetlb {
+        preferred |= UFFD_FEATURE_WP_HUGETLBFS_SHMEM;
+    }
+
+    match enable_uffd_api(fd, preferred) {
+        Ok(features) => Ok((fd, true, features)),
+        Err(wp_err) => match enable_uffd_api(fd, required) {
+            Ok(features) => Ok((fd, false, features)),
             Err(err) => {
                 // SAFETY: fd was successfully opened by the syscall above; closing it on
                 // the error path prevents a file-descriptor leak.
@@ -393,7 +445,7 @@ fn create_uffd() -> Result<(RawFd, bool)> {
     }
 }
 
-fn enable_uffd_api(fd: RawFd, features: u64) -> Result<()> {
+fn enable_uffd_api(fd: RawFd, features: u64) -> Result<u64> {
     let mut api = UffdioApi {
         api: UFFD_API,
         features,
@@ -405,7 +457,7 @@ fn enable_uffd_api(fd: RawFd, features: u64) -> Result<()> {
     if ret != 0 {
         bail!("{}", std::io::Error::last_os_error());
     }
-    Ok(())
+    Ok(api.features)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -439,7 +491,7 @@ mod tests {
     /// Returns `None` when `userfaultfd` is not available in this environment
     /// (e.g. a restricted container), so callers can skip the test gracefully.
     fn try_new_uffd(socket_path: &str) -> Option<UffdMemoryBackend> {
-        UffdMemoryBackend::new(socket_path).ok()
+        UffdMemoryBackend::new(socket_path, false, 0).ok()
     }
 
     /// Spawn a mock daemon thread that accepts one connection and drains the
@@ -485,37 +537,6 @@ mod tests {
 
         handle.join().expect("daemon thread");
         let _ = std::fs::remove_file(socket_path);
-    }
-
-    #[test]
-    fn test_region_mappings_use_registered_offsets() {
-        let backend = UffdMemoryBackend {
-            socket_path: PathBuf::from("/tmp/unused.sock"),
-            regions: vec![(0x1000, 0x2000, 0), (0x8000, 0x1000, 0x2000)],
-            uffd_fd: -1,
-            wp_async: false,
-            handoff_stream: None,
-        };
-
-        let mappings = backend.region_mappings(4096);
-
-        assert_eq!(
-            mappings,
-            vec![
-                RegionMapping {
-                    base_host_virt_addr: 0x1000,
-                    size: 0x2000,
-                    offset: 0,
-                    page_size_kib: 4096,
-                },
-                RegionMapping {
-                    base_host_virt_addr: 0x8000,
-                    size: 0x1000,
-                    offset: 0x2000,
-                    page_size_kib: 4096,
-                },
-            ]
-        );
     }
 
     #[test]
@@ -572,10 +593,17 @@ mod tests {
 
         let mut backend = UffdMemoryBackend {
             socket_path: PathBuf::from("/tmp/unused.sock"),
-            regions: vec![(ptr as u64, size as u64, 0)],
+            regions: vec![RegionMapping {
+                base_host_virt_addr: ptr as u64,
+                size: size as u64,
+                offset: 0,
+                page_size_kib: page_size,
+            }],
+            features: 0,
             uffd_fd: -1,
             wp_async: false,
             handoff_stream: None,
+            snapfile_offset: 0,
         };
 
         // Write pages 0 and 2, leave 1 and 3 untouched so only 0 and 2 are

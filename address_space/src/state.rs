@@ -346,14 +346,25 @@ impl AddressSpace {
             .get_machine_ram()
             .with_context(|| "This address space does not support migration.")?;
 
-        let mut uffd = UffdMemoryBackend::new(socket_path)
-            .with_context(|| "UFFD restore: failed to create userfaultfd")?;
+        let ram_regions = machine_ram.subregions();
+        let base_page_size = host_page_size();
+        let require_hugetlb = ram_regions
+            .iter()
+            .filter_map(|region| region.get_region_page_size())
+            .any(|page_size| page_size > base_page_size);
+
         let registered_offset_base = match snapshot_memory {
             SnapshotMemoryMode::Full => ram_data_file_offset,
             SnapshotMemoryMode::External => 0,
         };
+        let mut uffd = UffdMemoryBackend::new(socket_path, require_hugetlb, registered_offset_base)
+            .with_context(|| "UFFD restore: failed to create userfaultfd")?;
         let mut registered_offset = registered_offset_base;
-        for region in machine_ram.subregions().iter() {
+        let mut registrations = Vec::new();
+        if ram_regions.len() != address_space_state.ram_region_state.len() {
+            bail!("UFFD restore: RAM region count does not match snapshot");
+        }
+        for region in ram_regions.iter() {
             let state = address_space_state
                 .ram_region_state
                 .iter()
@@ -380,16 +391,13 @@ impl AddressSpace {
             // SAFETY: the region comes from the machine RAM subregion list; its
             // host mapping stays alive for the VM's lifetime.
             if let Some(host_addr) = unsafe { region.get_host_address(AddressAttr::Ram) } {
-                uffd.register_region(host_addr, region.size(), offset)
-                    .with_context(|| {
-                        format!(
-                            "UFFD restore: register region '{}' host={:#x} size={:#x}",
-                            region.name,
-                            host_addr,
-                            region.size()
-                        )
-                    })?;
-                registered_offset += region.size();
+                let page_size = region
+                    .get_region_page_size()
+                    .with_context(|| "RAM region has no mapping page size")?;
+                registrations.push((host_addr, region.size(), offset, page_size));
+                registered_offset = registered_offset
+                    .checked_add(region.size())
+                    .with_context(|| "Registered RAM size overflow")?;
             }
         }
 
@@ -403,6 +411,12 @@ impl AddressSpace {
                 registered_size,
                 address_space_state.total_region_size
             );
+        }
+
+        // Validate the complete layout before discarding or registering any RAM.
+        for (host_addr, size, offset, page_size) in registrations {
+            uffd.register_region(host_addr, size, offset, page_size)
+                .with_context(|| format!("UFFD restore: register RAM at {:#x}", host_addr))?;
         }
 
         uffd.send_to_external_uffd_daemon()
