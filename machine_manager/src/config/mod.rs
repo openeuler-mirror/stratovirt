@@ -153,10 +153,33 @@ pub struct VmConfig {
 }
 
 impl VmConfig {
+    /// Check whether the RAM backing supports vhost-user devices.
+    pub fn check_vhost_user_memory(&self) -> Result<()> {
+        if self.machine_config.mem_config.hugepages == HugePageConfig::Hugetlb2M {
+            bail!("hugepages=2M does not support vhost-user devices with private anonymous RAM");
+        }
+        Ok(())
+    }
+
     /// Healthy check for `VmConfig`
     pub fn check_vmconfig(&self, is_daemonize: bool) -> Result<()> {
         self.boot_source.check()?;
         self.machine_config.check()?;
+        let vhost_net = self.netdevs.values().any(|n| n.netdev_type == "vhost-user");
+        let vhost_device = self.devices.iter().any(|(k, _)| k.contains("vhost-user"));
+        if vhost_net || vhost_device {
+            self.check_vhost_user_memory()?;
+        }
+        let mem = &self.machine_config.mem_config;
+        if mem.hugepages == HugePageConfig::Hugetlb2M {
+            let mapped_restore = self
+                .incoming
+                .as_ref()
+                .is_some_and(|info| info.mode == MigrateMode::File && info.mapped);
+            if mapped_restore {
+                bail!("hugepages=2M does not support mapped snapshot restore");
+            }
+        }
 
         check_arg_too_long(&self.guest_name, "name")?;
 

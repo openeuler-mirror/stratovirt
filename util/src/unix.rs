@@ -223,6 +223,7 @@ pub fn parse_unix_uri(uri: &str) -> Result<String> {
 /// * `read_only` - Allow to write or not.
 /// * `is_share` - Share the mapping or not.
 /// * `dump_guest_core` - Exclude from a core dump or not.
+/// * `anonymous_hugetlb_2m` - Use private anonymous 2 MiB HugeTLB pages.
 ///
 /// # Errors
 ///
@@ -234,7 +235,11 @@ pub fn do_mmap(
     read_only: bool,
     is_share: bool,
     dump_guest_core: bool,
+    anonymous_hugetlb_2m: bool,
 ) -> Result<u64> {
+    if anonymous_hugetlb_2m && (file.is_some() || is_share || offset != 0) {
+        bail!("Anonymous 2 MiB HugeTLB requires private RAM without a file or offset");
+    }
     let mut flags: i32 = 0;
     let mut fd: i32 = -1;
     if let Some(f) = file {
@@ -247,6 +252,10 @@ pub fn do_mmap(
         flags |= libc::MAP_SHARED;
     } else {
         flags |= libc::MAP_PRIVATE;
+    }
+
+    if anonymous_hugetlb_2m {
+        flags |= libc::MAP_HUGETLB | libc::MAP_HUGE_2MB | libc::MAP_NORESERVE;
     }
 
     let mut prot = libc::PROT_READ;

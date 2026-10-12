@@ -117,6 +117,35 @@ pub struct MemBackendObjConfig {
 }
 
 impl MemBackendObjConfig {
+    /// Validate a backend object for private anonymous 2 MiB HugeTLB RAM.
+    pub fn check_hugetlb_2m(&self) -> Result<()> {
+        if self.mem_type != "memory-backend-ram" {
+            bail!(
+                "Memory backend '{}': hugepages=2M requires memory-backend-ram",
+                self.id
+            );
+        }
+        if self.size == 0 || !self.size.is_multiple_of(2 * M) {
+            bail!(
+                "Memory backend '{}': hugepages=2M requires a nonzero size aligned to 2 MiB",
+                self.id
+            );
+        }
+        if self.mem_path.is_some() {
+            bail!(
+                "Memory backend '{}': hugepages=2M conflicts with mem-path",
+                self.id
+            );
+        }
+        if self.share() {
+            bail!(
+                "Memory backend '{}': hugepages=2M does not support share=on",
+                self.id
+            );
+        }
+        Ok(())
+    }
+
     pub fn memfd(&self) -> bool {
         self.mem_type.eq("memory-backend-memfd")
     }
@@ -132,9 +161,30 @@ impl MemBackendObjConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HugePageConfig {
+    #[default]
+    None,
+    Hugetlb2M,
+}
+
+impl FromStr for HugePageConfig {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "off" => Ok(Self::None),
+            "2M" => Ok(Self::Hugetlb2M),
+            _ => bail!("hugepages must be off or 2M"),
+        }
+    }
+}
+
 /// Config that contains machine's memory information config.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MachineMemConfig {
+    #[serde(default)]
+    pub hugepages: HugePageConfig,
     pub mem_size: u64,
     pub max_size: u64,
     pub current_size: u64,
@@ -148,6 +198,7 @@ pub struct MachineMemConfig {
 impl Default for MachineMemConfig {
     fn default() -> Self {
         MachineMemConfig {
+            hugepages: HugePageConfig::None,
             mem_size: DEFAULT_MEMSIZE * M,
             max_size: DEFAULT_MEMSIZE * M,
             current_size: DEFAULT_MEMSIZE * M,
@@ -384,6 +435,18 @@ impl Default for MachineConfig {
 
 impl ConfigCheck for MachineConfig {
     fn check(&self) -> Result<()> {
+        let mem = &self.mem_config;
+        if mem.hugepages == HugePageConfig::Hugetlb2M {
+            if mem.mem_size & (2 * M - 1) != 0 {
+                bail!("hugepages=2M requires a memory size aligned to 2 MiB");
+            }
+            if mem.mem_path.is_some() {
+                bail!("hugepages=2M conflicts with mem-path: this backend uses anonymous RAM");
+            }
+            if mem.mem_share {
+                bail!("hugepages=2M does not support mem-share: shared backing restore is not implemented for this private anonymous backend");
+            }
+        }
         if self.mem_config.mem_size < MIN_MEMSIZE || self.mem_config.mem_size > MAX_MEMSIZE {
             bail!("Memory size must >= 128MiB and <= 512GiB, default unit: MiB, current memory size: {:?} bytes",
             &self.mem_config.mem_size);
@@ -412,6 +475,8 @@ struct MemSizeConfig {
 #[derive(Parser)]
 #[command(no_binary_name(true))]
 struct MachineCmdConfig {
+    #[arg(long, default_value = "off")]
+    hugepages: HugePageConfig,
     #[arg(long, aliases = ["classtype", "type"])]
     mach_type: MachineType,
     #[arg(long, default_value = "on", action = ArgAction::Append, value_parser = parse_bool)]
@@ -543,6 +608,7 @@ impl VmConfig {
         self.machine_config.mach_type = mach_cfg.mach_type;
         self.machine_config.mem_config.dump_guest_core = mach_cfg.dump_guest_core;
         self.machine_config.mem_config.mem_share = mach_cfg.mem_share;
+        self.machine_config.mem_config.hugepages = mach_cfg.hugepages;
 
         Ok(())
     }
@@ -771,6 +837,7 @@ mod tests {
     #[test]
     fn test_health_check() {
         let memory_config = MachineMemConfig {
+            hugepages: HugePageConfig::None,
             mem_size: MIN_MEMSIZE,
             mem_path: None,
             mem_share: false,
