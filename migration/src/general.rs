@@ -16,6 +16,7 @@ use std::io::{Read, Write};
 use std::mem::size_of;
 
 use anyhow::{anyhow, bail, Context, Result};
+use log::info;
 
 use crate::manager::{Instance, MIGRATION_MANAGER};
 use crate::protocol::{
@@ -180,17 +181,14 @@ impl MigrationManager {
         let locked_desc_db = MIGRATION_MANAGER.desc_db.read().unwrap();
         let snap_desc = desc_db
             .get(&instance.object)
-            .with_context(|| "Failed to get instance object")?;
+            .with_context(|| format!("Failed to get instance object '{}'", instance.object))?;
         let current_desc = locked_desc_db
             .get(&snap_desc.name)
-            .with_context(|| "Failed to get snap_desc name")?;
+            .with_context(|| format!("Failed to get snap_desc name '{}'", snap_desc.name))?;
+
+        info!("Check device '{}' {:?}", snap_desc.name, instance);
 
         let size = if snap_desc.size == 0 {
-            log::info!(
-                "Check {:?} using serde, size {}",
-                snap_desc.name,
-                instance.size
-            );
             let max_state_size = if snap_desc.name == "GpuState" {
                 MAX_LARGE_DEVICE_STATE_SIZE
             } else {
@@ -205,6 +203,10 @@ impl MigrationManager {
             }
             instance.size as u32
         } else {
+            info!(
+                "Check {:?} not using serde, size {}",
+                snap_desc.name, snap_desc.size
+            );
             // SAFETY: size has been checked in restore_desc_db().
             snap_desc.size
         };
