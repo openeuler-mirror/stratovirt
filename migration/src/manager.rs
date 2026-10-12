@@ -66,15 +66,14 @@ pub trait MigrationHook: StateTransfer {
             bail!("Invalid state length {}, id {}", state_data.len(), id);
         }
 
-        fd.write_all(
-            Instance {
-                name: id,
-                object: self.get_device_alias(),
-                size: state_data.len() as u64,
-            }
-            .as_bytes(),
-        )
-        .with_context(|| "Failed to write instance id.")?;
+        let instance = Instance {
+            name: id,
+            object: self.get_device_alias(),
+            size: state_data.len() as u64,
+        };
+        info!("Save device {:?}", instance);
+        fd.write_all(instance.as_bytes())
+            .with_context(|| "Failed to write instance id.")?;
         fd.write_all(&state_data)
             .with_context(|| "Failed to write device state")?;
 
