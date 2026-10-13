@@ -118,8 +118,8 @@ impl MigrationHook for RamList {
         Ok(())
     }
 
-    // Ram list regions are always copied from the snapshot file, regardless
-    // of how guest RAM is provided (`_mode` is ignored).
+    // All restore modes map eligible anonymous pflash privately; other regions
+    // retain eager copy, preserving both snapshot bytes and guest writes.
     fn restore_memory(&self, file: &mut File, _mode: &RestoreMode) -> Result<()> {
         let data_slice = read_state_slice(file)
             .with_context(|| "Failed to read state slice while restoring ramlist")?;
@@ -149,6 +149,14 @@ impl MigrationHook for RamList {
                         first_ram_region_offset, state.offset
                     )
                 })?;
+            if region_name == "pflash" && region_map.file_backend().is_none() {
+                // SAFETY: initial snapshot restore precedes vCPU startup and
+                // device activation; this anonymous pflash has no vhost users.
+                // Snapshot files are immutable and may be unlinked after restore.
+                if unsafe { region_map.try_restore_private_snapshot(file, record_offset)? } {
+                    continue;
+                }
+            }
             file.seek(SeekFrom::Start(record_offset))?;
 
             // SAFETY: host_addr is managed by mem_mapping, it can be guaranteed to be legal,

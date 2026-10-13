@@ -53,7 +53,7 @@ pub enum RestoreMode {
     Copy,
     /// Guest RAM pages are served on demand by the external uffd daemon
     /// listening on `socket_path`. Memory outside guest RAM (the ram list
-    /// section) is still copied from the snapshot memory file.
+    /// section) is restored separately from the snapshot memory file.
     Uffd {
         socket_path: String,
         memory: SnapshotMemoryMode,
@@ -274,8 +274,8 @@ impl MigrationManager {
             .unwrap()
             .restore_memory(file, mode)?;
 
-        // Restore memory managed by ram list. It is always copied from the
-        // snapshot file, regardless of how guest RAM is provided.
+        // Restore memory managed by ram list independently of guest RAM mode.
+        // Eligible anonymous pflash uses a private snapshot mapping.
         locked_vmm
             .ram_list
             .as_ref()
