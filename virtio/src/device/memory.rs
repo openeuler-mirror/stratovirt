@@ -806,8 +806,17 @@ impl VirtioDevice for Memory {
                 false,
                 backend.share,
                 false,
+                false,
             )?,
-            None => do_mmap(&None, config.region_size, 0, false, backend.share, false)?,
+            None => do_mmap(
+                &None,
+                config.region_size,
+                0,
+                false,
+                backend.share,
+                false,
+                false,
+            )?,
         };
         drop(backend);
 

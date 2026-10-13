@@ -1393,6 +1393,15 @@ impl DeviceInterface for StdMachine {
         let driver = args.driver.as_str();
         let vm_config = self.get_vm_config();
         let mut locked_vmconfig = vm_config.lock().unwrap();
+        // QMP hotplug does not run the startup memory compatibility checks.
+        if driver.starts_with("vhost-user-") {
+            if let Err(e) = locked_vmconfig.check_vhost_user_memory() {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        }
         let mut vm_config_clone = locked_vmconfig.clone();
         match driver {
             "virtio-blk-pci" => {
@@ -1728,12 +1737,19 @@ impl DeviceInterface for StdMachine {
             }
         };
 
-        match self
-            .get_vm_config()
-            .lock()
-            .unwrap()
-            .add_netdev_with_config(config)
-        {
+        let vm_config = self.get_vm_config();
+        let mut locked_vmconfig = vm_config.lock().unwrap();
+        // virtio-net-pci uses a netdev backend, so the driver check cannot cover it.
+        if config.netdev_type == "vhost-user" {
+            if let Err(e) = locked_vmconfig.check_vhost_user_memory() {
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        }
+
+        match locked_vmconfig.add_netdev_with_config(config) {
             Ok(()) => Response::create_empty_response(),
             Err(e) => Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
