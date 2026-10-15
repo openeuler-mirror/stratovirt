@@ -21,3 +21,5 @@ machine = { path = "../../machine" }
 machine_manager = { path = "../../machine_manager"}
 virtio = { path = "../../virtio", features = ["virtio_gpu"] }
 regex = "1"
+# For the tailappend test cases (qcow2 driver used to construct tail-loss images)
+block_backend = { path = "../../block_backend" }

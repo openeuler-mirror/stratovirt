@@ -14,15 +14,15 @@ $ cargo test --workspace --exclude mod_test -- --nocapture --test-threads=1
 
 StratoVirt mod test is an integrated testing method. During the test, the StratoVirt process will be started as the server and communicate through socket and QMP to test the StratoVirt module function.
 
-Before running mod test, we need to compile `stratovirt` and `virtiofsd` first, and then export the environment variables `STRATOVIRT_BINARY` and `VIRTIOFSD_BINARY`.
+Before running mod test, we need to compile `stratovirt`, `stratovirt-img` and `virtiofsd` first, and then export the environment variables `STRATOVIRT_BINARY` and `VIRTIOFSD_BINARY`. The `tailappend` test cases additionally require the `stratovirt-img` binary path in `STRATOVIRT_IMG_BINARY`.
 
-Build StratoVirt:
+Build `stratovirt` and `stratovirt-img`:
 
 ```shell
 $ cargo build --workspace --bins --release --target=aarch64-unknown-linux-gnu --all-features
 ```
 
-Build virtiofsd:
+Build `virtiofsd`:
 
 ```shell
 $ git clone https://gitlab.com/virtio-fs/virtiofsd.git
@@ -30,11 +30,12 @@ $ cd virtiofsd
 $ cargo build --release
 ```
 
-Export the environment variables `STRATOVIRT_BINARY` and `VIRTIOFSD_BINARY`:
+Export the environment variables `STRATOVIRT_BINARY`, `VIRTIOFSD_BINARY` and `STRATOVIRT_IMG_BINARY`:
 
 ```shell
 $ export STRATOVIRT_BINARY="/path/to/stratovirt"
 $ export VIRTIOFSD_BINARY="/path/to/virtiofsd"
+$ export STRATOVIRT_IMG_BINARY="/path/to/stratovirt-img"
 ```
 
 Run StratoVirt mod test as follows:
