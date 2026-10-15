@@ -7,6 +7,7 @@ description = "a lightweight hypervisor with low memory overhead and fast bootin
 license = "Mulan PSL v2"
 
 [dependencies]
+chardev_backend = { path = "chardev_backend" }
 thiserror = "1.0"
 anyhow = "1.0"
 log = "0.4"

@@ -10,6 +10,7 @@ General configuration of machine, including
 * type: The type of machine, three types of machine are available: "none", "microvm",
 "q35"(x86_64 platform) and "virt" (aarch64 platform).
 * dump-guest-core: Including guest memory in coredump file or not, default value is true.
+* hugepages: `off` (default) or `2M`; `2M` selects private anonymous 2 MiB HugeTLB RAM.
 * mem-share: Guest memory is sharable with other processes or not. By default this option is turned off.
 * accel: accelerate module, supported value `kvm`. (optional). If not set, default is KVM.
 * usb: whether use usb. supported value `off`. (optional). If not set, default is off.
@@ -18,7 +19,7 @@ NB: machine type "none" is used to get the capabilities of stratovirt.
 
 ```shell
 # cmdline
--machine [type=]name[,dump-guest-core={on|off}][,mem-share={on|off}]
+-machine [type=]name[,dump-guest-core={on|off}][,mem-share={on|off}][,hugepages={off|2M}]
 ```
 
 ### 1.2 CPU Config
@@ -91,6 +92,8 @@ Memory Prealloc feature is used to preallocate VM physical memory in advance and
 Using this feature, the number of page faults will decrease, and the memory access performance of the VM will improve.
 
 Note: This option will take effect the VM startup time.
+Memory preallocation is skipped during UFFD snapshot restore, including NUMA
+backend preallocation.
 
 You can use the following cmdline to configure memory prealloc.
 
@@ -128,6 +131,26 @@ $ cat /proc/meminfo
 # run StratoVirt with backend-file
 ... -mem-path <filebackend_path>
 ```
+
+#### 1.4.2 Private anonymous 2 MiB HugeTLB RAM
+
+Use `hugepages=2M` to enable private anonymous 2 MiB HugeTLB RAM.
+The default is `hugepages=off`.
+
+```shell
+-machine microvm,hugepages=2M -m 1G
+```
+
+The host must have enough free 2 MiB huge pages, and RAM sizes must be
+aligned to 2 MiB. NUMA `memory-backend-ram` objects inherit this setting.
+
+The following configurations are not supported with `hugepages=2M`:
+
+- `-mem-path` or `mem-share=on`.
+- NUMA backends using `memory-backend-file`, `memory-backend-memfd`,
+  `mem-path` or `share=on`.
+- vhost-user devices.
+- File snapshot restore with `mapped=true`.
 
 ### 1.5 NUMA node
 The optional NUMA node element gives the opportunity to create a virtual machine with non-uniform memory accesses.
@@ -226,20 +249,20 @@ One property can be set:
 
 ### 1.9 Logging
 
-StratoVirt supports to output log to stderr and log file.
+StratoVirt supports to output log to stdout and log file.
 
 You can enable StratoVirt's logging by:
 
 ```shell
-# Output log to stderr
+# Output log to stdout
 -D
 # Output log to log file
 -D <logfile_path>
 ```
 
 StratoVirt's log-level depends on env `STRATOVIRT_LOG_LEVEL`.
-StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `error`.
-If "-D" parameter is not set, logs are output to stderr by default.
+StratoVirt supports five log-levels: `trace`, `debug`, `info`, `warn`, `error`. The default level is `info`.
+If "-D" parameter is not set, logs are output to stdout by default.
 
 ### 1.10 Daemonize
 
@@ -702,7 +725,8 @@ of device and the second one represents function number of it.
 -device virtio-balloon-pci,id=<balloon_id>,bus=<pcie.0>,addr=<0x4>[,deflate-on-oom={true|false}][,free-page-reporting={true|false}][,multifunction={on|off}]
 ```
 
-Note: avoid using balloon devices and vfio devices together, balloon device is invalid when memory is hugepages.
+Note: avoid using balloon devices and vfio devices together.
+When using hugepages, the balloon device supports free-page reporting only; inflation and deflation are not supported.
 The balloon memory size must be an integer multiple of guest page size.
 
 ### 2.8 Virtio-rng

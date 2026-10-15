@@ -154,6 +154,7 @@ impl OhUiServer {
             false,
             true,
             false,
+            false,
         )?;
 
         let ret =
@@ -194,6 +195,7 @@ impl OhUiServer {
             0,
             false,
             true,
+            false,
             false,
         )?;
 
@@ -268,25 +270,25 @@ impl OhUiServer {
 
     /// # Safety
     ///
-    /// This function is unsafe because it copies the data from the buffer pointed by
-    /// `surface_data` parameter to the framebuffer.
+    /// This function is unsafe because it copies the dirty area from the guest surface
+    /// image buffer (obtained via `surface.guest_image`) to the framebuffer.
     /// The caller must ensure that:
     ///
-    /// - the source buffer is valid and the actual copied buffer can't exceed the source buffer.
-    /// - the size of source buffer is less or equal to the size of framebuffer.
-    /// - the source buffer should not be overlapped with the framebuffer.
+    /// - the guest image buffer is valid and the dirty area specified by `pos` and `size`
+    ///   does not exceed the bounds of the guest image buffer.
+    /// - the dirty area specified by `pos` and `size` does not exceed the bounds of the
+    ///   framebuffer.
+    /// - the guest image buffer does not overlap with the framebuffer.
     ///
     /// Failure to meet these conditions will lead to undefined behavior.
     unsafe fn raw_update_dirty_area(
         &self,
-        surface_data: *mut u32,
-        stride: i32,
+        surface: &GuestSurface,
         pos: (i32, i32),
         size: (i32, i32),
         force_copy: bool,
     ) {
-        let (x, y) = pos;
-        let (w, h) = size;
+        let surface_data = get_image_data(surface.guest_image);
 
         if self.framebuffer == 0
             || surface_data.is_null()
@@ -295,18 +297,24 @@ impl OhUiServer {
             return;
         }
 
-        let offset = (x * bytes_per_pixel() as i32 + y * stride) as u64;
-        let mut src_ptr = surface_data as u64 + offset;
-        let mut dst_ptr = self.framebuffer + offset;
+        let (x, y) = (pos.0 as usize, pos.1 as usize);
+        let (w, h) = (size.0 as usize, size.1 as usize);
+        let bpp = bytes_per_pixel();
+
+        let src_stride = surface.stride as usize;
+        let dst_stride = (surface.width as usize) * bpp;
+        let row_bytes = w * bpp;
+
+        let src_offset = y * src_stride + x * bpp;
+        let dst_offset = y * dst_stride + x * bpp;
+
+        let mut src_ptr = (surface_data as *const u8).add(src_offset);
+        let mut dst_ptr = (self.framebuffer as *mut u8).add(dst_offset);
 
         for _ in 0..h {
-            ptr::copy_nonoverlapping(
-                src_ptr as *const u8,
-                dst_ptr as *mut u8,
-                w as usize * bytes_per_pixel(),
-            );
-            src_ptr += stride as u64;
-            dst_ptr += stride as u64;
+            ptr::copy_nonoverlapping(src_ptr, dst_ptr, row_bytes);
+            src_ptr = src_ptr.add(src_stride);
+            dst_ptr = dst_ptr.add(dst_stride);
         }
     }
 
@@ -378,13 +386,11 @@ impl DisplayChangeListenerOperations for OhUiServer {
         locked_surface.stride = surface.stride();
         locked_surface.width = surface.width();
         locked_surface.height = surface.height();
-        drop(locked_surface);
-        let locked_surface = self.surface.read().unwrap();
+
         // SAFETY: we have checked the new surafce and it should not be larger than framebuffer.
         unsafe {
             self.raw_update_dirty_area(
-                get_image_data(locked_surface.guest_image),
-                locked_surface.stride,
+                &locked_surface,
                 (0, 0),
                 (locked_surface.width, locked_surface.height),
                 true,
@@ -429,15 +435,7 @@ impl DisplayChangeListenerOperations for OhUiServer {
 
         // SAFETY: we have checked the buffer indicated by (x,y,w,h) and it should not
         // exceed the image buffer stored in the surface which has been checked in dpy_switch().
-        unsafe {
-            self.raw_update_dirty_area(
-                get_image_data(locked_surface.guest_image),
-                locked_surface.stride,
-                (x, y),
-                (w, h),
-                false,
-            )
-        };
+        unsafe { self.raw_update_dirty_area(&locked_surface, (x, y), (w, h), false) };
 
         self.msg_handler
             .handle_dirty_area(x as u32, y as u32, w as u32, h as u32);
@@ -732,15 +730,18 @@ impl StateTransfer for OhUiMigration {
     }
 
     fn set_state_mut(&mut self, state: &[u8], _version: u32) -> Result<()> {
-        let mgt_state: OhUiMigrationState = serde_json::from_slice(state)
+        let cursor_bytes = CURSOR_SIZE as usize;
+        let mut mgt_state: OhUiMigrationState = serde_json::from_slice(state)
             .with_context(|| migration::error::MigrationError::FromBytesError("OHUI"))?;
         let mut cursor = self.cursor.lock().unwrap();
+
+        mgt_state.cursor_img.resize(cursor_bytes, 0);
         // SAFETY: the buffer is initialized and being kept for the whole VM lifecycle.
         unsafe {
             ptr::copy_nonoverlapping(
                 mgt_state.cursor_img.as_ptr(),
                 cursor.buffer as *mut u8,
-                CURSOR_SIZE as usize,
+                cursor_bytes,
             );
         }
         cursor.width = mgt_state.width;

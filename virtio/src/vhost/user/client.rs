@@ -518,6 +518,7 @@ impl VhostUserClient {
                     true,
                     true,
                     false,
+                    false,
                 )?;
                 let inflight = VhostInflight {
                     file,

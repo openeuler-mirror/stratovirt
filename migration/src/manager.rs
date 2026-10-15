@@ -66,15 +66,14 @@ pub trait MigrationHook: StateTransfer {
             bail!("Invalid state length {}, id {}", state_data.len(), id);
         }
 
-        fd.write_all(
-            Instance {
-                name: id,
-                object: self.get_device_alias(),
-                size: state_data.len() as u64,
-            }
-            .as_bytes(),
-        )
-        .with_context(|| "Failed to write instance id.")?;
+        let instance = Instance {
+            name: id,
+            object: self.get_device_alias(),
+            size: state_data.len() as u64,
+        };
+        info!("Save device {:?}", instance);
+        fd.write_all(instance.as_bytes())
+            .with_context(|| "Failed to write instance id.")?;
         fd.write_all(&state_data)
             .with_context(|| "Failed to write device state")?;
 
@@ -279,7 +278,7 @@ impl MigrationManager {
     fn register_device_desc(desc: DeviceStateDesc) {
         let mut desc_db = MIGRATION_MANAGER.desc_db.write().unwrap();
         if !desc_db.contains_key(&desc.name) {
-            info!("Register device name: {}, desc: {:?}", desc.name, desc);
+            info!("Register state: {}, desc: {:?}", desc.name, desc);
             desc_db.insert(desc.name.clone(), desc);
         }
     }
@@ -317,13 +316,16 @@ impl MigrationManager {
         T: MigrationHook + Sync + Send + 'static,
     {
         let name = cpu_desc.name.clone() + "/" + &id.to_string();
+        let uid = translate_id(&name);
+        info!("Register cpu '{}' instance name '{}'", name, uid);
+
         let mut copied_cpu_desc = cpu_desc.clone();
         copied_cpu_desc.name = name.clone();
         copied_cpu_desc.alias = cpu_desc.alias + u64::from(id);
         Self::register_device_desc(copied_cpu_desc);
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
-        locked_vmm.cpus.insert(translate_id(&name), cpu);
+        locked_vmm.cpus.insert(uid, cpu);
     }
 
     /// Register memory instance to vmm.
@@ -367,10 +369,12 @@ impl MigrationManager {
         T: MigrationHook + Sync + Send + 'static,
     {
         let name = device_desc.name.clone() + "/" + id;
+        let uid = translate_id(&name);
+        info!("Register transport '{}' instance name '{}'", name, uid);
         Self::register_device_desc(device_desc);
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
-        locked_vmm.transports.insert(translate_id(&name), device);
+        locked_vmm.transports.insert(uid, device);
     }
 
     /// Register device instance to vmm.
@@ -388,10 +392,12 @@ impl MigrationManager {
         T: MigrationHook + Sync + Send + 'static,
     {
         let name = device_desc.name.clone() + "/" + id;
+        let uid = translate_id(&name);
+        info!("Register device '{}' instance name '{}'", name, uid);
         Self::register_device_desc(device_desc);
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
-        locked_vmm.devices.insert(translate_id(&name), device);
+        locked_vmm.devices.insert(uid, device);
     }
 
     /// Register kvm instance to vmm.
@@ -422,10 +428,12 @@ impl MigrationManager {
     where
         T: MigrationHook + Sync + Send + 'static,
     {
+        let uid = translate_id(id);
+        info!("Register gic '{}' instance name '{}'", id, uid);
         Self::register_device_desc(gic_desc);
 
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
-        locked_vmm.gic_group.insert(translate_id(id), gic);
+        locked_vmm.gic_group.insert(uid, gic);
     }
 
     /// Register GPU instance to vmm.
@@ -438,8 +446,10 @@ impl MigrationManager {
     where
         T: MigrationHook + Sync + Send + 'static,
     {
+        let uid = translate_id(id);
+        info!("Register gpu '{}' instance name '{}'", id, uid);
         let mut locked_vmm = MIGRATION_MANAGER.vmm.write().unwrap();
-        locked_vmm.gpus.insert(translate_id(id), gpu);
+        locked_vmm.gpus.insert(uid, gpu);
     }
 
     /// Register migration instance to vmm.

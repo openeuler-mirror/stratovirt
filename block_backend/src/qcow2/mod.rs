@@ -78,7 +78,11 @@ const QCOW2_OFFSET_COMPRESSED: u64 = 1 << 62;
 pub const QCOW2_OFFSET_COPIED: u64 = 1 << 63;
 const MAX_L1_SIZE: u64 = 32 * (1 << 20);
 pub(crate) const DEFAULT_SECTOR_SIZE: u64 = 512;
-pub(crate) const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
+pub const QCOW2_MAX_L1_SIZE: u64 = 1 << 25;
+
+/// Tail preallocation window for `SyncAioInfo::preallocate_file_size`:
+/// each over-extension covers the next 256 MiB of tail allocations.
+const QCOW2_TAIL_PREALLOC_SIZE: u64 = 256 * 1024 * 1024;
 
 // The default flush interval is 30s.
 const DEFAULT_METADATA_FLUSH_INTERVAL: u64 = 30;
@@ -195,7 +199,7 @@ impl SyncAioInfo {
         self.write_buffer(addr, &output)
     }
 
-    pub(crate) fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
+    pub fn read_ctrl_cluster(&mut self, addr: u64, sz: u64) -> Result<Vec<u64>> {
         let mut buf = vec![0; sz as usize];
         let vec_len = size_of::<u64>() * sz as usize;
         let mut vec = vec![0_u8; vec_len];
@@ -218,6 +222,43 @@ impl SyncAioInfo {
         let end = round_up(end, DEFAULT_SECTOR_SIZE)
             .with_context(|| format!("Round up failed, value is {}", end))?;
         self.write_buffer(addr + start, &buf[start as usize..end as usize])
+    }
+
+    /// When `required_end` is past the current `i_size`, over-extend the backing
+    /// file to `required_end + QCOW2_TAIL_PREALLOC_SIZE` and `fsync`. This commits
+    /// `i_size` before the caller's pwrite lands, so a power-loss `i_size`
+    /// reversion cannot make a just-written tail cluster unreachable. The next
+    /// 256M of tail allocations then land inside the committed window and need
+    /// neither `set_len` nor a sync. The over-extension is a sparse hole.
+    /// `fsync` (not `fdatasync`) is used to also commit the extent-map change.
+    pub(crate) fn preallocate_file_size(&self, required_end: u64) -> Result<()> {
+        let file_end = self.file.as_ref().seek(SeekFrom::End(0))?;
+        if required_end > file_end {
+            let target = required_end
+                .checked_add(QCOW2_TAIL_PREALLOC_SIZE)
+                .with_context(|| {
+                    format!(
+                        "preallocate_file_size overflow: required_end={}",
+                        required_end
+                    )
+                })?;
+            // ftruncate grows i_size (sparse hole, no blocks). Do NOT set_len
+            // when required_end <= file_end: ftruncate to a smaller size would truncate.
+            self.file.set_len(target)?;
+            self.file.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// fsync barrier before persisting a metadata pointer: flushes the content
+    /// it references (L2 / refcount block / refcount table) to durable storage
+    /// first. Uses fsync, not fdatasync, since a content write may be a
+    /// fallocate (extent-map change) that fdatasync does not flush. Mandatory
+    /// under buffered IO (avoids a stale pointer on power loss); redundant but
+    /// harmless under O_DIRECT.
+    pub(crate) fn metadata_barrier(&self) -> Result<()> {
+        self.file.sync_all()?;
+        Ok(())
     }
 }
 
@@ -304,6 +345,103 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             )
             .with_context(|| "Failed to load snapshot table")?;
         Ok(())
+    }
+
+    /// Load the snapshot table (public wrapper for the dump-qcow2 command).
+    pub fn dump_load_snapshot_table(&mut self) -> Result<()> {
+        if self.header.nb_snapshots as usize > QCOW2_MAX_SNAPSHOTS {
+            bail!(
+                "Snapshot count {} exceeds the limit {}",
+                self.header.nb_snapshots,
+                QCOW2_MAX_SNAPSHOTS
+            );
+        }
+        self.snapshot.set_cluster_size(self.header.cluster_size());
+
+        // The full snapshot table size can't be known until every entry has been
+        // read (entries are variable-length), so the whole table can't be
+        // range-checked up front. Check the first cluster instead. Snapshots
+        // rarely exceed one cluster in practice.
+        //
+        // TODO: use a more complete check.
+        if self.header.nb_snapshots > 0 {
+            self.dump_check_range(self.header.snapshots_offset, self.header.cluster_size())?;
+        }
+        self.snapshot.load_snapshot_table(
+            self.header.snapshots_offset,
+            self.header.nb_snapshots,
+            false,
+        )?;
+        Ok(())
+    }
+
+    /// Load the refcount table (dump-qcow2 wrapper).
+    pub fn dump_load_refcount_table(&mut self) -> Result<()> {
+        let bytes = u64::from(self.header.refcount_table_clusters)
+            .checked_mul(self.header.cluster_size())
+            .with_context(|| {
+                format!(
+                    "Refcount table clusters {} * cluster size {} overflow",
+                    self.header.refcount_table_clusters,
+                    self.header.cluster_size()
+                )
+            })?;
+        self.dump_check_range(self.header.refcount_table_offset, bytes)?;
+        self.load_refcount_table()
+    }
+
+    /// Validate that a range [offset, offset+size) is cluster-aligned and
+    /// within the file.
+    fn dump_check_range(&mut self, offset: u64, size: u64) -> Result<()> {
+        let cluster_size = self.header.cluster_size();
+        if offset == 0 && size != 0 {
+            bail!("Offset is 0 for a non-empty metadata region");
+        }
+        if !is_aligned(cluster_size, offset) {
+            bail!(
+                "Offset 0x{:x} is not aligned to cluster size {}",
+                offset,
+                cluster_size
+            );
+        }
+        let file_size = self.driver.disk_size()?;
+        let end = offset
+            .checked_add(size)
+            .with_context(|| format!("Offset 0x{:x} + size {} overflow", offset, size))?;
+        if end > file_size {
+            bail!(
+                "Range [0x{:x}, 0x{:x}) is out of file (size 0x{:x})",
+                offset,
+                end,
+                file_size
+            );
+        }
+        Ok(())
+    }
+
+    /// Read `count` 8-byte table entries from disk at the given offset,
+    /// bypassing cache (dump-qcow2 primitive for L1 tables and L2 tables).
+    pub fn dump_read_table_entries(&mut self, offset: u64, count: u64) -> Result<Vec<u64>> {
+        let bytes = count
+            .checked_mul(ENTRY_SIZE)
+            .with_context(|| format!("Entry count {} * {} overflow", count, ENTRY_SIZE))?;
+        self.dump_check_range(offset, bytes)?;
+        self.sync_aio.borrow_mut().read_ctrl_cluster(offset, count)
+    }
+
+    /// Read a raw refcount block from disk at the given offset, bypassing cache.
+    pub fn dump_read_refcount_block(&mut self, block_offset: u64) -> Result<Vec<u16>> {
+        let cluster_size = self.header.cluster_size() as usize;
+        self.dump_check_range(block_offset, cluster_size as u64)?;
+        let mut buf = vec![0u8; cluster_size];
+        self.sync_aio
+            .borrow_mut()
+            .read_buffer(block_offset, &mut buf)?;
+        let mut entries = Vec::with_capacity(cluster_size / 2);
+        for i in (0..cluster_size).step_by(2) {
+            entries.push(BigEndian::read_u16(&buf[i..i + 2]));
+        }
+        Ok(entries)
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -526,6 +664,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(new_l1_table_offset, &new_l1_table)?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Update the message information, includes:
         // entry size of l1 table and active l1 table offset.
@@ -586,6 +725,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
             self.sync_aio
                 .borrow_mut()
                 .write_buffer(new_l2_offset, &l2_cluster)?;
+            self.sync_aio.borrow().metadata_barrier()?;
             let l2_cache_entry = Rc::new(RefCell::new(CacheTable::new(
                 new_l2_offset,
                 l2_cluster,
@@ -791,7 +931,11 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                 size
             );
         }
-        if write_zero && addr < self.driver.disk_size()? {
+        // Commit i_size before the clearing pwrite below: a pwrite past the
+        // current i_size auto-extends it without fsync, so committing first
+        // avoids leaving the tail cluster's i_size uncommitted.
+        self.sync_aio.borrow().preallocate_file_size(addr + size)?;
+        if write_zero {
             let ret = raw_write_zeroes(
                 self.sync_aio.borrow_mut().file.as_raw_fd(),
                 addr as usize,
@@ -804,8 +948,12 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
                     self.sync_aio.borrow_mut().write_buffer(offset, &zero_buf)?;
                 }
             }
+            // Flush the write-zero (fallocate) above. For a recycled cluster
+            // (within committed i_size) preallocate_file_size was a no-op; for a
+            // tail-extending cluster it already fsynced, making this redundant
+            // but harmless.
+            self.sync_aio.borrow().metadata_barrier()?;
         }
-        self.driver.extend_to_len(addr + size)?;
         Ok(addr)
     }
 
@@ -874,6 +1022,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         self.sync_aio
             .borrow_mut()
             .write_ctrl_cluster(new_l1_table_offset, &snap_l1_table)?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Sync active l1 table offset of header to disk.
         let mut new_header = self.header.clone();
@@ -1102,6 +1251,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
         let mut new_header = self.header.clone();
         new_header.snapshots_offset = snapshot_offset;
         new_header.nb_snapshots = (new_header.nb_snapshots as i32 + add) as u32;
+        self.sync_aio.borrow().metadata_barrier()?;
         self.sync_aio
             .borrow_mut()
             .write_buffer(0, &new_header.to_vec())?;
@@ -1153,6 +1303,7 @@ impl<T: Clone + 'static> Qcow2Driver<T> {
 
         // Flush the cache of the refcount block and l1/l2 table.
         self.flush()?;
+        self.sync_aio.borrow().metadata_barrier()?;
 
         // Update snapshot offset and num in qcow2 header.
         let mut new_header = self.header.clone();

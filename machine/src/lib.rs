@@ -153,7 +153,7 @@ use util::loop_context::{
 };
 use util::seccomp::{BpfRule, SeccompOpt, SyscallFilter};
 use util::{
-    bitmap::set_dense_bitmap_bit,
+    bitmap::{bitmap_page_size, set_dense_bitmap_bit},
     unix::{host_page_size, PagemapBatchReader},
 };
 #[cfg(feature = "vfio_device")]
@@ -564,25 +564,64 @@ pub(crate) fn build_mem_mappings(machine_ram: &Region) -> Result<qmp_schema::Mem
 
 pub(crate) fn build_mem_page_state(machine_ram: &Region) -> Result<qmp_schema::MemPageState> {
     let ram_regions = sorted_ram_regions(machine_ram);
-    let page_size = host_page_size();
+    let base_page_size = host_page_size();
+    let page_size = bitmap_page_size(ram_regions.iter().map(region_page_size), base_page_size)?;
+    let entries_per_page = page_size / base_page_size;
     let mut pagemap = PagemapBatchReader::new()?;
-
     let mut page_base = 0_u64;
     let mut resident = Vec::new();
     let mut empty = Vec::new();
     for region in ram_regions {
         let size = region.size();
-        let page_count = size.div_ceil(page_size);
+        let mapping_page_size = region_page_size(&region);
+        if mapping_page_size < page_size
+            || !mapping_page_size.is_multiple_of(page_size)
+            || size % page_size != 0
+        {
+            bail!(
+                "RAM mapping is not aligned to bitmap page size {}",
+                page_size
+            );
+        }
+        let page_count = size / page_size;
+        if page_count == 0 {
+            continue;
+        }
         // SAFETY: `sorted_ram_regions()` only returns RAM regions from the
         // address space. The returned host address is validated below before
-        // being passed to pagemap scanning.
+        // being queried for residency.
         let base_host_virt_addr = unsafe { region.get_host_address(AddressAttr::Ram) }
             .with_context(|| format!("RAM region {} has no host address", region.name))?;
 
-        pagemap.scan_range(base_host_virt_addr, size, page_size, |page_index, entry| {
-            if !entry.is_resident() {
+        let mut mincore_resident = vec![0_u8; usize::try_from(size / base_page_size)?];
+        // SAFETY: the RAM region owns this page-aligned mapping, and the
+        // output vector has one byte for every host page in the range.
+        let ret = unsafe {
+            libc::mincore(
+                base_host_virt_addr as *mut libc::c_void,
+                usize::try_from(size)?,
+                mincore_resident.as_mut_ptr(),
+            )
+        };
+        if ret != 0 {
+            bail!(
+                "RAM page-state mincore failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        // Read pagemap in base-page batches, sampling the first entry of each
+        // bitmap page. Swapped ordinary pages still hold snapshot data and
+        // must be read back before zero-page classification.
+        pagemap.scan_range(base_host_virt_addr, size, base_page_size, |index, entry| {
+            // HugeTLB migration entries can lack both pagemap present and swapped
+            // bits. mincore still reports these pages as resident.
+            if index % entries_per_page != 0
+                || !(entry.is_resident() || mincore_resident[index as usize] & 1 != 0)
+            {
                 return Ok(());
             }
+            let page_index = index / entries_per_page;
             let bitmap_index = page_base
                 .checked_add(page_index)
                 .with_context(|| "resident bitmap index overflow")?;
@@ -783,9 +822,11 @@ pub trait MachineOps: MachineLifecycle {
     fn create_machine_ram(&self, mem_config: &MachineMemConfig, thread_num: u8) -> Result<()> {
         let root = self.get_vm_ram();
         let numa_nodes = self.get_numa_nodes();
+        let migrate = self.get_migrate_info();
+        let skip_prealloc = migrate.mode == MigrateMode::File && migrate.uffd_sock.is_some();
 
         if numa_nodes.is_none() || mem_config.membackend_objs.is_none() {
-            let default_mem = create_default_mem(mem_config, thread_num)?;
+            let default_mem = create_default_mem(mem_config, thread_num, skip_prealloc)?;
             root.add_subregion_not_update(default_mem, 0_u64)?;
             return Ok(());
         }
@@ -794,7 +835,12 @@ pub trait MachineOps: MachineLifecycle {
         for node in numa_nodes.as_ref().unwrap().iter() {
             for mb_obj in mb_objs.iter() {
                 if mb_obj.id.eq(&node.1.mem_dev) {
-                    let ram = create_backend_mem(mb_obj, thread_num)?;
+                    let ram = create_backend_mem(
+                        mb_obj,
+                        thread_num,
+                        mem_config.hugepages,
+                        skip_prealloc,
+                    )?;
                     root.add_subregion_not_update(ram, offset)?;
                     offset = offset
                         .checked_add(mb_obj.size)

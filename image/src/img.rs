@@ -11,8 +11,10 @@
 // See the Mulan PSL v2 for more details.
 
 use std::{
+    cell::RefCell,
     fs::File,
-    os::unix::prelude::{FileExt, OpenOptionsExt},
+    mem::size_of,
+    os::unix::prelude::{FileExt, MetadataExt, OpenOptionsExt},
     str::FromStr,
     sync::Arc,
 };
@@ -21,7 +23,16 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::{cmdline::ArgsParse, BINARY_NAME};
 use block_backend::{
-    qcow2::{header::QcowHeader, InternalSnapshotOps, Qcow2Driver, SyncAioInfo},
+    qcow2::{
+        header::QcowHeader,
+        is_aligned,
+        snapshot::{QcowSnapshotHeader, SNAPSHOT_EXTRA_DATA_LEN_16, SNAPSHOT_EXTRA_DATA_LEN_24},
+        table::Qcow2ClusterType,
+        InternalSnapshotOps, Qcow2Driver, SyncAioInfo, ENTRY_SIZE, L1_RESERVED_MASK,
+        L1_TABLE_OFFSET_MASK, L2_STD_RESERVED_MASK, L2_TABLE_OFFSET_MASK, QCOW2_MAX_L1_SIZE,
+        QCOW2_OFFSET_COPIED, QCOW2_OFLAG_ZERO, REFCOUNT_TABLE_OFFSET_MASK,
+        REFCOUNT_TABLE_RESERVED_MASK,
+    },
     raw::RawDriver,
     BlockAllocStatus, BlockDriverOps, BlockProperty, CheckResult, CreateOptions, ImageInfo,
     FIX_ERRORS, FIX_LEAKS, NO_FIX, SECTOR_SIZE,
@@ -30,6 +41,7 @@ use machine_manager::config::{memory_unit_conversion, DiskFormat};
 use util::{
     aio::{buffer_is_zero, Aio, AioEngine, Iovec, WriteZeroesState},
     file::{lock_file, open_file, unlock_file},
+    num_ops::round_up,
 };
 
 enum SnapshotOperation {
@@ -38,6 +50,23 @@ enum SnapshotOperation {
     Apply,
     List,
     Rename,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DumpVerbosity {
+    Summary,
+    Verbose,
+    Full,
+}
+
+/// One dump-qcow2 invocation: the parsed options, the opened qcow2 driver,
+/// and the metadata shared by all dump methods.
+struct Qcow2DumpArg {
+    img_path: String,
+    verbosity: DumpVerbosity,
+    /// Logical file size, the EOF baseline for offset anomaly checks.
+    file_size: u64,
+    driver: Qcow2Driver<()>,
 }
 
 pub struct ImageFile {
@@ -227,6 +256,480 @@ pub(crate) fn image_create(args: Vec<String>) -> Result<()> {
     image_do_create(&create_options, true)?;
 
     Ok(())
+}
+
+/// Parsed snapshot-table information: the (l1_table_offset, l1_size) of every snapshot
+/// that survived the parse (l1_list.len()) and the number of clusters the table
+/// occupies.
+struct SnapshotTableInfo {
+    l1_list: Vec<(u64, u32)>,
+    table_clusters: u64,
+}
+
+/// A qcow2 image whose tail clusters may have been lost to host-file truncation.
+/// Bundles the state the metadata walks need; `max_end` accumulates the minimum file
+/// length covering every referenced metadata cluster (initialized to the head cluster).
+struct TailLostQcow2 {
+    sync_aio: RefCell<SyncAioInfo>,
+    file: Arc<File>,
+    header: QcowHeader,
+    file_size: u64,
+    cluster_size: u64,
+    max_end: u64,
+    snap_info: Option<SnapshotTableInfo>,
+}
+
+impl TailLostQcow2 {
+    /// Open the image and read the header, the file size and the cluster geometry.
+    /// A tail-truncated image still has a valid header (truncation never rewrites it).
+    fn new(file: Arc<File>, conf: &BlockProperty) -> Result<Self> {
+        let mut hdr_buf = vec![0_u8; QcowHeader::len()];
+        file.read_at(&mut hdr_buf, 0)
+            .with_context(|| "Failed to read qcow2 header")?;
+        let header =
+            QcowHeader::from_vec(&hdr_buf).with_context(|| "Failed to parse qcow2 header")?;
+        if header.version != 3 {
+            bail!("tailappend only supports qcow2 version 3 images");
+        }
+        // The driver validates the header through load_metadata(); tailappend bypasses
+        // it, so run the same check here: every walk below trusts the header's offsets,
+        // sizes and cluster_bits, and a corrupt header would otherwise turn into a
+        // bogus (possibly huge or overflowing) file extension instead of an error.
+        header
+            .check()
+            .context("tailappend: qcow2 header failed validation")?;
+        let file_size = file
+            .metadata()
+            .with_context(|| "Failed to stat qcow2 file")?
+            .len();
+        let cluster_size = header.cluster_size();
+        let sync_aio = RefCell::new(
+            SyncAioInfo::new(file.clone(), conf.clone())
+                .with_context(|| "Failed to create sync aio for metadata reads")?,
+        );
+        Ok(Self {
+            sync_aio,
+            file,
+            header,
+            file_size,
+            cluster_size,
+            // Head cluster.
+            max_end: cluster_size,
+            snap_info: None,
+        })
+    }
+
+    /// Extend self.max_end to cover the byte range [off, off + len) if it lies
+    /// beyond it. The addition is checked: an overflowing range is corruption,
+    /// not tail loss, and is an error.
+    fn cover_range(&mut self, off: u64, len: u64, what: &str) -> Result<()> {
+        let end = off
+            .checked_add(len)
+            .with_context(|| format!("{} end overflow ({:#x} + {:#x})", what, off, len))?;
+        if end > self.max_end {
+            self.max_end = end;
+        }
+        Ok(())
+    }
+
+    /// Walk one L2 table and extend self.max_end to cover every data cluster it
+    /// references. Each entry is validated before it is followed: a reserved bit set or
+    /// a misaligned host offset is corruption, not tail loss, and is an error.
+    fn walk_l2_table(&mut self, l2_off: u64) -> Result<()> {
+        let l2_entries = self.cluster_size / ENTRY_SIZE;
+        let l2_buf = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(l2_off, l2_entries)
+            .with_context(|| format!("Failed to read L2 table at {:#x}", l2_off))?;
+        for (idx, &l2_entry) in l2_buf.iter().enumerate() {
+            let cluster_type = Qcow2ClusterType::get_cluster_type(l2_entry);
+            if cluster_type != Qcow2ClusterType::Compressed && l2_entry & L2_STD_RESERVED_MASK != 0
+            {
+                bail!(
+                    "L2 entry {:#x}:{} has reserved bits set: {:#X}",
+                    l2_off,
+                    idx,
+                    l2_entry
+                );
+            }
+            match cluster_type {
+                Qcow2ClusterType::Normal | Qcow2ClusterType::ZeroAlloc => {
+                    let data_cluster_offset = l2_entry & L2_TABLE_OFFSET_MASK;
+                    if !is_aligned(self.cluster_size, data_cluster_offset) {
+                        bail!(
+                            "L2 entry {:#x}:{} host offset {:#X} is not cluster aligned",
+                            l2_off,
+                            idx,
+                            data_cluster_offset
+                        );
+                    }
+                    self.cover_range(data_cluster_offset, self.cluster_size, "Data cluster")?;
+                }
+                Qcow2ClusterType::Compressed => {
+                    bail!("Compressed is not supported");
+                }
+                // Unallocated / ZeroPlain: no host cluster referenced.
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Walk one L1 table and extend self.max_end to cover the L1 region itself, every
+    /// L2 table it points at, and every data cluster those L2 tables reference. Called
+    /// for both the active L1 table and every snapshot's L1 table. A table beyond EOF
+    /// is tail loss: only the in-file prefix is read (a fully-lost table has nothing to
+    /// walk). Every in-file entry is validated before it is followed; a bad entry is
+    /// corruption, not tail loss, and is an error. An entry pointing beyond EOF is
+    /// expected tail loss: self.max_end is extended over the lost L2 table and the walk
+    /// stops there.
+    fn walk_l1_table(&mut self, l1_off: u64, l1_size: u32) -> Result<()> {
+        if l1_off == 0 || l1_size == 0 {
+            return Ok(());
+        }
+
+        let l1_clusters_bytes = round_up(u64::from(l1_size) * ENTRY_SIZE, self.cluster_size)
+            .context("L1 table size overflow")?;
+        self.cover_range(l1_off, l1_clusters_bytes, "L1 table")?;
+
+        // Fully beyond EOF: the whole table was lost; nothing to walk.
+        if l1_off >= self.file_size {
+            return Ok(());
+        }
+        // Partly beyond EOF: read only the in-file prefix.
+        let read_entries = ((self.file_size - l1_off) / ENTRY_SIZE).min(u64::from(l1_size));
+
+        let l1_buf = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(l1_off, read_entries)
+            .with_context(|| {
+                format!(
+                    "Failed to read L1 table at {:#x} ({} entries)",
+                    l1_off, read_entries
+                )
+            })?;
+        for (idx, &l1_entry) in l1_buf.iter().enumerate() {
+            // Stricter than check_refcounts_l1 (which records the corruption and
+            // continues): reserved bits in an L1 entry are corruption, not tail
+            // loss, and abort the walk.
+            if l1_entry & L1_RESERVED_MASK != 0 {
+                bail!(
+                    "L1 entry {} at {:#x} has reserved bits set: {:#X}",
+                    idx,
+                    l1_off,
+                    l1_entry
+                );
+            }
+            let l2_off = l1_entry & L1_TABLE_OFFSET_MASK;
+            if l2_off == 0 {
+                continue;
+            }
+            if !is_aligned(self.cluster_size, l2_off) {
+                bail!(
+                    "L1 entry {} at {:#x}: L2 table offset {:#X} is not cluster aligned",
+                    idx,
+                    l1_off,
+                    l2_off
+                );
+            }
+            // The L2 table is lost to tail truncation: extend over it and stop
+            // -- its entries are gone, so there is nothing left to walk.
+            if l2_off >= self.file_size {
+                self.cover_range(l2_off, self.cluster_size, "L2 table")?;
+                continue;
+            }
+            self.walk_l2_table(l2_off)?;
+        }
+        Ok(())
+    }
+
+    /// Parse the snapshot table described by the header.
+    ///
+    /// `l1_list.len()` is the number of snapshots that survived the parse.
+    /// tail truncation can only lose a trailing suffix of entries,
+    /// so an entry whose header or body runs past EOF just ends the
+    /// table. Returns `None` when the whole table is lost (its start lies beyond EOF).
+    /// An entry fully inside the file but with garbage fields is real corruption.
+    ///
+    /// Note:
+    /// This is the mirror of function `InternalSnapshot::load_snapshot_table`:
+    /// the on-disk format rules (entry layout, extra_data_size / id_str_size
+    /// validation, 8-byte alignment) are defined there -- this is their shadow
+    /// copy. Keep the two in sync: change a rule there and the same rule must
+    /// change here, or the surviving prefix would no longer match what the
+    /// real loader accepts.
+    fn parse_snapshot_table(&self) -> Result<Option<SnapshotTableInfo>> {
+        let snapshots_offset = self.header.snapshots_offset;
+        if snapshots_offset >= self.file_size {
+            return Ok(None);
+        }
+        // The table base comes from the header, which header.check() does not cover.
+        if !is_aligned(self.cluster_size, snapshots_offset) {
+            bail!(
+                "Snapshot table offset {:#X} is not cluster aligned",
+                snapshots_offset
+            );
+        }
+
+        let header_size = size_of::<QcowSnapshotHeader>() as u64;
+        let mut l1_list: Vec<(u64, u32)> = Vec::new();
+        let mut cur = snapshots_offset;
+        for i in 0..self.header.nb_snapshots {
+            // Entry header runs past EOF: lost to tail truncation.
+            let hdr_end = cur
+                .checked_add(header_size)
+                .context("snapshot entry offset overflow")?;
+            if hdr_end > self.file_size {
+                break;
+            }
+            let mut hbuf = vec![0_u8; header_size as usize];
+            self.file
+                .read_at(&mut hbuf, cur)
+                .with_context(|| format!("read snapshot header error(addr {:#x})", cur))?;
+            let header = QcowSnapshotHeader::from_vec(&hbuf)?;
+
+            if ![SNAPSHOT_EXTRA_DATA_LEN_16, SNAPSHOT_EXTRA_DATA_LEN_24]
+                .contains(&(header.extra_date_size as usize))
+            {
+                bail!(
+                    "too much extra metadata in snapshot table entry {} ({} bytes)",
+                    i,
+                    header.extra_date_size
+                );
+            }
+            // The header is fully in-file, so a zero id size is real corruption.
+            if header.id_str_size == 0 {
+                bail!("invalid snapshot id size 0 (zeroed snapshot table)");
+            }
+
+            // Entries are aligned to 8 bytes, zero-padded, per the qcow2 spec.
+            let entry_size = round_up(
+                header_size
+                    + u64::from(header.extra_date_size)
+                    + u64::from(header.id_str_size)
+                    + u64::from(header.name_size),
+                u8::BITS as u64,
+            )
+            .context("snapshot entry size overflow")?;
+            // Entry body runs past EOF: lost to tail truncation.
+            let entry_end = cur
+                .checked_add(entry_size)
+                .context("snapshot entry offset overflow")?;
+            if entry_end > self.file_size {
+                break;
+            }
+            l1_list.push((header.l1_table_offset, header.l1_size));
+            cur = entry_end;
+        }
+
+        // Size the table in whole clusters: qcow2 allocates (and tailappend
+        // re-extends) space cluster-granularly.
+        let table_clusters = round_up(cur - snapshots_offset, self.cluster_size)
+            .context("snapshot table size overflow")?
+            / self.cluster_size;
+        Ok(Some(SnapshotTableInfo {
+            l1_list,
+            table_clusters,
+        }))
+    }
+
+    /// Walk the refcount table described by the header and extend self.max_end to
+    /// cover the table region itself and every refcount block it points at. Same
+    /// EOF-aware pattern as walk_l1_table: only the in-file prefix is read, and a
+    /// block entry beyond EOF just extends self.max_end over the lost block.
+    fn walk_refcount_table(&mut self) -> Result<()> {
+        let rt_off = self.header.refcount_table_offset;
+        let rt_clusters = self.header.refcount_table_clusters;
+        if rt_off == 0 || rt_clusters == 0 {
+            return Ok(());
+        }
+        let rt_bytes = u64::from(rt_clusters) * self.cluster_size;
+        self.cover_range(rt_off, rt_bytes, "Refcount table")?;
+
+        // Fully beyond EOF: the whole table was lost; nothing to walk.
+        if rt_off >= self.file_size {
+            return Ok(());
+        }
+        // Partly beyond EOF: read only the in-file prefix (entries in the lost suffix
+        // read back as zero and would contribute nothing).
+        let read_entries = ((self.file_size - rt_off) / ENTRY_SIZE).min(rt_bytes / ENTRY_SIZE);
+
+        let rt_buf = self
+            .sync_aio
+            .borrow_mut()
+            .read_ctrl_cluster(rt_off, read_entries)
+            .with_context(|| {
+                format!(
+                    "Failed to read refcount table at {:#x} ({} entries)",
+                    rt_off, read_entries
+                )
+            })?;
+        for rte in rt_buf {
+            if rte & REFCOUNT_TABLE_RESERVED_MASK != 0 {
+                bail!("Refcount table entry {:#X} has reserved bits set", rte);
+            }
+            let rb_off = rte & REFCOUNT_TABLE_OFFSET_MASK;
+            if rb_off != 0 {
+                if !is_aligned(self.cluster_size, rb_off) {
+                    bail!("Refcount block address not aligned {:#x}", rb_off);
+                }
+                self.cover_range(rb_off, self.cluster_size, "Refcount block")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compute the minimum file length covering every metadata cluster referenced by
+    /// the header (active tree, refcounts, and -- when still intact -- the snapshot
+    /// table and each snapshot's tree). The result is left in self.max_end,
+    /// rounded up to whole clusters.
+    fn compute_intended_size(&mut self) -> Result<()> {
+        // Active L1 table -> L2 tables -> data clusters.
+        self.walk_l1_table(self.header.l1_table_offset, self.header.l1_size)?;
+
+        // Refcount table -> refcount blocks.
+        self.walk_refcount_table()?;
+
+        // Snapshot table + each snapshot's L1/L2/data (a lost snapshot table was
+        // already dropped by the caller).
+        if let Some(info) = self.snap_info.take() {
+            if self.header.snapshots_offset != 0 && self.header.nb_snapshots > 0 {
+                // Snapshot table.
+                self.cover_range(
+                    self.header.snapshots_offset,
+                    info.table_clusters * self.cluster_size,
+                    "Snapshot table",
+                )?;
+            }
+            // Snapshot L1 table -> Snapshot L2 tables -> Snapshot data clusters.
+            for &(snap_l1_off, snap_l1_size) in &info.l1_list {
+                if !is_aligned(self.cluster_size, snap_l1_off) {
+                    bail!(
+                        "Snapshot L1 table offset {:#X} is not cluster aligned",
+                        snap_l1_off
+                    );
+                }
+                if u64::from(snap_l1_size) > QCOW2_MAX_L1_SIZE / ENTRY_SIZE {
+                    bail!("Snapshot L1 table too large: {} entries", snap_l1_size);
+                }
+                self.walk_l1_table(snap_l1_off, snap_l1_size)?;
+            }
+            self.snap_info = Some(info);
+        }
+
+        self.max_end =
+            round_up(self.max_end, self.cluster_size).context("get max file size overflow")?;
+        Ok(())
+    }
+}
+
+/// Append zero clusters at the tail of a qcow2 image whose tail clusters were lost
+/// (host file truncated, e.g. on power loss): cover every metadata reference that now
+/// dangles beyond EOF, then rebuild refcounts and fix leaks inline (equivalent to
+/// `check -r all`; no separate check run is needed afterwards).
+/// Lost cluster contents are not recovered (they become zeros).
+pub(crate) fn image_tail_append(args: Vec<String>) -> Result<()> {
+    let mut arg_parser = ArgsParse::create(vec!["h", "help"], vec![], vec![]);
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    let path = match arg_parser.free.len() {
+        0 => bail!("tailappend requires a filename"),
+        1 => arg_parser.free[0].clone(),
+        _ => bail!("Unexpected argument: {}", arg_parser.free[1]),
+    };
+
+    let image_file = ImageFile::create(&path, false)?;
+    let file = image_file.file.clone();
+    let conf = BlockProperty {
+        format: DiskFormat::Qcow2,
+        ..Default::default()
+    };
+
+    // 1) Open the image and load the header / file size / cluster geometry.
+    let mut tl_qcow2 = TailLostQcow2::new(file.clone(), &conf)?;
+
+    // 2) Snapshot-table tail loss: a truncated table loses a trailing suffix of its
+    //    sequentially laid-out entries, so keep the surviving prefix (l1_list.len())
+    //    and only shrink nb_snapshots in the header when entries were lost. Only when
+    //    the table start itself lies beyond EOF are all snapshots dropped.
+    let orig_nb_snapshots = tl_qcow2.header.nb_snapshots;
+    if tl_qcow2.header.nb_snapshots > 0 && tl_qcow2.header.snapshots_offset != 0 {
+        match tl_qcow2.parse_snapshot_table()? {
+            Some(info) => {
+                let kept = info.l1_list.len() as u32;
+                if kept < orig_nb_snapshots {
+                    tl_qcow2.header.nb_snapshots = kept;
+                    file.write_at(&tl_qcow2.header.to_vec(), 0)
+                        .with_context(|| "Failed to shrink nb_snapshots in header")?;
+                    println!(
+                        "tailappend: snapshot table was lost beyond EOF; kept {} of {} snapshot(s) (lost ones unrecoverable)",
+                        kept, orig_nb_snapshots
+                    );
+                }
+                tl_qcow2.snap_info = Some(info);
+            }
+            None => {
+                // Rewrite the whole header, the way the driver persists header updates.
+                tl_qcow2.header.nb_snapshots = 0;
+                tl_qcow2.header.snapshots_offset = 0;
+                file.write_at(&tl_qcow2.header.to_vec(), 0)
+                    .with_context(|| "Failed to drop snapshots from header")?;
+                println!(
+                    "tailappend: snapshot table was lost beyond EOF; dropped {} snapshot(s) from header (unrecoverable)",
+                    orig_nb_snapshots
+                );
+            }
+        }
+    }
+
+    // 3) Compute the minimum file length covering all referenced metadata.
+    tl_qcow2.compute_intended_size()?;
+
+    // 4) Append zero clusters at the tail to cover whatever was lost beyond EOF.
+    // There is no sound upper bound to validate max_end against: an in-file,
+    // aligned, reserved-bit-free metadata reference is indistinguishable from
+    // real tail loss (the file may have grown far beyond its current size in
+    // the past via snapshot COW and later deletion). A corrupt entry that
+    // survives all per-entry checks therefore gets extended over as-is; at
+    // worst this enlarges the (sparse) file size, nothing else is affected.
+    let final_size = if tl_qcow2.max_end > tl_qcow2.file_size {
+        file.set_len(tl_qcow2.max_end)
+            .with_context(|| format!("Failed to extend qcow2 file to {:#X}", tl_qcow2.max_end))?;
+        if let Err(e) = file.sync_all() {
+            println!("Failed to set len sync '{}': {:?}", path, e);
+        }
+        tl_qcow2.max_end
+    } else {
+        println!("tailappend: nothing to extend, image already covers all references");
+        tl_qcow2.file_size
+    };
+    let added_clusters = (final_size - tl_qcow2.file_size) / tl_qcow2.cluster_size;
+    println!(
+        "tailappend: file size {:#X} -> {:#X} bytes, extended {} cluster(s) ({} bytes)",
+        tl_qcow2.file_size,
+        final_size,
+        added_clusters,
+        final_size - tl_qcow2.file_size
+    );
+
+    // 5) Rebuild refcounts / fix leaks so the image is fully consistent.
+    let mut qcow2_driver = create_qcow2_driver_for_check(file.clone(), conf)
+        .with_context(|| "Failed to create qcow2 driver for check")?;
+    let mut check_res = CheckResult::default();
+    let fix = FIX_LEAKS | FIX_ERRORS;
+    let ret = qcow2_driver.check_image(&mut check_res, false, fix);
+    print!("{}", check_res.collect_check_message());
+    if let Err(e) = file.sync_all() {
+        println!("Failed to fsync in the end '{}': {:?}", path, e);
+    }
+    ret
 }
 
 pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
@@ -818,6 +1321,598 @@ pub(crate) fn print_version() {
     )
 }
 
+// ========== dump-qcow2 helpers ==========
+
+fn format_size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    const TIB: u64 = GIB * 1024;
+    if bytes >= TIB {
+        format!("{:.2} TiB", bytes as f64 / TIB as f64)
+    } else if bytes >= GIB {
+        format!("{:.2} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.2} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.2} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// Format a (seconds, nanoseconds) timestamp pair, e.g.
+/// "2026-08-31 15:30:24.924000000".
+fn format_time(secs: i64, nsecs: i64) -> String {
+    let [y, mo, dy, h, mi, s] = util::time::get_format_time(secs);
+    format!(
+        "{}-{:02}-{:02} {:02}:{:02}:{:02}.{:09}",
+        y, mo, dy, h, mi, s, nsecs
+    )
+}
+
+/// Return a short anomaly tag if the offset is misaligned or past EOF,
+/// or an empty string when plausible.
+fn offset_anomaly(cluster_size: u64, file_end: u64, offset: u64) -> String {
+    if offset == 0 {
+        // Valid "unallocated" marker, not an anomaly.
+        return String::new();
+    }
+    if !is_aligned(cluster_size, offset) {
+        return format!("!misaligned(0x{:x})", offset & (cluster_size - 1));
+    }
+    if offset >= file_end {
+        return format!("!past-EOF(file_end=0x{:x})", file_end);
+    }
+    String::new()
+}
+
+impl Qcow2DumpArg {
+    /// Open the image, validate it is qcow2, and load the header and
+    /// table/refcount info. Returns ready to dump.
+    fn new(img_path: String, verbosity: DumpVerbosity) -> Result<Self> {
+        let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
+        let image_file = ImageFile::create(&img_path, true)?;
+        let detect_fmt = image_file.detect_img_format()?;
+        if detect_fmt != DiskFormat::Qcow2 {
+            bail!(
+                "dump-qcow2 only supports qcow2 format images. Detected format: {:?}",
+                detect_fmt
+            );
+        }
+
+        let conf = BlockProperty {
+            format: DiskFormat::Qcow2,
+            ..Default::default()
+        };
+        let mut driver = Qcow2Driver::new(image_file.file.clone(), aio, conf.clone())?;
+
+        driver
+            .load_header()
+            .with_context(|| "Failed to load qcow2 header")?;
+        driver
+            .header
+            .check()
+            .with_context(|| "Invalid qcow2 header")?;
+        driver.table.init_table_info(&driver.header, &conf)?;
+        driver.refcount.init_refcount_info(&driver.header, &conf);
+
+        let file_size = driver
+            .driver
+            .disk_size()
+            .with_context(|| format!("Failed to get file size of {}", img_path))?;
+
+        Ok(Self {
+            img_path,
+            verbosity,
+            file_size,
+            driver,
+        })
+    }
+
+    /// Run the whole dump: file info, header, L1/L2 tables, refcount
+    /// table/blocks, then snapshots. Sections other than the header tolerate
+    /// load failures — the error is printed and the dump continues.
+    fn dump(&mut self) -> Result<()> {
+        self.dump_file_info()?;
+
+        self.dump_header()?;
+
+        match self.driver.dump_read_table_entries(
+            self.driver.header.l1_table_offset,
+            u64::from(self.driver.header.l1_size),
+        ) {
+            Ok(l1_table) => {
+                self.dump_l1_table(&l1_table, "", "L1 Table");
+                self.dump_l2_tables(&l1_table, "", "L2 Table");
+            }
+            Err(e) => {
+                println!(
+                    "=== L1 Table ===\n[ERROR: failed to read L1 table: {:?}]\n",
+                    e
+                );
+            }
+        }
+
+        match self.driver.dump_load_refcount_table() {
+            Ok(()) => {
+                self.dump_refcount_table()?;
+                self.dump_refcount_blocks();
+            }
+            Err(e) => {
+                println!(
+                    "=== Refcount Table ===\n[ERROR: failed to load refcount table: {:?}]\n",
+                    e
+                );
+            }
+        }
+
+        match self.driver.dump_load_snapshot_table() {
+            Ok(()) => {
+                self.dump_snapshots_text();
+            }
+            Err(e) => {
+                println!(
+                    "=== Snapshot Table ===\n[ERROR: failed to load snapshot table: {:?}]\n",
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Print file-level info (stat-style: sizes, owner, timestamps).
+    fn dump_file_info(&self) -> Result<()> {
+        let meta = std::fs::metadata(&self.img_path)
+            .with_context(|| format!("Failed to stat image file {}", self.img_path))?;
+        let dev = (meta.dev() >> 8, meta.dev() & 0xff);
+        let rdev = (meta.rdev() >> 8, meta.rdev() & 0xff);
+        let virtual_size = meta.size();
+        let actual_size = meta.blocks() * SECTOR_SIZE;
+
+        println!("=== Image File ===");
+        println!("Image path:       {}", self.img_path);
+        println!("Device:           {},{}", dev.0, dev.1);
+        println!("Inode:            {}", meta.ino());
+        println!("Links:            {}", meta.nlink());
+        println!("Access:           0o{:o}", meta.mode());
+        println!("Uid:              {} ({})", meta.uid(), meta.uid());
+        println!("Gid:              {} ({})", meta.gid(), meta.gid());
+        println!("Device type:      {},{}", rdev.0, rdev.1);
+        println!(
+            "Virtual size:     {} ({} bytes)",
+            format_size(virtual_size),
+            virtual_size
+        );
+        println!(
+            "Actual size:      {} ({} bytes)",
+            format_size(actual_size),
+            actual_size
+        );
+        println!("Block size:       {}", meta.blksize());
+        println!(
+            "Blocks:           {} ({} bytes on disk)",
+            meta.blocks(),
+            actual_size
+        );
+        println!(
+            "Access:           {}",
+            format_time(meta.atime(), meta.atime_nsec())
+        );
+        println!(
+            "Modify:           {}",
+            format_time(meta.mtime(), meta.mtime_nsec())
+        );
+        println!(
+            "Change:           {}",
+            format_time(meta.ctime(), meta.ctime_nsec())
+        );
+        println!();
+
+        Ok(())
+    }
+
+    fn dump_header(&self) -> Result<()> {
+        let h = &self.driver.header;
+        println!("=== QCOW2 Header ===");
+        println!("Image path:               {}", self.img_path);
+        println!("Magic:                    0x{:08x} (QFI\\xfb)", h.magic);
+        println!("Version:                  {}", h.version);
+        println!("Backing file offset:      0x{:016x}", h.backing_file_offset);
+        println!("Backing file size:        {}", h.backing_file_size);
+        println!("Cluster bits:             {}", h.cluster_bits);
+        println!(
+            "Cluster size:             {} ({} bytes)",
+            format_size(h.cluster_size()),
+            h.cluster_size()
+        );
+        println!(
+            "Virtual size:             {} ({} bytes)",
+            format_size(h.size),
+            h.size
+        );
+        println!(
+            "Crypt method:             {} ({})",
+            h.crypt_method,
+            match h.crypt_method {
+                0 => "None",
+                _ => "Unknown",
+            }
+        );
+        println!("L1 size:                  {}", h.l1_size);
+        println!("L1 table offset:          0x{:016x}", h.l1_table_offset);
+        println!(
+            "Refcount table offset:    0x{:016x}",
+            h.refcount_table_offset
+        );
+        println!("Refcount table clusters:  {}", h.refcount_table_clusters);
+        println!("Number of snapshots:      {}", h.nb_snapshots);
+        println!("Snapshots offset:         0x{:016x}", h.snapshots_offset);
+        if h.version >= 3 {
+            println!(
+                "Incompatible features:    0x{:016x}",
+                h.incompatible_features
+            );
+            println!("Compatible features:      0x{:016x}", h.compatible_features);
+            println!("Autoclear features:       0x{:016x}", h.autoclear_features);
+            println!(
+                "Refcount order:           {} ({}-bit refcounts)",
+                h.refcount_order,
+                1u32 << h.refcount_order
+            );
+            println!("Header length:            {}", h.header_length);
+        }
+        println!();
+        Ok(())
+    }
+}
+
+impl Qcow2DumpArg {
+    /// Print the rows of an L1 table (active or snapshot); `indent` prefixes
+    /// each line. Skips zero entries unless verbosity is Full.
+    fn print_l1_table(&self, l1_table: &[u64], indent: &str) {
+        let cluster_size = self.driver.header.cluster_size();
+        println!(
+            "{}{:<8} {:<20} {:<20} {:<10} {:<10} {:<20}",
+            indent, "Index", "Raw Value", "L2 Offset", "Copied", "Reserved", "Anomaly"
+        );
+        for (i, entry) in l1_table.iter().enumerate() {
+            if *entry == 0 && self.verbosity != DumpVerbosity::Full {
+                continue;
+            }
+            let l2_offset = entry & L1_TABLE_OFFSET_MASK;
+            let copied = entry & QCOW2_OFFSET_COPIED != 0;
+            let reserved = entry & L1_RESERVED_MASK != 0;
+            let anomaly = offset_anomaly(cluster_size, self.file_size, l2_offset);
+            println!(
+                "{}{:<8} 0x{:016x}    0x{:016x}    {:<10} {:<10} {}",
+                indent, i, entry, l2_offset, copied, reserved, anomaly
+            );
+        }
+    }
+
+    /// Print one L2 table: the type-count summary line and, in Verbose/Full
+    /// mode, the per-entry rows.
+    fn print_l2_table(
+        &self,
+        l2_table: &[u64],
+        l1_idx: usize,
+        l2_offset: u64,
+        indent: &str,
+        label: &str,
+    ) {
+        let cluster_size = self.driver.header.cluster_size();
+        let mut unallocated = 0u64;
+        let mut zero_plain = 0u64;
+        let mut zero_alloc = 0u64;
+        let mut normal = 0u64;
+        let mut compressed = 0u64;
+        for entry in l2_table {
+            match Qcow2ClusterType::get_cluster_type(*entry) {
+                Qcow2ClusterType::Unallocated => unallocated += 1,
+                Qcow2ClusterType::ZeroPlain => zero_plain += 1,
+                Qcow2ClusterType::ZeroAlloc => zero_alloc += 1,
+                Qcow2ClusterType::Normal => normal += 1,
+                Qcow2ClusterType::Compressed => compressed += 1,
+            }
+        }
+        println!(
+            "{}{} [L1 index={}, offset=0x{:016x}]:",
+            indent, label, l1_idx, l2_offset
+        );
+        println!(
+            "{}  Entries: {} | Unallocated: {} | ZeroPlain: {} | ZeroAlloc: {} | Normal: {} | Compressed: {}",
+            indent, l2_table.len(), unallocated, zero_plain, zero_alloc, normal, compressed
+        );
+
+        if self.verbosity == DumpVerbosity::Summary {
+            return;
+        }
+        println!(
+            "{}  {:<8} {:<20} {:<14} {:<20} {:<8} {:<6} {:<20}",
+            indent,
+            "Index",
+            "Raw Value",
+            "Cluster Type",
+            "Host Offset",
+            "Copied",
+            "Zero",
+            "Anomaly"
+        );
+        for (l2_idx, entry) in l2_table.iter().enumerate() {
+            let cluster_type = Qcow2ClusterType::get_cluster_type(*entry);
+            if self.verbosity == DumpVerbosity::Verbose
+                && cluster_type == Qcow2ClusterType::Unallocated
+            {
+                continue;
+            }
+            let host_offset = entry & L2_TABLE_OFFSET_MASK;
+            let copied = entry & QCOW2_OFFSET_COPIED != 0;
+            let zero = entry & QCOW2_OFLAG_ZERO != 0;
+            let type_str = match cluster_type {
+                Qcow2ClusterType::Unallocated => "Unallocated",
+                Qcow2ClusterType::ZeroPlain => "ZeroPlain",
+                Qcow2ClusterType::ZeroAlloc => "ZeroAlloc",
+                Qcow2ClusterType::Normal => "Normal",
+                Qcow2ClusterType::Compressed => "Compressed",
+            };
+            let anomaly = offset_anomaly(cluster_size, self.file_size, host_offset);
+            println!(
+                "{}  {:<8} 0x{:016x}    {:<14} 0x{:016x}    {:<8} {:<6} {}",
+                indent, l2_idx, entry, type_str, host_offset, copied, zero, anomaly
+            );
+        }
+    }
+
+    /// Print an L1 table section (active or snapshot): title, statistics,
+    /// then the entry rows. `indent` prefixes each line; `title` distinguishes
+    /// the active L1 table ("L1 Table") from a snapshot's ("Snapshot L1 Table").
+    fn dump_l1_table(&self, l1_table: &[u64], indent: &str, title: &str) {
+        println!("{}=== {} ===", indent, title);
+        if title == "L1 Table" {
+            println!(
+                "{}Offset: 0x{:016x}  Entries: {}",
+                indent,
+                self.driver.header.l1_table_offset,
+                l1_table.len()
+            );
+        } else {
+            let allocated = l1_table
+                .iter()
+                .filter(|e| **e & L1_TABLE_OFFSET_MASK != 0)
+                .count();
+            println!(
+                "{}entries={}, allocated={}, unallocated={}",
+                indent,
+                l1_table.len(),
+                allocated,
+                l1_table.len() - allocated
+            );
+        }
+        println!();
+        self.print_l1_table(l1_table, indent);
+        println!();
+    }
+
+    /// Walk an L1 table (active or snapshot) and print each allocated L2
+    /// table; `indent`/`label` distinguish active from snapshot output. A
+    /// failing L2 table is reported and the walk continues.
+    fn dump_l2_tables(&mut self, l1_table: &[u64], indent: &str, label: &str) {
+        println!("{}=== {}s ===", indent, label);
+        let l2_entries = self.driver.header.cluster_size() / ENTRY_SIZE;
+
+        for (l1_idx, l1_entry) in l1_table.iter().enumerate() {
+            let l2_offset = l1_entry & L1_TABLE_OFFSET_MASK;
+            if l2_offset == 0 {
+                continue;
+            }
+
+            match self.driver.dump_read_table_entries(l2_offset, l2_entries) {
+                Ok(t) => {
+                    self.print_l2_table(&t, l1_idx, l2_offset, indent, label);
+                    println!();
+                }
+                Err(e) => {
+                    println!(
+                        "{}{} [L1 index={}, offset=0x{:016x}]: [ERROR: {:?}]",
+                        indent, label, l1_idx, l2_offset, e
+                    );
+                }
+            }
+        }
+    }
+
+    fn dump_refcount_table(&self) -> Result<()> {
+        println!("=== Refcount Table ===");
+        println!(
+            "Offset: 0x{:016x}  Clusters: {}  Entries: {}",
+            self.driver.header.refcount_table_offset,
+            self.driver.header.refcount_table_clusters,
+            self.driver.refcount.refcount_table.len()
+        );
+        println!();
+        println!(
+            "{:<8} {:<20} {:<20} {:<20}",
+            "Index", "Raw Value", "Block Offset", "Anomaly"
+        );
+        for (i, entry) in self.driver.refcount.refcount_table.iter().enumerate() {
+            if *entry == 0 {
+                continue;
+            }
+            let block_offset = entry & REFCOUNT_TABLE_OFFSET_MASK;
+            let anomaly = offset_anomaly(
+                self.driver.header.cluster_size(),
+                self.file_size,
+                block_offset,
+            );
+            println!(
+                "{:<8} 0x{:016x}    0x{:016x}    {}",
+                i, entry, block_offset, anomaly
+            );
+        }
+        println!();
+        Ok(())
+    }
+
+    fn dump_refcount_blocks(&mut self) {
+        println!("=== Refcount Blocks ===");
+        let refcount_blk_bits =
+            self.driver.header.cluster_bits + 3 - self.driver.header.refcount_order;
+        let cluster_bits = self.driver.header.cluster_bits;
+
+        let refcount_table = self.driver.refcount.refcount_table.clone();
+        for (rt_idx, rt_entry) in refcount_table.iter().enumerate() {
+            let block_offset = rt_entry & REFCOUNT_TABLE_OFFSET_MASK;
+            if block_offset == 0 {
+                continue;
+            }
+
+            let entries = match self.driver.dump_read_refcount_block(block_offset) {
+                Ok(e) => e,
+                Err(e) => {
+                    println!(
+                        "Refcount Block [table index={}, offset=0x{:016x}]: [ERROR: {:?}]",
+                        rt_idx, block_offset, e
+                    );
+                    continue;
+                }
+            };
+            let nonzero_count = entries.iter().filter(|e| **e != 0).count();
+
+            println!(
+                "Refcount Block [table index={}, offset=0x{:016x}]:",
+                rt_idx, block_offset
+            );
+            println!("  Entries: {} | Nonzero: {}", entries.len(), nonzero_count);
+
+            if self.verbosity != DumpVerbosity::Summary {
+                println!(
+                    "  {:<8} {:<20} {:<10}",
+                    "Index", "Cluster Offset", "Refcount"
+                );
+                for (i, rc) in entries.iter().enumerate() {
+                    if self.verbosity == DumpVerbosity::Verbose && *rc == 0 {
+                        continue;
+                    }
+                    let cluster_idx = (rt_idx as u64) << refcount_blk_bits | i as u64;
+                    let cluster_offset = cluster_idx << cluster_bits;
+                    println!("  {:<8} 0x{:016x}    {:<10}", i, cluster_offset, rc);
+                }
+            }
+            println!();
+        }
+    }
+
+    fn dump_snapshots_text(&mut self) {
+        println!("=== Snapshot Table ===");
+        let snapshots = self.driver.snapshot.snapshots.clone();
+        if snapshots.is_empty() {
+            println!("(none)");
+            println!();
+            return;
+        }
+        println!("Number of snapshots: {}", snapshots.len());
+        println!();
+        for snap in &snapshots {
+            println!("  Snapshot ID:       {}", snap.id);
+            println!("  Name:              {}", snap.name);
+            println!("  L1 table offset:   0x{:016x}", snap.l1_table_offset);
+            println!("  L1 size:           {}", snap.l1_size);
+            println!(
+                "  Disk size:         {} ({} bytes)",
+                format_size(snap.disk_size),
+                snap.disk_size
+            );
+            println!("  VM state size:     {} bytes", snap.vm_state_size);
+            println!(
+                "  Date:              {}-{:02}-{:02} {:02}:{:02}:{:02} (sec={}, nsec={})",
+                1970 + snap.date_sec as u64 / 31536000,
+                ((snap.date_sec as u64 % 31536000) / 2592000) + 1,
+                ((snap.date_sec as u64 % 2592000) / 86400) + 1,
+                (snap.date_sec as u64 % 86400) / 3600,
+                (snap.date_sec as u64 % 3600) / 60,
+                snap.date_sec as u64 % 60,
+                snap.date_sec,
+                snap.date_nsec
+            );
+            let vm_clock_secs = snap.vm_clock_nsec / 1_000_000_000;
+            println!(
+                "  VM clock:          {:02}:{:02}:{:02}.{:03} ({:?} nsec)",
+                vm_clock_secs / 3600,
+                (vm_clock_secs % 3600) / 60,
+                vm_clock_secs % 60,
+                (snap.vm_clock_nsec / 1_000_000) % 1000,
+                snap.vm_clock_nsec
+            );
+            println!(
+                "  Icount:            {}",
+                if snap.icount == u64::MAX {
+                    "disabled".to_string()
+                } else {
+                    snap.icount.to_string()
+                }
+            );
+            println!("  Extra data size:   {}", snap.extra_data_size);
+
+            if snap.l1_table_offset != 0 && snap.l1_size > 0 {
+                match self
+                    .driver
+                    .dump_read_table_entries(snap.l1_table_offset, u64::from(snap.l1_size))
+                {
+                    Ok(snap_l1) => {
+                        self.dump_l1_table(&snap_l1, "    ", "Snapshot L1 Table");
+                        self.dump_l2_tables(&snap_l1, "    ", "Snapshot L2 Table");
+                    }
+                    Err(e) => {
+                        println!("  Snapshot L1 Table: [ERROR: failed to read: {:?}]", e);
+                        println!();
+                    }
+                }
+            }
+            println!();
+        }
+    }
+}
+
+pub(crate) fn image_dump_qcow2(args: Vec<String>) -> Result<()> {
+    let mut arg_parser = ArgsParse::create(
+        vec!["h", "help", "full", "verbose", "summary"],
+        vec![],
+        vec![],
+    );
+    arg_parser.parse(args)?;
+
+    if arg_parser.opt_present("h") || arg_parser.opt_present("help") {
+        print_help();
+        return Ok(());
+    }
+
+    // --full > --verbose > --summary; default Verbose.
+    let verbosity = if arg_parser.opt_present("full") {
+        DumpVerbosity::Full
+    } else if arg_parser.opt_present("verbose") {
+        DumpVerbosity::Verbose
+    } else if arg_parser.opt_present("summary") {
+        DumpVerbosity::Summary
+    } else {
+        DumpVerbosity::Verbose
+    };
+
+    let len = arg_parser.free.len();
+    let img_path = match len {
+        0 => bail!("Image path is needed"),
+        1 => arg_parser.free[0].clone(),
+        _ => {
+            let param = arg_parser.free[1].clone();
+            bail!("Unexpected argument: {}", param);
+        }
+    };
+
+    let mut dump_arg = Qcow2DumpArg::new(img_path, verbosity)?;
+    dump_arg.dump()
+}
+
 pub fn print_help() {
     print!(
         r#"Copyright (c) 2023 Huawei Technologies Co.,Ltd. All rights reserved.
@@ -834,6 +1929,8 @@ check [-r [leaks | all]] [-no_print_error] [-f fmt] filename
 resize [-f fmt] filename [+]size
 snapshot [-l | -a snapshot | -c snapshot | -d snapshot | -r old_snapshot_name new_snapshot_name] filename
 convert [-f input_fmt | -O output_fmt | -S sparse_size ] input_filename output_filename
+dump-qcow2 [--summary | --verbose | --full] filename
+tailappend filename
 
 Command parameters:
 'filename' is a disk image filename
@@ -862,6 +1959,23 @@ Parameters to convert subcommand:
  '-S sparse_size' is the consecutive number of bytes that must contain only zeroes to create a sparse image during conversion. Unit: sector(512 bytes). Default is 8.
  'input_filename' is the name of the input file using *input_fmt* image format.
  'output_filename' is the name of the output file using *output_fmt* image format.
+
+Parameters to dump-qcow2 subcommand:
+ '--summary'       show only per-table summaries (skip zero-valued entries)
+ '--verbose'       show summaries plus nonzero entries (default if none given)
+ '--full'          show all entries including zero-valued ones
+
+Parameters to tailappend subcommand:
+ 'filename' is the qcow2 image to repair.
+ Repairs a qcow2 whose tail clusters were lost (host file truncated, e.g. on
+     power loss). It appends zero clusters at the tail to cover every metadata
+     reference that now dangles beyond EOF, then rebuilds refcounts and fixes
+     leaks inline (equivalent to `check -r all`; no separate check run is
+     needed afterwards) so the image is openable again.
+ Lost cluster *contents* are NOT recovered (they become zeros); this restores the
+     qcow2 structure, accepting data loss in the lost clusters.
+ If the snapshot table itself was lost (snapshot-table / snapshot-l1 tail loss), the
+     snapshots are unrecoverable and are dropped from the header before repairing.
 "#,
     );
 }
@@ -1202,7 +2316,23 @@ mod test {
             assert_ne!(l1_size, 0);
             assert_ne!(reftable_clusters, 0);
             assert!(u64::from(l1_size) * cluster_size * cluster_size / ENTRY_SIZE >= image_size);
-            assert!(reftable_size * refblock_size * cluster_size >= file_len);
+
+            // The end of the on-disk metadata layout: metadata extents really
+            // exist in the file, so they cannot end past the physical file.
+            // The file tail beyond this may be a sparse preallocated hole.
+            let metadata_end = test_image
+                .header
+                .l1_table_offset
+                .saturating_add(u64::from(test_image.header.l1_size) * ENTRY_SIZE)
+                .max(
+                    test_image.header.refcount_table_offset
+                        + u64::from(reftable_clusters) * cluster_size,
+                );
+            assert!(metadata_end <= file_len);
+            // Refcount coverage must reach every allocated cluster, i.e. the
+            // metadata layout end; trailing sparse-hole clusters carry
+            // refcount 0 and need no coverage.
+            assert!(reftable_size * refblock_size * cluster_size >= metadata_end);
             assert_eq!(u64::from(test_image.header.cluster_bits), cluster_bits);
             assert_eq!(test_image.header.size, image_size);
 
@@ -1794,6 +2924,61 @@ mod test {
             assert!(res.corruptions_fixed != 0);
             drop(qcow2_driver);
         }
+    }
+
+    /// Test the refcount rebuild convergence: the rebuilt refcount table's own
+    /// refcount must be persisted, so a single repair pass yields a consistent
+    /// image.
+    ///
+    /// TestStep:
+    ///   1. Create an image with a small cluster size.
+    ///   2. Zero the refcount of the reftable cluster in its refblock, so the
+    ///      image needs a refcount rebuild.
+    ///   3. Apply image check with FIX_ERRORS | FIX_LEAKS.
+    /// Expect:
+    ///   1. One repair pass converges: the repaired image reports no
+    ///      corruptions, leaks or errors.
+    #[test]
+    fn test_rebuild_refcount_convergence() {
+        let path = "/tmp/test_rebuild_refcount_convergence.qcow2";
+        // Only refcount bit=16 is supported currently.
+        let refcount_bits = 16;
+        let cluster_bits = 9;
+        let fix = FIX_ERRORS | FIX_LEAKS;
+
+        let test_image = TestQcow2Image::create(cluster_bits, refcount_bits, path, "+4M");
+
+        // Zero the refcount of cluster 1 (the reftable cluster) in refblock 0
+        // to make the on-disk refcount inconsistent with the references, so
+        // the check has to rebuild the refcount structure.
+        let refblock0_offset = test_image.header.refcount_table_offset;
+        let mut entry = vec![0_u8; 8];
+        test_image
+            .file
+            .read_at(&mut entry, refblock0_offset)
+            .unwrap();
+        let refblock0 = u64::from_be_bytes(entry.try_into().unwrap()) & 0x00ff_ffff_ffff_fe00;
+        let buf = [0_u8; 2];
+        assert!(test_image.file.write_at(&buf, refblock0 + 2).is_ok());
+
+        // One repair pass must rebuild the refcount structure and converge.
+        let mut res = CheckResult::default();
+        let mut qcow2_driver = test_image.create_driver_for_check();
+        assert!(qcow2_driver.check_image(&mut res, false, fix).is_ok());
+        assert!(res.corruptions_fixed != 0);
+        drop(qcow2_driver);
+
+        // The rebuilt reftable clusters' refcounts must be on disk now: the
+        // second pass must find nothing left to rebuild or fix, or the repair
+        // would never converge.
+        let mut res = CheckResult::default();
+        let mut qcow2_driver = test_image.create_driver_for_check();
+        assert!(qcow2_driver.check_image(&mut res, false, fix).is_ok());
+        assert_eq!(res.corruptions, 0);
+        assert_eq!(res.corruptions_fixed, 0);
+        assert_eq!(res.leaks, 0);
+        assert_eq!(res.err_num, 0);
+        drop(qcow2_driver);
     }
 
     /// Test the function of image check.
@@ -2705,5 +3890,583 @@ mod test {
 
         // Clean.
         assert!(remove_file(dst_path).is_ok());
+    }
+
+    /// Test argument parsing for dump-qcow2 subcommand.
+    #[test]
+    fn test_dump_qcow2_args_parse() {
+        let path = "/tmp/test_dump_qcow2_args_parse.qcow2";
+        let _ = remove_file(path);
+
+        let test_cases = [
+            ("img_path", true),
+            ("--verbose img_path", true),
+            ("--summary img_path", true),
+            ("--full img_path", true),
+            ("--verbose --full img_path", true),
+            ("-h", true),
+            ("--help", true),
+            ("img_path extra_arg", false),
+            ("--verbose img_path extra_arg", false),
+            ("", false),
+        ];
+
+        for (case, expect_ok) in test_cases {
+            let cmd_str = case.replace("img_path", path);
+            let args: Vec<String> = if cmd_str.is_empty() {
+                vec![]
+            } else {
+                cmd_str.split(' ').map(|s| s.to_string()).collect()
+            };
+
+            assert!(image_create(vec![
+                "-f".to_string(),
+                "qcow2".to_string(),
+                path.to_string(),
+                "+10M".to_string()
+            ])
+            .is_ok());
+
+            let ret = image_dump_qcow2(args.clone());
+            if expect_ok {
+                assert!(ret.is_ok(), "case '{}' should succeed: {:?}", case, ret);
+            } else {
+                assert!(ret.is_err(), "case '{}' should fail", case);
+            }
+
+            assert!(remove_file(path).is_ok());
+        }
+    }
+
+    /// Test dump-qcow2 in Summary mode (--summary).
+    #[test]
+    fn test_dump_qcow2_summary() {
+        let path = "/tmp/test_dump_qcow2_summary.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        assert!(image_dump_qcow2(vec!["--summary".to_string(), path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 in Verbose mode (--verbose), the default when no
+    /// verbosity flag is given.
+    #[test]
+    fn test_dump_qcow2_verbose() {
+        let path = "/tmp/test_dump_qcow2_verbose.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        assert!(image_dump_qcow2(vec!["--verbose".to_string(), path.to_string()]).is_ok());
+        // No verbosity flag: defaults to Verbose.
+        assert!(image_dump_qcow2(vec![path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 in Full mode (--full).
+    #[test]
+    fn test_dump_qcow2_full() {
+        let path = "/tmp/test_dump_qcow2_full.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        assert!(image_dump_qcow2(vec!["--full".to_string(), path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 with snapshots.
+    #[test]
+    fn test_dump_qcow2_with_snapshots() {
+        let path = "/tmp/test_dump_qcow2_with_snapshots.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        // Create two snapshots.
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "snap1".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+        assert!(image_snapshot(vec![
+            "-c".to_string(),
+            "snap2".to_string(),
+            path.to_string()
+        ])
+        .is_ok());
+
+        // Dump should succeed and include snapshot data.
+        assert!(image_dump_qcow2(vec![path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--verbose".to_string(), path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--summary".to_string(), path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--full".to_string(), path.to_string()]).is_ok());
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 rejects non-qcow2 formats.
+    #[test]
+    fn test_dump_qcow2_non_qcow2() {
+        let path = "/tmp/test_dump_qcow2_non_qcow2.raw";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "raw".to_string(),
+            path.to_string(),
+            "+10M".to_string()
+        ])
+        .is_ok());
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(ret.is_err(), "dump on raw image should fail");
+        let err_msg = format!("{:?}", ret.unwrap_err());
+        assert!(
+            err_msg.contains("qcow2") || err_msg.contains("Raw"),
+            "error should mention format: {}",
+            err_msg
+        );
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 fault-tolerance on a truncated image.
+    #[test]
+    fn test_dump_qcow2_truncated() {
+        let path = "/tmp/test_dump_qcow2_truncated.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+1M".to_string()
+        ])
+        .is_ok());
+
+        // Truncate the image to half size. The header is in the first cluster,
+        // but L1 table and later metadata may be lost. Fault-tolerance should
+        // print the header and report errors for unreachable sections.
+        let original_size = std::fs::metadata(path).unwrap().len();
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_len(original_size / 2).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on truncated image should still succeed: {:?}",
+            ret
+        );
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test dump-qcow2 with a data-filled qcow2 image.
+    #[test]
+    fn test_dump_qcow2_with_data() {
+        let raw_path = "/tmp/test_dump_qcow2_with_data.raw";
+        let qcow2_path = "/tmp/test_dump_qcow2_with_data.qcow2";
+        let _ = remove_file(raw_path);
+        let _ = remove_file(qcow2_path);
+
+        // Create a 10M raw file with real non-zero data in the first 1M.
+        let data = vec![0xabu8; 1 * M as usize];
+        std::fs::write(raw_path, &data).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(raw_path)
+            .unwrap();
+        file.set_len(10 * M).unwrap();
+        drop(file);
+
+        // Convert raw to qcow2.
+        assert!(image_convert(vec![
+            "-f".to_string(),
+            "raw".to_string(),
+            "-O".to_string(),
+            "qcow2".to_string(),
+            raw_path.to_string(),
+            qcow2_path.to_string()
+        ])
+        .is_ok());
+
+        // All three modes should succeed.
+        assert!(image_dump_qcow2(vec![qcow2_path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--verbose".to_string(), qcow2_path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--summary".to_string(), qcow2_path.to_string()]).is_ok());
+        assert!(image_dump_qcow2(vec!["--full".to_string(), qcow2_path.to_string()]).is_ok());
+
+        assert!(remove_file(raw_path).is_ok());
+        assert!(remove_file(qcow2_path).is_ok());
+    }
+
+    /// Test that dump header reports correct fields via direct driver access.
+    #[test]
+    fn test_dump_qcow2_header_consistency() {
+        let path = "/tmp/test_dump_qcow2_header.qcow2";
+        let _ = remove_file(path);
+
+        let cluster_bits = 16;
+        let refcount_bits = 16;
+        let img_size = "100M";
+
+        let test_image = TestQcow2Image::create(cluster_bits, refcount_bits, path, img_size);
+
+        // Validate header fields directly.
+        assert_eq!(test_image.header.version, 3);
+        assert_eq!(test_image.header.cluster_bits, cluster_bits as u32);
+        assert_eq!(test_image.header.cluster_size(), 1 << cluster_bits);
+        assert_eq!(test_image.header.refcount_order, 4); // 4 -> 16-bit refcounts
+        assert_eq!(test_image.header.incompatible_features, 0);
+        assert_eq!(test_image.header.compatible_features, 0);
+        assert_eq!(test_image.header.autoclear_features, 0);
+        assert!(test_image.header.size > 0);
+
+        // Verify the dump methods succeed via Qcow2DumpArg.
+        let file_size = std::fs::metadata(path).unwrap().len();
+        let mut dump_arg = Qcow2DumpArg::new(path.to_string(), DumpVerbosity::Summary).unwrap();
+        dump_arg.file_size = file_size;
+        assert!(dump_arg.dump_header().is_ok());
+        let l1_table = dump_arg
+            .driver
+            .dump_read_table_entries(
+                dump_arg.driver.header.l1_table_offset,
+                u64::from(dump_arg.driver.header.l1_size),
+            )
+            .unwrap();
+        dump_arg.dump_l1_table(&l1_table, "", "L1 Table");
+        dump_arg.dump_l2_tables(&l1_table, "", "L2 Table");
+        assert!(dump_arg.dump_refcount_table().is_ok());
+
+        drop(dump_arg);
+    }
+
+    /// Test that the dump helpers reject out-of-range / corrupted metadata
+    /// fields instead of silently returning zero-filled buffers (pread past
+    /// EOF returns 0 bytes without error).
+    #[test]
+    fn test_dump_qcow2_rejects_corrupted_metadata() {
+        let path = "/tmp/test_dump_qcow2_corrupted_meta.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "100M");
+        let mut driver = test_image.create_driver();
+
+        let cluster_size = driver.header.cluster_size();
+        // A point well past both the virtual disk size and the on-disk file
+        // size, but still cluster-aligned so it isolates the range check.
+        let out_of_range = 1u64 << 40;
+
+        // dump_read_table_entries (L2 table): offset past EOF must be
+        // rejected, not zero-filled.
+        let l2_entries = cluster_size / ENTRY_SIZE;
+        assert!(
+            driver
+                .dump_read_table_entries(out_of_range, l2_entries)
+                .is_err(),
+            "out-of-range L2 offset should be rejected"
+        );
+        // Misaligned offset must be rejected.
+        assert!(
+            driver.dump_read_table_entries(1, l2_entries).is_err(),
+            "misaligned L2 offset should be rejected"
+        );
+
+        // dump_read_refcount_block: offset past EOF must be rejected.
+        assert!(
+            driver.dump_read_refcount_block(out_of_range).is_err(),
+            "out-of-range refcount block offset should be rejected"
+        );
+        assert!(
+            driver.dump_read_refcount_block(cluster_size + 1).is_err(),
+            "misaligned refcount block offset should be rejected"
+        );
+
+        // A valid offset but count reaching past EOF must also be rejected.
+        assert!(
+            driver.dump_read_table_entries(out_of_range, 1).is_err(),
+            "out-of-range table offset should be rejected"
+        );
+
+        drop(driver);
+    }
+
+    /// Test that dump-qcow2 tolerates a corrupted nb_snapshots header field:
+    /// the snapshot section reports an error instead of hanging or OOM, and
+    /// the rest of the dump still succeeds.
+    #[test]
+    fn test_dump_qcow2_dirty_snapshot_count() {
+        let path = "/tmp/test_dump_qcow2_dirty_snapshot_count.qcow2";
+        let _ = remove_file(path);
+
+        assert!(image_create(vec![
+            "-f".to_string(),
+            "qcow2".to_string(),
+            path.to_string(),
+            "+1M".to_string()
+        ])
+        .is_ok());
+
+        // Read the header, corrupt nb_snapshots (offset 60, big-endian u32),
+        // and write it back. Use a value large enough that looping would be
+        // catastrophic if unguarded.
+        let mut buf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        use std::os::unix::prelude::FileExt;
+        file.read_at(&mut buf, 0).unwrap();
+        // u32::MAX snapshots.
+        buf[60..64].copy_from_slice(&u32::MAX.to_be_bytes());
+        file.write_at(&buf, 0).unwrap();
+        drop(file);
+
+        // dump-qcow2 must not hang or OOM; it reports the snapshot section as
+        // an error and returns Ok overall.
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty nb_snapshots should still succeed: {:?}",
+            ret
+        );
+
+        assert!(remove_file(path).is_ok());
+    }
+
+    /// Test that dump-qcow2 tolerates a corrupted snapshots_offset (out of
+    /// file range): the snapshot section reports an error instead of
+    /// crashing or fabricating snapshot entries.
+    #[test]
+    fn test_dump_qcow2_dirty_snapshot_offset() {
+        let path = "/tmp/test_dump_qcow2_dirty_snapshot_offset.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "+1M");
+        // Create a real snapshot so the snapshot table is non-empty, then drop
+        // the driver to release the file handle before patching the header.
+        // create_snapshot flushes metadata to disk internally.
+        {
+            let mut driver = test_image.create_driver();
+            assert!(driver.create_snapshot("s1".to_string(), 0).is_ok());
+            drop(driver);
+        }
+
+        // Patch the on-disk header: keep nb_snapshots, point snapshots_offset
+        // at a cluster-aligned location well past EOF.
+        use std::os::unix::prelude::FileExt;
+        let mut buf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut buf, 0).unwrap();
+        let out_of_range = 1u64 << 40; // cluster-aligned, past EOF
+        buf[64..72].copy_from_slice(&out_of_range.to_be_bytes());
+        file.write_at(&buf, 0).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty snapshots_offset should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
+    }
+
+    /// Test that dump-qcow2 tolerates a dirty (garbage) L1 table entry: the
+    /// entry is printed verbatim, its masked L2 offset is rejected by the
+    /// dump range check as an [ERROR] line, and the dump still succeeds.
+    #[test]
+    fn test_dump_qcow2_dirty_l1_entry() {
+        let path = "/tmp/test_dump_qcow2_dirty_l1_entry.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "+1M");
+        // Write one cluster so an L1 entry is allocated and persisted, then
+        // drop the driver to release the file handle before patching.
+        {
+            let mut driver = test_image.create_driver();
+            let data = vec![0xaau8; test_image.header.cluster_size() as usize];
+            assert!(driver
+                .write_vectored(
+                    vec![Iovec {
+                        iov_base: data.as_ptr() as u64,
+                        iov_len: data.len() as u64,
+                    }],
+                    0,
+                    (),
+                )
+                .is_ok());
+            assert!(driver.flush().is_ok());
+            drop(driver);
+        }
+
+        // Patch the first L1 entry on disk with a garbage value. The L1
+        // table offset (header byte 0x28) locates the table; the first entry
+        // is the first 8 bytes there.
+        use std::os::unix::prelude::FileExt;
+        let mut hbuf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut hbuf, 0).unwrap();
+        let l1_off = u64::from_be_bytes(hbuf[40..48].try_into().unwrap());
+        let mut entry_buf = [0u8; 8];
+        file.read_at(&mut entry_buf, l1_off).unwrap();
+        // Garbage entry: a value that is neither cluster-aligned nor a valid
+        // offset. After masking it stays non-cluster-aligned, so dump_check_range
+        // rejects it on the misalignment check.
+        let garbage = 0x650e_124e_f1c7_1111u64;
+        file.write_at(&garbage.to_be_bytes(), l1_off).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty L1 entry should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
+    }
+
+    /// Test that dump-qcow2 classifies a corrupted l1_table_offset pointing
+    /// past EOF as an out-of-file error rather than a generic pread failure
+    /// (misaligned offsets are already caught earlier by QcowHeader::check,
+    /// so the past-EOF case is the one only the dump pre-check catches).
+    #[test]
+    fn test_dump_qcow2_dirty_l1_offset_past_eof() {
+        let path = "/tmp/test_dump_qcow2_dirty_l1_offset_past_eof.qcow2";
+        let _ = remove_file(path);
+
+        // Keep test_image alive so the file handle (and the file on disk) survives
+        // the header patch and the dump; its Drop removes the file at function end.
+        let _test_image = TestQcow2Image::create(16, 16, path, "+1M");
+
+        // Patch the on-disk l1_table_offset (header byte 0x28) with a
+        // cluster-aligned value well past EOF.
+        use std::os::unix::prelude::FileExt;
+        let mut buf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut buf, 0).unwrap();
+        let out_of_range = 1u64 << 40; // cluster-aligned, past EOF
+        buf[40..48].copy_from_slice(&out_of_range.to_be_bytes());
+        file.write_at(&buf, 0).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty l1_table_offset (past EOF) should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
+    }
+
+    /// Test that dump-qcow2 tolerates a dirty L2 table entry: it is printed
+    /// verbatim as a row (L2 entries are not used to drive further reads in
+    /// the dump path) and does not crash the dump.
+    #[test]
+    fn test_dump_qcow2_dirty_l2_entry() {
+        let path = "/tmp/test_dump_qcow2_dirty_l2_entry.qcow2";
+        let _ = remove_file(path);
+
+        let test_image = TestQcow2Image::create(16, 16, path, "+1M");
+        // Write one cluster so an L2 entry is allocated and persisted, then
+        // drop the driver to release the file handle before patching.
+        {
+            let mut driver = test_image.create_driver();
+            let data = vec![0xbbu8; test_image.header.cluster_size() as usize];
+            assert!(driver
+                .write_vectored(
+                    vec![Iovec {
+                        iov_base: data.as_ptr() as u64,
+                        iov_len: data.len() as u64,
+                    }],
+                    0,
+                    (),
+                )
+                .is_ok());
+            assert!(driver.flush().is_ok());
+            drop(driver);
+        }
+
+        // Locate the L2 table: read L1[0] from the on-disk L1 table, mask it to
+        // get the L2 table offset, then patch the first L2 entry with a value
+        // whose host offset field is past EOF.
+        use std::os::unix::prelude::FileExt;
+        let mut hbuf = vec![0u8; QcowHeader::len()];
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.read_at(&mut hbuf, 0).unwrap();
+        let l1_off = u64::from_be_bytes(hbuf[40..48].try_into().unwrap());
+        let mut l1_entry_buf = [0u8; 8];
+        file.read_at(&mut l1_entry_buf, l1_off).unwrap();
+        let l2_off = u64::from_be_bytes(l1_entry_buf) & L1_TABLE_OFFSET_MASK;
+        assert_ne!(
+            l2_off, 0,
+            "L1[0] should point at an allocated L2 table after writing data"
+        );
+        // Dirty L2 entry: host offset past EOF, cluster-aligned so only the
+        // range check (not the alignment check) rejects any downstream use.
+        let dirty_l2 = 1u64 << 40;
+        file.write_at(&dirty_l2.to_be_bytes(), l2_off).unwrap();
+        drop(file);
+
+        let ret = image_dump_qcow2(vec![path.to_string()]);
+        assert!(
+            ret.is_ok(),
+            "dump on image with dirty L2 entry should still succeed: {:?}",
+            ret
+        );
+
+        // TestQcow2Image::drop removes the file; do not remove it here.
     }
 }

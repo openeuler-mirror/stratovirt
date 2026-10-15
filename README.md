@@ -1,4 +1,7 @@
-# StratoVirt：
+# StratoVirt
+ 
+简体中文 | [English](./README_EN.md)
+
 StratoVirt是计算产业中面向云数据中心的企业级虚拟化平台，实现了一套架构统一支持虚拟机、容器、Serverless三种场景。
 StratoVirt在轻量低噪、软硬协同、Rust语言级安全等方面具备关键技术竞争优势。
 

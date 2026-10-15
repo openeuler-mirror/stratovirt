@@ -54,7 +54,7 @@ use util::byte_code::ByteCode;
 use util::loop_context::{
     read_fd, EventNotifier, EventNotifierHelper, NotifierCallback, NotifierOperation,
 };
-use util::num_ops::round_down;
+use util::num_ops::{round_down, round_up};
 use util::seccomp::BpfRule;
 use util::unix::host_page_size;
 use util::{gen_base_func, offset_of};
@@ -415,29 +415,57 @@ impl Request {
     }
 
     fn release_pages(&self, mem: &Arc<Mutex<BlnMemInfo>>) {
-        for iov in self.iovec.iter() {
-            let gpa: GuestAddress = iov.iov_base;
-            let (hva, shared) = match mem.lock().unwrap().get_host_address(gpa) {
-                Some((hva, shared)) => (hva, shared),
-                None => {
-                    error!("Can not get host address, gpa: {}", gpa.raw_value());
+        let mem = mem.lock().unwrap();
+        let mut huge_ranges = Vec::new();
+        {
+            let regions = mem.regions.lock().unwrap();
+            for iov in &self.iovec {
+                let report_start = iov.iov_base.raw_value();
+                let Some(report_end) = report_start.checked_add(iov.iov_len) else {
                     continue;
+                };
+                // Reports can span RAM regions with different backing page sizes.
+                for (region_index, region) in regions.iter().enumerate() {
+                    let Some(region_end) = region.guest_phys_addr.checked_add(region.memory_size)
+                    else {
+                        continue;
+                    };
+                    let overlap_start = report_start.max(region.guest_phys_addr);
+                    let overlap_end = report_end.min(region_end);
+                    if overlap_start >= overlap_end
+                        || region
+                            .userspace_addr
+                            .checked_add(region.memory_size)
+                            .is_none()
+                    {
+                        continue;
+                    }
+                    if region.reg_page_size.unwrap_or_else(host_page_size) > host_page_size() {
+                        huge_ranges.push((
+                            region_index,
+                            region.userspace_addr + (overlap_start - region.guest_phys_addr),
+                            region.userspace_addr + (overlap_end - region.guest_phys_addr),
+                        ));
+                        continue;
+                    }
+                    let hva = region.userspace_addr + (overlap_start - region.guest_phys_addr);
+                    let advice = if region.mem_share {
+                        libc::MADV_REMOVE
+                    } else {
+                        libc::MADV_DONTNEED
+                    };
+                    // SAFETY: the reported range has been clipped to this RAM region.
+                    unsafe {
+                        memory_advise(
+                            hva as *mut libc::c_void,
+                            (overlap_end - overlap_start) as usize,
+                            advice,
+                        )
+                    };
                 }
-            };
-            let advice = if shared {
-                libc::MADV_REMOVE
-            } else {
-                libc::MADV_DONTNEED
-            };
-            // SAFETY: The memory to be freed is allocated by guest and has been checked in `get_host_address`.
-            unsafe {
-                memory_advise(
-                    hva as *const libc::c_void as *mut _,
-                    iov.iov_len as usize,
-                    advice,
-                )
-            };
+            }
         }
+        mem.release_reported_huge_ranges(&huge_ranges);
     }
 }
 
@@ -463,6 +491,62 @@ struct BlnMemInfo {
 }
 
 impl BlnMemInfo {
+    /// Return only huge backing pages completely covered by this request; never accumulate coverage.
+    fn fully_covered_huge_ranges(&self, ranges: &[(usize, u64, u64)]) -> Vec<(u64, u64, bool)> {
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+        let mut result = Vec::new();
+        for (region_index, region) in self.regions.lock().unwrap().iter().enumerate() {
+            let page_size = region.reg_page_size.unwrap_or_else(host_page_size);
+            if page_size <= host_page_size() {
+                continue;
+            }
+            let mut covered = Vec::new();
+            for &(index, start, end) in ranges {
+                if index == region_index {
+                    covered.push((start, end));
+                }
+            }
+            covered.sort_unstable();
+            let mut merged: Vec<(u64, u64)> = Vec::new();
+            for (start, end) in covered {
+                if let Some(last) = merged.last_mut() {
+                    if start <= last.1 {
+                        last.1 = last.1.max(end);
+                        continue;
+                    }
+                }
+                merged.push((start, end));
+            }
+            for (start, end) in merged {
+                let Some(aligned_start) = round_up(start, page_size) else {
+                    continue;
+                };
+                let Some(aligned_end) = round_down(end, page_size) else {
+                    continue;
+                };
+                if aligned_start >= aligned_end {
+                    continue;
+                }
+                result.push((aligned_start, aligned_end - aligned_start, region.mem_share));
+            }
+        }
+        result
+    }
+
+    fn release_reported_huge_ranges(&self, ranges: &[(usize, u64, u64)]) {
+        for (hva, len, shared) in self.fully_covered_huge_ranges(ranges) {
+            let advice = if shared {
+                libc::MADV_REMOVE
+            } else {
+                libc::MADV_DONTNEED
+            };
+            // SAFETY: fully_covered_huge_ranges returns only complete backing pages inside a RAM region.
+            unsafe { memory_advise(hva as *mut libc::c_void, len as usize, advice) };
+        }
+    }
+
     fn new() -> BlnMemInfo {
         BlnMemInfo {
             regions: Mutex::new(Vec::new()),
@@ -710,9 +794,7 @@ impl BalloonIoHandler {
             }
             let req = Request::parse(&elem, IN_IOVEC)
                 .with_context(|| "Fail to parse available descriptor chain")?;
-            if !self.mem_info.lock().unwrap().has_huge_page() {
-                req.release_pages(&self.mem_info);
-            }
+            req.release_pages(&self.mem_info);
             locked_queue
                 .vring
                 .add_used(req.desc_index, req.elem_cnt)

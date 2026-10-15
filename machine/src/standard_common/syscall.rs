@@ -113,6 +113,7 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_openat),
         BpfRule::new(libc::SYS_sigaltstack),
         BpfRule::new(libc::SYS_mmap),
+        BpfRule::new(libc::SYS_mincore),
         BpfRule::new(libc::SYS_mprotect),
         BpfRule::new(libc::SYS_userfaultfd),
         BpfRule::new(libc::SYS_munmap),
