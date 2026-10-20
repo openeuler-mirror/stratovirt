@@ -21,6 +21,8 @@ const ETH_HLEN: usize = libc::ETH_HLEN as usize;
 const ETH_ALEN: usize = libc::ETH_ALEN as usize;
 const ETH_PROTO_OFFSET: usize = 12;
 const ETH_P_ARP: u16 = libc::ETH_P_ARP as u16;
+const ETH_P_8021Q: u16 = 0x8100;
+const VLAN_HLEN: usize = 4;
 // data length of arp protocol
 const ARP_DATA_LEN: usize = 28;
 // source mac address offset in arp data
@@ -93,6 +95,7 @@ impl Macnat for IpvtapMacnat {
         let proto = BigEndian::read_u16(&buf[offset + ETH_PROTO_OFFSET..]);
         let required_len = match proto {
             ETH_P_ARP => offset + ETH_HLEN + ARP_DATA_LEN,
+            ETH_P_8021Q => offset + ETH_HLEN + VLAN_HLEN,
             _ => eth_packet_len,
         };
         if packet_len < required_len {
