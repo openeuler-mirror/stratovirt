@@ -1702,15 +1702,25 @@ impl Net {
         }
     }
 
-    fn unregister_trans_evts(&mut self) -> Result<()> {
-        unregister_event_helper(
+    fn unregister_event_listeners(&mut self) {
+        if let Err(e) = unregister_event_helper(
+            self.net_cfg.iothread.as_ref(),
+            &mut self.base.deactivate_evts,
+        ) {
+            warn!("Failed to unregister iothread event: {}", e);
+        };
+        if let Err(e) = unregister_event_helper(
             self.net_cfg.rx_iothread.as_ref(),
             &mut self.rx_deactivate_evts,
-        )?;
-        unregister_event_helper(
+        ) {
+            warn!("Failed to unregister rx event: {}", e);
+        }
+        if let Err(e) = unregister_event_helper(
             self.net_cfg.tx_iothread.as_ref(),
             &mut self.tx_deactivate_evts,
-        )
+        ) {
+            warn!("Failed to unregister tx event: {}", e);
+        }
     }
 
     fn enable_taps(&mut self, enable: bool) {
@@ -2219,11 +2229,7 @@ impl VirtioDevice for Net {
 
     fn deactivate(&mut self) -> Result<()> {
         wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.net_cfg.id);
-        unregister_event_helper(
-            self.net_cfg.iothread.as_ref(),
-            &mut self.base.deactivate_evts,
-        )?;
-        self.unregister_trans_evts()?;
+        self.unregister_event_listeners();
         self.update_evts.clear();
         self.senders = None;
         self.ctrl_info = None;
