@@ -416,6 +416,10 @@ impl CtrlInfo {
     }
 
     fn filter_packets(&mut self, buf: &[u8]) -> bool {
+        if buf.len() < ETHERNET_HDR_LENGTH {
+            return true;
+        }
+
         // Broadcast address: 0xff:0xff:0xff:0xff:0xff:0xff.
         let bcast = [0xff; MAC_ADDR_LEN];
         // TPID of the vlan tag, defined in IEEE 802.1Q, is 0x8100.
@@ -426,6 +430,10 @@ impl CtrlInfo {
         }
 
         if buf[ETHERNET_HDR_LENGTH - VLAN_TPID_LENGTH..ETHERNET_HDR_LENGTH] == vlan {
+            if buf.len() < ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH {
+                return true;
+            }
+
             let vid = u16::from_be_bytes([buf[ETHERNET_HDR_LENGTH], buf[ETHERNET_HDR_LENGTH + 1]]);
             let value = if let Some(value) = self.vlan_map.get(&(vid >> 5)) {
                 *value
@@ -2400,7 +2408,7 @@ mod tests {
         ctrl_info.rx_mode.promisc = false;
         let mut buf = [
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x81, 0x00,
-            0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ];
         // It has no vla vid, the packet is filtered.
         assert!(ctrl_info.filter_packets(&buf));
