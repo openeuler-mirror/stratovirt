@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{cmp, fs, mem};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
 use once_cell::sync::Lazy;
@@ -1744,9 +1744,18 @@ impl Net {
         self.create_taps()?;
 
         if self.base.device_activated.load(Ordering::SeqCst) {
-            let mem_space = self.mem_space.take().unwrap();
-            let interrupt_cb = self.interrupt_cb.take().unwrap();
-            let queue_evts = self.queue_evts.take().unwrap();
+            let mem_space = self
+                .mem_space
+                .take()
+                .ok_or_else(|| anyhow!("mem_space is None during update_netdev_cfg"))?;
+            let interrupt_cb = self
+                .interrupt_cb
+                .take()
+                .ok_or_else(|| anyhow!("interrupt_cb is None during update_netdev_cfg"))?;
+            let queue_evts = self
+                .queue_evts
+                .take()
+                .ok_or_else(|| anyhow!("queue_evts is None during update_netdev_cfg"))?;
             self.deactivate()?;
             self.activate(mem_space, interrupt_cb, queue_evts)?;
         }
