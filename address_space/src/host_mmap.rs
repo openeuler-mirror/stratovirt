@@ -13,8 +13,9 @@
 use std::cmp::min;
 use std::ffi::CString;
 use std::fs::{remove_file, File};
-use std::os::unix::io::FromRawFd;
-use std::sync::Arc;
+use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 
 use anyhow::{bail, Context, Result};
@@ -441,16 +442,16 @@ pub struct HostMemMapping {
     /// The start address of mapped memory.
     host_addr: *mut u8,
     /// Represents file and offset-in-file that backs this mapping.
-    file_back: Option<FileBackend>,
+    file_back: OnceLock<FileBackend>,
     /// share mem flag
-    is_share: bool,
+    is_share: AtomicBool,
     /// The size of a memory page in bytes.
     page_size: u64,
 }
 
 // SAFETY: Send and Sync is not auto-implemented for raw pointer type,
-// implementing them is safe because field of HostMemMapping won't change
-// once initialized, only access(r/w) is permitted
+// Mapping addresses remain fixed. Snapshot backing is installed once while
+// all users are stopped, as required by try_restore_private_snapshot.
 unsafe impl Send for HostMemMapping {}
 // SAFETY: Same reason as above.
 unsafe impl Sync for HostMemMapping {}
@@ -540,9 +541,69 @@ impl HostMemMapping {
             },
             host_addr: host_addr as *mut u8,
             page_size,
-            file_back,
-            is_share,
+            file_back: file_back.map(OnceLock::from).unwrap_or_default(),
+            is_share: AtomicBool::new(is_share),
         })
+    }
+
+    /// Replace anonymous RAM with a writable, private view of snapshot bytes.
+    /// Returns false without changing the mapping when it is not eligible.
+    /// Invalid snapshot ranges and mapping failures remain errors.
+    ///
+    /// # Safety
+    /// The caller must stop all users of this region (including KVM/vhost) and
+    /// serialize restore operations. The snapshot file must not be modified or
+    /// truncated while the mapping is alive; unlinking it is safe.
+    pub unsafe fn try_restore_private_snapshot(&self, file: &File, offset: u64) -> Result<bool> {
+        let size = self.size();
+        let page_size = host_page_size();
+        let end = offset
+            .checked_add(size)
+            .context("Snapshot range overflow")?;
+        if end > file.metadata()?.len() {
+            bail!("Snapshot mapping range exceeds file size");
+        }
+        if self.file_backend().is_some()
+            || self.page_size != page_size
+            || size == 0
+            || !size.is_multiple_of(page_size)
+            || !self.host_address().is_multiple_of(page_size)
+            || !offset.is_multiple_of(page_size)
+            || offset > i64::MAX as u64
+            || usize::try_from(size).is_err()
+        {
+            return Ok(false);
+        }
+        let backing = FileBackend {
+            file: Arc::new(file.try_clone()?),
+            offset,
+            page_size,
+        };
+        // SAFETY: the caller excludes concurrent access; alignment, ownership,
+        // size and file bounds are checked above. Keep the HVA used by KVM.
+        let addr = unsafe {
+            libc::mmap(
+                self.host_addr.cast(),
+                size as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_FIXED,
+                backing.file.as_raw_fd(),
+                offset as libc::off_t,
+            )
+        };
+        if addr == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error()).context("Map private snapshot region");
+        }
+        // SAFETY: mmap above replaced exactly this owned range.
+        if unsafe { libc::madvise(addr, size as usize, libc::MADV_DONTDUMP) } != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("Exclude snapshot region from core dump");
+        }
+        self.is_share.store(false, Ordering::Release);
+        self.file_back
+            .set(backing)
+            .map_err(|_| anyhow::anyhow!("Snapshot mapping already installed"))?;
+        Ok(true)
     }
 
     pub fn page_size(&self) -> u64 {
@@ -568,11 +629,11 @@ impl HostMemMapping {
     /// Get File backend information if this mapping is backed be host-memory.
     /// return None if this mapping is an anonymous mapping.
     pub fn file_backend(&self) -> Option<FileBackend> {
-        self.file_back.clone()
+        self.file_back.get().cloned()
     }
 
     pub fn mem_shared(&self) -> bool {
-        self.is_share
+        self.is_share.load(Ordering::Acquire)
     }
 }
 
