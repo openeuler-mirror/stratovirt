@@ -1473,40 +1473,46 @@ impl Qcow2DumpArg {
         let actual_size = meta.blocks() * SECTOR_SIZE;
 
         println!("=== Image File ===");
-        println!("Image path:       {}", self.img_path);
-        println!("Device:           {},{}", dev.0, dev.1);
-        println!("Inode:            {}", meta.ino());
-        println!("Links:            {}", meta.nlink());
-        println!("Access:           0o{:o}", meta.mode());
-        println!("Uid:              {} ({})", meta.uid(), meta.uid());
-        println!("Gid:              {} ({})", meta.gid(), meta.gid());
-        println!("Device type:      {},{}", rdev.0, rdev.1);
+        println!("{:<18} {}", "Image path:", self.img_path);
+        println!("{:<18} {},{}", "Device:", dev.0, dev.1);
+        println!("{:<18} {}", "Inode:", meta.ino());
+        println!("{:<18} {}", "Links:", meta.nlink());
+        println!("{:<18} 0o{:o}", "Access:", meta.mode());
+        println!("{:<18} {} ({})", "Uid:", meta.uid(), meta.uid());
+        println!("{:<18} {} ({})", "Gid:", meta.gid(), meta.gid());
+        println!("{:<18} {},{}", "Device type:", rdev.0, rdev.1);
         println!(
-            "Virtual size:     {} ({} bytes)",
+            "{:<18} {} ({} bytes)",
+            "File Virtual size:",
             format_size(virtual_size),
             virtual_size
         );
         println!(
-            "Actual size:      {} ({} bytes)",
+            "{:<18} {} ({} bytes)",
+            "File Actual size:",
             format_size(actual_size),
             actual_size
         );
-        println!("Block size:       {}", meta.blksize());
+        println!("{:<18} {}", "Block size:", meta.blksize());
         println!(
-            "Blocks:           {} ({} bytes on disk)",
+            "{:<18} {} ({} bytes on disk)",
+            "Blocks:",
             meta.blocks(),
             actual_size
         );
         println!(
-            "Access:           {}",
+            "{:<18} {}",
+            "Access:",
             format_time(meta.atime(), meta.atime_nsec())
         );
         println!(
-            "Modify:           {}",
+            "{:<18} {}",
+            "Modify:",
             format_time(meta.mtime(), meta.mtime_nsec())
         );
         println!(
-            "Change:           {}",
+            "{:<18} {}",
+            "Change:",
             format_time(meta.ctime(), meta.ctime_nsec())
         );
         println!();
