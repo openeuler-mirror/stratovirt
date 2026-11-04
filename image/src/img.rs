@@ -756,7 +756,7 @@ pub(crate) fn image_info(args: Vec<String>) -> Result<()> {
     };
 
     let aio = Aio::new(Arc::new(SyncAioInfo::complete_func), AioEngine::Off, None)?;
-    let image_file = ImageFile::create(&img_path, false)?;
+    let image_file = ImageFile::create(&img_path, true)?;
     let detect_fmt = image_file.detect_img_format()?;
     let conf = BlockProperty {
         format: detect_fmt,
