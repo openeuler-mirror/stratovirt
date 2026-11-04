@@ -1238,8 +1238,9 @@ pub(crate) fn image_snapshot(args: Vec<String>) -> Result<()> {
         }
     };
 
-    // Detect the image fmt.
-    let image_file = ImageFile::create(&path, false)?;
+    // Open read-only unless the operation writes the image.
+    let read_only = matches!(snapshot_operation, None | Some(SnapshotOperation::List));
+    let image_file = ImageFile::create(&path, read_only)?;
     let detect_fmt = image_file.detect_img_format()?;
     let real_fmt = image_file.check_img_format(disk_fmt, detect_fmt)?;
     if real_fmt != DiskFormat::Qcow2 {
