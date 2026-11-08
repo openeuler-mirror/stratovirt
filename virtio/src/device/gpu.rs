@@ -10,8 +10,12 @@
 // NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 
+use std::fs::File;
+use std::io::ErrorKind;
 use std::mem::size_of;
+use std::os::unix::fs::FileExt;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,6 +75,7 @@ use util::pixman::{
     pixman_region_init_rect, pixman_region_intersect, pixman_region_translate,
     virtio_gpu_unref_resource_callback,
 };
+use util::unix::{do_mmap, host_page_size};
 
 /// Number of virtqueues
 const QUEUE_NUM_GPU: usize = 2;
@@ -193,7 +198,10 @@ struct GpuResourceState {
     scanouts_bitmask: u32,
     host_mem: u64,
     backing_iov: Vec<GpuBackingState>,
+    /// Range of the image in the vmstate blob.
     image: Option<GpuBlobRange>,
+    /// Range of the image in the images file, when saved by a snapshot.
+    image_file_range: Option<GpuBlobRange>,
     monochrome_cursor: Option<GpuBlobRange>,
 }
 
@@ -242,6 +250,21 @@ struct GpuVmstateHeader {
 
 const GPU_VMSTATE_MAGIC: u32 = u32::from_le_bytes(*b"GVMS");
 const GPU_VMSTATE_VERSION: u32 = 1;
+
+/// Prefix of the per-device snapshot file next to the device state, holding
+/// resource images so that restore can map them privately.
+const GPU_IMAGES_FILE_PREFIX: &str = "gpu-images-";
+
+/// # Safety
+///
+/// `mapping` must be the boxed address and length of a mapping owned by `_image`.
+unsafe extern "C" fn release_image_mapping(
+    _image: *mut pixman_image_t,
+    mapping: *mut libc::c_void,
+) {
+    let (base, len) = *Box::from_raw(mapping.cast::<(u64, usize)>());
+    libc::munmap(base as *mut libc::c_void, len);
+}
 
 trait CtrlHdr {
     fn mut_ctrl_hdr(&mut self) -> &mut VirtioGpuCtrlHdr;
@@ -1901,6 +1924,10 @@ pub struct Gpu {
     queue_evts: Arc<Mutex<Vec<Arc<EventFd>>>>,
     /// bar0 file backend which is set by ohui server
     bar0_fb: Option<FileBackend>,
+    /// Snapshot images file, opened by `restore_gpu`.
+    images_file: Option<File>,
+    /// Snapshot vmstate received before `images_file` was opened.
+    pending_state: Option<Vec<u8>>,
 }
 
 /// SAFETY: The raw pointer in rust doesn't impl Send, all write operations
@@ -1926,6 +1953,8 @@ impl Gpu {
             io_inflight: IoRef::default(),
             queue_evts: Arc::new(Mutex::new(Vec::new())),
             bar0_fb: None,
+            images_file: None,
+            pending_state: None,
         }
     }
 
@@ -2023,16 +2052,47 @@ impl Gpu {
         offset == data.len()
     }
 
-    fn snapshot_resource(blob_len: &mut u64, res: &GpuResource) -> GpuResourceState {
-        let image = Self::pixman_data(res).and_then(|data| {
-            if (res.resource_id & VIRTIO_GPU_RES_FRAMEBUF != 0 && !res.iov.is_empty())
-                || Self::iov_matches_data(&res.iov, data)
-            {
-                None
-            } else {
-                Some(Self::blob_range(blob_len, data.len()))
-            }
-        });
+    fn images_file_path(&self, dir: &str) -> PathBuf {
+        Path::new(dir).join(format!("{}{}", GPU_IMAGES_FILE_PREFIX, self.cfg.id))
+    }
+
+    /// A framebuffer with backing is displayed from guest memory, so restore
+    /// does not need its image.
+    fn is_direct_framebuffer(res: &GpuResource) -> bool {
+        res.resource_id & VIRTIO_GPU_RES_FRAMEBUF != 0 && !res.iov.is_empty()
+    }
+
+    fn next_image_file_range(file_len: &mut u64, res: &GpuResource) -> Option<GpuBlobRange> {
+        if Self::is_direct_framebuffer(res) {
+            return None;
+        }
+        let data = Self::pixman_data(res)?;
+        // Keep images page aligned so that restore can map each of them.
+        *file_len = file_len.next_multiple_of(host_page_size());
+        Some(Self::blob_range(file_len, data.len()))
+    }
+
+    fn snapshot_resource(
+        blob_len: &mut u64,
+        use_images_file: bool,
+        images_file_len: &mut u64,
+        res: &GpuResource,
+    ) -> GpuResourceState {
+        // The images file keeps the images, so that restore never reads
+        // resource backing from guest memory that may still be served by UFFD.
+        let (image, image_file_range) = if use_images_file {
+            (None, Self::next_image_file_range(images_file_len, res))
+        } else {
+            let image = Self::pixman_data(res).and_then(|data| {
+                if Self::is_direct_framebuffer(res) || Self::iov_matches_data(&res.iov, data) {
+                    None
+                } else {
+                    Some(Self::blob_range(blob_len, data.len()))
+                }
+            });
+
+            (image, None)
+        };
         let monochrome_cursor = if res.monochrome_cursor.is_empty() {
             None
         } else {
@@ -2056,6 +2116,7 @@ impl Gpu {
             host_mem: res.host_mem,
             backing_iov,
             image,
+            image_file_range,
             monochrome_cursor,
         }
     }
@@ -2098,12 +2159,18 @@ impl Gpu {
 
     fn build_state_blob(&self) -> Result<Vec<u8>> {
         let mut blob_len = 0_u64;
+        // Snapshot saving sets `migrating` and writes images via `save_gpu`.
+        // Other state transfers keep images in the vmstate or guest backing.
+        let use_images_file = self.migrating.load(Ordering::SeqCst);
+        let mut images_file_len = 0_u64;
         let rt = self.runtime.lock().unwrap();
         let output_states = self.output_states.lock().unwrap().to_vec();
         let resources = rt
             .resources_list
             .iter()
-            .map(|res| Self::snapshot_resource(&mut blob_len, res))
+            .map(|res| {
+                Self::snapshot_resource(&mut blob_len, use_images_file, &mut images_file_len, res)
+            })
             .collect();
         let scanouts = rt
             .scanouts
@@ -2176,10 +2243,62 @@ impl Gpu {
         Ok((gpu_state, &state[json_end..blob_end]))
     }
 
+    fn map_image(
+        file: &File,
+        range: &GpuBlobRange,
+        state: &GpuResourceState,
+        format: pixman_format_code_t,
+    ) -> Result<*mut pixman_image_t> {
+        let file_len = file.metadata()?.len();
+        let end = range.offset.checked_add(range.len);
+        if range.len != state.host_mem || state.height == 0 || end.is_none_or(|end| end > file_len)
+        {
+            bail!("Invalid virtio-gpu image file range");
+        }
+        let stride = i32::try_from(range.len / u64::from(state.height))?;
+
+        // Map pixels privately instead of reading them: pages stay shared with
+        // the page cache until written. The images file must not be modified or
+        // truncated while restored VMs are alive.
+        let page_offset = range.offset % host_page_size();
+        let len = page_offset + range.len;
+        let base = do_mmap(
+            &Some(file),
+            len,
+            range.offset - page_offset,
+            false,
+            false,
+            false,
+            false,
+        )?;
+        let image = create_pixman_image(
+            format,
+            state.width as i32,
+            state.height as i32,
+            (base + page_offset) as *mut u32,
+            stride,
+        );
+        if image.is_null() {
+            // SAFETY: The mapping was created above and is not used by any image.
+            unsafe { libc::munmap(base as *mut libc::c_void, len as usize) };
+            bail!("Failed to recreate virtio-gpu pixman image");
+        }
+        // SAFETY: The image owns the mapping, which is released with its last reference.
+        unsafe {
+            pixman_image_set_destroy_function(
+                image,
+                Some(release_image_mapping),
+                Box::into_raw(Box::new((base, len as usize))).cast(),
+            );
+        }
+        Ok(image)
+    }
+
     fn rebuild_resource(
         mem_space: &AddressSpace,
         state: &GpuResourceState,
         blob: &[u8],
+        images_file: Option<&File>,
     ) -> Result<GpuResource> {
         let (mem, _) = cal_image_hostmem(state.format, state.width, state.height, u32::MAX);
         let host_mem = mem.with_context(|| "Invalid virtio-gpu resource size")? as u64;
@@ -2221,6 +2340,11 @@ impl Gpu {
 
         if state.format != VIRTIO_GPU_FORMAT_MONOCHROME {
             let pixman_format = get_pixman_format(state.format)?;
+            if let Some(range) = &state.image_file_range {
+                let file = images_file.with_context(|| "Virtio-gpu images file is missing")?;
+                res.pixman_image = Self::map_image(file, range, state, pixman_format)?;
+                return Ok(res);
+            }
             res.pixman_image = create_pixman_image(
                 pixman_format,
                 state.width as i32,
@@ -2360,6 +2484,16 @@ impl Gpu {
 
     fn restore_state_blob(&mut self, state: &[u8]) -> Result<()> {
         let (gpu_state, blob) = Self::split_state_blob(state)?;
+        // `restore_gpu` runs concurrently, so the images file may not be open yet.
+        if self.images_file.is_none()
+            && gpu_state
+                .resources
+                .iter()
+                .any(|r| r.image_file_range.is_some())
+        {
+            self.pending_state = Some(state.to_vec());
+            return Ok(());
+        }
         let total_hostmem = gpu_state.resources.iter().try_fold(0_u64, |acc, res| {
             acc.checked_add(res.host_mem)
                 .with_context(|| "Virtio-gpu used host memory overflow")
@@ -2390,13 +2524,17 @@ impl Gpu {
         }
         drop(output_states);
 
+        let images_file = self.images_file.take();
         let mut new_rt = GpuRuntimeState::new(&self.consoles);
         new_rt.enable_output_bitmask = gpu_state.enable_output_bitmask;
         new_rt.used_hostmem = gpu_state.used_hostmem;
         for res_state in &gpu_state.resources {
-            new_rt
-                .resources_list
-                .push(Self::rebuild_resource(&self.mem_space, res_state, blob)?);
+            new_rt.resources_list.push(Self::rebuild_resource(
+                &self.mem_space,
+                res_state,
+                blob,
+                images_file.as_ref(),
+            )?);
         }
         for (idx, scanout_state) in gpu_state.scanouts.iter().enumerate() {
             if idx >= new_rt.scanouts.len() {
@@ -2584,6 +2722,9 @@ impl StateTransfer for Gpu {
 
 impl MigrationHook for Gpu {
     fn resume(&mut self) -> Result<()> {
+        if self.pending_state.is_some() {
+            bail!("Virtio-gpu snapshot images file is missing");
+        }
         let locked_evts = self.queue_evts.lock().unwrap();
         for evt in locked_evts.iter() {
             if let Err(e) = evt.write(1) {
@@ -2599,6 +2740,32 @@ impl MigrationHook for Gpu {
 
     fn max_state_size(&self) -> usize {
         MAX_LARGE_DEVICE_STATE_SIZE
+    }
+
+    fn save_gpu(&mut self, path: &str) -> Result<()> {
+        let rt = self.runtime.lock().unwrap();
+        let file = File::create(self.images_file_path(path))
+            .with_context(|| "Failed to create virtio-gpu images file")?;
+        let mut file_len = 0_u64;
+        for res in &rt.resources_list {
+            if let Some(range) = Self::next_image_file_range(&mut file_len, res) {
+                file.write_all_at(Self::pixman_data(res).unwrap(), range.offset)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn restore_gpu(&mut self, path: &str) -> Result<()> {
+        self.images_file = match File::open(self.images_file_path(path)) {
+            Ok(file) => Some(file),
+            // Snapshots without the file keep resource images in the vmstate.
+            Err(e) if e.kind() == ErrorKind::NotFound => None,
+            Err(e) => return Err(e).with_context(|| "Failed to open virtio-gpu images file"),
+        };
+        if let Some(state) = self.pending_state.take() {
+            self.restore_state_blob(&state)?;
+        }
+        Ok(())
     }
 
     fn notify_status(&self, save: bool, status: MigrationStatus) -> Result<()> {
