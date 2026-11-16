@@ -630,7 +630,7 @@ macro_rules! check_arg_exist{
     }
 }
 
-/// Make sure args are existed.
+/// Make sure args are not existed.
 ///
 ///   arg_name: Name of arg.
 ///   arg_value: Value of arg. Should be Option<> class.
