@@ -182,7 +182,7 @@ impl PciDevBase {
         self.config.write_mask = pci_state.write_mask.clone();
         self.config.write_clear_mask = pci_state.write_clear_mask.clone();
         self.config.last_cap_end = pci_state.last_cap_end;
-        self.config.last_ext_cap_offset = pci_state.last_ext_cap_end;
+        self.config.last_ext_cap_offset = pci_state.last_ext_cap_offset;
         self.config.last_ext_cap_end = pci_state.last_ext_cap_end;
         self.bme.store(pci_state.bme, Ordering::Release);
     }

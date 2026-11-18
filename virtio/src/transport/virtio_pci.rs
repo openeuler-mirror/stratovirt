@@ -1381,11 +1381,6 @@ impl StateTransfer for VirtioPciDevice {
 
 impl MigrationHook for VirtioPciDevice {
     fn resume(&mut self) -> Result<()> {
-        if !self.device.lock().unwrap().device_activated() {
-            return Ok(());
-        }
-
-        // Reregister ioevents for notifies.
         let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
         PCI_BUS!(parent_bus, locked_bus, pci_bus);
         if let Err(e) = self.base.config.update_bar_mapping(
@@ -1396,6 +1391,11 @@ impl MigrationHook for VirtioPciDevice {
             bail!("Failed to update bar, error is {:?}", e);
         }
 
+        if !self.device.lock().unwrap().device_activated() {
+            return Ok(());
+        }
+
+        // Reregister ioevents for notifies.
         let queue_evts = (*self.notify_eventfds).clone().events;
         if let Some(cb) = self.interrupt_cb.clone() {
             if let Err(e) =
