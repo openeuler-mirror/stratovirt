@@ -2540,6 +2540,7 @@ pub trait MachineOps: MachineLifecycle {
             device.clone(),
             &config.id,
         );
+        MigrationManager::register_gpu_instance(device.clone(), &config.id);
         self.add_virtio_pci_device(&config.id, &bdf, device, false, false)?;
         Ok(())
     }

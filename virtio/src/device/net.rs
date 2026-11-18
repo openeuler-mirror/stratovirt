@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{cmp, fs, mem};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use log::{error, warn};
 use once_cell::sync::Lazy;
@@ -416,6 +416,10 @@ impl CtrlInfo {
     }
 
     fn filter_packets(&mut self, buf: &[u8]) -> bool {
+        if buf.len() < ETHERNET_HDR_LENGTH {
+            return true;
+        }
+
         // Broadcast address: 0xff:0xff:0xff:0xff:0xff:0xff.
         let bcast = [0xff; MAC_ADDR_LEN];
         // TPID of the vlan tag, defined in IEEE 802.1Q, is 0x8100.
@@ -426,6 +430,10 @@ impl CtrlInfo {
         }
 
         if buf[ETHERNET_HDR_LENGTH - VLAN_TPID_LENGTH..ETHERNET_HDR_LENGTH] == vlan {
+            if buf.len() < ETHERNET_HDR_LENGTH + VLAN_TAG_LENGTH {
+                return true;
+            }
+
             let vid = u16::from_be_bytes([buf[ETHERNET_HDR_LENGTH], buf[ETHERNET_HDR_LENGTH + 1]]);
             let value = if let Some(value) = self.vlan_map.get(&(vid >> 5)) {
                 *value
@@ -1702,15 +1710,25 @@ impl Net {
         }
     }
 
-    fn unregister_trans_evts(&mut self) -> Result<()> {
-        unregister_event_helper(
+    fn unregister_event_listeners(&mut self) {
+        if let Err(e) = unregister_event_helper(
+            self.net_cfg.iothread.as_ref(),
+            &mut self.base.deactivate_evts,
+        ) {
+            warn!("Failed to unregister iothread event: {}", e);
+        };
+        if let Err(e) = unregister_event_helper(
             self.net_cfg.rx_iothread.as_ref(),
             &mut self.rx_deactivate_evts,
-        )?;
-        unregister_event_helper(
+        ) {
+            warn!("Failed to unregister rx event: {}", e);
+        }
+        if let Err(e) = unregister_event_helper(
             self.net_cfg.tx_iothread.as_ref(),
             &mut self.tx_deactivate_evts,
-        )
+        ) {
+            warn!("Failed to unregister tx event: {}", e);
+        }
     }
 
     fn enable_taps(&mut self, enable: bool) {
@@ -1744,9 +1762,18 @@ impl Net {
         self.create_taps()?;
 
         if self.base.device_activated.load(Ordering::SeqCst) {
-            let mem_space = self.mem_space.take().unwrap();
-            let interrupt_cb = self.interrupt_cb.take().unwrap();
-            let queue_evts = self.queue_evts.take().unwrap();
+            let mem_space = self
+                .mem_space
+                .take()
+                .ok_or_else(|| anyhow!("mem_space is None during update_netdev_cfg"))?;
+            let interrupt_cb = self
+                .interrupt_cb
+                .take()
+                .ok_or_else(|| anyhow!("interrupt_cb is None during update_netdev_cfg"))?;
+            let queue_evts = self
+                .queue_evts
+                .take()
+                .ok_or_else(|| anyhow!("queue_evts is None during update_netdev_cfg"))?;
             self.deactivate()?;
             self.activate(mem_space, interrupt_cb, queue_evts)?;
         }
@@ -2210,11 +2237,7 @@ impl VirtioDevice for Net {
 
     fn deactivate(&mut self) -> Result<()> {
         wait_io_done(&self.io_inflight, DEFAULT_IO_TIMEOUT, &self.net_cfg.id);
-        unregister_event_helper(
-            self.net_cfg.iothread.as_ref(),
-            &mut self.base.deactivate_evts,
-        )?;
-        self.unregister_trans_evts()?;
+        self.unregister_event_listeners();
         self.update_evts.clear();
         self.senders = None;
         self.ctrl_info = None;
@@ -2385,7 +2408,7 @@ mod tests {
         ctrl_info.rx_mode.promisc = false;
         let mut buf = [
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x81, 0x00,
-            0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
         ];
         // It has no vla vid, the packet is filtered.
         assert!(ctrl_info.filter_packets(&buf));
