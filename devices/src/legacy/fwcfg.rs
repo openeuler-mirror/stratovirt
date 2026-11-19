@@ -240,19 +240,29 @@ struct FwCfgDmaAccess {
 
 impl ByteCode for FwCfgDmaAccess {}
 
+impl FwCfgDmaAccess {
+    fn dma_read(mem: &Arc<AddressSpace>, addr: GuestAddress) -> Result<Self> {
+        const SIZE: usize = std::mem::size_of::<FwCfgDmaAccess>();
+        let mut buf = [0u8; SIZE];
+        read_dma_memory(mem, addr, &mut buf)?;
+
+        Ok(Self {
+            control: BigEndian::read_u32(&buf[0..4]),
+            length: BigEndian::read_u32(&buf[4..8]),
+            address: BigEndian::read_u64(&buf[8..16]),
+        })
+    }
+}
+
 /// write data to DMA memory zone
-fn write_dma_memory(
-    addr_space: &Arc<AddressSpace>,
-    addr: GuestAddress,
-    mut buf: &[u8],
-    len: u64,
-) -> Result<()> {
+fn write_dma_memory(addr_space: &Arc<AddressSpace>, addr: GuestAddress, buf: &[u8]) -> Result<()> {
     addr_space
-        .write(&mut buf, addr, len, AddressAttr::Ram)
+        .write_bytes(buf, addr, AddressAttr::Ram)
         .with_context(|| {
             format!(
                 "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-                addr.0, len
+                addr.0,
+                buf.len()
             )
         })?;
 
@@ -264,8 +274,8 @@ fn read_dma_memory(
     addr_space: &Arc<AddressSpace>,
     addr: GuestAddress,
     mut buf: &mut [u8],
-    len: u64,
 ) -> Result<()> {
+    let len = buf.len() as u64;
     addr_space
         .read(&mut buf, addr, len, AddressAttr::Ram)
         .with_context(|| {
@@ -285,15 +295,13 @@ fn write_dma_result(addr_space: &Arc<AddressSpace>, addr: GuestAddress, value: u
         addr_space,
         addr.unchecked_add(offset_of!(FwCfgDmaAccess, control) as u64),
         &dma_buf,
-        dma_buf.len() as u64,
     )
     .with_context(|| {
         format!(
             "Failed to write dma result of fwcfg at gpa=0x{:x} value=0x{:x}",
             addr.0, value
         )
-    })?;
-    Ok(())
+    })
 }
 
 #[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
@@ -561,20 +569,24 @@ impl FwCfgCommon {
         // Reset dma_addr address before next dma access
         self.dma_addr = GuestAddress(0);
 
-        // Read DMA request from guest
-        let mut dma_req = FwCfgDmaAccess::default();
-        let dma_request = dma_req.as_mut_bytes();
-        let size = std::mem::size_of::<FwCfgDmaAccess>() as u64;
-        if let Err(_e) = read_dma_memory(&self.mem_space, dma_addr, dma_request, size) {
-            write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)?;
-            return Err(anyhow!(LegacyError::ReadDmaRequest(dma_addr.0, size)));
-        }
-
-        // Build `FwCfgDmaAccess` object from dma_request here
-        let mut dma = FwCfgDmaAccess {
-            control: BigEndian::read_u32(&dma_request[0..4]),
-            length: BigEndian::read_u32(&dma_request[4..8]),
-            address: BigEndian::read_u64(&dma_request[8..]),
+        // Read DMA request from guest. The guest spins on the control word, so
+        // an ERROR must be pushed back on failure before bailing out.
+        let mut dma = match FwCfgDmaAccess::dma_read(&self.mem_space, dma_addr) {
+            Ok(dma) => dma,
+            Err(e) => {
+                if let Err(notify_err) =
+                    write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)
+                {
+                    error!(
+                        "Failed to notify dma error of fwcfg at gpa=0x{:x}: {:?}",
+                        dma_addr.0, notify_err
+                    );
+                }
+                return Err(e.context(LegacyError::ReadDmaRequest(
+                    dma_addr.0,
+                    std::mem::size_of::<FwCfgDmaAccess>() as u64,
+                )));
+            }
         };
         if dma.control & FW_CFG_DMA_CTL_SELECT > 0 {
             self.select_entry((dma.control >> 16) as u16);
@@ -609,13 +621,8 @@ impl FwCfgCommon {
 
                 if is_read {
                     let data = vec![0_u8; len as usize];
-                    if write_dma_memory(
-                        &mem_space,
-                        GuestAddress(dma.address),
-                        data.as_slice(),
-                        u64::from(len),
-                    )
-                    .is_err()
+                    if write_dma_memory(&mem_space, GuestAddress(dma.address), data.as_slice())
+                        .is_err()
                     {
                         dma.control |= FW_CFG_DMA_CTL_ERROR;
                     }
@@ -635,8 +642,7 @@ impl FwCfgCommon {
                     && write_dma_memory(
                         &mem_space,
                         GuestAddress(dma.address),
-                        &entry.data[offset as usize..],
-                        u64::from(len),
+                        &entry.data[offset as usize..(offset + len) as usize],
                     )
                     .is_err()
                 {
@@ -645,10 +651,8 @@ impl FwCfgCommon {
 
                 if is_write {
                     let mut dma_read_error = false;
-                    let data = &mut entry.data[offset as usize..];
-                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data, u64::from(len))
-                        .is_err()
-                    {
+                    let data = &mut entry.data[offset as usize..(offset + len) as usize];
+                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data).is_err() {
                         dma_read_error = true;
                     }
 
