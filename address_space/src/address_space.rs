@@ -742,18 +742,28 @@ impl AddressSpace {
         count: u64,
         attr: AddressAttr,
     ) -> Result<()> {
+        let mut buf = Vec::with_capacity(count as usize);
+        let len = src.read_to_end(&mut buf)?;
+        if len as u64 != count {
+            bail!("Short read: expected {} bytes, got {} bytes", count, len);
+        }
+        self.write_bytes(&buf, addr, attr)
+    }
+
+    /// Write a byte slice to memory. Unlike [`AddressSpace::write`], this does
+    /// not copy the source buffer, while keeping trace and ioeventfd handling
+    /// consistent with it.
+    pub fn write_bytes(&self, buf: &[u8], addr: GuestAddress, attr: AddressAttr) -> Result<()> {
+        let count = buf.len() as u64;
         trace::address_space_write(&addr, count);
         let view = self.flat_view.load();
 
-        let mut buf = Vec::new();
-        src.read_to_end(&mut buf).unwrap();
-
-        if self.try_trigger_ioeventfd(addr, &buf) {
+        if self.try_trigger_ioeventfd(addr, buf) {
             return Ok(());
         }
 
-        view.write(&mut buf.as_slice(), addr, count, attr)?;
-        Ok(())
+        let mut src = buf;
+        view.write(&mut src, addr, count, attr)
     }
 
     /// Write an object to memory.
@@ -771,13 +781,8 @@ impl AddressSpace {
         addr: GuestAddress,
         attr: AddressAttr,
     ) -> Result<()> {
-        self.write(
-            &mut data.as_bytes(),
-            addr,
-            std::mem::size_of::<T>() as u64,
-            attr,
-        )
-        .with_context(|| "Failed to write object")
+        self.write_bytes(data.as_bytes(), addr, attr)
+            .with_context(|| "Failed to write object")
     }
 
     /// Read some data from memory to form an object.

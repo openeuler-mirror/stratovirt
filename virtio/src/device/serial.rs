@@ -761,16 +761,11 @@ impl SerialPortHandler {
             for elem_iov in elem.in_iovec.iter() {
                 let len = cmp::min(elem_iov.len as usize, left);
                 let write_end = written_count + len;
-                let mut source_slice = &buffer[written_count..write_end];
+                let source_slice = &buffer[written_count..write_end];
 
                 // GPAChecked: the elem_iov has been checked in pop_avail().
                 self.mem_space
-                    .write(
-                        &mut source_slice,
-                        elem_iov.addr,
-                        len as u64,
-                        AddressAttr::Ram,
-                    )
+                    .write_bytes(source_slice, elem_iov.addr, AddressAttr::Ram)
                     .with_context(|| {
                         format!(
                             "Failed to write slice for virtio serial port input: addr {:X} len {}",

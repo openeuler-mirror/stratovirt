@@ -389,11 +389,10 @@ impl MachineBase {
         }
     }
 
-    fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
-        let count = data.len() as u64;
+    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
         if let Err(e) = self
             .sys_mem
-            .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
+            .write_bytes(data, GuestAddress(addr), AddressAttr::MMIO)
         {
             error!("Failed to mmio write addr {:x}, error: {:?}", addr, e);
             false

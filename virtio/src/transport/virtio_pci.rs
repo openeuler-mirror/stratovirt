@@ -1006,11 +1006,12 @@ impl VirtioPciDevice {
         }
 
         let result = if is_write {
-            let mut data = self.base.config.config[pci_cfg_data_offset..].as_ref();
-            self.sys_mem.write(
-                &mut data,
+            let data = self.base.config.config
+                [pci_cfg_data_offset..pci_cfg_data_offset + len as usize]
+                .as_ref();
+            self.sys_mem.write_bytes(
+                data,
                 GuestAddress(bar_base + u64::from(off)),
-                u64::from(len),
                 AddressAttr::MMIO,
             )
         } else {

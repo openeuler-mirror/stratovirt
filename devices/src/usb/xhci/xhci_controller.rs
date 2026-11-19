@@ -3037,15 +3037,15 @@ pub fn dma_read_bytes(
 pub fn dma_write_bytes(
     addr_space: &Arc<AddressSpace>,
     addr: GuestAddress,
-    mut buf: &[u8],
+    buf: &[u8],
 ) -> Result<()> {
-    let len = buf.len() as u64;
     addr_space
-        .write(&mut buf, addr, len, AddressAttr::Ram)
+        .write_bytes(buf, addr, AddressAttr::Ram)
         .with_context(|| {
             format!(
                 "Failed to write dma memory at gpa=0x{:x} len=0x{:x}",
-                addr.0, len
+                addr.0,
+                buf.len()
             )
         })?;
     Ok(())

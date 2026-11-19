@@ -135,13 +135,9 @@ impl RngHandler {
             if offset as u32 >= size {
                 break;
             }
+            let len = min(size - offset as u32, iov.len) as usize;
             self.mem_space
-                .write(
-                    &mut buffer[offset..].as_ref(),
-                    iov.addr,
-                    u64::from(min(size - offset as u32, iov.len)),
-                    AddressAttr::Ram,
-                )
+                .write_bytes(&buffer[offset..offset + len], iov.addr, AddressAttr::Ram)
                 .with_context(|| "Failed to write request data for virtio rng")?;
 
             offset += iov.len as usize;

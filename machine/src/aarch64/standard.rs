@@ -243,10 +243,9 @@ impl StdMachine {
         locked_vm
             .base
             .sys_mem
-            .write(
-                &mut locked_vm.dtb_vec.as_slice(),
+            .write_bytes(
+                locked_vm.dtb_vec.as_slice(),
                 GuestAddress(fdt_addr),
-                locked_vm.dtb_vec.len() as u64,
                 AddressAttr::Ram,
             )
             .with_context(|| "Fail to write dtb into sysmem")?;
@@ -718,10 +717,9 @@ impl MachineOps for StdMachine {
                 locked_vm
                     .base
                     .sys_mem
-                    .write(
-                        &mut fdt_vec.as_slice(),
+                    .write_bytes(
+                        fdt_vec.as_slice(),
                         GuestAddress(boot_cfg.fdt_addr),
-                        fdt_vec.len() as u64,
                         AddressAttr::Ram,
                     )
                     .with_context(|| MachineError::WrtFdtErr(boot_cfg.fdt_addr, fdt_vec.len()))?;
