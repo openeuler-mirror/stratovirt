@@ -86,10 +86,12 @@ const MMIO_REPLACEABLE_BLK_NR: usize = 4;
 // The replaceable network device maximum count.
 const MMIO_REPLACEABLE_NET_NR: usize = 2;
 
-// The config of replaceable device.
+// The backend configuration of a replaceable device.
 #[derive(Debug)]
 struct MmioReplaceableConfig {
-    // Device id.
+    // The registration id of the backend, i.e. the id the backend itself
+    // is known by: the `node-name` of blockdev-add, the `id` of netdev_add,
+    // or the id of the drive/netdev backend configured on the cmdline.
     id: String,
     // The config of the related backend device.
     // Eg: Drive config of virtio mmio block. Netdev config of virtio mmio net.
@@ -102,6 +104,8 @@ struct MmioReplaceableDevInfo {
     device: Arc<Mutex<dyn VirtioDevice>>,
     // Device id.
     id: String,
+    // The registration id of the backend configuration bound to this device.
+    backend_id: String,
     // Identify if this device is be used.
     used: bool,
 }
@@ -111,15 +115,38 @@ impl fmt::Debug for MmioReplaceableDevInfo {
         f.debug_struct("MmioReplaceableDevInfo")
             .field("device_type", &self.device.lock().unwrap().device_type())
             .field("id", &self.id)
+            .field("backend_id", &self.backend_id)
             .field("used", &self.used)
             .finish()
+    }
+}
+
+// The kind of a replaceable device, mapped from the `driver` of QMP
+// device_add.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplaceableDevKind {
+    // Virtio mmio block device, driver "virtio-blk-device".
+    Blk,
+    // Virtio mmio net device, driver "virtio-net-device".
+    Net,
+}
+
+impl ReplaceableDevKind {
+    // Map the `driver` of QMP device_add to a replaceable device kind.
+    // New replaceable devices supported by QMP should be added here.
+    fn from_driver(driver: &str) -> Result<Self> {
+        match driver {
+            "virtio-blk-device" => Ok(ReplaceableDevKind::Blk),
+            "virtio-net-device" => Ok(ReplaceableDevKind::Net),
+            _ => bail!("Unsupported device driver {}.", driver),
+        }
     }
 }
 
 // The gather of config, info and count of all replaceable devices.
 #[derive(Debug)]
 pub(crate) struct MmioReplaceableInfo {
-    // The arrays of all replaceable configs.
+    // The registry of backend configurations, keyed by their registration ids.
     configs: Arc<Mutex<Vec<MmioReplaceableConfig>>>,
     // The arrays of all replaceable device information.
     devices: Arc<Mutex<Vec<MmioReplaceableDevInfo>>>,
@@ -191,6 +218,7 @@ impl LightMachine {
             let info = MmioReplaceableDevInfo {
                 device: block,
                 id: id.to_string(),
+                backend_id: "".to_string(),
                 used: false,
             };
             self.replaceable_info.devices.lock().unwrap().push(info);
@@ -216,6 +244,7 @@ impl LightMachine {
             let info = MmioReplaceableDevInfo {
                 device: net,
                 id: total_id.to_string(),
+                backend_id: "".to_string(),
                 used: false,
             };
             self.replaceable_info.devices.lock().unwrap().push(info);
@@ -232,6 +261,7 @@ impl LightMachine {
     pub(crate) fn fill_replaceable_device(
         &mut self,
         id: &str,
+        backend_id: &str,
         dev_config: Vec<Arc<dyn ConfigCheck>>,
         index: usize,
     ) -> Result<()> {
@@ -242,6 +272,7 @@ impl LightMachine {
             }
 
             device_info.id = id.to_string();
+            device_info.backend_id = backend_id.to_string();
             device_info.used = true;
             device_info
                 .device
@@ -251,7 +282,7 @@ impl LightMachine {
                 .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
         }
 
-        self.add_replaceable_config(id, dev_config[0].clone())
+        self.add_replaceable_config(backend_id, dev_config[0].clone())
     }
 
     fn add_replaceable_config(&self, id: &str, back_config: Arc<dyn ConfigCheck>) -> Result<()> {
@@ -280,74 +311,93 @@ impl LightMachine {
     fn add_replaceable_device(
         &self,
         args: Box<qmp_schema::DeviceAddArgument>,
+        dev_kind: ReplaceableDevKind,
         slot: usize,
     ) -> Result<()> {
         let id = args.id;
         let driver = args.driver;
 
-        // Find the configuration by id.
-        let configs_lock = self.replaceable_info.configs.lock().unwrap();
-        let mut configs = Vec::new();
-        for config in configs_lock.iter() {
-            if config.id == id {
-                configs.push(config.back_config.clone());
-            }
-        }
-        if configs.is_empty() {
-            bail!("Failed to find device configuration.");
-        }
+        // The backend reference of the device: the `drive` argument for block
+        // devices and the `netdev` argument for net devices, which must match
+        // the `node-name` of blockdev-add or the `id` of netdev_add.
+        let back_ref = match dev_kind {
+            ReplaceableDevKind::Net => args.netdev.clone().with_context(|| "No netdev set")?,
+            ReplaceableDevKind::Blk => args.drive.clone().with_context(|| "No drive set")?,
+        };
+
+        // Find the backend configuration registered for the backend reference.
+        let backend_config = {
+            let registry = self.replaceable_info.configs.lock().unwrap();
+            registry
+                .iter()
+                .find(|config| config.id == back_ref)
+                .map(|config| config.back_config.clone())
+                .with_context(|| match dev_kind {
+                    ReplaceableDevKind::Net => {
+                        format!("Netdev: {:?} not found for net device", back_ref)
+                    }
+                    ReplaceableDevKind::Blk => {
+                        "No drive configured matched for blk device".to_string()
+                    }
+                })?
+        };
+
+        // The configs to update the replaceable device with: the backend
+        // config followed by the frontend device config.
+        let mut update_configs: Vec<Arc<dyn ConfigCheck>> = vec![backend_config];
 
         // Sanity check for config, driver and slot.
-        let cfg_any = configs[0].as_any();
-        let index = if driver.contains("net") {
-            if slot >= MMIO_REPLACEABLE_NET_NR {
-                return Err(anyhow!(MachineError::RplDevLmtErr(
-                    "net".to_string(),
-                    MMIO_REPLACEABLE_NET_NR
-                )));
+        let backend_cfg_any = update_configs[0].as_any();
+        let index = match dev_kind {
+            ReplaceableDevKind::Net => {
+                if slot >= MMIO_REPLACEABLE_NET_NR {
+                    return Err(anyhow!(MachineError::RplDevLmtErr(
+                        "net".to_string(),
+                        MMIO_REPLACEABLE_NET_NR
+                    )));
+                }
+                if backend_cfg_any.downcast_ref::<NetDevcfg>().is_none() {
+                    return Err(anyhow!(MachineError::DevTypeErr("net".to_string())));
+                }
+                let mut net_config = NetworkInterfaceConfig {
+                    classtype: driver,
+                    id: id.clone(),
+                    netdev: back_ref.clone(),
+                    mac: args.mac,
+                    iothread: args.iothread,
+                    ..Default::default()
+                };
+                net_config.auto_iothread();
+                update_configs.push(Arc::new(net_config));
+                slot + MMIO_REPLACEABLE_BLK_NR
             }
-            if cfg_any.downcast_ref::<NetDevcfg>().is_none() {
-                return Err(anyhow!(MachineError::DevTypeErr("net".to_string())));
+            ReplaceableDevKind::Blk => {
+                if slot >= MMIO_REPLACEABLE_BLK_NR {
+                    return Err(anyhow!(MachineError::RplDevLmtErr(
+                        "block".to_string(),
+                        MMIO_REPLACEABLE_BLK_NR
+                    )));
+                }
+                if backend_cfg_any.downcast_ref::<DriveConfig>().is_none() {
+                    return Err(anyhow!(MachineError::DevTypeErr("blk".to_string())));
+                }
+                let dev_config = VirtioBlkDevConfig {
+                    classtype: driver,
+                    id: id.clone(),
+                    drive: back_ref.clone(),
+                    bootindex: args.boot_index,
+                    iothread: args.iothread,
+                    serial: args.serial_num,
+                    ..Default::default()
+                };
+                update_configs.push(Arc::new(dev_config));
+                slot
             }
-            let mut net_config = NetworkInterfaceConfig {
-                classtype: driver,
-                id: id.clone(),
-                netdev: args.chardev.with_context(|| "No chardev set")?,
-                mac: args.mac,
-                iothread: args.iothread,
-                ..Default::default()
-            };
-            net_config.auto_iothread();
-            configs.push(Arc::new(net_config));
-            slot + MMIO_REPLACEABLE_BLK_NR
-        } else if driver.contains("blk") {
-            if slot >= MMIO_REPLACEABLE_BLK_NR {
-                return Err(anyhow!(MachineError::RplDevLmtErr(
-                    "block".to_string(),
-                    MMIO_REPLACEABLE_BLK_NR
-                )));
-            }
-            if cfg_any.downcast_ref::<DriveConfig>().is_none() {
-                return Err(anyhow!(MachineError::DevTypeErr("blk".to_string())));
-            }
-            let dev_config = VirtioBlkDevConfig {
-                classtype: driver,
-                id: id.clone(),
-                drive: args.drive.with_context(|| "No drive set")?,
-                bootindex: args.boot_index,
-                iothread: args.iothread,
-                serial: args.serial_num,
-                ..Default::default()
-            };
-            configs.push(Arc::new(dev_config));
-            slot
-        } else {
-            bail!("Unsupported replaceable device type.");
         };
 
         // Read the MMDS whitelist before acquiring the devices lock to keep lock
-        // ordering consistent with mmds_config (mmds_store → devices).
-        let mmds_ifaces = if index >= MMIO_REPLACEABLE_BLK_NR {
+        // order consistent with mmds_config (mmds_store → devices).
+        let mmds_ifaces = if dev_kind == ReplaceableDevKind::Net {
             self.base
                 .mmds_store
                 .lock()
@@ -361,18 +411,38 @@ impl LightMachine {
 
         // Find the replaceable device and replace it.
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
+        for device_info in replaceable_devices.iter() {
+            if device_info.used && device_info.id == id {
+                bail!("Device {} already exists.", id);
+            }
+            if device_info.used && device_info.backend_id == back_ref {
+                if dev_kind == ReplaceableDevKind::Net {
+                    bail!(
+                        "Netdev '{}' is already in use by device '{}'",
+                        back_ref,
+                        device_info.id
+                    );
+                }
+                bail!(
+                    "Drive '{}' is already in use by device '{}'",
+                    back_ref,
+                    device_info.id
+                );
+            }
+        }
         if let Some(device_info) = replaceable_devices.get_mut(index) {
             if device_info.used {
                 bail!("The slot {} is occupied already.", slot);
             }
 
             device_info.id = id.to_string();
+            device_info.backend_id = back_ref;
             device_info.used = true;
             device_info
                 .device
                 .lock()
                 .unwrap()
-                .update_config(configs)
+                .update_config(update_configs)
                 .with_context(|| MachineError::UpdCfgErr(id.to_string()))?;
         }
 
@@ -392,27 +462,39 @@ impl LightMachine {
     }
 
     fn del_replaceable_device(&self, id: &str) -> Result<String> {
-        // find the index of configuration by name and remove it
-        let mut is_exist = false;
+        // Find the device by id, and get the id of its backend configuration.
+        let backend_id = self
+            .replaceable_info
+            .devices
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|info| info.used && info.id == id)
+            .map(|info| info.backend_id.clone())
+            .with_context(|| format!("Device {} not found", id))?;
+
+        // Remove the backend configuration registered by blockdev-add or netdev_add.
         let mut configs_lock = self.replaceable_info.configs.lock().unwrap();
-        for (index, config) in configs_lock.iter().enumerate() {
-            if config.id == id {
-                if let Some(drive_config) =
-                    config.back_config.as_any().downcast_ref::<DriveConfig>()
-                {
-                    self.unregister_drive_file(&drive_config.path_on_host)?;
-                }
-                configs_lock.remove(index);
-                is_exist = true;
-                break;
+        if let Some(index) = configs_lock
+            .iter()
+            .position(|config| config.id == backend_id)
+        {
+            if let Some(drive_config) = configs_lock[index]
+                .back_config
+                .as_any()
+                .downcast_ref::<DriveConfig>()
+            {
+                self.unregister_drive_file(&drive_config.path_on_host)?;
             }
+            configs_lock.remove(index);
         }
 
-        // set the status of the device to 'unused'
+        // Set the status of the device to 'unused'.
         let mut replaceable_devices = self.replaceable_info.devices.lock().unwrap();
         for device_info in replaceable_devices.iter_mut() {
-            if device_info.id == id {
+            if device_info.used && device_info.id == id {
                 device_info.id = "".to_string();
+                device_info.backend_id = "".to_string();
                 device_info.used = false;
                 device_info
                     .device
@@ -429,9 +511,6 @@ impl LightMachine {
             }
         }
 
-        if !is_exist {
-            bail!("Device {} not found", id);
-        }
         Ok(id.to_string())
     }
 
@@ -499,7 +578,7 @@ impl LightMachine {
             }
             let configs: Vec<Arc<dyn ConfigCheck>> =
                 vec![Arc::new(netdev_cfg), Arc::new(net_cfg.clone())];
-            self.fill_replaceable_device(&net_cfg.id, configs, index)?;
+            self.fill_replaceable_device(&net_cfg.id, &net_cfg.netdev, configs, index)?;
             self.replaceable_info.net_count += 1;
         }
         Ok(())
@@ -530,7 +609,7 @@ impl LightMachine {
         let index = self.replaceable_info.block_count;
         let configs: Vec<Arc<dyn ConfigCheck>> =
             vec![Arc::new(drive_cfg), Arc::new(device_cfg.clone())];
-        self.fill_replaceable_device(&device_cfg.id, configs, index)?;
+        self.fill_replaceable_device(&device_cfg.id, &device_cfg.drive, configs, index)?;
         self.replaceable_info.block_count += 1;
         Ok(())
     }
@@ -864,6 +943,22 @@ impl DeviceInterface for LightMachine {
     }
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
+        // Validate the driver against the replaceable devices supported by
+        // the micro VM.
+        let dev_kind = match ReplaceableDevKind::from_driver(&args.driver) {
+            Ok(kind) => kind,
+            Err(ref e) => {
+                error!(
+                    "Failed to add device: id {}, type {}, error: {:?}",
+                    args.id, args.driver, e
+                );
+                return Response::create_error_response(
+                    qmp_schema::QmpErrorClass::GenericError(e.to_string()),
+                    None,
+                );
+            }
+        };
+
         // get slot of bus by addr or lun
         let mut slot = 0_usize;
         if let Some(addr) = args.addr.clone() {
@@ -882,11 +977,13 @@ impl DeviceInterface for LightMachine {
             slot = lun + 1;
         }
 
-        match self.add_replaceable_device(args.clone(), slot) {
+        match self.add_replaceable_device(args.clone(), dev_kind, slot) {
             Ok(()) => Response::create_empty_response(),
             Err(ref e) => {
-                error!("{:?}", e);
-                error!("Failed to add device: id {}, type {}", args.id, args.driver);
+                error!(
+                    "Failed to add device: id {}, type {}, error: {:?}",
+                    args.id, args.driver, e
+                );
                 Response::create_error_response(
                     qmp_schema::QmpErrorClass::GenericError(e.to_string()),
                     None,

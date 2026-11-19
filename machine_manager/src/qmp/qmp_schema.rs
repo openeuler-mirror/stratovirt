@@ -277,7 +277,8 @@ generate_command_impl!(system_reset, Empty);
 /// # Arguments
 ///
 /// * `id` - the device's ID, must be unique.
-/// * `driver` - the name of the new device's driver.
+/// * `driver` - the type of the new device's driver. For the micro VM,
+///   only `virtio-blk-device` and `virtio-net-device` are supported.
 /// * `addr` - the address device insert into.
 ///
 /// Additional arguments depend on the type.
@@ -286,7 +287,7 @@ generate_command_impl!(system_reset, Empty);
 ///
 /// ```text
 /// -> { "execute": "device_add",
-///      "arguments": { "id": "net-0", "driver": "virtio-net-mmio", "addr": "0x0" } }
+///      "arguments": { "id": "nic-0", "driver": "virtio-net-device", "netdev": "net-0", "addr": "0x0" } }
 /// <- { "return": {} }
 /// ```
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -2255,8 +2256,8 @@ pub struct CpuResize {}
 ///
 /// ```text
 /// <- { "event": "DEVICE_DELETED",
-///      "data": { "device": "virtio-net-mmio-0",
-///                "path": "/machine/peripheral/virtio-net-mmio-0" },
+///      "data": { "device": "nic-0",
+///                "path": "/machine/peripheral/nic-0" },
 ///      "timestamp": { "seconds": 1265044230, "microseconds": 450486 } }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -2747,7 +2748,7 @@ mod tests {
             "execute": "device_add" ,
             "arguments": {
                 "id":"net-0",
-                "driver":"virtio-net-mmio",
+                "driver":"virtio-net-device",
                 "addr":"0x0"
             }
         }
@@ -2765,7 +2766,7 @@ mod tests {
             "execute": "device_add" ,
             "arguments": {
                 "id":"net-0",
-                "driver":"virtio-net-mmio",
+                "driver":"virtio-net-device",
                 "addr":"0x0",
                 "UnknownArg": "should go to error"
             }
@@ -2784,7 +2785,7 @@ mod tests {
             "execute": "device_add" ,
             "arguments": {
                 "id":"net-0",
-                "driv":"virtio-net-mmio",
+                "driv":"virtio-net-device",
                 "addr":"0x0"
             }
         }
@@ -2902,8 +2903,9 @@ mod tests {
         {
             "execute": "device_add",
             "arguments": {
-                "id": "drive-0",
-                "driver": "virtio-blk-mmio",
+                "id": "blk-0",
+                "driver": "virtio-blk-device",
+                "drive": "drive-0",
                 "addr": "0x1"
             }
         }
