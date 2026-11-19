@@ -370,7 +370,7 @@ mod tests {
     fn create_dummy_address_space() -> Arc<AddressSpace> {
         use address_space::Region;
         let root = Region::init_container_region(u64::MAX, "test_root");
-        AddressSpace::new(root, "test", None).unwrap()
+        AddressSpace::new(root, "test", None, false).unwrap()
     }
 
     #[test]

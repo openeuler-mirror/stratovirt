@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 
 use crate::address_space::FlatView;
 use crate::{
@@ -141,6 +141,39 @@ impl RegionIoEventFd {
     /// * `other` - Other `RegionIoEventFd`.
     pub fn after(&self, other: &RegionIoEventFd) -> bool {
         self.addr_range.base.0 >= (other.addr_range.base.0 + other.addr_range.size)
+    }
+
+    pub fn data_matched(&self, addr: u64, buf: &[u8]) -> bool {
+        if self.addr_range.base.0 != addr {
+            return false;
+        }
+        if self.addr_range.size != 0 && buf.len() as u64 != self.addr_range.size {
+            return false;
+        }
+        if !self.data_match {
+            return true;
+        }
+
+        self.data
+            == match *buf {
+                [b0] => u64::from(b0),
+                [b0, b1] => u64::from(u16::from_ne_bytes([b0, b1])),
+                [b0, b1, b2, b3] => u64::from(u32::from_ne_bytes([b0, b1, b2, b3])),
+                [b0, b1, b2, b3, b4, b5, b6, b7] => {
+                    u64::from_ne_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
+                }
+                _ => return false,
+            }
+    }
+
+    pub fn try_trigger(&self, addr: u64, buf: &[u8]) -> bool {
+        if !self.data_matched(addr, buf) {
+            return false;
+        }
+        if let Err(e) = self.fd.write(1) {
+            error!("Failed to write ioeventfd {:?}: {}", self, e);
+        }
+        true
     }
 }
 

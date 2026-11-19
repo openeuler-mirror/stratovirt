@@ -44,6 +44,7 @@
 //!         Region::init_container_region(std::u64::MAX, "guest_mem"),
 //!         "guest_mem",
 //!         None,
+//!         false,
 //!     )
 //!     .unwrap();
 //!     let kernel_file = std::path::PathBuf::from("/path/to/my/kernel");
@@ -69,6 +70,7 @@
 //!         Region::init_container_region(u64::MAX, "guest_mem"),
 //!         "guest_mem",
 //!         None,
+//!         false,
 //!     )
 //!     .unwrap();
 //!     let kernel_file = std::path::PathBuf::from("/path/to/my/kernel");

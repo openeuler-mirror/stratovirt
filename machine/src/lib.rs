@@ -271,10 +271,12 @@ impl MachineBase {
             vm_config.machine_config.max_cpus,
         );
         let machine_ram = Arc::new(Region::init_container_region(u64::MAX, "MachineRam"));
+        let ioeventfd_enabled = vm_config.machine_config.hypervisor == HypervisorType::Kvm;
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::MAX, "SysMem"),
             "sys_mem",
             Some(machine_ram.clone()),
+            ioeventfd_enabled,
         )
         .with_context(|| MachineError::CrtIoSpaceErr)?;
 
@@ -283,6 +285,7 @@ impl MachineBase {
             Region::init_container_region(1 << 16, "SysIo"),
             "SysIo",
             None,
+            ioeventfd_enabled,
         )
         .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(

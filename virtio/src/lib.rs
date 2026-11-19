@@ -1060,6 +1060,7 @@ mod tests {
             Region::init_container_region(u64::max_value(), "sys_mem"),
             "sys_mem",
             None,
+            false,
         )
         .unwrap();
         #[cfg(target_arch = "x86_64")]
@@ -1067,6 +1068,7 @@ mod tests {
             Region::init_container_region(1 << 16, "sys_io"),
             "sys_io",
             None,
+            false,
         )
         .unwrap();
         let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);
@@ -1082,7 +1084,7 @@ mod tests {
 
     pub fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "root");
-        let sys_space = AddressSpace::new(root, "sys_space", None).unwrap();
+        let sys_space = AddressSpace::new(root, "sys_space", None, false).unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),

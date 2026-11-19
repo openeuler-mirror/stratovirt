@@ -858,7 +858,7 @@ mod tests {
         use std::sync::Arc;
 
         let root = Region::init_container_region(u64::MAX, "test_root");
-        let mem_space = AddressSpace::new(root, "test", None).unwrap();
+        let mem_space = AddressSpace::new(root, "test", None, false).unwrap();
 
         let driver_features = 0u64;
         let queue_config = QueueConfig::new(256);
