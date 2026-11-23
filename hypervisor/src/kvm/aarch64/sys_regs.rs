@@ -46,3 +46,7 @@ pub const KVM_REG_ARM_MPIDR_EL1: u64 = arm64_sys_reg!(3, 0, 0, 0, 5);
 // Counter-timer Virtual Count register: Due to the API interface problem, the encode of
 // this register is SYS_CNTV_CVAL_EL0.
 pub const KVM_REG_ARM_TIMER_CNT: u64 = arm64_sys_reg!(3, 3, 14, 3, 2);
+
+// ID_AA64PFR1_EL1 - AArch64 Processor Feature Register 1.
+pub const KVM_REG_ID_AA64PFR1_EL1: u64 = arm64_sys_reg!(3, 0, 0, 4, 1);
+pub const ID_AA64PFR1_EL1_BTI_MASK: u64 = 0xf;

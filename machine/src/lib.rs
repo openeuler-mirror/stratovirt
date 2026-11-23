@@ -1089,7 +1089,7 @@ pub trait MachineOps: MachineLifecycle {
     ) -> Result<()> {
         use cpu::PVTIME_SIZE_PER_CPU;
 
-        if vcpu_cfg.steal_time {
+        if vcpu_cfg.steal_time.is_on() {
             let pvtime_size = PVTIME_SIZE_PER_CPU * max_cpus as u64;
             if pvtime_size > pvtime_reg_size {
                 bail!("pvtime requires a {pvtime_size} for {max_cpus} cpus, but only {pvtime_reg_size} has been reserved");
@@ -1110,13 +1110,16 @@ pub trait MachineOps: MachineLifecycle {
             register_ram_region("pvtime".to_string(), host_mmap)?;
         }
         for cpu in self.machine_base().cpus.iter() {
-            if vcpu_cfg.pmu {
+            if vcpu_cfg.pmu.is_on() {
                 cpu.hypervisor_cpu.init_pmu()?;
             }
 
-            if vcpu_cfg.steal_time {
-                cpu.hypervisor_cpu.init_pvtime(pvtime_reg_base)?
+            if vcpu_cfg.steal_time.is_on() {
+                cpu.hypervisor_cpu.init_pvtime(pvtime_reg_base)?;
             }
+
+            #[cfg(target_arch = "aarch64")]
+            cpu.hypervisor_cpu.vcpu_post_init(vcpu_cfg)?;
         }
         Ok(())
     }

@@ -154,6 +154,11 @@ impl CPUHypervisorOps for TestCpu {
         Ok(())
     }
 
+    #[cfg(target_arch = "aarch64")]
+    fn vcpu_post_init(&self, _features: &CPUFeatures) -> Result<()> {
+        Ok(())
+    }
+
     #[allow(unused)]
     fn set_boot_config(
         &self,
