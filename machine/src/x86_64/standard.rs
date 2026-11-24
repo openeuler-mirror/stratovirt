@@ -384,7 +384,8 @@ impl StdMachineOps for StdMachine {
             let boot_cfg = locked_controller.get_boot_config();
             let topology = locked_controller.get_topology_config();
 
-            let hypervisor = clone_vm.lock().unwrap().base.hypervisor.clone();
+            // The caller holds the StdMachine lock; do not relock clone_vm.
+            let hypervisor = self.base.hypervisor.clone();
             let vcpu = <StdMachine as MachineOps>::create_vcpu(
                 vcpu_id,
                 clone_vm,
