@@ -310,78 +310,59 @@ impl MemoryBackend {
     }
 }
 
-#[derive(Parser, Clone, Debug, Serialize, Deserialize, Default)]
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CpuFeatureState {
+    Auto = 0,
+    On = 1,
+    Off = 2,
+}
+
+impl CpuFeatureState {
+    /// Whether the feature is explicitly requested.
+    pub fn is_on(self) -> bool {
+        matches!(self, Self::On)
+    }
+}
+
+impl FromStr for CpuFeatureState {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            _ => Err(anyhow!(
+                "Invalid CPU feature option, must be one of \"auto\", \"on\" or \"off\".",
+            )),
+        }
+    }
+}
+
+#[derive(Parser, Clone, Debug, Serialize, Deserialize)]
 #[command(no_binary_name(true))]
 pub struct CpuConfig {
     #[arg(long, alias = "classtype", value_parser = ["host"])]
     pub family: String,
     #[arg(long, default_value = "off")]
-    pub pmu: PmuConfig,
+    pub pmu: CpuFeatureState,
     #[arg(long, default_value = "off")]
-    pub sve: SveConfig,
+    pub sve: CpuFeatureState,
+    #[arg(long, default_value = "auto")]
+    pub bti: CpuFeatureState,
     #[arg(long, alias = "kvm-steal-time", default_value = "off")]
-    pub steal_time: StealTimeConfig,
+    pub steal_time: CpuFeatureState,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum PmuConfig {
-    On,
-    #[default]
-    Off,
-}
-
-impl FromStr for PmuConfig {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "on" => Ok(PmuConfig::On),
-            "off" => Ok(PmuConfig::Off),
-            _ => Err(anyhow!(
-                "Invalid PMU option,must be one of \'on\" or \"off\"."
-            )),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum SveConfig {
-    On,
-    #[default]
-    Off,
-}
-
-impl FromStr for SveConfig {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "on" => Ok(SveConfig::On),
-            "off" => Ok(SveConfig::Off),
-            _ => Err(anyhow!(
-                "Invalid SVE option, must be one of \"on\" or \"off\"."
-            )),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum StealTimeConfig {
-    On,
-    #[default]
-    Off,
-}
-
-impl FromStr for StealTimeConfig {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "on" => Ok(StealTimeConfig::On),
-            "off" => Ok(StealTimeConfig::Off),
-            _ => Err(anyhow!(
-                "Invalid steal time option,must be one of \'on\" or \"off\"."
-            )),
+impl Default for CpuConfig {
+    fn default() -> Self {
+        Self {
+            family: String::new(),
+            pmu: CpuFeatureState::Off,
+            sve: CpuFeatureState::Off,
+            bti: CpuFeatureState::Auto,
+            steal_time: CpuFeatureState::Off,
         }
     }
 }
@@ -1237,15 +1218,19 @@ mod tests {
         // Test PMU flags
         let mut vm_config = VmConfig::default();
         vm_config.add_cpu_feature("host").unwrap();
-        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        assert!(vm_config.machine_config.cpu_config.pmu == CpuFeatureState::Off);
         vm_config.add_cpu_feature("host,pmu=off").unwrap();
-        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::Off);
+        assert!(vm_config.machine_config.cpu_config.pmu == CpuFeatureState::Off);
         vm_config.add_cpu_feature("host,pmu=on").unwrap();
-        assert!(vm_config.machine_config.cpu_config.pmu == PmuConfig::On);
+        assert!(vm_config.machine_config.cpu_config.pmu == CpuFeatureState::On);
         vm_config.add_cpu_feature("host,sve=on").unwrap();
-        assert!(vm_config.machine_config.cpu_config.sve == SveConfig::On);
+        assert!(vm_config.machine_config.cpu_config.sve == CpuFeatureState::On);
         vm_config.add_cpu_feature("host,sve=off").unwrap();
-        assert!(vm_config.machine_config.cpu_config.sve == SveConfig::Off);
+        assert!(vm_config.machine_config.cpu_config.sve == CpuFeatureState::Off);
+        vm_config.add_cpu_feature("host,bti=on").unwrap();
+        assert!(vm_config.machine_config.cpu_config.bti == CpuFeatureState::On);
+        vm_config.add_cpu_feature("host,bti=off").unwrap();
+        assert!(vm_config.machine_config.cpu_config.bti == CpuFeatureState::Off);
 
         // Illegal cpu command lines: should set cpu family.
         let result = vm_config.add_cpu_feature("pmu=off");

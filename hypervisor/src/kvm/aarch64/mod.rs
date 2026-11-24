@@ -25,10 +25,13 @@ use kvm_ioctls::DeviceFd;
 use vmm_sys_util::{ioctl_ioc_nr, ioctl_iow_nr, ioctl_iowr_nr};
 
 use self::core_regs::Arm64CoreRegs;
-use self::sys_regs::{KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT};
+use self::sys_regs::{
+    ID_AA64PFR1_EL1_BTI_MASK, KVM_REG_ARM_MPIDR_EL1, KVM_REG_ARM_TIMER_CNT, KVM_REG_ID_AA64PFR1_EL1,
+};
 use crate::kvm::{KvmCpu, KvmHypervisor};
 use cpu::{
-    ArchCPU, CPUBootConfig, CPUFeatures, CpregListEntry, RegsIndex, CPU, PMU_INTR, PPI_BASE,
+    ArchCPU, ArchCPUCaps::IdFeatureField, CPUBootConfig, CPUFeatures, CpregListEntry, RegsIndex,
+    CPU, PMU_INTR, PPI_BASE,
 };
 use migration::MigrationError;
 use util::byte_code::ByteCode;
@@ -163,14 +166,14 @@ impl KvmCpu {
         }
 
         // Enable PMU from config.
-        if vcpu_config.pmu {
+        if vcpu_config.pmu.is_on() {
             if !self.caps.pmuv3 {
                 bail!("PMUv3 is not supported by KVM");
             }
             kvi.features[0] |= 1 << kvm_bindings::KVM_ARM_VCPU_PMU_V3;
         }
         // Enable SVE from config.
-        if vcpu_config.sve {
+        if vcpu_config.sve.is_on() {
             if !self.caps.sve {
                 bail!("SVE is not supported by KVM");
             }
@@ -184,7 +187,7 @@ impl KvmCpu {
 
         self.arch_vcpu_init()?;
 
-        if vcpu_config.sve {
+        if vcpu_config.sve.is_on() {
             self.fd
                 .vcpu_finalize(&(i32::try_from(kvm_bindings::KVM_ARM_VCPU_SVE)?))?;
         }
@@ -196,6 +199,23 @@ impl KvmCpu {
 
         arch_cpu.lock().unwrap().features = *vcpu_config;
 
+        Ok(())
+    }
+
+    pub fn arch_vcpu_post_init(&self, features: &CPUFeatures) -> Result<()> {
+        let fields = [IdFeatureField {
+            name: "BTI",
+            reg_id: KVM_REG_ID_AA64PFR1_EL1,
+            mask: ID_AA64PFR1_EL1_BTI_MASK,
+            policy: features.bti,
+        }];
+
+        for field in fields {
+            field.apply(
+                |id| self.get_one_reg(id),
+                |id, val| self.set_one_reg(id, val),
+            )?;
+        }
         Ok(())
     }
 
@@ -488,9 +508,14 @@ impl KvmCpu {
     }
 
     pub fn arch_reset_vcpu(&self, cpu: Arc<CPU>) -> Result<()> {
-        cpu.arch_cpu.lock().unwrap().set(&cpu.boot_state());
+        let features = {
+            let mut arch_cpu = cpu.arch_cpu.lock().unwrap();
+            arch_cpu.set(&cpu.boot_state());
+            arch_cpu.features
+        };
         self.arch_vcpu_init()?;
-        self.arch_put_register(cpu)
+        self.arch_put_register(cpu)?;
+        self.arch_vcpu_post_init(&features)
     }
 
     pub fn arch_get_state_vec(&self, arch_cpu: Arc<Mutex<ArchCPU>>) -> Result<Vec<u8>> {

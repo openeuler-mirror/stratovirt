@@ -119,7 +119,7 @@ pub fn create_args_parser<'a>() -> ArgParser<'a> {
         .arg(
             Arg::with_name("cpu")
             .long("cpu")
-            .value_name("host[,pmu=on|off][,sve=on|off]")
+            .value_name("host[,pmu=auto|on|off][,sve=auto|on|off][,steal-time=auto|on|off][,bti=auto|on|off]")
             .help("set CPU model and features.")
             .can_no_value(false)
             .takes_value(true)

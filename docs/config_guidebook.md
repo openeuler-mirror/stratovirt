@@ -57,12 +57,17 @@ StratoVirt allows the configuration of CPU features.
 Currently, these options are supported.
 
 * CPU Family: Set the CPU family for VM, default to `host`, and this is the only supported variant currently.
-* pmu: This enables armv8 PMU for VM. Should be `off` or `on`, default to `off`. (Currently only supported on aarch64)
-* sve: This enables SVE feature for VM. Should be `off` or `on`, default to `off`. (Currently only supported on aarch64)
+* pmu: This enables armv8 PMU for VM. Should be `auto`, `off` or `on`, default to `off`. (Currently only supported on aarch64)
+* sve: This enables SVE feature for VM. Should be `auto`, `off` or `on`, default to `off`. (Currently only supported on aarch64)
+* bti: Branch Target Identification. Should be `auto`, `off` or `on`, default to `auto`. (Currently only supported on aarch64)
+  * `auto`: keep the host-passthrough value from KVM (do not modify ID registers).
+  * `on`: require the host to advertise BTI; fail to start if it does not.
+  * `off`: clear guest `ID_AA64PFR1_EL1.BT` when the host kernel allows writable ID fields (typically Linux 6.12+).
+* kvm-steal-time: Enable paravirtualized steal time. Should be `auto`, `off` or `on`, default to `off`. (Currently only supported on aarch64)
 
 ```shell
 # cmdline
--cpu host[,pmu={on|off}][,sve={on|off}]
+-cpu host[,pmu={auto|on|off}][,sve={auto|on|off}][,kvm-steal-time={auto|on|off}][,bti={auto|on|off}]
 ```
 
 ### 1.3 Memory

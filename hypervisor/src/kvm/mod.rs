@@ -550,6 +550,11 @@ impl CPUHypervisorOps for KvmCpu {
         self.arch_vcpu_init()
     }
 
+    #[cfg(target_arch = "aarch64")]
+    fn vcpu_post_init(&self, features: &CPUFeatures) -> Result<()> {
+        self.arch_vcpu_post_init(features)
+    }
+
     fn set_boot_config(
         &self,
         arch_cpu: Arc<Mutex<ArchCPU>>,

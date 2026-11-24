@@ -36,6 +36,8 @@ mod aarch64;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
+pub use aarch64::caps as ArchCPUCaps;
+#[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUBootConfig as CPUBootConfig;
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::ArmCPUFeatures as CPUFeatures;
@@ -163,6 +165,9 @@ pub trait CPUHypervisorOps: Send + Sync {
     fn init_pvtime(&self, _ipa: u64) -> Result<()>;
 
     fn vcpu_init(&self) -> Result<()>;
+
+    #[cfg(target_arch = "aarch64")]
+    fn vcpu_post_init(&self, features: &CPUFeatures) -> Result<()>;
 
     fn set_boot_config(
         &self,

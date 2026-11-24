@@ -269,7 +269,14 @@ impl CompileFDTHelper for MachineBase {
 
         fdt.end_node(cpus_node_dep)?;
 
-        if self.cpus[0].arch().lock().unwrap().get_features().pmu {
+        if self.cpus[0]
+            .arch()
+            .lock()
+            .unwrap()
+            .get_features()
+            .pmu
+            .is_on()
+        {
             generate_pmu_node(fdt)?;
         }
 
