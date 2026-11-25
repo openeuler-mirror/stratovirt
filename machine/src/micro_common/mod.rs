@@ -943,6 +943,13 @@ impl DeviceInterface for LightMachine {
     }
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
+        if args.id.is_empty() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("Device id is empty".to_string()),
+                None,
+            );
+        }
+
         // Validate the driver against the replaceable devices supported by
         // the micro VM.
         let dev_kind = match ReplaceableDevKind::from_driver(&args.driver) {
@@ -993,6 +1000,13 @@ impl DeviceInterface for LightMachine {
     }
 
     fn device_del(&mut self, device_id: String) -> Response {
+        if device_id.is_empty() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("Device id is empty".to_string()),
+                None,
+            );
+        }
+
         match self.del_replaceable_device(&device_id) {
             Ok(path) => {
                 let block_del_event = qmp_schema::DeviceDeleted {
