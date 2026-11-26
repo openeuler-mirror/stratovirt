@@ -1383,6 +1383,13 @@ impl DeviceInterface for StdMachine {
     }
 
     fn device_add(&mut self, args: Box<qmp_schema::DeviceAddArgument>) -> Response {
+        if args.id.is_empty() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("Device id is empty".to_string()),
+                None,
+            );
+        }
+
         if let Err(e) = self.check_device_id_existed_simple(&args.id) {
             return Response::create_error_response(
                 qmp_schema::QmpErrorClass::GenericError(e.to_string()),
@@ -1558,6 +1565,13 @@ impl DeviceInterface for StdMachine {
     }
 
     fn device_del(&mut self, device_id: String) -> Response {
+        if device_id.is_empty() {
+            return Response::create_error_response(
+                qmp_schema::QmpErrorClass::GenericError("Device id is empty".to_string()),
+                None,
+            );
+        }
+
         let pci_host = match self.get_pci_host() {
             Ok(host) => host,
             Err(e) => {
