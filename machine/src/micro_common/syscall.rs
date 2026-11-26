@@ -118,7 +118,6 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_connect),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_clone3),
-        #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_rt_sigaction),
         #[cfg(target_env = "gnu")]
         BpfRule::new(libc::SYS_rseq),
@@ -132,6 +131,10 @@ pub fn syscall_whitelist() -> Vec<BpfRule> {
         BpfRule::new(libc::SYS_clock_nanosleep),
         BpfRule::new(libc::SYS_prctl),
         BpfRule::new(libc::SYS_userfaultfd),
+        #[cfg(all(target_arch = "x86_64", target_env = "musl"))]
+        BpfRule::new(libc::SYS_readlink),
+        BpfRule::new(libc::SYS_readlinkat),
+        BpfRule::new(libc::SYS_getcwd),
         madvise_rule(),
     ];
     syscall.append(&mut arch_syscall_whitelist());
@@ -218,7 +221,8 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_OP_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE)
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT);
     #[cfg(target_env = "gnu")]
     return BpfRule::new(libc::SYS_futex)
         .add_constraint(
@@ -233,5 +237,10 @@ fn futex_rule() -> BpfRule {
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAIT_BITSET_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_WAKE_BITSET_PRIVATE)
         .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_REQUEUE_PRIVATE)
-        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_LOCK_PI2_PRIVATE);
+        .add_constraint(SeccompCmpOpt::Eq, 1, FUTEX_LOCK_PI2_PRIVATE)
+        .add_constraint(
+            SeccompCmpOpt::Eq,
+            1,
+            FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME,
+        );
 }

@@ -619,14 +619,16 @@ class BaseVM:
     def add_disk(self, diskpath, index=1, check=True):
         """Hotplug a disk to vm"""
         LOG.debug("hotplug disk %s to vm" % diskpath)
-        devid = "drive-%d" % index
-        resp = self.qmp.qmp_command("blockdev-add", node_name="drive-%d" % index,
+        node_name = "drive-%d" % index
+        devid = "blk-%d" % index
+        resp = self.qmp.qmp_command("blockdev-add", node_name=node_name,
                                     file={"driver": "file", "filename": diskpath})
 
         LOG.debug("blockdev-add return %s" % resp)
         if check:
             assert "error" not in resp
-        resp = self.device_add(id=devid, driver="virtio-blk-mmio", addr=str(hex(index)))
+        resp = self.device_add(id=devid, driver="virtio-blk-device", drive=node_name,
+                               addr=str(hex(index)))
         LOG.debug("device_add return %s" % resp)
         if check:
             assert "error" not in resp
@@ -636,36 +638,38 @@ class BaseVM:
     def del_disk(self, index=1, check=True):
         """Unplug a disk"""
         LOG.debug("unplug diskid %d to vm" % index)
-        devid = "drive-%d" % index
+        devid = "blk-%d" % index
         resp = self.device_del(id=devid)
         if check:
             assert "error" not in resp
 
-    def add_net(self, check=True, config_addr=True):
+    def add_net(self, check=True, config_addr=True, index=1):
         """Hotplug a net device"""
         tapinfo = NETWORKS.generator_tap()
         LOG.debug("hotplug tapinfo is %s" % tapinfo)
         self.taps.append(tapinfo)
         tapname = tapinfo["name"]
+        devid = "nic-%d" % index
         resp = self.netdev_add(id=tapname, ifname=tapname)
         if check:
             assert "error" not in resp
         LOG.debug("netdev_add return %s" % resp)
-        resp = self.device_add(id=tapname, driver="virtio-net-mmio", addr="0x1")
+        resp = self.device_add(id=devid, driver="virtio-net-device", netdev=tapname,
+                               addr=str(hex(index)))
         if check:
             assert "error" not in resp
         if config_addr:
-            self.config_network(index=1, model=self.ipalloc_type)
+            self.config_network(index=index, model=self.ipalloc_type)
         LOG.debug("device_add return %s" % resp)
         return resp
 
-    def del_net(self, check=True):
+    def del_net(self, check=True, index=1):
         """Del net"""
         tapinfo = self.taps[-1]
-        tapname = tapinfo["name"]
         # clean ip addr in guest
 
-        resp = self.device_del(id=tapname)
+        devid = "nic-%d" % index
+        resp = self.device_del(id=devid)
         if check:
             assert "error" not in resp
         if "error" not in resp:

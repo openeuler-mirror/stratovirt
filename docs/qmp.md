@@ -97,7 +97,7 @@ Add a block backend.
 
 *Micro VM*
 
-* `node-name` in `blockdev-add` should be same as `id` in `device_add`.
+* `drive` in `device_add` should be same as `node-name` in `blockdev-add`.
 
 * For `addr`, it start at `0x0` mapping in guest with `vda` on x86_64 platform, and start at `0x1`
  mapping in guest with `vdb` on aarch64 platform.
@@ -148,7 +148,7 @@ Add a network backend.
 
 *Micro VM*
 
-* `id` in `netdev_add` should be same as `id` in `device_add`.
+* `netdev` in `device_add` should be same as `id` in `netdev_add`.
 
 * For `addr`, it start at `0x0` mapping in guest with `eth0`.
 
@@ -318,7 +318,7 @@ Add a device.
 #### Arguments
 
 * `id` : the device's ID, must be unique.
-* `driver` : the name of the device's driver.
+* `driver` : the type of the device's driver. For the micro VM, only `virtio-blk-device` and `virtio-net-device` are supported.
 * `addr` : the address device insert into.
 * `host` : the PCI device info in the system that contains domain, bus number, slot number and function number.
 * `bus` : the bus device insert into. Only for Standard VM.
@@ -340,7 +340,7 @@ Add a device.
 #### Example
 
 ```json
--> { "execute": "device_add", "arguments": { "id": "net-0", "driver": "virtio-net-mmio", "addr": "0x0" } }
+-> { "execute": "device_add", "arguments": { "id": "nic-0", "driver": "virtio-net-device", "netdev": "net-0", "addr": "0x0" } }
 <- { "return": {} }
 ```
 
