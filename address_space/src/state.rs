@@ -595,7 +595,7 @@ mod tests {
         );
         let ram_region = Region::init_ram_region(mem, "ram");
         machine_ram.add_subregion_not_update(ram_region, 0).unwrap();
-        let space = AddressSpace::new(root, "space", Some(machine_ram)).unwrap();
+        let space = AddressSpace::new(root, "space", Some(machine_ram), false).unwrap();
         let metadata_path = std::env::temp_dir().join(format!(
             "stratovirt-address-space-metadata-{}",
             std::process::id()

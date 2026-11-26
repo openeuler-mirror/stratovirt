@@ -271,10 +271,12 @@ impl MachineBase {
             vm_config.machine_config.max_cpus,
         );
         let machine_ram = Arc::new(Region::init_container_region(u64::MAX, "MachineRam"));
+        let ioeventfd_enabled = vm_config.machine_config.hypervisor == HypervisorType::Kvm;
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::MAX, "SysMem"),
             "sys_mem",
             Some(machine_ram.clone()),
+            ioeventfd_enabled,
         )
         .with_context(|| MachineError::CrtIoSpaceErr)?;
 
@@ -283,6 +285,7 @@ impl MachineBase {
             Region::init_container_region(1 << 16, "SysIo"),
             "SysIo",
             None,
+            ioeventfd_enabled,
         )
         .with_context(|| MachineError::CrtIoSpaceErr)?;
         let sysbus = SysBus::new(
@@ -386,11 +389,10 @@ impl MachineBase {
         }
     }
 
-    fn mmio_write(&self, addr: u64, mut data: &[u8]) -> bool {
-        let count = data.len() as u64;
+    fn mmio_write(&self, addr: u64, data: &[u8]) -> bool {
         if let Err(e) = self
             .sys_mem
-            .write(&mut data, GuestAddress(addr), count, AddressAttr::MMIO)
+            .write_bytes(data, GuestAddress(addr), AddressAttr::MMIO)
         {
             error!("Failed to mmio write addr {:x}, error: {:?}", addr, e);
             false

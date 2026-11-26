@@ -563,6 +563,7 @@ mod tests {
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
             None,
+            false,
         )
         .unwrap();
         let parent_bus = Arc::new(Mutex::new(PciBus::new(

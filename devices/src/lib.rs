@@ -305,7 +305,7 @@ pub mod test {
 
     pub fn address_space_init() -> Arc<AddressSpace> {
         let root = Region::init_container_region(1 << 36, "root");
-        let sys_space = AddressSpace::new(root, "sys_space", None).unwrap();
+        let sys_space = AddressSpace::new(root, "sys_space", None, false).unwrap();
         let host_mmap = Arc::new(
             HostMemMapping::new(
                 GuestAddress(0),

@@ -16,8 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use arc_swap::ArcSwap;
-use log::{error, info};
-use once_cell::sync::OnceCell;
+use log::info;
 
 use crate::{
     AddressAttr, AddressRange, AddressSpaceError, FlatRange, GuestAddress, Listener,
@@ -185,7 +184,7 @@ pub struct AddressSpace {
     /// The backend memory region tree, used for migrate.
     machine_ram: Option<Arc<Region>>,
     /// Whether the hypervisor enables the ioeventfd.
-    hyp_ioevtfd_enabled: OnceCell<bool>,
+    hyp_ioevtfd_enabled: bool,
 }
 
 impl fmt::Debug for AddressSpace {
@@ -209,6 +208,7 @@ impl AddressSpace {
         root: Region,
         name: &str,
         machine_ram: Option<Arc<Region>>,
+        hyp_ioevtfd_enabled: bool,
     ) -> Result<Arc<AddressSpace>> {
         let space = Arc::new(AddressSpace {
             name: String::from(name),
@@ -217,7 +217,7 @@ impl AddressSpace {
             listeners: Arc::new(Mutex::new(Vec::new())),
             ioeventfds: Arc::new(Mutex::new(Vec::new())),
             machine_ram,
-            hyp_ioevtfd_enabled: OnceCell::new(),
+            hyp_ioevtfd_enabled,
         });
 
         root.set_belonged_address_space(&space);
@@ -499,6 +499,29 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Try to trigger io event fd.
+    /// Checks whether a guest memory write matches any registered `ioeventfd` and
+    /// signals the corresponding eventfd instead of writing to guest memory.
+    ///
+    /// Returns `true` if a matching `ioeventfd` was triggered (in which case the
+    /// caller should skip writing to `flat_view`), or `false` if no match occurred
+    /// or hypervisor-level `ioeventfd` handling is enabled.
+    ///
+    fn try_trigger_ioeventfd(&self, addr: GuestAddress, buf: &[u8]) -> bool {
+        if self.hyp_ioevtfd_enabled {
+            return false;
+        }
+
+        let ioeventfds = self.ioeventfds.lock().unwrap();
+        for evtfd in ioeventfds.as_slice() {
+            if evtfd.try_trigger(addr.0, buf) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Return the host address according to the given `GuestAddress`. It is dangerous to
     /// read and write directly to hva. We strongly recommend that you use the read and
     /// write interface provided by AddressSpace unless you know exactly what you need and
@@ -719,48 +742,28 @@ impl AddressSpace {
         count: u64,
         attr: AddressAttr,
     ) -> Result<()> {
+        let mut buf = Vec::with_capacity(count as usize);
+        let len = src.read_to_end(&mut buf)?;
+        if len as u64 != count {
+            bail!("Short read: expected {} bytes, got {} bytes", count, len);
+        }
+        self.write_bytes(&buf, addr, attr)
+    }
+
+    /// Write a byte slice to memory. Unlike [`AddressSpace::write`], this does
+    /// not copy the source buffer, while keeping trace and ioeventfd handling
+    /// consistent with it.
+    pub fn write_bytes(&self, buf: &[u8], addr: GuestAddress, attr: AddressAttr) -> Result<()> {
+        let count = buf.len() as u64;
         trace::address_space_write(&addr, count);
         let view = self.flat_view.load();
 
-        let mut buf = Vec::new();
-        src.read_to_end(&mut buf).unwrap();
-
-        if !*self.hyp_ioevtfd_enabled.get_or_init(|| false) {
-            let ioeventfds = self.ioeventfds.lock().unwrap();
-            for evtfd in ioeventfds.as_slice() {
-                if evtfd.addr_range.base != addr {
-                    continue;
-                }
-                if count == evtfd.addr_range.size || evtfd.addr_range.size == 0 {
-                    if !evtfd.data_match {
-                        if let Err(e) = evtfd.fd.write(1) {
-                            error!("Failed to write ioeventfd {:?}: {}", evtfd, e);
-                        }
-                        return Ok(());
-                    }
-
-                    let mut buf_temp = buf.clone();
-
-                    if buf_temp.len() <= 8 {
-                        buf_temp.resize(8, 0);
-                        let data = u64::from_bytes(buf_temp.as_slice()).unwrap();
-                        if data == evtfd.data {
-                            if let Err(e) = evtfd.fd.write(1) {
-                                error!("Failed to write ioeventfd {:?}: {}", evtfd, e);
-                            }
-                            return Ok(());
-                        } else {
-                            continue;
-                        }
-                    }
-                    view.write(&mut buf_temp.as_slice(), addr, count, attr)?;
-                    return Ok(());
-                }
-            }
+        if self.try_trigger_ioeventfd(addr, buf) {
+            return Ok(());
         }
 
-        view.write(&mut buf.as_slice(), addr, count, attr)?;
-        Ok(())
+        let mut src = buf;
+        view.write(&mut src, addr, count, attr)
     }
 
     /// Write an object to memory.
@@ -778,13 +781,8 @@ impl AddressSpace {
         addr: GuestAddress,
         attr: AddressAttr,
     ) -> Result<()> {
-        self.write(
-            &mut data.as_bytes(),
-            addr,
-            std::mem::size_of::<T>() as u64,
-            attr,
-        )
-        .with_context(|| "Failed to write object")
+        self.write_bytes(data.as_bytes(), addr, attr)
+            .with_context(|| "Failed to write object")
     }
 
     /// Read some data from memory to form an object.
@@ -827,12 +825,6 @@ impl AddressSpace {
         self.update_ioeventfds()
             .with_context(|| "Failed to generate and update ioeventfds")?;
         Ok(())
-    }
-
-    pub fn set_ioevtfd_enabled(&self, ioevtfd_enabled: bool) {
-        self.hyp_ioevtfd_enabled
-            .set(ioevtfd_enabled)
-            .unwrap_or_else(|_| error!("Failed to set hyp_ioevtfd_enabled"));
     }
 }
 
@@ -980,7 +972,7 @@ mod test {
         }
 
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root, "space", None).unwrap();
+        let space = AddressSpace::new(root, "space", None, false).unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener3 = Arc::new(Mutex::new(ListenerPrior3::default()));
@@ -1031,7 +1023,7 @@ mod test {
         }
 
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root, "space", None).unwrap();
+        let space = AddressSpace::new(root, "space", None, false).unwrap();
         let listener1 = Arc::new(Mutex::new(ListenerPrior0::default()));
         let listener2 = Arc::new(Mutex::new(ListenerPrior0::default()));
         space.register_listener(listener1).unwrap();
@@ -1047,7 +1039,7 @@ mod test {
     #[test]
     fn test_update_topology() {
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None, false).unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -1145,7 +1137,7 @@ mod test {
         // the flat_view is as follows,
         //               [BBBBBBBBBBBBB][CCCCC]
         let root = Region::init_container_region(8000, "region");
-        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None, false).unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -1207,7 +1199,7 @@ mod test {
         // the flat_view is as follows,
         //                      [CCCCCC]
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None, false).unwrap();
         let listener = Arc::new(Mutex::new(TestListener::default()));
         space.register_listener(listener.clone()).unwrap();
 
@@ -1229,7 +1221,7 @@ mod test {
     #[test]
     fn test_get_ram_info() {
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None, false).unwrap();
         let default_ops = RegionOps {
             read: Arc::new(|_: &mut [u8], _: GuestAddress, _: u64| -> bool { true }),
             write: Arc::new(|_: &[u8], _: GuestAddress, _: u64| -> bool { true }),
@@ -1306,7 +1298,7 @@ mod test {
     #[test]
     fn test_write_and_read_object() {
         let root = Region::init_container_region(8000, "root");
-        let space = AddressSpace::new(root.clone(), "space", None).unwrap();
+        let space = AddressSpace::new(root.clone(), "space", None, false).unwrap();
         let ram1 = Arc::new(
             HostMemMapping::new(GuestAddress(0), None, 1000, None, false, false, false).unwrap(),
         );

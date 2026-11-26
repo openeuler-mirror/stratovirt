@@ -437,6 +437,7 @@ pub fn sysbus_init() -> Arc<Mutex<SysBus>> {
         Region::init_container_region(u64::max_value(), "sys_mem"),
         "sys_mem",
         None,
+        false,
     )
     .unwrap();
     #[cfg(target_arch = "x86_64")]
@@ -444,6 +445,7 @@ pub fn sysbus_init() -> Arc<Mutex<SysBus>> {
         Region::init_container_region(1 << 16, "sys_io"),
         "sys_io",
         None,
+        false,
     )
     .unwrap();
     let free_irqs: (i32, i32) = (IRQ_BASE, IRQ_MAX);

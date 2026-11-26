@@ -571,12 +571,14 @@ pub mod tests {
             Region::init_container_region(1 << 16, "sysio"),
             "sysio",
             None,
+            false,
         )
         .unwrap();
         let sys_mem = AddressSpace::new(
             Region::init_container_region(u64::max_value(), "sysmem"),
             "sysmem",
             None,
+            false,
         )
         .unwrap();
         Arc::new(Mutex::new(PciHost::new(

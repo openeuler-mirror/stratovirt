@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail, Context, Result};
 #[cfg(target_arch = "x86_64")]
 use byteorder::LittleEndian;
 use byteorder::{BigEndian, ByteOrder};
-use log::{error, warn};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::legacy::error::LegacyError;
@@ -34,8 +34,7 @@ use migration::snapshot::FWCFG_SNAPSHOT_ID;
 use migration::{DeviceStateDesc, MigrationError, MigrationHook, MigrationManager, StateTransfer};
 use migration_derive::DescSerde;
 use util::byte_code::ByteCode;
-use util::num_ops::extract_u64;
-use util::{gen_base_func, offset_of};
+use util::gen_base_func;
 
 #[cfg(target_arch = "x86_64")]
 const FW_CFG_IO_BASE: u64 = 0x510;
@@ -44,10 +43,10 @@ const FW_CFG_IO_BASE: u64 = 0x510;
 const FW_CFG_IO_SIZE: u64 = 0x12;
 
 // FwCfg Signature
-const FW_CFG_DMA_SIGNATURE: u128 = 0x51454d5520434647;
+const FW_CFG_DMA_SIGNATURE: &[u8; 8] = b"QEMU CFG";
 /// FwCfg version bits
-const FW_CFG_VERSION: u16 = 0x01;
-const FW_CFG_VERSION_DMA: u16 = 0x02;
+const FW_CFG_VERSION: u32 = 0x01;
+const FW_CFG_VERSION_DMA: u32 = 0x02;
 // FwCfg related constants
 const FW_CFG_FILE_SLOTS_DFLT: u16 = 0x20;
 const FW_CFG_FILE_FIRST: u16 = 0x20;
@@ -96,6 +95,7 @@ pub enum FwCfgEntryType {
     #[cfg(target_arch = "x86_64")]
     E820Table = 0x8003,
 }
+
 /// Get the FwCfg entry name of a given key
 fn get_key_name(key: usize) -> &'static str {
     static FW_CFG_KEYS: [&str; 26] = [
@@ -127,11 +127,7 @@ fn get_key_name(key: usize) -> &'static str {
         "file_dir",
     ];
 
-    if key < FW_CFG_FILE_FIRST as usize {
-        FW_CFG_KEYS[key]
-    } else {
-        "unknown"
-    }
+    FW_CFG_KEYS.get(key).copied().unwrap_or("unknown")
 }
 
 /// FwCfg select callback and write callback type definition
@@ -145,6 +141,7 @@ pub trait FwCfgCallback {
 
 /// FwCfg write callback
 pub trait FwCfgWriteCallback {
+    /// Receives the bytes written and their offset within the item.
     fn write_callback(&mut self, data: Vec<u8>, start: u64, len: usize);
 }
 
@@ -173,59 +170,28 @@ impl FwCfgEntry {
     }
 }
 
-/// The FwCfgFile entry used to retrieve firwmware files by os loader
-#[repr(C, packed)]
-#[derive(Copy, Clone)]
+/// A file directory record.
 struct FwCfgFile {
     size: u32,
     select: u16,
-    reserved: u16,
     name: [u8; 56],
 }
 
 impl FwCfgFile {
-    fn new(size: u32, select: u16, name: &str) -> Self {
-        let len = std::cmp::min(56, name.len());
-        let mut bytes = [0; 56];
-        bytes[..len].copy_from_slice(&name.as_bytes()[..len]);
-
-        FwCfgFile {
-            size,
-            select,
-            reserved: 0_u16,
-            name: bytes,
+    fn encode_name(name: &str) -> Result<[u8; 56]> {
+        if name.is_empty() || name.len() >= 56 || !name.is_ascii() || name.as_bytes().contains(&0) {
+            bail!("invalid fwcfg file name {:?}", name);
         }
+        let mut bytes = [0; 56];
+        bytes[..name.len()].copy_from_slice(name.as_bytes());
+        Ok(bytes)
     }
 
-    /// Convert FwCfgFile item into a big endian format data array
-    fn as_be_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![0; 64_usize];
-
-        let mut curr_offset = 0_usize;
-        let mut next_size = std::mem::size_of::<u32>();
-        BigEndian::write_u32(
-            &mut bytes[curr_offset..(curr_offset + next_size)],
-            self.size,
-        );
-
-        curr_offset += next_size;
-        next_size = std::mem::size_of::<u16>();
-        BigEndian::write_u16(
-            &mut bytes[curr_offset..(curr_offset + next_size)],
-            self.select,
-        );
-
-        curr_offset += next_size;
-        next_size = std::mem::size_of::<u16>();
-        BigEndian::write_u16(
-            &mut bytes[curr_offset..(curr_offset + next_size)],
-            self.reserved,
-        );
-
-        curr_offset += next_size;
-        bytes[curr_offset..].copy_from_slice(&self.name);
-
-        bytes
+    fn append_to(&self, directory: &mut Vec<u8>) {
+        directory.extend_from_slice(&self.size.to_be_bytes());
+        directory.extend_from_slice(&self.select.to_be_bytes());
+        directory.extend_from_slice(&[0; 2]);
+        directory.extend_from_slice(&self.name);
     }
 }
 
@@ -240,62 +206,6 @@ struct FwCfgDmaAccess {
 
 impl ByteCode for FwCfgDmaAccess {}
 
-/// write data to DMA memory zone
-fn write_dma_memory(
-    addr_space: &Arc<AddressSpace>,
-    addr: GuestAddress,
-    mut buf: &[u8],
-    len: u64,
-) -> Result<()> {
-    addr_space
-        .write(&mut buf, addr, len, AddressAttr::Ram)
-        .with_context(|| {
-            format!(
-                "Failed to write dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-                addr.0, len
-            )
-        })?;
-
-    Ok(())
-}
-
-/// read data form DMA memory zone
-fn read_dma_memory(
-    addr_space: &Arc<AddressSpace>,
-    addr: GuestAddress,
-    mut buf: &mut [u8],
-    len: u64,
-) -> Result<()> {
-    addr_space
-        .read(&mut buf, addr, len, AddressAttr::Ram)
-        .with_context(|| {
-            format!(
-                "Failed to read dma memory of fwcfg at gpa=0x{:x} len=0x{:x}",
-                addr.0, len
-            )
-        })?;
-    Ok(())
-}
-
-/// Write DMA result to DMA response zone
-fn write_dma_result(addr_space: &Arc<AddressSpace>, addr: GuestAddress, value: u32) -> Result<()> {
-    let mut dma_buf: [u8; 4] = [0; 4];
-    BigEndian::write_u32(&mut dma_buf, value);
-    write_dma_memory(
-        addr_space,
-        addr.unchecked_add(offset_of!(FwCfgDmaAccess, control) as u64),
-        &dma_buf,
-        dma_buf.len() as u64,
-    )
-    .with_context(|| {
-        format!(
-            "Failed to write dma result of fwcfg at gpa=0x{:x} value=0x{:x}",
-            addr.0, value
-        )
-    })?;
-    Ok(())
-}
-
 #[derive(Clone, Copy, DescSerde, Serialize, Deserialize)]
 #[desc_version(current_version = "0.1.0")]
 struct FwCfgState {
@@ -306,8 +216,6 @@ struct FwCfgState {
 }
 
 pub struct FwCfgCommon {
-    // Firmware file slot count
-    file_slots: u16,
     // Arch related firmware entry
     arch_entries: Vec<FwCfgEntry>,
     // Arch independent firmware entry
@@ -329,7 +237,6 @@ pub struct FwCfgCommon {
 impl FwCfgCommon {
     fn new(sys_mem: Arc<AddressSpace>) -> Self {
         FwCfgCommon {
-            file_slots: FW_CFG_FILE_SLOTS_DFLT,
             arch_entries: vec![
                 FwCfgEntry::default();
                 (FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT) as usize
@@ -338,7 +245,7 @@ impl FwCfgCommon {
                 FwCfgEntry::default();
                 (FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT) as usize
             ],
-            files: Vec::new(),
+            files: Vec::with_capacity(usize::from(FW_CFG_FILE_SLOTS_DFLT)),
             cur_entry: 0,
             cur_offset: 0,
             dma_enabled: true,
@@ -347,114 +254,57 @@ impl FwCfgCommon {
         }
     }
 
-    /// Check whether the selected entry has a arch_local flag
-    fn is_arch_local(&self) -> bool {
-        (self.cur_entry & FW_CFG_ARCH_LOCAL) > 0
-    }
-
-    /// Get the max entry size
-    fn max_entry(&self) -> u16 {
-        FW_CFG_FILE_FIRST + self.file_slots
-    }
-
-    /// Get a mutable reference of the current selected entry
-    fn get_entry_mut(&mut self) -> Result<&mut FwCfgEntry> {
-        let key = self.cur_entry & FW_CFG_ENTRY_MASK;
-        if key >= self.max_entry() || self.cur_entry == FW_CFG_INVALID {
-            return Err(anyhow!(LegacyError::EntryNotFound(
-                get_key_name(self.cur_entry as usize).to_owned()
-            )));
+    fn entry(&self, key: u16) -> Option<&FwCfgEntry> {
+        let entries = if key & FW_CFG_ARCH_LOCAL != 0 {
+            &self.arch_entries
+        } else {
+            &self.entries
         };
-
-        // unwrap is safe because the count of arch_entries and entries is initialized
-        // as `FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT`, which is equal to the return
-        // value of `max_entry` function.
-        if self.is_arch_local() {
-            Ok(self.arch_entries.get_mut(key as usize).unwrap())
-        } else {
-            Ok(self.entries.get_mut(key as usize).unwrap())
-        }
+        entries.get(usize::from(key & FW_CFG_ENTRY_MASK))
     }
 
-    /// Select the entry by the key specified
+    fn entry_mut(&mut self, key: u16) -> Option<&mut FwCfgEntry> {
+        let entries = if key & FW_CFG_ARCH_LOCAL != 0 {
+            &mut self.arch_entries
+        } else {
+            &mut self.entries
+        };
+        entries.get_mut(usize::from(key & FW_CFG_ENTRY_MASK))
+    }
+
     fn select_entry(&mut self, key: u16) {
-        let ret;
         self.cur_offset = 0;
-        if (key & FW_CFG_ENTRY_MASK) >= self.max_entry() {
-            self.cur_entry = FW_CFG_INVALID;
-            ret = 0;
-        } else {
-            self.cur_entry = key;
-            ret = 1;
-
-            // unwrap() is safe because we have checked the range of `key`.
-            let selected_entry = self.get_entry_mut().unwrap();
-            if let Some(ref mut cb) = selected_entry.select_cb {
-                cb.select_callback();
-            }
+        let valid = self.entry(key).is_some();
+        self.cur_entry = if valid { key } else { FW_CFG_INVALID };
+        if let Some(callback) = self.entry(key).and_then(|entry| entry.select_cb.as_ref()) {
+            callback.select_callback();
         }
-
-        trace::fwcfg_select_entry(key, get_key_name(key as usize), ret);
+        trace::fwcfg_select_entry(key, get_key_name(key as usize), i32::from(valid));
     }
 
-    fn add_entry(
-        &mut self,
-        key: FwCfgEntryType,
-        select_cb: Option<FwCfgCallbackType>,
-        write_cb: Option<FwCfgWriteCallbackType>,
-        data: Vec<u8>,
-        allow_write: bool,
-    ) -> Result<()> {
-        let key = (key as u16) & FW_CFG_ENTRY_MASK;
-
-        if key >= self.max_entry() || data.len() >= u32::MAX as usize {
+    fn add_entry(&mut self, key: FwCfgEntryType, data: Vec<u8>) -> Result<()> {
+        let key = key as u16;
+        if u32::try_from(data.len()).is_err() {
             return Err(anyhow!(LegacyError::InvalidFwCfgEntry(key)));
         }
-
-        let entry = if self.is_arch_local() {
-            self.arch_entries.get_mut(key as usize)
-        } else {
-            self.entries.get_mut(key as usize)
-        };
-
-        if entry.is_none() {
-            warn!("entry not initialized in construction function");
-        }
-
-        let entry = entry.unwrap();
+        let entry = self
+            .entry_mut(key)
+            .with_context(|| LegacyError::InvalidFwCfgEntry(key))?;
         if !entry.data.is_empty() {
-            warn!("Entry not empty, will override");
+            warn!("overriding fwcfg entry {:#x}", key);
         }
-
-        entry.data = data.clone();
-        entry.select_cb = select_cb;
-        entry.allow_write = allow_write;
-        entry.write_cb = write_cb;
-
-        trace::fwcfg_add_entry(key, get_key_name(key as usize), data);
+        trace::fwcfg_add_entry(key, get_key_name(key as usize), data.len());
+        *entry = FwCfgEntry::new(data, None, None, false);
         Ok(())
     }
 
-    // Update a FwCfgEntry
-    fn update_entry_data(&mut self, key: u16, mut data: Vec<u8>) -> Result<()> {
-        if key >= self.max_entry() || data.len() >= u32::MAX as usize {
-            return Err(anyhow!(LegacyError::InvalidFwCfgEntry(key)));
-        }
-
-        let entry = if self.is_arch_local() {
-            self.arch_entries.get_mut(key as usize)
-        } else {
-            self.entries.get_mut(key as usize)
-        };
-
-        if let Some(e) = entry {
-            e.data.clear();
-            e.data.append(&mut data);
-            Ok(())
-        } else {
-            Err(anyhow!(LegacyError::EntryNotFound(
-                get_key_name(key as usize).to_owned()
-            )))
+    fn rebuild_file_directory(&mut self) {
+        let directory = &mut self.entries[FwCfgEntryType::FileDir as usize].data;
+        directory.clear();
+        directory.reserve(4 + self.files.len() * 64);
+        directory.extend_from_slice(&(self.files.len() as u32).to_be_bytes());
+        for file in &self.files {
+            file.append_to(directory);
         }
     }
 
@@ -466,335 +316,235 @@ impl FwCfgCommon {
         write_cb: Option<FwCfgWriteCallbackType>,
         allow_write: bool,
     ) -> Result<()> {
-        if self.files.len() >= self.file_slots as usize {
+        if self.files.len() >= usize::from(FW_CFG_FILE_SLOTS_DFLT) {
             return Err(anyhow!(LegacyError::FileSlotsNotAvailable(
                 filename.to_owned()
             )));
         }
 
-        let file_name_bytes = filename.to_string().as_bytes().to_vec();
-        // Check against duplicate file here
-        if self
-            .files
-            .iter()
-            .any(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
-        {
-            return Err(anyhow!(LegacyError::DuplicateFile(filename.to_owned())));
-        }
-
-        let mut index = self.files.len();
-        for (i, file_entry) in self.files.iter().enumerate() {
-            if file_name_bytes < file_entry.name.to_vec() {
-                index = i;
-                break;
-            }
-        }
-
-        let data_len = data.len();
-        let file = FwCfgFile::new(data_len as u32, FW_CFG_FILE_FIRST + index as u16, filename);
-        self.files.insert(index, file);
-        self.files.iter_mut().skip(index + 1).for_each(|f| {
-            f.select += 1;
-        });
-
-        let mut bytes = Vec::new();
-        let file_length_be = BigEndian::read_u32((self.files.len() as u32).as_bytes());
-        bytes.append(&mut file_length_be.as_bytes().to_vec());
-        for value in self.files.iter() {
-            bytes.append(&mut value.as_be_bytes());
-        }
-        self.update_entry_data(FwCfgEntryType::FileDir as u16, bytes)?;
-
-        self.entries.insert(
-            FW_CFG_FILE_FIRST as usize + index,
-            FwCfgEntry::new(data, select_cb, write_cb, allow_write),
+        let name = FwCfgFile::encode_name(filename)?;
+        let index = match self.files.binary_search_by_key(&name, |file| file.name) {
+            Ok(_) => return Err(anyhow!(LegacyError::DuplicateFile(filename.to_owned()))),
+            Err(index) => index,
+        };
+        let size = u32::try_from(data.len()).context("fwcfg file is too large")?;
+        let first = usize::from(FW_CFG_FILE_FIRST);
+        self.entries[first + index..=first + self.files.len()].rotate_right(1);
+        self.entries[first + index] = FwCfgEntry::new(data, select_cb, write_cb, allow_write);
+        self.files.insert(
+            index,
+            FwCfgFile {
+                size,
+                select: FW_CFG_FILE_FIRST + index as u16,
+                name,
+            },
         );
+        for file in &mut self.files[index + 1..] {
+            file.select += 1;
+        }
+        self.rebuild_file_directory();
 
-        trace::fwcfg_add_file(index, filename, data_len);
+        trace::fwcfg_add_file(index, filename, size as usize);
         Ok(())
     }
 
-    fn modify_file_callback(
-        &mut self,
-        filename: &str,
-        data: Vec<u8>,
-        select_cb: Option<FwCfgCallbackType>,
-        write_cb: Option<FwCfgWriteCallbackType>,
-        allow_write: bool,
-    ) -> Result<()> {
-        if self.files.len() >= self.file_slots as usize {
-            return Err(anyhow!(LegacyError::FileSlotsNotAvailable(
-                filename.to_owned()
-            )));
-        }
-
-        let file_name_bytes = filename.to_string().as_bytes().to_vec();
-        // Make sure file entry is existed.
+    fn modify_file(&mut self, filename: &str, data: Vec<u8>) -> Result<()> {
+        let name = FwCfgFile::encode_name(filename)?;
         let index = self
             .files
-            .iter()
-            .position(|f| f.name[0..file_name_bytes.len()].to_vec() == file_name_bytes)
+            .binary_search_by_key(&name, |file| file.name)
+            .ok()
             .with_context(|| LegacyError::EntryNotFound(filename.to_owned()))?;
-        self.files[index].size = data.len() as u32;
-
-        // Update FileDir entry
-        let mut bytes = Vec::new();
-        let file_length_be = BigEndian::read_u32((self.files.len() as u32).as_bytes());
-        bytes.append(&mut file_length_be.as_bytes().to_vec());
-        for value in self.files.iter() {
-            bytes.append(&mut value.as_be_bytes());
-        }
-        self.update_entry_data(FwCfgEntryType::FileDir as u16, bytes)?;
-
-        // Update File entry
-        self.entries[FW_CFG_FILE_FIRST as usize + index] =
-            FwCfgEntry::new(data, select_cb, write_cb, allow_write);
+        let file = &mut self.files[index];
+        file.size = u32::try_from(data.len()).context("fwcfg file is too large")?;
+        self.entries[usize::from(file.select)] = FwCfgEntry::new(data, None, None, true);
+        self.rebuild_file_directory();
         Ok(())
     }
 
-    // Fetch FwCfgDma request from guest and handle it
     fn handle_dma_request(&mut self) -> Result<()> {
-        let dma_addr = self.dma_addr;
-        let mem_space = self.mem_space.clone();
-        let cur_entry = self.cur_entry;
-
-        // Reset dma_addr address before next dma access
-        self.dma_addr = GuestAddress(0);
-
-        // Read DMA request from guest
-        let mut dma_req = FwCfgDmaAccess::default();
-        let dma_request = dma_req.as_mut_bytes();
+        let addr = std::mem::replace(&mut self.dma_addr, GuestAddress(0));
         let size = std::mem::size_of::<FwCfgDmaAccess>() as u64;
-        if let Err(_e) = read_dma_memory(&self.mem_space, dma_addr, dma_request, size) {
-            write_dma_result(&self.mem_space, dma_addr, FW_CFG_DMA_CTL_ERROR)?;
-            return Err(anyhow!(LegacyError::ReadDmaRequest(dma_addr.0, size)));
-        }
-
-        // Build `FwCfgDmaAccess` object from dma_request here
-        let mut dma = FwCfgDmaAccess {
-            control: BigEndian::read_u32(&dma_request[0..4]),
-            length: BigEndian::read_u32(&dma_request[4..8]),
-            address: BigEndian::read_u64(&dma_request[8..]),
+        let result = addr
+            .0
+            .checked_add(size - 1)
+            .context("fwcfg DMA descriptor address overflows")
+            .and_then(|_| {
+                self.mem_space
+                    .read_object::<FwCfgDmaAccess>(addr, AddressAttr::Ram)
+                    .with_context(|| LegacyError::ReadDmaRequest(addr.0, size))
+            })
+            .and_then(|request| self.transfer_dma(request));
+        let status = if let Err(err) = result {
+            debug!("fwcfg DMA request at {:#x} failed: {:#}", addr.0, err);
+            FW_CFG_DMA_CTL_ERROR
+        } else {
+            0
         };
-        if dma.control & FW_CFG_DMA_CTL_SELECT > 0 {
-            self.select_entry((dma.control >> 16) as u16);
-        }
-
-        let mut offset = self.cur_offset;
-
-        let mut is_read = false;
-        let mut is_write = false;
-        if dma.control & FW_CFG_DMA_CTL_READ != 0 {
-            is_read = true;
-        }
-        if dma.control & FW_CFG_DMA_CTL_WRITE != 0 {
-            is_write = true;
-        }
-        if dma.control & FW_CFG_DMA_CTL_SKIP != 0 {
-            dma.length = 0;
-        }
-
-        // clear dma.control here
-        dma.control = 0;
-
-        let entry = self.get_entry_mut()?;
-
-        let mut len: u32;
-        while dma.length > 0 && (dma.control & FW_CFG_DMA_CTL_ERROR) == 0 {
-            if cur_entry == FW_CFG_INVALID
-                || entry.data.is_empty()
-                || offset >= entry.data.len() as u32
-            {
-                len = dma.length;
-
-                if is_read {
-                    let data = vec![0_u8; len as usize];
-                    if write_dma_memory(
-                        &mem_space,
-                        GuestAddress(dma.address),
-                        data.as_slice(),
-                        u64::from(len),
-                    )
-                    .is_err()
-                    {
-                        dma.control |= FW_CFG_DMA_CTL_ERROR;
-                    }
-                }
-                if is_write {
-                    dma.control |= FW_CFG_DMA_CTL_ERROR;
-                }
-            } else {
-                if dma.length <= entry.data.len() as u32 - offset {
-                    len = dma.length;
-                } else {
-                    len = entry.data.len() as u32 - offset;
-                }
-
-                // If it is a DMA read request
-                if is_read
-                    && write_dma_memory(
-                        &mem_space,
-                        GuestAddress(dma.address),
-                        &entry.data[offset as usize..],
-                        u64::from(len),
-                    )
-                    .is_err()
-                {
-                    dma.control |= FW_CFG_DMA_CTL_ERROR;
-                }
-
-                if is_write {
-                    let mut dma_read_error = false;
-                    let data = &mut entry.data[offset as usize..];
-                    if read_dma_memory(&mem_space, GuestAddress(dma.address), data, u64::from(len))
-                        .is_err()
-                    {
-                        dma_read_error = true;
-                    }
-
-                    if dma_read_error || !entry.allow_write || len != dma.length {
-                        dma.control |= FW_CFG_DMA_CTL_ERROR;
-                    } else if true {
-                        if let Some(cb) = &entry.write_cb {
-                            cb.lock().unwrap().write_callback(
-                                data.to_vec(),
-                                u64::from(offset),
-                                len as usize,
-                            );
-                        }
-                    }
-                }
-                offset += len;
-            }
-            dma.length -= len;
-            dma.address += u64::from(len)
-        }
-
-        self.cur_offset = offset;
-        write_dma_result(&self.mem_space, dma_addr, dma.control)?;
-
         trace::fwcfg_read_data(0);
+
+        self.mem_space
+            .write_object(&status.to_be(), addr, AddressAttr::Ram)
+            .with_context(|| format!("failed to write fwcfg DMA status at {:#x}", addr.0))
+    }
+
+    fn transfer_dma(&mut self, request: FwCfgDmaAccess) -> Result<()> {
+        let control = u32::from_be(request.control);
+        if control & FW_CFG_DMA_CTL_SELECT != 0 {
+            self.select_entry((control >> 16) as u16);
+        }
+        let length = u32::from_be(request.length) as usize;
+        if length == 0 {
+            return Ok(());
+        }
+
+        let address = u64::from_be(request.address);
+        let offset = self.cur_offset as usize;
+        let remaining = self
+            .entry(self.cur_entry)
+            .and_then(|entry| entry.data.get(offset..))
+            .unwrap_or_default();
+        let count = length.min(remaining.len());
+
+        // READ takes precedence over WRITE, then SKIP.
+        if control & (FW_CFG_DMA_CTL_READ | FW_CFG_DMA_CTL_WRITE) != 0 {
+            address
+                .checked_add(length as u64 - 1)
+                .context("fwcfg DMA buffer address overflows")?;
+        }
+        let next_offset = self
+            .cur_offset
+            .checked_add(count as u32)
+            .context("fwcfg cur_offset overflow")?;
+        let transfer_result = if control & FW_CFG_DMA_CTL_READ != 0 {
+            (|| -> Result<()> {
+                if count != 0 {
+                    self.mem_space.write_bytes(
+                        &remaining[..count],
+                        GuestAddress(address),
+                        AddressAttr::Ram,
+                    )?;
+                }
+                // AddressSpace::write consumes the entire reader into a buffer.
+                static ZEROES: [u8; 64 * 1024] = [0; 64 * 1024];
+                for start in (count..length).step_by(ZEROES.len()) {
+                    let size = (length - start).min(ZEROES.len());
+                    self.mem_space.write_bytes(
+                        &ZEROES[..size],
+                        GuestAddress(address + start as u64),
+                        AddressAttr::Ram,
+                    )?;
+                }
+                Ok(())
+            })()
+        } else if control & FW_CFG_DMA_CTL_WRITE != 0 {
+            self.write_dma_entry(GuestAddress(address), offset, length, count)
+        } else if control & FW_CFG_DMA_CTL_SKIP != 0 {
+            Ok(())
+        } else {
+            return Ok(());
+        };
+
+        self.cur_offset = next_offset;
+        transfer_result?;
         Ok(())
     }
 
-    /// Write DMA mem register
-    ///
-    /// # Arguments
-    ///
-    /// * `addr`    - The address to write to
-    /// * `value`   - Value to write
-    /// * `size`    - Length of raw bytes to write
-    ///
-    /// # Errors
-    ///
-    /// Return Error if fail to add the file entry.
-    fn dma_mem_write(&mut self, addr: u64, value: u64, size: u32) -> Result<()> {
-        if size == 4 {
-            if addr == 0 {
-                self.dma_addr = GuestAddress(value << 32);
-            } else if addr == 4 {
-                self.dma_addr = GuestAddress(self.dma_addr.raw_value() | value);
+    fn write_dma_entry(
+        &mut self,
+        address: GuestAddress,
+        offset: usize,
+        length: usize,
+        count: usize,
+    ) -> Result<()> {
+        let key = self.cur_entry;
+        let entry = self.entry(key).context("missing fwcfg entry")?;
+        if !entry.allow_write || count != length {
+            bail!("fwcfg DMA write to read-only item or past end of item");
+        }
+        let callback = entry.write_cb.clone();
+        let mut callback = callback
+            .as_ref()
+            .map(|cb| {
+                cb.lock()
+                    .map_err(|_| anyhow!("fwcfg write callback lock is poisoned"))
+            })
+            .transpose()?;
+
+        // A guest memory read can fail after copying part of the request.
+        let mut data = Vec::new();
+        data.try_reserve_exact(length)?;
+        self.mem_space
+            .read(&mut data, address, length as u64, AddressAttr::Ram)?;
+        let entry = self.entry_mut(key).context("missing fwcfg entry")?;
+        entry.data[offset..offset + length].copy_from_slice(&data);
+        if let Some(cb) = callback.as_mut() {
+            cb.write_callback(data, offset as u64, length);
+        }
+        Ok(())
+    }
+
+    fn dma_mem_write(&mut self, addr: u64, data: &[u8]) -> Result<()> {
+        if !self.dma_enabled {
+            bail!("fwcfg DMA is disabled");
+        }
+        match (addr, data.len()) {
+            (0, 4) => self.dma_addr = GuestAddress(u64::from(BigEndian::read_u32(data)) << 32),
+            (4, 4) => {
+                self.dma_addr.0 |= u64::from(BigEndian::read_u32(data));
                 self.handle_dma_request()?;
             }
-        } else if size == 8 && addr == 0 {
-            self.dma_addr = GuestAddress(value);
-            self.handle_dma_request()?;
-        } else {
-            bail!(
-                "Failed to set DMA address, offset is 0x{:x}, size is 0x{:x}",
+            (0, 8) => {
+                self.dma_addr = GuestAddress(BigEndian::read_u64(data));
+                self.handle_dma_request()?;
+            }
+            _ => bail!(
+                "invalid fwcfg DMA register write at offset {:#x}, size {}",
                 addr,
-                size
-            );
+                data.len()
+            ),
         }
         Ok(())
     }
 
-    /// Read DMA mem register
-    ///
-    /// # Arguments
-    ///
-    /// * `addr`    - The address to read to
-    /// * `size`    - Length of raw bytes to read
-    ///
-    /// # Return
-    ///
-    /// Return the value of the register
-    fn dma_mem_read(&self, addr: u64, size: u32) -> Result<u64> {
-        extract_u64(
-            FW_CFG_DMA_SIGNATURE as u64,
-            ((8 - addr - u64::from(size)) * 8) as u32,
-            size * 8,
-        )
-        .with_context(|| "Failed to extract bits from u64")
+    fn dma_mem_read(&self, offset: usize, data: &mut [u8]) -> bool {
+        let signature = FW_CFG_DMA_SIGNATURE.get(offset..).unwrap_or_default();
+        if !self.dma_enabled || data.len() > signature.len() {
+            return false;
+        }
+        data.copy_from_slice(&signature[..data.len()]);
+        true
     }
 
-    /// Read data register
-    ///
-    /// # Arguments
-    ///
-    /// * `_addr`    - The address to read to
-    /// * `size`    - Length of raw bytes to read
-    ///
-    /// # Return
-    ///
-    /// Return the value of the register
-    fn read_data_reg(&mut self, _addr: u64, mut size: u32) -> Result<u64> {
-        if size == 0 || size > std::mem::size_of::<u64>() as u32 {
-            bail!(
-                "Failed to read from FWcfg data register, size {} overflows",
-                size
-            );
+    fn read_data_reg(&mut self, data: &mut [u8]) {
+        let offset = self.cur_offset as usize;
+        let remaining = self
+            .entry(self.cur_entry)
+            .and_then(|entry| entry.data.get(offset..))
+            .unwrap_or_default();
+        let count = data.len().min(remaining.len());
+        data[..count].copy_from_slice(&remaining[..count]);
+        data[count..].fill(0);
+        self.cur_offset += count as u32;
+
+        for chunk in data.chunks(8) {
+            let mut value = [0; 8];
+            value[8 - chunk.len()..].copy_from_slice(chunk);
+            trace::fwcfg_read_data(u64::from_be_bytes(value));
         }
-
-        let cur_entry = self.cur_entry;
-        let mut cur_offset = self.cur_offset;
-        let entry = self.get_entry_mut()?;
-        let mut value: u64 = 0;
-
-        if cur_entry != FW_CFG_INVALID
-            && !entry.data.is_empty()
-            && cur_offset < entry.data.len() as u32
-        {
-            loop {
-                value = (value << 8) | u64::from(entry.data[cur_offset as usize]);
-                cur_offset += 1;
-                size -= 1;
-
-                if size == 0 || cur_offset >= entry.data.len() as u32 {
-                    break;
-                }
-            }
-            value <<= 8 * u64::from(size);
-        }
-        self.cur_offset = cur_offset;
-
-        trace::fwcfg_read_data(value);
-        Ok(value)
     }
 
     fn common_realize(&mut self) -> Result<()> {
         // Firmware configurations add Signature item
         let sig = b"QEMU";
-        self.add_entry(FwCfgEntryType::Signature, None, None, sig.to_vec(), false)?;
+        self.add_entry(FwCfgEntryType::Signature, sig.to_vec())?;
 
-        self.add_entry(
-            FwCfgEntryType::NoGraphic,
-            None,
-            None,
-            (0_u16).as_bytes().to_vec(),
-            false,
-        )?;
+        self.add_entry(FwCfgEntryType::NoGraphic, (0_u16).as_bytes().to_vec())?;
 
-        self.add_entry(
-            FwCfgEntryType::BootMenu,
-            None,
-            None,
-            (0_u16).as_bytes().to_vec(),
-            false,
-        )?;
+        self.add_entry(FwCfgEntryType::BootMenu, (0_u16).as_bytes().to_vec())?;
 
         // Add FileDir item
-        self.add_entry(FwCfgEntryType::FileDir, None, None, Vec::new(), false)?;
+        self.add_entry(FwCfgEntryType::FileDir, Vec::new())?;
 
         // Add boot-fail-wait file item, default to 5s
         self.add_file_callback(
@@ -810,13 +560,7 @@ impl FwCfgCommon {
         if self.dma_enabled {
             version |= FW_CFG_VERSION_DMA;
         }
-        self.add_entry(
-            FwCfgEntryType::Id,
-            None,
-            None,
-            version.as_bytes().to_vec(),
-            false,
-        )?;
+        self.add_entry(FwCfgEntryType::Id, version.to_le_bytes().to_vec())?;
         Ok(())
     }
 
@@ -834,15 +578,14 @@ impl FwCfgCommon {
     fn set_state_mut(&mut self, state: &[u8]) -> Result<()> {
         let fwcfg_state: FwCfgState = serde_json::from_slice(state)
             .with_context(|| MigrationError::FromBytesError("FwCfgState"))?;
-        self.cur_entry = fwcfg_state.cur_entry;
-        self.cur_offset = fwcfg_state.cur_offset;
-
         if fwcfg_state.dma_enabled != 0 && fwcfg_state.dma_enabled != 1 {
             bail!(
                 "fwcfg dma_enabled state is error: {}",
                 fwcfg_state.dma_enabled
             );
         }
+        self.cur_entry = fwcfg_state.cur_entry;
+        self.cur_offset = fwcfg_state.cur_offset;
         self.dma_enabled = fwcfg_state.dma_enabled == 1;
         self.dma_addr = GuestAddress(fwcfg_state.dma_addr);
 
@@ -852,35 +595,6 @@ impl FwCfgCommon {
     fn get_device_alias(&self) -> u64 {
         MigrationManager::get_desc_alias(&FwCfgState::descriptor().name).unwrap_or(!0)
     }
-}
-
-fn get_io_count(data_len: usize) -> usize {
-    if data_len.is_multiple_of(8) {
-        8
-    } else if data_len.is_multiple_of(4) {
-        4
-    } else if data_len.is_multiple_of(2) {
-        2
-    } else {
-        1
-    }
-}
-
-fn common_read(
-    #[cfg(target_arch = "aarch64")] fwcfg_arch: &mut FwCfgMem,
-    #[cfg(target_arch = "x86_64")] fwcfg_arch: &mut FwCfgIO,
-    data: &mut [u8],
-    base: GuestAddress,
-    offset: u64,
-) -> bool {
-    let data_len = data.len();
-    let io_count = get_io_count(data_len);
-    for i in (0..data_len).step_by(io_count) {
-        if !read_bytes(fwcfg_arch, &mut data[i..i + io_count], base, offset) {
-            return false;
-        }
-    }
-    true
 }
 
 /// FwCfg MMIO Device use for AArch64 platform
@@ -912,61 +626,6 @@ impl FwCfgMem {
 }
 
 #[cfg(target_arch = "aarch64")]
-fn read_bytes(
-    fwcfg_arch: &mut FwCfgMem,
-    data: &mut [u8],
-    _base: GuestAddress,
-    offset: u64,
-) -> bool {
-    let value = match offset {
-        0..=7 => match fwcfg_arch.fwcfg.read_data_reg(offset, data.len() as u32) {
-            Ok(val) => val,
-            Err(e) => {
-                error!("Failed to read from FwCfg data register, error is {:?}", e);
-                return false;
-            }
-        },
-        8..=15 => {
-            error!("Read from FwCfg control register is not supported.");
-            0
-        }
-        16..=23 => {
-            if (offset + data.len() as u64) > 0x18 {
-                error!(
-                    "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
-                    offset - 0x10,
-                    data.len()
-                );
-                return false;
-            }
-            match fwcfg_arch
-                .fwcfg
-                .dma_mem_read(offset - 0x10, data.len() as u32)
-            {
-                Ok(val) => val,
-                Err(e) => {
-                    error!("Failed to handle FwCfg DMA-read, error is {:?}", e);
-                    return false;
-                }
-            }
-        }
-        _ => {
-            error!("Failed to read FwCfg, offset 0x{:x} is invalid", offset);
-            return false;
-        }
-    };
-
-    match data.len() {
-        1 => data[0] = value as u8,
-        2 => BigEndian::write_u16(data, value as u16),
-        4 => BigEndian::write_u32(data, value as u32),
-        8 => BigEndian::write_u64(data, value),
-        _ => {}
-    }
-    true
-}
-
-#[cfg(target_arch = "aarch64")]
 impl FwCfgOps for FwCfgMem {
     fn fw_cfg_common(&mut self) -> &mut FwCfgCommon {
         &mut self.fwcfg
@@ -983,7 +642,10 @@ impl Device for FwCfgMem {
     }
 
     fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let parent_bus = self
+            .parent_bus()
+            .and_then(|bus| bus.upgrade())
+            .context("fwcfg system bus is unavailable")?;
         MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         self.fwcfg.common_realize()?;
         let dev = Arc::new(Mutex::new(self));
@@ -1004,29 +666,32 @@ impl Device for FwCfgMem {
 impl SysBusDevOps for FwCfgMem {
     gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
-    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
-        common_read(self, data, base, offset)
+    fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        match offset {
+            0..=7 => self.fwcfg.read_data_reg(data),
+            8..=15 => data.fill(0),
+            16..=23 => return self.fwcfg.dma_mem_read((offset - 16) as usize, data),
+            _ => return false,
+        }
+        true
     }
 
     fn write(&mut self, data: &[u8], _base: GuestAddress, offset: u64) -> bool {
-        let size = data.len() as u32;
-        let value = match size {
-            1 => u64::from(data[0]),
-            2 => u64::from(BigEndian::read_u16(data)),
-            4 => u64::from(BigEndian::read_u32(data)),
-            8 => BigEndian::read_u64(data),
-            _ => 0,
-        };
         match offset {
             0..=7 => {
                 error!("Write to FwCfg data register is not supported.");
             }
             8..=15 => {
                 // Write to FwCfg control register
-                self.fwcfg.select_entry(value as u16);
+                let key = match data.len() {
+                    1 => u16::from(data[0]),
+                    2 | 4 | 8 => BigEndian::read_u16(&data[data.len() - 2..]),
+                    _ => return false,
+                };
+                self.fwcfg.select_entry(key);
             }
             16..=23 => {
-                if let Err(e) = self.fwcfg.dma_mem_write(offset - 0x10, value, size) {
+                if let Err(e) = self.fwcfg.dma_mem_write(offset - 0x10, data) {
                     error!("Failed to write dma at offset=0x{:x} {:?}.", offset, e);
                     return false;
                 }
@@ -1094,59 +759,6 @@ impl FwCfgIO {
 }
 
 #[cfg(target_arch = "x86_64")]
-fn read_bytes(fwcfg_arch: &mut FwCfgIO, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
-    let value: u64 = match offset {
-        0..=1 => match fwcfg_arch.fwcfg.read_data_reg(offset, data.len() as u32) {
-            Err(e) => {
-                error!("Failed to read from FwCfg data register, error is {:?}", e);
-                return false;
-            }
-            Ok(val) => val,
-        },
-        4..=11 => {
-            if (offset + data.len() as u64) > 0x14 {
-                error!(
-                    "Illegal parameter: the sum of addr 0x{:x} and size 0x{:x} overflow",
-                    offset - 0x10,
-                    data.len()
-                );
-                return false;
-            }
-            match fwcfg_arch.fwcfg.dma_mem_read(offset - 4, data.len() as u32) {
-                Err(e) => {
-                    error!("Failed to handle FwCfg DMA-read, error is {:?}", e);
-                    return false;
-                }
-                Ok(val) => val,
-            }
-        }
-        _ => {
-            // This should never happen
-            error!(
-                "Failed to read FwCfg, ioport 0x{:x} is invalid",
-                base.0 + offset
-            );
-            return false;
-        }
-    };
-
-    match data.len() {
-        1 => data[0] = value as u8,
-        2 => BigEndian::write_u16(data, value as u16),
-        4 => BigEndian::write_u32(data, value as u32),
-        8 => BigEndian::write_u64(data, value),
-        _ => {
-            warn!(
-                "Failed to read from FwCfg data register, data length {} is invalid",
-                data.len()
-            );
-            return false;
-        }
-    }
-    true
-}
-
-#[cfg(target_arch = "x86_64")]
 impl FwCfgOps for FwCfgIO {
     fn fw_cfg_common(&mut self) -> &mut FwCfgCommon {
         &mut self.fwcfg
@@ -1163,7 +775,10 @@ impl Device for FwCfgIO {
     }
 
     fn realize(mut self) -> Result<Arc<Mutex<Self>>> {
-        let parent_bus = self.parent_bus().unwrap().upgrade().unwrap();
+        let parent_bus = self
+            .parent_bus()
+            .and_then(|bus| bus.upgrade())
+            .context("fwcfg system bus is unavailable")?;
         MUT_SYS_BUS!(parent_bus, locked_bus, sysbus);
         self.fwcfg.common_realize()?;
         let dev = Arc::new(Mutex::new(self));
@@ -1185,12 +800,17 @@ impl Device for FwCfgIO {
 impl SysBusDevOps for FwCfgIO {
     gen_base_func!(sysbusdev_base, sysbusdev_base_mut, SysBusDevBase, base);
 
-    fn read(&mut self, data: &mut [u8], base: GuestAddress, offset: u64) -> bool {
-        common_read(self, data, base, offset)
+    fn read(&mut self, data: &mut [u8], _base: GuestAddress, offset: u64) -> bool {
+        match offset {
+            0..=1 => self.fwcfg.read_data_reg(data),
+            4..=11 => return self.fwcfg.dma_mem_read((offset - 4) as usize, data),
+            _ => return false,
+        }
+        true
     }
 
     fn write(&mut self, data: &[u8], base: GuestAddress, offset: u64) -> bool {
-        let size = data.len() as u32;
+        let size = data.len();
         match offset {
             0..=1 => {
                 if size != 2 {
@@ -1203,14 +823,7 @@ impl SysBusDevOps for FwCfgIO {
                 self.fwcfg.select_entry(LittleEndian::read_u16(data));
             }
             4..=11 => {
-                let value = match size {
-                    1 => u64::from(data[0]),
-                    2 => u64::from(BigEndian::read_u16(data)),
-                    4 => u64::from(BigEndian::read_u32(data)),
-                    8 => BigEndian::read_u64(data),
-                    _ => 0,
-                };
-                if let Err(e) = self.fwcfg.dma_mem_write(offset - 4, value, size) {
+                if let Err(e) = self.fwcfg.dma_mem_write(offset - 4, data) {
                     error!("Failed to handle FwCfg DMA-write, error is {:?}", e);
                     return false;
                 }
@@ -1219,7 +832,7 @@ impl SysBusDevOps for FwCfgIO {
                 // This should never happen
                 error!(
                     "Failed to write FwCfg, ioport 0x{:x} is invalid",
-                    base.0 + offset
+                    base.0.saturating_add(offset)
                 );
                 return false;
             }
@@ -1268,7 +881,7 @@ pub trait FwCfgOps: Send + Sync {
     /// * `key` - FwCfgEntryType
     /// * `data` - Raw data bytes of the entry to be added
     fn add_data_entry(&mut self, key: FwCfgEntryType, data: Vec<u8>) -> Result<()> {
-        self.fw_cfg_common().add_entry(key, None, None, data, false)
+        self.fw_cfg_common().add_entry(key, data)
     }
 
     /// Add an entry to FwCfg device, with String content.
@@ -1278,10 +891,10 @@ pub trait FwCfgOps: Send + Sync {
     /// * `key` - FwCfgEntryType
     /// * `value` - string data entry to be added
     fn add_string_entry(&mut self, key: FwCfgEntryType, value: &str) -> Result<()> {
-        let mut bytes = value.as_bytes().to_vec();
+        let mut bytes = Vec::with_capacity(value.len() + 1);
+        bytes.extend_from_slice(value.as_bytes());
         bytes.push(0_u8);
-        self.fw_cfg_common()
-            .add_entry(key, None, None, bytes, false)
+        self.fw_cfg_common().add_entry(key, bytes)
     }
 
     /// Add a file entry to FwCfg device, with select callback function and
@@ -1324,8 +937,7 @@ pub trait FwCfgOps: Send + Sync {
     /// * `filename` - Name of the file
     /// * `data` - Raw data bytes of the file to be modified
     fn modify_file_entry(&mut self, filename: &str, data: Vec<u8>) -> Result<()> {
-        self.fw_cfg_common()
-            .modify_file_callback(filename, data, None, None, true)
+        self.fw_cfg_common().modify_file(filename, data)
     }
 }
 
@@ -1377,19 +989,196 @@ mod test {
     use crate::test::address_space_init;
 
     #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn arch_entry_registration_uses_the_entry_key() {
+        let mut fwcfg = FwCfgCommon::new(address_space_init());
+        fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        fwcfg
+            .add_entry(FwCfgEntryType::E820Table, vec![1, 2])
+            .unwrap();
+        assert!(fwcfg
+            .entry(FwCfgEntryType::RamSize as u16)
+            .unwrap()
+            .data
+            .is_empty());
+        fwcfg.select_entry(FwCfgEntryType::E820Table as u16);
+        let mut data = [0; 2];
+        fwcfg.read_data_reg(&mut data);
+        assert_eq!(data, [1, 2]);
+    }
+
+    #[test]
+    fn file_directory_matches_full_names_and_updates_when_full() {
+        let mut fwcfg = FwCfgCommon::new(address_space_init());
+        fwcfg.select_entry(FW_CFG_ARCH_LOCAL);
+        fwcfg
+            .add_file_callback("aa", vec![2], None, None, false)
+            .unwrap();
+        fwcfg
+            .add_file_callback("a", vec![1], None, None, false)
+            .unwrap();
+        assert!(fwcfg
+            .add_file_callback("a", vec![], None, None, false)
+            .is_err());
+        assert!(fwcfg
+            .add_file_callback(&"x".repeat(56), vec![], None, None, false)
+            .is_err());
+        assert!(fwcfg.modify_file("a\0", vec![]).is_err());
+        assert_eq!(fwcfg.entry(FW_CFG_FILE_FIRST + 1).unwrap().data, [2]);
+        for index in 2..FW_CFG_FILE_SLOTS_DFLT {
+            fwcfg
+                .add_file_callback(&format!("other/{index:02}"), vec![], None, None, false)
+                .unwrap();
+        }
+        fwcfg.modify_file("a", vec![3, 4]).unwrap();
+
+        let dir = &fwcfg.entry(FwCfgEntryType::FileDir as u16).unwrap().data;
+        assert_eq!(&dir[..4], &u32::from(FW_CFG_FILE_SLOTS_DFLT).to_be_bytes());
+        assert_eq!(&dir[4..12], &[0, 0, 0, 2, 0, 0x20, 0, 0]);
+        assert_eq!(&dir[12..14], b"a\0");
+        assert_eq!(&dir[76..79], b"aa\0");
+        assert_eq!(
+            fwcfg.entries.len(),
+            usize::from(FW_CFG_FILE_FIRST + FW_CFG_FILE_SLOTS_DFLT)
+        );
+    }
+
+    fn submit_dma(fwcfg: &mut FwCfgCommon, control: u32, length: u32, address: u64) -> u32 {
+        let addr = GuestAddress(0);
+        let request = FwCfgDmaAccess {
+            control: control.to_be(),
+            length: length.to_be(),
+            address: address.to_be(),
+        };
+        fwcfg
+            .mem_space
+            .write_object(&request, addr, AddressAttr::Ram)
+            .unwrap();
+        fwcfg.dma_addr = addr;
+        fwcfg.handle_dma_request().unwrap();
+        u32::from_be(
+            fwcfg
+                .mem_space
+                .read_object::<u32>(addr, AddressAttr::Ram)
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn dma_skip_and_select_preserve_stream_position() {
+        let mut fwcfg = FwCfgCommon::new(address_space_init());
+        fwcfg.common_realize().unwrap();
+        fwcfg.select_entry(FW_CFG_INVALID);
+        let mut data = [0xff; 4];
+        fwcfg.read_data_reg(&mut data);
+        assert_eq!(data, [0; 4]);
+        assert_eq!(
+            submit_dma(
+                &mut fwcfg,
+                FW_CFG_DMA_CTL_SELECT | FW_CFG_DMA_CTL_SKIP,
+                2,
+                0
+            ),
+            0
+        );
+        assert_eq!(fwcfg.cur_offset, 2);
+        let control = FW_CFG_DMA_CTL_READ | FW_CFG_DMA_CTL_WRITE | FW_CFG_DMA_CTL_SKIP;
+        assert_eq!(submit_dma(&mut fwcfg, control, 4, 0x1000), 0);
+        let value = fwcfg
+            .mem_space
+            .read_object::<u32>(GuestAddress(0x1000), AddressAttr::Ram)
+            .unwrap();
+        assert_eq!(value.to_ne_bytes(), *b"MU\0\0");
+        assert_eq!(fwcfg.cur_offset, 4);
+
+        let control =
+            FW_CFG_DMA_CTL_READ | FW_CFG_DMA_CTL_SELECT | (u32::from(FW_CFG_INVALID) << 16);
+        assert_eq!(submit_dma(&mut fwcfg, control, 4, 0x1000), 0);
+        assert_eq!(
+            fwcfg
+                .mem_space
+                .read_object::<u32>(GuestAddress(0x1000), AddressAttr::Ram)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            submit_dma(&mut fwcfg, FW_CFG_DMA_CTL_READ, 4, u64::MAX),
+            FW_CFG_DMA_CTL_ERROR
+        );
+    }
+
+    #[test]
+    fn rejected_dma_writes_leave_the_item_unchanged() {
+        let mut fwcfg = FwCfgCommon::new(address_space_init());
+        fwcfg
+            .add_entry(FwCfgEntryType::Signature, b"QEMU".to_vec())
+            .unwrap();
+        fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        assert_eq!(
+            submit_dma(&mut fwcfg, FW_CFG_DMA_CTL_WRITE, 4, 0x1000),
+            FW_CFG_DMA_CTL_ERROR
+        );
+        assert_eq!(fwcfg.entry(0).unwrap().data, b"QEMU");
+        assert_eq!(fwcfg.cur_offset, 4);
+
+        fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        fwcfg
+            .add_entry(FwCfgEntryType::Signature, b"QEMU".to_vec())
+            .unwrap();
+        fwcfg
+            .entry_mut(FwCfgEntryType::Signature as u16)
+            .unwrap()
+            .allow_write = true;
+        // The first two bytes are in RAM and the remaining two are unmapped.
+        assert_eq!(
+            submit_dma(&mut fwcfg, FW_CFG_DMA_CTL_WRITE, 4, 0x0fff_fffe),
+            FW_CFG_DMA_CTL_ERROR
+        );
+        assert_eq!(
+            submit_dma(&mut fwcfg, FW_CFG_DMA_CTL_WRITE, 5, 0x1000),
+            FW_CFG_DMA_CTL_ERROR
+        );
+        assert_eq!(fwcfg.cur_offset, 4);
+        assert_eq!(fwcfg.entry(0).unwrap().data, b"QEMU");
+        fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+        assert_eq!(submit_dma(&mut fwcfg, FW_CFG_DMA_CTL_WRITE, 2, 0x1000), 0);
+        assert_eq!(fwcfg.entry(0).unwrap().data, b"\0\0MU");
+        assert_eq!(fwcfg.cur_offset, 2);
+    }
+
+    #[test]
+    fn failed_dma_read_advances_entry_offset() {
+        let mut fwcfg = FwCfgCommon::new(address_space_init());
+        fwcfg
+            .add_entry(FwCfgEntryType::Signature, b"QEMU".to_vec())
+            .unwrap();
+        fwcfg.select_entry(FwCfgEntryType::Signature as u16);
+
+        assert_eq!(
+            submit_dma(&mut fwcfg, FW_CFG_DMA_CTL_READ, 4, 0x0fff_fffe),
+            FW_CFG_DMA_CTL_ERROR
+        );
+        assert_eq!(fwcfg.cur_offset, 4);
+    }
+
+    #[test]
+    fn dma_register_rejects_out_of_range_accesses() {
+        let mut fwcfg = FwCfgCommon::new(address_space_init());
+        assert!(!fwcfg.dma_mem_read(7, &mut [0; 2]));
+        assert!(fwcfg.dma_mem_write(1, &[0; 4]).is_err());
+        let mut data = [0];
+        assert!(fwcfg.dma_mem_read(7, &mut data));
+        assert_eq!(data, *b"G");
+    }
+
+    #[test]
     fn test_entry_functions() {
         let sys_mem = address_space_init();
         let mut fwcfg_common = FwCfgCommon::new(sys_mem);
 
         let ncpus: usize = 1;
         fwcfg_common
-            .add_entry(
-                FwCfgEntryType::NbCpus,
-                None,
-                None,
-                ncpus.as_bytes().to_vec(),
-                false,
-            )
+            .add_entry(FwCfgEntryType::NbCpus, ncpus.as_bytes().to_vec())
             .unwrap();
         assert_eq!(
             fwcfg_common.entries[FwCfgEntryType::NbCpus as usize].data,
@@ -1402,10 +1191,7 @@ mod test {
         fwcfg_common
             .add_entry(
                 FwCfgEntryType::CmdlineSize,
-                None,
-                None,
                 (cmdline.len() + 1).as_bytes().to_vec(),
-                false,
             )
             .unwrap();
         assert_eq!(
@@ -1414,13 +1200,7 @@ mod test {
         );
 
         fwcfg_common
-            .add_entry(
-                FwCfgEntryType::CmdlineData,
-                None,
-                None,
-                cmdline.as_bytes().to_vec(),
-                false,
-            )
+            .add_entry(FwCfgEntryType::CmdlineData, cmdline.as_bytes().to_vec())
             .unwrap();
         assert_eq!(
             fwcfg_common.entries[FwCfgEntryType::CmdlineData as usize].data,
@@ -1429,7 +1209,7 @@ mod test {
 
         let boot_order = Vec::<u8>::new();
         fwcfg_common
-            .add_entry(FwCfgEntryType::FileDir, None, None, boot_order, false)
+            .add_entry(FwCfgEntryType::FileDir, boot_order)
             .unwrap();
         assert_eq!(
             fwcfg_common.entries[FwCfgEntryType::FileDir as usize].data,
@@ -1441,74 +1221,56 @@ mod test {
     fn test_file_entry() {
         let sys_mem = address_space_init();
         let mut fwcfg_common = FwCfgCommon::new(sys_mem);
-        assert_eq!(fwcfg_common.common_realize().is_ok(), true);
+        assert!(fwcfg_common.common_realize().is_ok());
 
         let file_data = vec![0xcc; 200];
-        assert_eq!(
-            fwcfg_common
-                .add_file_callback("xyz", file_data.clone(), None, None, false)
-                .is_ok(),
-            true
-        );
+        assert!(fwcfg_common
+            .add_file_callback("xyz", file_data.clone(), None, None, false)
+            .is_ok());
         let id = fwcfg_common.files.last().unwrap().select;
         fwcfg_common.select_entry(id);
-        let entry = fwcfg_common.get_entry_mut().unwrap();
+        let entry = fwcfg_common.entry(fwcfg_common.cur_entry).unwrap();
         assert_eq!(entry.data, file_data);
 
         let file_data = vec![0x8b; 200];
-        assert_eq!(
-            fwcfg_common
-                .add_file_callback("def", file_data.clone(), None, None, false)
-                .is_ok(),
-            true
-        );
+        assert!(fwcfg_common
+            .add_file_callback("def", file_data.clone(), None, None, false)
+            .is_ok());
         let id = fwcfg_common.files[0].select;
         fwcfg_common.select_entry(id);
-        let entry = fwcfg_common.get_entry_mut().unwrap();
+        let entry = fwcfg_common.entry(fwcfg_common.cur_entry).unwrap();
         assert_eq!(entry.data, file_data);
 
         let file_data = Vec::new();
-        assert_eq!(
-            fwcfg_common
-                .add_file_callback("bootorder", file_data.clone(), None, None, false)
-                .is_ok(),
-            true
-        );
+        assert!(fwcfg_common
+            .add_file_callback("bootorder", file_data.clone(), None, None, false)
+            .is_ok());
         let id = fwcfg_common.files[0].select;
         fwcfg_common.select_entry(id);
-        let entry = fwcfg_common.get_entry_mut().unwrap();
+        let entry = fwcfg_common.entry(fwcfg_common.cur_entry).unwrap();
         assert_eq!(entry.data, file_data);
 
         let modify_file_data = "/pci@ffffffffffffffff/pci-bridge@3/scsi@0,1/disk@0,0"
             .as_bytes()
             .to_vec();
-        assert_eq!(
-            fwcfg_common
-                .modify_file_callback("bootorder", modify_file_data.clone(), None, None, true)
-                .is_ok(),
-            true
-        );
+        assert!(fwcfg_common
+            .modify_file("bootorder", modify_file_data.clone())
+            .is_ok());
         let id = fwcfg_common.files[0].select;
         fwcfg_common.select_entry(id);
-        let entry = fwcfg_common.get_entry_mut().unwrap();
+        let entry = fwcfg_common.entry(fwcfg_common.cur_entry).unwrap();
         assert_eq!(entry.data, modify_file_data);
 
-        assert_eq!(
-            fwcfg_common
-                .modify_file_callback("abc", modify_file_data.clone(), None, None, true)
-                .is_err(),
-            true
-        );
+        assert!(fwcfg_common
+            .modify_file("abc", modify_file_data.clone())
+            .is_err());
         let file_data = vec![0x33; 500];
-        assert_eq!(
-            fwcfg_common
-                .add_file_callback("abc", file_data.clone(), None, None, false)
-                .is_ok(),
-            true
-        );
+        assert!(fwcfg_common
+            .add_file_callback("abc", file_data.clone(), None, None, false)
+            .is_ok());
         let id = fwcfg_common.files[0].select;
         fwcfg_common.select_entry(id);
-        let entry = fwcfg_common.get_entry_mut().unwrap();
+        let entry = fwcfg_common.entry(fwcfg_common.cur_entry).unwrap();
         assert_eq!(entry.data, file_data);
     }
 
@@ -1516,7 +1278,7 @@ mod test {
     fn test_dma_functions() {
         let sys_mem = address_space_init();
         let mut fwcfg_common = FwCfgCommon::new(sys_mem);
-        assert_eq!(fwcfg_common.common_realize().is_ok(), true);
+        assert!(fwcfg_common.common_realize().is_ok());
 
         // [1]write dma request.
         let mut dma_req = FwCfgDmaAccess::default();
@@ -1539,7 +1301,7 @@ mod test {
         fwcfg_common.dma_addr = addr;
 
         // [3]handle dma request.
-        assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
+        assert!(fwcfg_common.handle_dma_request().is_ok());
 
         // [4]check dma response.
         assert_eq!(
@@ -1584,7 +1346,7 @@ mod test {
 
         fwcfg_common.dma_addr = addr;
 
-        assert_eq!(fwcfg_common.handle_dma_request().is_ok(), true);
+        assert!(fwcfg_common.handle_dma_request().is_ok());
 
         // Result should be all zero.
         assert_eq!(
@@ -1625,7 +1387,7 @@ mod test {
             chunk.fill(index as u8);
         }
         fwcfg_common
-            .add_entry(FwCfgEntryType::InitrdData, None, None, initrd_data, false)
+            .add_entry(FwCfgEntryType::InitrdData, initrd_data)
             .unwrap();
 
         for index in 0..CHUNK_COUNT {
